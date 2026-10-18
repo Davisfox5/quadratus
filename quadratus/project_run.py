@@ -6,6 +6,7 @@ import dataclasses
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -29,6 +30,8 @@ from .session import SessionConfig
 from .usage import UsageMeter
 from .workers import WorkerBudget
 
+log = logging.getLogger(__name__)
+
 
 @dataclass
 class ProjectResult:
@@ -37,6 +40,24 @@ class ProjectResult:
     run_dir: Path
     diff: str
     error: str = ''
+
+
+def _publish_in_flight(store, run_dir, in_flight: dict) -> None:
+    """Preserved partial work: a record of the committed generation when the
+    store still publishes, and the historical export either way."""
+    try:
+        store.publish({'in_flight': in_flight})
+    except Exception:  # noqa: BLE001 -- a latched store keeps its last generation
+        log.warning('could not publish the in-flight record', exc_info=True)
+    (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
+
+
+def _store_readable(store) -> bool:
+    try:
+        store.current()
+        return True
+    except Exception:  # noqa: BLE001 -- a corrupt manifest is reported, never read around
+        return False
 
 
 @contextmanager
@@ -421,7 +442,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                      f"carried {carried['calls']} call(s), "
                      f"{carried['input_tokens'] + carried['output_tokens']:,} reported tokens")
     (run_dir / 'lineage.json').write_text(json.dumps(lineage, indent=2) + '\n', encoding='utf-8')
-    budget = RunBudget(run_limits, path=run_dir / 'budget.json', carried=carried) if run_limits else None
+    # The run's durable job store (quadratus.jobstore): every budget
+    # mutation, checkpoint and session effect is one committed generation
+    # under one manifest; budget.json and checkpoint.json stay as exports.
+    from .jobstore import JobStore
+    job_store = JobStore(run_dir)
+    budget = RunBudget(run_limits, path=run_dir / 'budget.json', carried=carried, store=job_store) if run_limits else None
     if isinstance(decider, str) or decider is None:
         from .decisions import decider_from_name
         decider = decider_from_name(decider, meter=meter, budget=budget)
@@ -461,11 +487,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         decider=decider,
         decider_labels=decider_labels,
         repair_tests=tuple(repair_tests),
+        job_store=job_store,
     )
 
     def on_quiescent(session):
-        # One snapshot, written to budget.json and into the checkpoint, so
-        # the two agree to the second (root review of aaa06a6).
+        # One snapshot, published as the budget record and into the
+        # checkpoint's own record of the same generation, so the two agree
+        # to the second (root review of aaa06a6).
         snapshot = budget.persist() if budget else {}
         watch = getattr(session, 'dependency_watch', None)
         baseline = getattr(watch, 'baseline', None)
@@ -479,7 +507,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             identities=checkpoint.identities(source=session._source_fingerprint(),
                                              dependency=getattr(baseline, 'digest', None), **held),
             state={} if uncarried else state_now,
-            written=datetime.now(timezone.utc).isoformat()))
+            written=datetime.now(timezone.utc).isoformat()), store=job_store,
+            budget_snapshot=snapshot or None)
     config.on_quiescent = on_quiescent
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -537,7 +566,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         partial = getattr(exc, 'partial', None)
         in_flight = dict(getattr(session, 'in_flight', {}) or partial or {})
         if in_flight:
-            (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
+            _publish_in_flight(job_store, run_dir, in_flight)
     finally:
         fleet.close()
     if not error and session is not None and getattr(session, 'stop_reason', ''):
@@ -554,7 +583,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                 note='Stopped by the unfinished-task breaker; every capped or failed task\'s edits are preserved.',
                 changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records + failed),
                 turn_limited=records, failed=failed)
-            (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
+            _publish_in_flight(job_store, run_dir, in_flight)
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
     traces = []
@@ -647,6 +676,17 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'judgment_gaps': list(getattr(session, 'judgment_gaps', []) or []) if session else [],
         # The last obligations view the planner or the audit read (quadratus.obligations).
         'obligations': dict(getattr(session, 'obligation_view', {}) or {}) if session else {},
+        # Typed delivery records (quadratus.delivery): review findings with
+        # per-id dispositions, evidence obligations with execution and
+        # sufficiency apart, the plan admissions decided before each wave,
+        # and the session's own effects (checks, captures, probes).
+        'review_findings': list(getattr(session, 'review_findings', []) or []) if session else [],
+        'evidence_obligations': list(getattr(session, 'evidence_obligations', []) or []) if session else [],
+        'plan_admissions': list(getattr(session, 'plan_admissions', []) or []) if session else [],
+        'operations': list(getattr(session, 'operations', []) or []) if session else [],
+        'job_store': dict(generation=(job_store.current().number if job_store.current() else None),
+                          refused=job_store.refused) if _store_readable(job_store) else dict(generation=None,
+                                                                                      refused='unreadable'),
         'findings': list(getattr(session, 'findings', []) or []) if session else [],
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),
@@ -690,7 +730,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     if not interrupted:
         # A run that ended on its own terms is never resumed; only an
         # interrupted one keeps its last quiescent checkpoint open.
-        checkpoint.seal(run_dir, error or ('completed' if completed else 'incomplete'))
+        checkpoint.seal(run_dir, error or ('completed' if completed else 'incomplete'), store=job_store)
     (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')

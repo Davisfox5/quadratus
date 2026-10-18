@@ -2250,7 +2250,9 @@
       },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Connected A+B (Davis, 2026-10-18, Fable High): per-id findings at every recheck, post-merge, reassessment and audit site; typed evidence obligations routed to the gate with strict receipt binding and audit-only sufficiency; whole-remaining-path admission (mandatory refuses, correction route recorded); durable job store (immutable generations, manifest-first readers, operation records for model calls, checks, captures and probes) with checkpoint and budget publishing through it. recheck_state is no longer a live reader; budget.json and checkpoint.json are exports."
+      ]
     }
   ],
   "receipts": [

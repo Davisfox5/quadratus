@@ -249,12 +249,21 @@ def test_reviewers_are_told_how_to_mark_blocking_findings(store):
 
 
 def test_rechecks_never_widen_scope(store):
-    rec = BlockingRecorder(["RESOLVED"])
+    """A recheck judges exactly the findings it is handed, by id, and
+    reopens nothing else. A genuine new defect is not discarded for arriving
+    on a recheck (blueprint section 4): it is recorded as its own finding
+    with its own id, and the expected findings' dispositions stand as read."""
+    rec = BlockingRecorder(["RFT1-1: RESOLVED escaped now\nNEW: the parser accepts malformed numbers | "
+                            "basis: tests/test_numbers.py | impact: correctness", "RFT1-2: RESOLVED fixed"])
     s = _session(store, rec)
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
     recheck = next(c["prompt"] for c in rec.calls
                    if "Check only your BLOCKING" in c["prompt"])
-    assert "Do not raise new findings" in recheck
+    assert "Do not reopen the review of anything else" in recheck and "Expected ids: RFT1-1" in recheck
+    states = {r["fid"]: r["state"] for r in s.review_findings}
+    assert states == {"RFT1-1": "resolved", "RFT1-2": "resolved"}
+    new = next(r for r in s.review_findings if r["fid"] == "RFT1-2")
+    assert new["basis"] == {"kind": "evidence", "ref": "tests/test_numbers.py"} and new["impact"] == "correctness"
 
 
 # -- the fetch channel --------------------------------------------------------

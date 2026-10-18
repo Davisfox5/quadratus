@@ -485,7 +485,8 @@ def render_story(status):
         events, _ = _tail_jsonl(run_dir / 'activity.jsonl')
         replies = _read_replies(run_dir)
     work = _task_work(events, result)
-    budget, _ = _read_json(run_dir / 'budget.json') if run_dir else (None, None)
+    from .jobstore import read_budget
+    budget, _ = read_budget(run_dir) if run_dir else (None, None)
     budget = budget or {}
     preserved = _preserved_reply(run_dir, budget) if run_dir and status.get('finished') is True else None
     if preserved:

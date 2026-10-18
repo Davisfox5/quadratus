@@ -629,7 +629,8 @@ def _fill_calls(status, mark, run_dir: Path, now: float) -> None:
 
 
 def _fill_tokens(status, mark, run_dir: Path) -> None:
-    budget, problem = _read_json(run_dir / "budget.json")
+    from .jobstore import read_budget
+    budget, problem = read_budget(run_dir)
     if budget is not None:
         reported = _count(budget.get("reported_tokens"))
         if reported is not None:
@@ -733,7 +734,8 @@ def _history_row(run_dir: Path) -> Dict[str, Any]:
     else:
         row["ended"] = _iso(_mtime(result_path)) or UNKNOWN
         row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
-    budget, _ = _read_json(run_dir / "budget.json")
+    from .jobstore import read_budget
+    budget, _ = read_budget(run_dir)
     reported = _count(budget.get("reported_tokens")) if isinstance(budget, dict) else None
     if reported is not None:
         row["tokens"] = reported

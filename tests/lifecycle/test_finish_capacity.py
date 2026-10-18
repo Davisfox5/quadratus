@@ -88,7 +88,7 @@ def test_serial_the_last_wave_closes_factually_and_the_finish_runs_inside_the_li
     record = json.loads(replay.artifact_texts("factual-closeout")[0])
     assert record["task"] == "t2" and "last dispatched wave" in record["why"]
     assert record["reviews"] == [["openai:gpt-5.6-sol", "reviewed: blocking findings"],
-                                 ["openai:gpt-5.6-sol", "recheck: resolved"]]
+                                 ["openai:gpt-5.6-sol", "recheck: RFT2-1 resolved"]]
     assert record["check"] == "last check PASSED on the current source"
     assert record["changed"] == ["README.md"] and len(record["evidence"]) == 2
     summary = H.result_json(replay)
@@ -144,9 +144,15 @@ def test_parallel_last_wave_closes_factually_and_a_refused_merge_recheck_stays_o
         assert verdict == "resolved" and replay.result.completed, replay.result.error
         assert _roles(replay)[-2:] == [("run", "orchestrator"), ("audit", "auditor")]
     else:
+        # The reviewer's finding names no basis and claims no immediate risk,
+        # so it is carried to the final audit by id rather than stopping the
+        # run (blueprint stage A): the refused recheck keeps it, the goal
+        # question and the audit run, the audit finds R2 not met over it,
+        # and the run is not complete.
         assert verdict == "kept: recheck refused to keep the finish"
-        assert not replay.of("auditor") and not replay.result.completed
-        assert "FindingsOpen" in replay.result.error
+        assert not replay.result.completed
+        finding = next(r for r in H.result_json(replay)["review_findings"] if r["fid"] == "RFT2-1")
+        assert finding["state"] == "unresolved" and finding["audit_carried"]
         assert H.result_json(replay)["finish_refusals"][0]["what"].startswith("post-merge recheck by")
 
 
@@ -187,38 +193,44 @@ def _tight(total):
 
 @pytest.mark.requirements_ledger
 def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follows(tmp_path, monkeypatch):
-    """5,440 tokens. After t1 and the planning call for t2, 4,780 remain:
-    t2's lead is exposed at 3,000 and refused before it starts. Old: that
-    refusal stopped the run with neither finishing judgment. Now t2 is NOT
-    RUN, nothing is planned after it, the goal question and the audit run,
-    and the run still is not complete: the work the plan asked for was not
-    done."""
+    """6,400 tokens. t1's mandatory stages fit (4,180 left after the two
+    1,000 holds). After t1 and the planning call for t2, 5,740 remain, 3,740
+    after the holds: t2's mandatory stages (its lead at the 3,000 ceiling,
+    its review at the 1,000 reserve) cannot be paid, so t2 is refused at
+    dispatch, before its first editing call is even asked of the budget
+    (blueprint stage A: the remaining path is costed before the wave).
+    Old: the lead's own reservation was refused by the hold. Either way t2
+    is NOT RUN, nothing is planned after it, the goal question and the audit
+    run, and the run still is not complete: the work the plan asked for was
+    not done."""
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(5_440),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(6_400),
                    record_complete=False)
     assert not [c for c in replay.calls if c.task == "t2"], "t2's lead never started"
-    assert _roles(replay)[-3:] == [("run", "orchestrator"), ("run", "orchestrator"), ("audit", "auditor")]
+    assert replay.of("auditor"), "the audit still runs after the refusal"
     assert len(replay.of("orchestrator")) == 3, "plan, plan t2, goal question: no planning after the refusal"
     result = H.result_json(replay)
     assert [n["task"] for n in result["not_started"]] == ["t2"]
-    assert result["finish_refusals"][-1]["what"] == "first editing call by " + result["not_started"][0]["lead"]
+    assert result["finish_refusals"][-1]["what"].startswith("dispatch: the calls left cannot pay")
+    admission = [a for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "mandatory"][-1]
+    assert not admission["feasible"] and admission["short"] == {"tokens": 4_000 - 3_740}
     t2 = next(t for t in result["workflow"]["tasks"] if t["task_id"] == "t2")
     assert t2["closed_as"] == "not_started"
     assert not replay.result.completed and "t2 NOT RUN" in replay.result.error
     assert result["requirements"]["audits"][-1]["verdicts"]["R1"]["met"] is True
     budget = _budget(replay)
-    refusal = budget["finish_protection"]["refusals"][0]
-    assert refusal["exposure"] == 3_000 and refusal["tokens_after"] == 4_780 - 3_000
+    assert budget["finish_protection"]["refusals"] == [], "refused at dispatch, never at the budget"
     assert budget["finish_protection"]["started"] == ["goal", "audit"] and budget["stop_reason"] == ""
 
 
 @pytest.mark.requirements_ledger
 def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, monkeypatch):
-    """5,330 tokens: t1's lead stops at its turn cap (partial), then t2's
-    first editing call is refused. t2 is NOT RUN; t1's capped work is still
-    debt, so the cap's own decision stops before the goal question and no
-    audit runs."""
+    """6,400 tokens: t1's mandatory stages fit (4,180 left after the holds),
+    its lead stops at its turn cap (partial), then t2's mandatory stages do
+    not fit and t2 is refused at dispatch. t2 is NOT RUN; t1's capped work
+    is still debt, so the cap's own decision stops before the goal question
+    and no audit runs."""
     from quadratus.config import Settings
 
     def lead(call, replay):
@@ -226,7 +238,7 @@ def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, mon
         return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lead
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(5_330),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(6_400),
                    record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
     assert [n["task"] for n in H.result_json(replay)["not_started"]] == ["t2"]
     assert len(replay.of("orchestrator")) == 2 and not replay.of("auditor"), "no goal question, no audit"
@@ -236,19 +248,38 @@ def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, mon
 
 @pytest.mark.requirements_ledger
 def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monkeypatch):
-    """5,660 tokens: t2's lead is admitted with exactly 5,000 left, writes
-    README.md and asks to FETCH; its second turn is refused. Work was
-    written, so this is not a task that never started: the run stops on the
-    refusal as before, with the edit kept and nothing recorded NOT RUN."""
+    """6,800 tokens: t2's mandatory stages fit at dispatch (4,140 left after
+    the holds), its lead writes README.md, reports 1,510 tokens and asks to
+    FETCH; the second turn, exposed at 3,000 against the 2,630 now left, is
+    refused. Work was written, so this is not a task that never started:
+    the run stops on the refusal as before, with the edit kept and nothing
+    recorded NOT RUN."""
+    import json as _json
+    import uuid as _uuid
+
+    heavy_usage = {"input_tokens": 1_500, "output_tokens": 10}
+
+    def heavy(call, text):
+        """The seat's own envelope, reporting 1,510 tokens for this turn."""
+        if call.vendor == "claude":
+            return _json.dumps({"type": "result", "subtype": "success", "is_error": False, "num_turns": 1,
+                                "result": text, "stop_reason": "end_turn", "session_id": str(_uuid.uuid4()),
+                                "usage": heavy_usage})
+        thread = str(_uuid.uuid4())
+        events = [{"type": "thread.started", "thread_id": thread}, {"type": "turn.started"},
+                  {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": text}},
+                  {"type": "turn.completed", "usage": heavy_usage}]
+        return "\n".join(_json.dumps(e) for e in events)
+
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
             return 'Implemented add.\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": README})
-        return "FETCH: no-such-artifact"
+        return heavy(call, "FETCH: no-such-artifact")
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lead
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(5_660),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(6_800),
                    record_complete=False)
     assert len([c for c in replay.calls if c.task == "t2"]) == 1
     assert replay.result.error.startswith("FinishReserved") and H.result_json(replay)["not_started"] == []

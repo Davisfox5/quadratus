@@ -67,6 +67,16 @@ def _budget(run_dir):
     return json.loads((Path(run_dir) / "budget.json").read_text())
 
 
+def _commit(run_dir, name, value):
+    """Alter a committed record of the run (budget or checkpoint): the
+    manifest is the authority a resume reads, so the altered value is
+    published as a new generation; the export is rewritten too, so the two
+    agree and a reader of either sees the alteration."""
+    from quadratus.jobstore import JobStore
+    JobStore(run_dir).publish({name: value})
+    (Path(run_dir) / f"{name}.json").write_text(json.dumps(value))
+
+
 # -- interruption recovery, accepted-work preservation, budget carryover ----------
 
 def test_an_interrupted_job_resumes_with_its_record_lineage_and_spent_allowance(tmp_path, monkeypatch):
@@ -139,7 +149,7 @@ def test_an_altered_checkpoint_refuses_the_resume(tmp_path, monkeypatch):
     replay, first = _interrupted(tmp_path, monkeypatch)
     data = json.loads((first / "checkpoint.json").read_text())
     data["body"]["consumed"]["calls"] = 0
-    (first / "checkpoint.json").write_text(json.dumps(data))
+    _commit(first, "checkpoint", data)
     with pytest.raises(CheckpointRefused, match="digest"):
         _episode(replay, resume_from=first.name)
 
@@ -204,7 +214,7 @@ def test_a_budget_record_with_unknown_or_missing_usage_refuses_the_resume(tmp_pa
     replay, first = _interrupted(tmp_path, monkeypatch)
     budget = _budget(first)
     budget[field] = value
-    (first / "budget.json").write_text(json.dumps(budget))
+    _commit(first, "budget", budget)
     with pytest.raises(CheckpointRefused, match=match):
         _episode(replay, resume_from=first.name)
 
@@ -253,7 +263,7 @@ def test_an_absent_or_malformed_uncertainty_field_is_unknown_not_zero(tmp_path, 
         del budget[field]
     else:
         budget[field] = value
-    (first / "budget.json").write_text(json.dumps(budget))
+    _commit(first, "budget", budget)
     with pytest.raises(CheckpointRefused, match=match):
         _episode(replay, resume_from=first.name)
     assert not (first / "resumed-by.json").exists()
@@ -1703,7 +1713,11 @@ def test_a_finished_draft_past_the_size_stop_spends_one_fix_cycle_coming_back_un
         return
     if case == "unresolved":
         assert roles == ["lead", "revision", "revision"], "trim, then the one revision the allowance leaves"
-        assert len(replay.of("recheck")) == 1 and "FindingsOpen" in (replay.result.error or "")
+        # The reviewer's finding names no basis and claims no immediate
+        # risk, so it is carried to the final audit by id (blueprint stage
+        # A): the audit finds the requirement not met over it.
+        assert len(replay.of("recheck")) == 1
+        assert "RequirementsUnmet" in (replay.result.error or "") and "RFT1-1" in replay.result.error
         return
     if case == "capped-draft":
         # R16 on 78f76bb: a capped draft's in-path overrun now gets the same
@@ -1832,7 +1846,10 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
     # controlled in tests/lifecycle/test_finish_capacity.py.
     monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
     declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1"
-    reserve = 1000
+    # Small enough that the task's dispatch admission (its lead and its
+    # review, each at this reserve, blueprint stage A) fits well inside the
+    # calibrated spend, so the audit's own reserve is the one boundary pinned.
+    reserve = 200
 
     def run(where, total):
         def orchestrator(call, replay):

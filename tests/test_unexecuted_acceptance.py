@@ -93,15 +93,18 @@ def test_not_run_never_raises_a_verdict(tmp_path):
 def test_only_a_later_passing_check_naming_the_item_lifts_a_report(tmp_path):
     session, _ = _session(tmp_path, f"R5: MET - {UNIT}\n")
     _not_run(session, "t3", ["R5"], f"NOT RUN: {SCENARIO} - not approved")
-    session.checks.append(dict(passed=True, command="gate suite",
+    source = session._source_fingerprint()  # every recorded check carries the source it ran on
+    session.checks.append(dict(passed=True, command="gate suite", source=source,
                                receipts=[dict(id="check", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command="pytest -q")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "an unrelated passing check lifts nothing"
-    session.checks.append(dict(passed=False, command="gate suite",
+    session.checks.append(dict(passed=False, command="gate suite", source=source,
                                receipts=[dict(id="extra-2", status="failed", output="# pass 3\n# fail 0\n# skipped 0\n", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "a failing run lifts nothing"
-    session.checks.append(dict(passed=True, command="gate suite",
+    session.checks.append(dict(passed=True, command="gate suite", source=source,
                                receipts=[dict(id="extra-2", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is True
+    typed = session.evidence_obligations[0]
+    assert typed["execution"] == "ran" and typed["runner"] == "gate" and list(typed["receipts"]) == ["check-3"]
 
 
 def test_prose_is_not_parsed_and_the_editing_call_is_told_the_line(tmp_path):
@@ -150,7 +153,10 @@ def _ran(session, task, covers, result):
     session._current_covers = list(covers)
     session._note_skips(SimpleNamespace(task_id=task), result)
     session.checks.append(dict(passed=result.passed, command=result.command, output=result.output,
-                               receipts=[dataclasses.asdict(r) for r in result.receipts]))
+                               receipts=[dataclasses.asdict(r) for r in result.receipts],
+                               # As the session records every check: the source it ran on, so
+                               # the typed obligation's receipt binds to it (delivery.discharge).
+                               source=session._source_fingerprint()))
     session._current_covers = []
 
 

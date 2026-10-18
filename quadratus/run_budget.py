@@ -262,12 +262,17 @@ def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_s
 
 
 class RunBudget:
-    def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic, carried=None):
+    def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic, carried=None, store=None):
         """``carried`` is what earlier episodes of the same job spent
         (quadratus.checkpoint.consumed): the allowance is the job's, so a
-        resumed episode starts from it and never from zero (step 2)."""
+        resumed episode starts from it and never from zero (step 2).
+        ``store`` is the run's durable job store (quadratus.jobstore): when
+        given, every mutation publishes the budget record as one generation
+        there before ``path`` is written as a compatibility export, and a
+        publication that fails stops the run as a failed write always did."""
         self.limits = limits
         self.path = Path(path) if path else None
+        self.store = store
         self._clock = clock
         carried = dict(carried or {})
         self._carried = carried
@@ -299,7 +304,14 @@ class RunBudget:
         #: what each was for (session._complete_judgment).
         self._judgments = int(carried.get('judgment_completions') or 0)
         self._judgment_records = []
-        if self.path:
+        #: One operation record per reservation (delivery.OperationRecord
+        #: states): started while the ticket is active, settled with the
+        #: digest of what came back, uncertain never written here (a
+        #: resumed episode reads the started ones that never settled).
+        self._operations = {}
+        self._settled_operations = []
+        self._export_failures = 0
+        if self.path or self.store:
             # Written before any call, so an episode that ends before its
             # first call still leaves the job's record (and what it carried).
             try:
@@ -330,6 +342,12 @@ class RunBudget:
             # resumed episode, shared by parallel children (one budget).
             'judgment_completions': self._judgments,
             'judgment_completion_records': [dict(r) for r in self._judgment_records],
+            # Every reservation as an operation record: the started ones are
+            # the calls in flight; a settled one carries the digest of its
+            # reply. Published with the admission, before the call.
+            'operations': {'started': [dict(o) for o in self._operations.values()],
+                           'settled': [dict(o) for o in self._settled_operations]},
+            'export_failures': self._export_failures,
             # Included in every total above: spent by earlier episodes.
             'carried_from_earlier_episodes': dict(self._carried),
             'shape_boundary': ('a summary-only call whose CLI argv enforces one model turn reserves '
@@ -375,27 +393,42 @@ class RunBudget:
         same spend, time included (root review of aaa06a6: a record written
         only at reserve and finish under-counted the time between calls)."""
         with self._lock:
-            snapshot = self._snapshot()
-            if self.path:
-                try:
-                    self.path.parent.mkdir(parents=True, exist_ok=True)
-                    temporary = self.path.with_suffix('.tmp')
-                    temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
-                    temporary.replace(self.path)
-                except OSError as exc:
-                    raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
-            return snapshot
+            return self._write(latch=False)
 
     def _persist(self):
+        """Under the lock already: every caller holds it."""
+        self._write(latch=True)
+
+    def _write(self, *, latch: bool):
+        """The one write path. The job store's generation is the authority:
+        published first, with the active tickets as unsettled operations and
+        their reserves as unfinished; a failed publication stops the run
+        (latched when ``latch``). The compatibility export at ``path`` is
+        written after it; an export failure is counted and never a reason to
+        act on the export (readers prefer the manifest)."""
+        snapshot = self._snapshot()
+        if self.store is not None:
+            try:
+                self.store.publish({'budget': snapshot},
+                                   budget_unsettled=[o['opid'] for o in self._operations.values()],
+                                   reserved_unfinished=sum(a[2] or 0 for a in self._active.values()))
+            except Exception as exc:  # noqa: BLE001 -- any store failure is a stop
+                if latch:
+                    self._reason = self._reason or 'budget_state_unavailable'
+                raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
         if self.path:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = self.path.with_suffix('.tmp')
-                temporary.write_text(json.dumps(self._snapshot(), indent=2) + '\n')
+                temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
                 temporary.replace(self.path)
             except OSError as exc:
-                self._reason = self._reason or 'budget_state_unavailable'
-                raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
+                if self.store is None:
+                    if latch:
+                        self._reason = self._reason or 'budget_state_unavailable'
+                    raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
+                self._export_failures += 1
+        return snapshot
 
     def _remaining(self):
         return self.limits.wall_seconds - (self._clock() - self._started)
@@ -581,6 +614,10 @@ class RunBudget:
         self._calls += 1
         ticket = self._calls
         self._active[ticket] = (transport, price_key, reserve, exposure)
+        self._operations[ticket] = dict(
+            opid=f'O-{ticket}', purpose='model call', status='started', reservation=ticket,
+            transport=transport, stage=stage, editing=bool(shape.get('editing')), reserve=reserve,
+            exposure=exposure, shaped=shaped, started_at=round(max(0.0, self._clock() - self._started), 3))
         if deferral is not None:
             # Recorded in the same write as the admission: a deferred call is
             # admitted only if this record is durable (root on cf8cd2b).
@@ -592,6 +629,7 @@ class RunBudget:
             # Never invoked: no ticket, no attempt, nothing in flight, the stage
             # still pending; the latched stop refuses every later call.
             self._active.pop(ticket)
+            self._operations.pop(ticket, None)
             self._calls -= 1
             self._shaped -= int(shaped)
             if started:
@@ -609,6 +647,15 @@ class RunBudget:
             if ticket not in self._active:
                 raise RuntimeError('Unknown or already-finished budget reservation')
             transport, reserved_key, _, _ = self._active.pop(ticket)
+            operation = self._operations.pop(ticket, None)
+            if operation is not None:
+                import hashlib
+                operation.update(status='settled', result_digest=hashlib.sha256((reply or '').encode()).hexdigest(),
+                                 settled_at=round(max(0.0, self._clock() - self._started), 3),
+                                 usage_known=isinstance(usage, dict) and all(
+                                     type(usage.get(k)) is int and usage.get(k) >= 0
+                                     for k in ('input_tokens', 'output_tokens')))
+                self._settled_operations.append(operation)
             self._settled.notify_all()
             usage = usage if isinstance(usage, dict) else {}
             counts = [usage.get('input_tokens'), usage.get('output_tokens')]

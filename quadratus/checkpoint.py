@@ -58,7 +58,12 @@ _CARRIED = (
     "_run_start_contents", "_original_selection", "scratch_proofs", "evidence_requests",
     "unresolved_reviews", "_cap_goal", "_final_audit", "review_notes", "finish_refusals",
     "review_dispositions", "not_started", "judgment_completions", "judgment_gaps",
+    "review_findings", "evidence_obligations", "plan_admissions", "operations", "_requirement_revision_record",
 )
+#: Carried state added by the A+B batch (2026-10-18): absent from earlier
+#: checkpoints, which are still readable and resumable with these empty.
+_ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admissions", "operations",
+                          "_requirement_revision_record"})
 #: State a checkpoint does not carry. Any of it present makes the point not
 #: resumable, rather than resuming a job whose record would be incomplete.
 _NOT_CARRIED = (
@@ -190,6 +195,11 @@ def restore_state(session, state: dict) -> None:
     session._breaker_counted = [by_id[t] for t in state["breaker_counted"] if t in by_id]
     session._slots_used = int(state["slots_used"])
     for name in _CARRIED:
+        if name in _ADDED_LATER and name not in state:
+            # A checkpoint written before these records existed carries
+            # none: the records start empty, which is what that run held.
+            setattr(session, name, {} if name == "_requirement_revision_record" else [])
+            continue
         setattr(session, name, state[name])
     session._carried_baselines = dict(_original_tests=state["_original_tests"],
                                       _run_start_contents=state["_run_start_contents"],
@@ -285,17 +295,35 @@ def consumed(budget_record: Optional[dict], *, recorded: bool = False) -> dict:
 
 # -- the file --------------------------------------------------------------------------
 
-def write(run_dir, body: dict) -> None:
-    """Write the checkpoint atomically with the digest of its body. A write
-    that fails removes the checkpoint rather than leave an older one that a
-    resume could mistake for this point."""
+def write(run_dir, body: dict, *, store=None, budget_snapshot=None) -> None:
+    """Record the checkpoint: as a record of the run's committed generation
+    when the run has a job store (one generation holding the budget
+    snapshot it agrees with and this body), then as the ``checkpoint.json``
+    export for historical readers. A store publication that fails removes
+    the export rather than leave an older point a resume could mistake for
+    this one; the store itself stays refused (quadratus.jobstore)."""
     target = Path(run_dir) / NAME
     temporary = target.with_suffix(".tmp")
+    record = dict(body=body, digest=_digest(body))
+    if store is not None:
+        updates = {"checkpoint": record}
+        if budget_snapshot is not None:
+            updates["budget"] = budget_snapshot
+        try:
+            store.publish(updates)
+        except Exception:  # noqa: BLE001 -- the store is latched; the export must not outlive it
+            log.warning("could not publish the checkpoint generation; removing the export", exc_info=True)
+            for path in (temporary, target):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            return
     try:
-        temporary.write_text(json.dumps(dict(body=body, digest=_digest(body))) + "\n")
+        temporary.write_text(json.dumps(record) + "\n")
         os.replace(temporary, target)
     except OSError:
-        log.warning("could not write the checkpoint; removing the old one", exc_info=True)
+        log.warning("could not write the checkpoint export; removing the old one", exc_info=True)
         for path in (temporary, target):
             try:
                 path.unlink()
@@ -303,28 +331,50 @@ def write(run_dir, body: dict) -> None:
                 pass
 
 
-def seal(run_dir, reason: str) -> None:
+def seal(run_dir, reason: str, *, store=None) -> None:
     """Mark a finished run's checkpoint sealed: a run that ended on its own
     terms (complete, stopped, refused) is never resumed."""
-    target = Path(run_dir) / NAME
     try:
-        data = json.loads(target.read_text())
-        body = data["body"]
-    except (OSError, ValueError, KeyError, TypeError):
+        body = load(run_dir)
+    except CheckpointRefused:
         return
-    if data.get("digest") != _digest(body):
-        return
-    write(run_dir, dict(body, sealed=True, resumable=False, sealed_reason=str(reason)[:400]))
+    write(run_dir, dict(body, sealed=True, resumable=False, sealed_reason=str(reason)[:400]), store=store)
+
+
+def _read_record(run_dir) -> dict:
+    """The checkpoint record: from the committed manifest when the run has
+    one (a manifest naming no checkpoint, or a corrupt one, is a refusal,
+    never a fall back to the export), else the historical export."""
+    from . import jobstore
+    run_dir = Path(run_dir)
+    try:
+        manifest = jobstore.read_manifest(run_dir)
+    except jobstore.GenerationCorrupt as exc:
+        raise CheckpointRefused(f"the run's committed state is corrupt: {exc}") from exc
+    if manifest is not None:
+        if "checkpoint" not in manifest.records:
+            raise CheckpointRefused(f"no checkpoint in {run_dir.name}: its committed generation "
+                                    f"{manifest.number} names none")
+        try:
+            data = jobstore.read_record(run_dir, "checkpoint", manifest=manifest)
+        except jobstore.GenerationCorrupt as exc:
+            raise CheckpointRefused(f"the run's committed checkpoint is corrupt: {exc}") from exc
+        if not isinstance(data, dict):
+            raise CheckpointRefused("the committed checkpoint record is not a record")
+        return data
+    try:
+        return json.loads((run_dir / NAME).read_text())
+    except (OSError, ValueError) as exc:
+        raise CheckpointRefused(f"no readable checkpoint in {run_dir.name}: {type(exc).__name__}") from exc
 
 
 def load(run_dir) -> dict:
     """The checkpoint body, digest verified, or CheckpointRefused."""
-    target = Path(run_dir) / NAME
+    data = _read_record(run_dir)
     try:
-        data = json.loads(target.read_text())
         body = data["body"]
         digest = data["digest"]
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (KeyError, TypeError) as exc:
         raise CheckpointRefused(f"no readable checkpoint in {Path(run_dir).name}: {type(exc).__name__}") from exc
     if not isinstance(body, dict) or digest != _digest(body):
         raise CheckpointRefused("the checkpoint does not match its digest; it was altered or truncated")
@@ -344,12 +394,23 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
                                 + ", ".join(body.get("uncarried") or ["no carried state"]))
     if (run_dir / RESUMED).exists():
         raise CheckpointRefused("the run was already resumed; resume its latest episode instead")
+    from . import jobstore
+    budget, problem = jobstore.read_budget(run_dir)
+    if budget is None:
+        raise CheckpointRefused(f"the parent's budget record is unreadable: {problem}")
     try:
-        budget = json.loads((run_dir / "budget.json").read_text())
-    except (OSError, ValueError) as exc:
-        raise CheckpointRefused(f"the parent's budget record is unreadable: {type(exc).__name__}") from exc
-    if not isinstance(budget, dict):
-        raise CheckpointRefused("the parent's budget record is not a record")
+        unsettled = jobstore.unsettled_operations(run_dir)
+    except jobstore.GenerationCorrupt as exc:
+        raise CheckpointRefused(f"the parent's committed state is corrupt: {exc}") from exc
+    if unsettled:
+        # A started effect whose result was never recorded: its usage and
+        # effect are unknown, and nothing here resumes or repeats it.
+        raise CheckpointRefused(f"{len(unsettled)} operation(s) started and never settled when the run "
+                                f"ended ({', '.join(unsettled[:5])}); their effect is unknown")
+    started = (budget.get("operations") or {}).get("started")
+    if isinstance(started, list) and started:
+        raise CheckpointRefused(f"{len(started)} model call(s) were started and never settled; their "
+                                "usage and effect are unknown")
     # The uncertainty fields must be present and well typed: an absent one
     # is unknown, never a known zero (root review of dc70adb).
     for field in ("in_flight", "unknown_usage_attempts"):

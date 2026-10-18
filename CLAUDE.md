@@ -1717,32 +1717,44 @@ Key design decisions already settled:
   does not know, or one that prompts or exits (`-i`, `--version`,
   `--check`), is refused. A project file merely named like an interpreter
   (`./python3`) is the program itself and is not parsed.
-- **Delivery records are typed and pure; the controller is wired to them
-  later** (blueprint stage A+B, records batch, 2026-10-18). `delivery.py`
-  holds requirement revisions (origin never changes; an inferred row is
-  approved only by a decision receipt), findings with stable ids, a basis
-  (requirement, reproduction, evidence or none) and an impact, dispositions
-  per id (RESOLVED needs a source other than the one the finding was raised
-  on; an immediate risk holds the affected effect whatever its basis; a
-  basis-less concern that is not an immediate risk is carried to the audit by
-  id, never dropped as a note), evidence obligations with `execution` and
-  `sufficiency` as two fields (a receipt discharges execution only on the
-  current source, same gate, same runner, same requirement revisions, named
-  cases passed and not skipped; sufficiency comes only from a named seat,
-  never the harness), operation records (no reservation, no start; started
-  without a result is uncertain, not absent and not resumed), and
-  `admit_plan` costing the whole remaining path in the budget's own exposure
-  classes (a stage holding the write grant is always at the editing ceiling;
-  no cheaper class is invented). `judgment.recheck_verdicts` reads a recheck
-  one finding id at a time: UNRESOLVED wins, a duplicate or missing line
-  settles nothing, INVALIDATED needs evidence text, NEW/BLOCKING lines are new
-  findings, foreign ids are reported and applied to nothing. `generations.py`
-  holds the manifest rules: content-addressed record paths never rewritten,
-  an expected generation that is not current is a conflict, and no fallback
-  past a started operation or unfinished reservation. None of it is wired
-  into `session.py`, no prompt asks for per-id lines yet, nothing is written
-  durably, and `recheck_state` is still the live reader; those seams are
-  root's next batch, and nothing here is a product claim.
+- **Stage A+B is connected: typed delivery records are the controller's
+  account** (blueprint 2026-10-17; connected batch 2026-10-18). `delivery.py`
+  holds the records and pure transitions; `session.py` is the adapter.
+  Review findings get stable ids (`RF<TASK>-<n>`) with a basis (requirement,
+  reproduction, evidence or none) and an impact read off the reviewer's
+  own BLOCKING line (`| basis: ... | impact: ...`). Every recheck, the
+  post-merge recheck, the reassessment and the final audit read per id
+  (`judgment.recheck_verdicts`): UNRESOLVED wins, a duplicate or missing
+  line settles nothing, INVALIDATED needs checkable evidence, NEW lines open
+  findings of their own with their basis and impact, foreign ids apply to
+  nothing, and only the designated judge settles a finding (the seat that
+  raised it in recheck or reassessment; the audit for a concern carried to
+  it), on the binding it was handed. A finding with no basis and no
+  immediate risk does not stop the run: it is carried to the audit by id,
+  and the requirement it touches is not met until a judge closes it. A
+  data-loss, integrity, security or irreversible impact holds the close
+  whatever its basis. `recheck_state` is not a live reader any more.
+  Evidence obligations (`O<n>`) are registered for every NOT RUN item, skip
+  fact and declared acceptance behavior, with the harness's gate as runner
+  when it can run what the item names and None (a reported prerequisite)
+  otherwise; execution is discharged only by a receipt bound to the current
+  source, gate, runner, environment and current requirement revisions, and
+  sufficiency comes only from the audit (an explicit `O<n>: SUFFICIENT`
+  line, else its requirement verdict), bound to exactly that evidence. The
+  whole remaining path is costed before a task's first call in the budget's
+  own exposure classes (`delivery.admit_plan`): the mandatory stages refuse
+  (NOT RUN before any call), the correction route and close-out are
+  recorded, shown to the planner and the audit, never a refusal and never a
+  cheaper class. The run's state is a durable job store (`jobstore.py`,
+  `generations.py`): immutable content-addressed records under one
+  manifest, fsync before rename, a latched refusal on any failure, readers
+  that take the manifest over `budget.json` and `checkpoint.json` (now
+  exports), model calls as `O-<ticket>` operations settled with the reply
+  digest, checks, captures and probes as `OP-<n>` operations published
+  started before and settled after; a committed generation holding a started
+  operation refuses resume, and nothing falls back to an older generation.
+  The final audit's cache binds to source, requirement texts, gate, evidence,
+  findings, obligations, rulings and policy, not source and ids alone.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
