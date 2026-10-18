@@ -239,7 +239,14 @@ def test_a_revision_is_told_which_files_are_already_recorded(tmp_path, monkeypat
 
 def test_a_fix_round_is_told_which_files_are_already_recorded(tmp_path, monkeypatch):
     def recheck(call, replay):
-        return "BLOCKING: still no negative-number test." if len(replay.of("recheck")) == 1 else "RESOLVED"
+        # The first recheck keeps every standing finding (one disposition
+        # per expected id, as the protocol reads it); the fix round's
+        # recheck resolves each by id. A bare RESOLVED judges nothing for a
+        # finding it does not name (tests.lifecycle.replies).
+        from tests.lifecycle.replies import recheck_reply
+        if len(replay.of("recheck")) == 1:
+            return recheck_reply(call.prompt, default="UNRESOLVED still no negative-number test")
+        return recheck_reply(call.prompt, default="RESOLVED the fix round adds the negative-number test")
 
     def revision(call, replay):
         assert "Files this task has already changed" in call.prompt and "app.py" in call.prompt
@@ -251,6 +258,9 @@ def test_a_fix_round_is_told_which_files_are_already_recorded(tmp_path, monkeypa
     assert len(replay.of("revision")) == 2, "the review revision, then one fix round"
     assert any("remain unresolved" in c.prompt for c in replay.of("revision"))
     assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
+    findings = H.result_json(replay)["review_findings"]
+    assert findings and all(f["closed"] and f["state"] == "resolved" for f in findings), findings
+    assert all(f["history"][0]["state"] == "unresolved" for f in findings), "the first recheck held them"
 
 
 def test_a_revision_with_no_edits_and_an_empty_declaration_proceeds(tmp_path, monkeypatch):

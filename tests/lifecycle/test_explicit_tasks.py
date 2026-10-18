@@ -130,8 +130,23 @@ def test_the_run_budget_still_stops_a_listed_run(tmp_path, monkeypatch):
                   limits=RunLimits(max_calls=1, max_reported_tokens=6_000_000, wall_seconds=600,
                                    max_concurrent_workers=2),
                   record_complete=False)
-    assert "budget" in replay.result.error.lower(), replay.result.error
-    assert replay.of("orchestrator") == [] and not replay.result.completed
+    # Whole-route admission refuses t1 before any call: its selected route
+    # (the draft and the close-out) cannot be paid from one call. The budget
+    # restriction still stops the listed run; the stop is the refusal.
+    error = replay.result.error or ""
+    assert "FinishReserved" in error and "cannot pay its selected route" in error, error
+    assert "short by calls 1" in error, error
+    assert replay.calls == [] and replay.of("orchestrator") == [] and not replay.result.completed
+    result = H.result_json(replay)
+    # A listed run has no planner to send the refusal back to: it is the
+    # run's own terminal budget fact, and the list records t1 as not run.
+    (fact,) = [f for f in result["workflow"]["run"]["facts"] if f["kind"] == "budget"]
+    assert fact["terminal"] and "2 call(s)" in fact["detail"] and "short by calls 1" in fact["detail"], fact
+    assert result["budget"]["reserved_attempts"] == 0 and result["budget"]["limits"]["max_calls"] == 1
+    listed = result["explicit_tasks"]
+    assert listed["listed"] == 2 and listed["not_run"] == 1 and listed["tasks_closed_clean"] == []
+    assert not listed["completed"]
+    assert (replay.project / "README.md").read_text() == FILES["README.md"], "nothing written"
 
 
 def test_a_failed_listed_task_keeps_its_work_and_the_list_ends_incomplete(tmp_path, monkeypatch):

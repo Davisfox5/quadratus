@@ -328,7 +328,16 @@ def test_the_shape_is_passed_only_where_the_argv_enforces_one_turn(monkeypatch, 
     provider.summary_only = True
     with pytest.raises(RunBudgetExceeded):
         provider._observed_call('p', None, 1, 1)
-    assert control.seen == [{}, {'expected_tokens': 64_000} if capped else {}]
+    # Every reservation names the call's identity (seat, task, role, prompt
+    # digest, the committed authority or none); the summary shape rides
+    # only where the argv enforces one turn.
+    assert len(control.seen) == 2
+    for seen in control.seen:
+        identity = seen['identity']
+        assert identity['seat'] == f'{provider.name}:{model}' and identity['role'] == 'direct'
+        assert identity['task'] == 'run' and len(identity['prompt_digest']) == 32 and identity['authority'] == ''
+    shapes = [{k: v for k, v in seen.items() if k != 'identity'} for seen in control.seen]
+    assert shapes == [{}, {'expected_tokens': 64_000} if capped else {}]
 
 
 def test_the_turn_cap_is_read_from_the_summary_argv_pair():
