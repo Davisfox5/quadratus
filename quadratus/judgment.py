@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 __all__ = ["MET", "NOT_MET", "DUPLICATE", "Judgment", "combine", "has_blocking",
-           "RESOLVED", "UNRESOLVED", "INVALID", "recheck_state"]
+           "RESOLVED", "UNRESOLVED", "INVALID", "INVALIDATED", "recheck_state",
+           "Verdict", "RecheckReading", "recheck_verdicts"]
 
 MET, NOT_MET, DUPLICATE = "met", "not met", "duplicate"
 RESOLVED, UNRESOLVED, INVALID = "resolved", "unresolved", "invalid"
@@ -92,3 +93,107 @@ def recheck_state(text: str) -> str:
     if lines and lines.count("RESOLVED") == 1 and "RESOLVED" in (lines[0], lines[-1]):
         return RESOLVED
     return INVALID
+
+
+# --- per-finding rechecks (blueprint section 4) ------------------------------
+
+_ID_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?P<fid>[A-Z][A-Z0-9]*-?\d+)\s*:\s*"
+                      r"(?P<state>RESOLVED|UNRESOLVED|NOT\s+RESOLVED|INVALIDATED)\b\s*[-:,]?\s*(?P<why>.*)$",
+                      re.IGNORECASE)
+_NEW_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NEW|BLOCKING)\s*:\s*(?P<claim>.+)$", re.IGNORECASE)
+_NOTE_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NOTE|SUGGESTION)\s*:\s*(?P<text>.+)$", re.IGNORECASE)
+_COVERAGE_LINE = re.compile(r"\s*COVERAGE\s*:\s*(?P<state>COMPLETE|PARTIAL)\b\s*[-:,]?\s*(?P<why>.*)$",
+                            re.IGNORECASE)
+INVALIDATED = "invalidated"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """One finding's reading: ``state`` is RESOLVED, UNRESOLVED, INVALIDATED
+    or INVALID (no judgment the reader accepts); ``why`` says what the line
+    said, or why it was not accepted."""
+
+    state: str
+    why: str
+
+
+@dataclass(frozen=True)
+class RecheckReading:
+    """A recheck reply read per finding id. ``dispositions`` has one entry for
+    every expected id; ``new`` are claims the reviewer raised that were not
+    expected; ``foreign`` are ids it judged that were never asked; ``notes``
+    are advisory lines that settle nothing; ``coverage`` is the reviewer's own
+    statement of what it read, or None."""
+
+    dispositions: Dict[str, Verdict]
+    new: Tuple[str, ...]
+    foreign: Tuple[str, ...]
+    notes: Tuple[str, ...]
+    coverage: Optional[Tuple[str, str]]
+
+    @property
+    def unjudged(self) -> Tuple[str, ...]:
+        return tuple(fid for fid, v in self.dispositions.items() if v.state == INVALID)
+
+
+def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
+    """Read a recheck reply one finding at a time.
+
+    Every expected id gets exactly one verdict. A line ``F3: RESOLVED why``
+    at the start of a line is the only form read; a marker inside prose is
+    narration. Any UNRESOLVED (or NOT RESOLVED) line for an id makes it
+    UNRESOLVED, whatever else was said. Otherwise exactly one RESOLVED line
+    resolves, exactly one INVALIDATED line with evidence text invalidates,
+    and a missing, duplicated, contradictory or evidence-less line is
+    INVALID: no judgment, never a pass. A ``NEW:`` or ``BLOCKING:`` line is a
+    new finding; a ``NOTE:`` or ``SUGGESTION:`` line settles nothing; an id
+    that was never expected is reported as foreign and applied to nothing.
+    """
+    wanted = {fid.upper(): fid for fid in expected}
+    lines: Dict[str, list] = {}
+    new, foreign, notes = [], [], []
+    coverage = None
+    for raw in (text or "").splitlines():
+        line = raw.replace("**", "").strip()
+        if not line:
+            continue
+        hit = _ID_LINE.match(line)
+        if hit:
+            fid = hit.group("fid").upper()
+            state = hit.group("state").upper().replace("NOT RESOLVED", "UNRESOLVED")
+            state = re.sub(r"\s+", " ", state)
+            if fid in wanted:
+                lines.setdefault(fid, []).append((state, hit.group("why").strip()))
+            else:
+                foreign.append(hit.group("fid"))
+            continue
+        hit = _NEW_LINE.match(line)
+        if hit:
+            claim = hit.group("claim").strip()
+            if claim and not re.match(r"(?i)(none|n/?a|nothing)\b", claim):
+                new.append(claim)
+            continue
+        hit = _NOTE_LINE.match(line)
+        if hit:
+            notes.append(hit.group("text").strip())
+            continue
+        hit = _COVERAGE_LINE.match(line)
+        if hit and coverage is None:
+            coverage = (hit.group("state").lower(), hit.group("why").strip())
+    dispositions: Dict[str, Verdict] = {}
+    for key, fid in wanted.items():
+        read = lines.get(key, [])
+        unresolved = [why for state, why in read if state == "UNRESOLVED"]
+        if unresolved:
+            dispositions[fid] = Verdict(UNRESOLVED, unresolved[0])
+        elif not read:
+            dispositions[fid] = Verdict(INVALID, "no line judged it")
+        elif len(read) > 1:
+            dispositions[fid] = Verdict(INVALID, f"{len(read)} lines judged it; a duplicate settles nothing")
+        elif read[0][0] == "RESOLVED":
+            dispositions[fid] = Verdict(RESOLVED, read[0][1])
+        elif read[0][1]:
+            dispositions[fid] = Verdict(INVALIDATED, read[0][1])
+        else:
+            dispositions[fid] = Verdict(INVALID, "INVALIDATED without evidence")
+    return RecheckReading(dispositions, tuple(new), tuple(foreign), tuple(notes), coverage)

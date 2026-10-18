@@ -3,8 +3,8 @@
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
     "pr": 73,
-    "sha": "b809429aff558630041c121dde3c52b502e69ad1",
-    "gate": "Step 2 (adaptive orchestration, accurate recovery, coordination, persistent progress): root's independent scoped review of #73 and #72, one correction batch, one final combined changed-engine local suite, exact CI and install, then one qualified fresh medium multi-component job. Benchmark stays paused; no automatic PASS or MET.",
+    "sha": "627468d79d04ecfef712af5ff299003a00b838d8",
+    "gate": "Step 2 plus blueprint stage A+B records (Davis, 2026-10-18): root's review of the typed records batch, root's production wiring and durable effects, one full suite on the final connected changed batch, exact CI, then the frozen end-to-end evaluation contract. Benchmark stays paused; no automatic PASS or MET.",
     "required_receipts": [
       "ci",
       "acceptance",
@@ -40,6 +40,15 @@
         "reason": "Research inbox PR #74 is a separately authorized side integration. Restore the pre-existing engine milestone candidate after recording its integration; no engine milestone qualification is implied.",
         "by": "codex",
         "at": "2026-10-16T02:47:51Z"
+      },
+      {
+        "previous": "b809429aff558630041c121dde3c52b502e69ad1",
+        "sha": "627468d79d04ecfef712af5ff299003a00b838d8",
+        "reason": "Stale candidate b809429 is an ancestor of the reviewed #73 head 627468d (root review of d264b0c, full suite 4107 passed / 15 original skips, 4 CI jobs green per root). The A+B records batch is authored on 627468d; receipts start over on the final connected batch.",
+        "by": "claude",
+        "at": "2026-10-18T00:44:18Z",
+        "previous_pr": 73,
+        "previous_gate": "Step 2 (adaptive orchestration, accurate recovery, coordination, persistent progress): root's independent scoped review of #73 and #72, one correction batch, one final combined changed-engine local suite, exact CI and install, then one qualified fresh medium multi-component job. Benchmark stays paused; no automatic PASS or MET."
       }
     ]
   },
@@ -2218,6 +2227,27 @@
         "candidate": "5a20957649ad27997b197d91c3093e612b077236",
         "at": "2026-10-16T02:47:51Z"
       }
+    },
+    {
+      "id": "T-stage-a-records",
+      "purpose": "Blueprint stage A+B, records only (Davis, 2026-10-18, start at lower effort): pure typed delivery records and transitions in quadratus/delivery.py (requirement revisions with immutable origin, per-id findings with basis/impact/dispositions, evidence obligations with separate execution and sufficiency, operation records with prepared/started/settled/uncertain, whole-remaining-path admission in the budget's own exposure classes), the per-id recheck reader judgment.recheck_verdicts, and the immutable-generation manifest rules in quadratus/generations.py. No session wiring, no durable publisher, no prompt change, no product claim; root wires at higher effort after this commit.",
+      "base": "627468d79d04ecfef712af5ff299003a00b838d8",
+      "owns": [
+        "quadratus/delivery.py",
+        "quadratus/generations.py",
+        "quadratus/judgment.py",
+        "tests/test_delivery_records.py",
+        "tests/test_generations.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-18T00:44:19Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [

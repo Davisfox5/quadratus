@@ -1,0 +1,269 @@
+"""Typed delivery records and pure transitions (blueprint stage A, records).
+
+These exercise the records alone. Nothing here is wired into the controller
+yet, and none of these tests claims the three measured failures of the
+controller-reset job are fixed; they pin what the records refuse so the
+wiring cannot loosen it.
+"""
+
+import pytest
+
+from quadratus import delivery as D
+from quadratus.judgment import INVALID, RESOLVED, UNRESOLVED, recheck_verdicts
+
+SRC_A = "a" * 64
+SRC_B = "b" * 64
+
+
+# --- requirement revisions ------------------------------------------------
+
+def test_requirement_revision_origin_decides_approval_and_text_digest():
+    said = D.RequirementRevision("R1", 1, "IDs are positive integers", "user-said")
+    inferred = D.RequirementRevision("R2", 1, "report stays a CSV", "inferred")
+    accepted = D.RequirementRevision("R2", 2, "report stays a CSV", "inferred", decision_receipt="B1@v3")
+    assert said.approved and not inferred.approved and accepted.approved
+    assert inferred.origin == accepted.origin == "inferred"
+    assert said.text_digest == D.RequirementRevision("R1", 2, "  IDs are positive integers ", "user-said").text_digest
+    assert said.to_dict()["approved"] is True
+
+
+@pytest.mark.parametrize("bad", [
+    dict(rid="r1"), dict(revision=0), dict(revision=True), dict(text=" "), dict(origin="guessed"),
+    dict(brief_version=-1),
+])
+def test_requirement_revision_rejects_malformed_rows(bad):
+    row = dict(rid="R1", revision=1, text="x", origin="user-said")
+    row.update(bad)
+    with pytest.raises(ValueError):
+        D.RequirementRevision(**row)
+
+
+# --- findings -------------------------------------------------------------
+
+def _finding(fid="F1", basis=("requirement", "R3@1"), impact="correctness", source=SRC_A):
+    return D.Finding(fid, "claude:opus", "collaborator", f"{fid} claim", D.FindingBasis(*basis), impact, source)
+
+
+def test_finding_basis_needs_a_reference_unless_none():
+    with pytest.raises(ValueError):
+        D.FindingBasis("reproduction", "")
+    assert D.FindingBasis("none").ref == ""
+
+
+def test_fixed_findings_close_while_the_new_one_opens():
+    findings = (_finding("F1"), _finding("F2"), _finding("F3"))
+    reading = recheck_verdicts(
+        "F1: RESOLVED fixed in store.py\nF2: RESOLVED\nF3: RESOLVED\nNEW: dispatch parses 1_0 as 10\n"
+        "NOTE: rename helper", ["F1", "F2", "F3"])
+    after = D.apply_reading(findings, reading, author="claude:opus", role="recheck", source_digest=SRC_B, call="c7")
+    assert [f.state for f in after[:3]] == [RESOLVED, RESOLVED, RESOLVED]
+    assert after[3].fid == "F4" and after[3].state == "open" and after[3].basis.kind == "none"
+    assert after[3].audit_carried and not after[3].holds_effects
+    assert after[0].history[0].call == "c7" and after[0].history[0].source_digest == SRC_B
+
+
+def test_unresolved_wins_duplicates_and_missing_settle_nothing_foreign_ignored():
+    findings = (_finding("F1"), _finding("F2"), _finding("F3"), _finding("F4"))
+    reading = recheck_verdicts(
+        "F1: RESOLVED\nF1: UNRESOLVED still fails on bool\nF2: RESOLVED\nF2: RESOLVED again\n"
+        "F9: RESOLVED\nI think F4 is RESOLVED now.", ["F1", "F2", "F3", "F4"])
+    assert reading.foreign == ("F9",)
+    after = D.apply_reading(findings, reading, author="x", role="recheck", source_digest=SRC_B)
+    assert after[0].state == UNRESOLVED
+    assert after[1].state == "open" and after[1].history[-1].state == "unjudged"
+    assert after[2].history[-1].why == "no line judged it"
+    assert after[3].history[-1].state == "unjudged"
+    assert reading.unjudged == ("F2", "F3", "F4")
+
+
+def test_resolved_on_the_source_it_was_raised_on_is_unjudged():
+    reading = recheck_verdicts("F1: RESOLVED", ["F1"])
+    after = D.apply_reading((_finding("F1"),), reading, author="x", role="recheck", source_digest=SRC_A)
+    assert after[0].state == "open"
+    assert "nothing changed" in after[0].history[-1].why
+
+
+def test_invalidated_needs_evidence_and_then_closes():
+    findings = (_finding("F1"), _finding("F2"))
+    reading = recheck_verdicts("F1: INVALIDATED\nF2: INVALIDATED test_cycle covers it, run 3 passed",
+                               ["F1", "F2"])
+    assert reading.dispositions["F1"].state == INVALID
+    after = D.apply_reading(findings, reading, author="x", role="recheck", source_digest=SRC_A)
+    assert after[0].state == "open" and after[1].state == "invalidated" and after[1].closed
+
+
+def test_immediate_risk_holds_effects_whatever_its_basis_and_is_not_audit_only():
+    risky = _finding("F1", basis=("none", ""), impact="data-loss")
+    assert risky.holds_effects and not risky.audit_carried
+    plain = _finding("F2", basis=("none", ""), impact="style")
+    assert plain.audit_carried and not plain.holds_effects
+    cited = _finding("F3", basis=("reproduction", "pytest -k cycle: 1 failed"), impact="correctness")
+    assert not cited.audit_carried and not cited.holds_effects and cited.state == "open"
+
+
+def test_apply_reading_requires_a_source_and_leaves_unmentioned_findings_alone():
+    reading = recheck_verdicts("F1: RESOLVED", ["F1"])
+    with pytest.raises(ValueError):
+        D.apply_reading((_finding("F1"),), reading, author="x", role="r", source_digest=" ")
+    after = D.apply_reading((_finding("F1"), _finding("F7")), reading, author="x", role="r", source_digest=SRC_B)
+    assert after[1].history == ()
+
+
+# --- evidence obligations -------------------------------------------------
+
+def _obligation(**over):
+    base = dict(oid="O1", behavior="real HTTP server answers POST /tickets/{id}/dependencies",
+                requirements=(("R8", 1), ("R9", 1)), gate="g1", runner="loopback-http",
+                cases=("test_real_handler_rejects_bad_json_and_deletes",))
+    base.update(over)
+    return D.EvidenceObligation(**base)
+
+
+def _receipt(**over):
+    base = dict(id="rcpt-1", source=SRC_A, gate="g1", runner="loopback-http",
+                requirements=[["R8", 1], ["R9", 1]], completed=True, passed=True,
+                passed_cases=["test_real_handler_rejects_bad_json_and_deletes"], skipped_cases=[])
+    base.update(over)
+    return base
+
+
+def test_obligation_without_runner_is_a_prerequisite_not_a_pass():
+    ob = _obligation(runner=None)
+    assert not ob.executable and ob.execution == "missing" and not ob.established
+    out = D.discharge(ob, _receipt(), current_source=SRC_A)
+    assert not out.accepted and out.obligation.execution == "invalid"
+
+
+def test_matching_receipt_discharges_execution_only():
+    out = D.discharge(_obligation(), _receipt(), current_source=SRC_A)
+    assert out.accepted and out.obligation.execution == "ran" and out.obligation.receipts == ("rcpt-1",)
+    assert out.obligation.sufficiency == "unjudged" and not out.obligation.established
+
+
+@pytest.mark.parametrize("over, reason", [
+    (dict(source=SRC_B), "current source"),
+    (dict(gate="g2"), "another gate"),
+    (dict(runner="lead-sandbox"), "another runner"),
+    (dict(requirements=[["R8", 2], ["R9", 1]]), "other requirement revisions"),
+    (dict(completed=False), "did not complete"),
+    (dict(passed_cases=[], skipped_cases=["test_real_handler_rejects_bad_json_and_deletes"]), "skipped"),
+    (dict(passed_cases=["test_other_name"]), "not among the passed cases"),
+])
+def test_mismatched_receipt_is_invalid_and_names_the_first_reason(over, reason):
+    out = D.discharge(_obligation(), _receipt(**over), current_source=SRC_A)
+    assert not out.accepted and out.obligation.execution == "invalid"
+    assert reason in out.reason and out.obligation.receipts == ()
+
+
+def test_failed_matching_run_records_failed():
+    out = D.discharge(_obligation(), _receipt(passed=False, passed_cases=[]), current_source=SRC_A)
+    assert out.accepted and out.obligation.execution == "failed"
+
+
+def test_sufficiency_is_an_independent_judgment_on_a_completed_run():
+    ran = D.discharge(_obligation(), _receipt(), current_source=SRC_A).obligation
+    with pytest.raises(ValueError):
+        D.judge_sufficiency(ran, "sufficient", judged_by="harness")
+    with pytest.raises(ValueError):
+        D.judge_sufficiency(_obligation(), "sufficient", judged_by="claude:opus")
+    judged = D.judge_sufficiency(ran, "sufficient", judged_by="claude:opus")
+    assert judged.established and judged.judged_by == "claude:opus"
+    assert D.judge_sufficiency(_obligation(), "insufficient", judged_by="openai:gpt-5.6-sol").sufficiency == "insufficient"
+
+
+def test_obligation_rejects_malformed_rows():
+    with pytest.raises(ValueError):
+        _obligation(requirements=())
+    with pytest.raises(ValueError):
+        _obligation(execution="done")
+    with pytest.raises(ValueError):
+        _obligation(sufficiency="sufficient")
+
+
+# --- operations -----------------------------------------------------------
+
+def _op(**over):
+    base = dict(opid="O-1", purpose="lead draft t2", owner="openai:gpt-5.6-sol",
+                identity={"purpose": "draft", "role": "lead", "policy": "p1", "input": "d" * 8},
+                allowed_effects=("project-write",), reservation="ticket-13")
+    base.update(over)
+    return D.OperationRecord(**base)
+
+
+def test_operation_starts_only_with_a_reservation_and_settles_on_a_result():
+    with pytest.raises(ValueError):
+        D.start_operation(_op(reservation=None))
+    started = D.start_operation(_op())
+    assert started.status == "started" and started.unsettled
+    with pytest.raises(ValueError):
+        D.settle_operation(started, " ")
+    settled = D.settle_operation(started, "r" * 64)
+    assert settled.status == "settled" and not settled.unsettled
+    with pytest.raises(ValueError):
+        D.start_operation(settled)
+
+
+def test_started_without_result_is_uncertain_not_absent_and_not_restartable():
+    started = D.start_operation(_op())
+    unsure = D.uncertain_operation(started, "process died before the receipt")
+    assert unsure.status == "uncertain" and unsure.unsettled
+    with pytest.raises(ValueError):
+        D.start_operation(unsure)
+    with pytest.raises(ValueError):
+        D.settle_operation(unsure, "r" * 64)
+
+
+def test_operation_identity_names_purpose_role_policy_and_input():
+    with pytest.raises(ValueError):
+        _op(identity={"purpose": "draft", "role": "lead", "policy": "p1"})
+    same = _op(opid="O-2", reservation="ticket-14")
+    assert same.dedupe_key == _op().dedupe_key
+    assert _op(identity={"purpose": "draft", "role": "collaborator", "policy": "p1",
+                         "input": "d" * 8}).dedupe_key != _op().dedupe_key
+
+
+# --- the remaining path ---------------------------------------------------
+
+EXPOSURES = {"editing": 500_000, "reserve": 200_000}
+
+
+def test_last_wave_replay_cannot_pay_a_write_revision_plus_the_held_finish():
+    stages = [D.PlanStage("t2 revision", "editing", editing=True),
+              D.PlanStage("goal", "reserve", finishing=True), D.PlanStage("audit", "reserve", finishing=True)]
+    verdict = D.admit_plan(stages, calls_left=5, tokens_left=657_000, wall_left=1_200,
+                           exposures=EXPOSURES, wall_per_stage=120)
+    assert not verdict.feasible and verdict.short == {"tokens": 243_000}
+    assert verdict.calls_needed == 3 and verdict.tokens_needed == 900_000
+    assert "short by tokens 243,000" in verdict.detail
+    without = D.admit_plan(stages[1:], calls_left=5, tokens_left=657_000, wall_left=1_200,
+                           exposures=EXPOSURES, wall_per_stage=120)
+    assert without.feasible and without.short == {}
+
+
+def test_write_grant_is_always_exposed_at_the_editing_ceiling():
+    with pytest.raises(ValueError):
+        D.PlanStage("trim", "shaped", editing=True)
+    with pytest.raises(ValueError):
+        D.PlanStage("trim", "reserve", editing=True)
+    low_ceiling = D.admit_plan([D.PlanStage("edit", "editing", editing=True)], calls_left=1, tokens_left=250_000,
+                               wall_left=200, exposures={"editing": 100_000, "reserve": 200_000}, wall_per_stage=120)
+    assert low_ceiling.tokens_needed == 200_000
+
+
+def test_shaped_without_a_budget_figure_counts_at_the_reserve_and_all_axes_report():
+    verdict = D.admit_plan([D.PlanStage("closeout", "shaped"), D.PlanStage("audit", "reserve", calls=2)],
+                           calls_left=2, tokens_left=100_000, wall_left=100, exposures=EXPOSURES, wall_per_stage=120)
+    assert verdict.tokens_needed == 600_000
+    assert verdict.short == {"calls": 1, "tokens": 500_000, "wall_seconds": 260.0}
+    shaped = D.admit_plan([D.PlanStage("closeout", "shaped")], calls_left=1, tokens_left=70_000, wall_left=200,
+                          exposures=dict(EXPOSURES, shaped=64_000), wall_per_stage=120)
+    assert shaped.feasible and shaped.tokens_needed == 64_000
+
+
+def test_admit_plan_rejects_missing_budget_figures_and_negative_capacity():
+    with pytest.raises(ValueError):
+        D.admit_plan([], calls_left=1, tokens_left=1, wall_left=1, exposures={"reserve": 1}, wall_per_stage=1)
+    with pytest.raises(ValueError):
+        D.admit_plan([], calls_left=-1, tokens_left=1, wall_left=1, exposures=EXPOSURES, wall_per_stage=1)
+    empty = D.admit_plan([], calls_left=0, tokens_left=0, wall_left=0, exposures=EXPOSURES, wall_per_stage=1)
+    assert empty.feasible and empty.to_dict()["calls_needed"] == 0

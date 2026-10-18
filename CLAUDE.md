@@ -1717,6 +1717,32 @@ Key design decisions already settled:
   does not know, or one that prompts or exits (`-i`, `--version`,
   `--check`), is refused. A project file merely named like an interpreter
   (`./python3`) is the program itself and is not parsed.
+- **Delivery records are typed and pure; the controller is wired to them
+  later** (blueprint stage A+B, records batch, 2026-10-18). `delivery.py`
+  holds requirement revisions (origin never changes; an inferred row is
+  approved only by a decision receipt), findings with stable ids, a basis
+  (requirement, reproduction, evidence or none) and an impact, dispositions
+  per id (RESOLVED needs a source other than the one the finding was raised
+  on; an immediate risk holds the affected effect whatever its basis; a
+  basis-less concern that is not an immediate risk is carried to the audit by
+  id, never dropped as a note), evidence obligations with `execution` and
+  `sufficiency` as two fields (a receipt discharges execution only on the
+  current source, same gate, same runner, same requirement revisions, named
+  cases passed and not skipped; sufficiency comes only from a named seat,
+  never the harness), operation records (no reservation, no start; started
+  without a result is uncertain, not absent and not resumed), and
+  `admit_plan` costing the whole remaining path in the budget's own exposure
+  classes (a stage holding the write grant is always at the editing ceiling;
+  no cheaper class is invented). `judgment.recheck_verdicts` reads a recheck
+  one finding id at a time: UNRESOLVED wins, a duplicate or missing line
+  settles nothing, INVALIDATED needs evidence text, NEW/BLOCKING lines are new
+  findings, foreign ids are reported and applied to nothing. `generations.py`
+  holds the manifest rules: content-addressed record paths never rewritten,
+  an expected generation that is not current is a conflict, and no fallback
+  past a started operation or unfinished reservation. None of it is wired
+  into `session.py`, no prompt asks for per-id lines yet, nothing is written
+  durably, and `recheck_state` is still the live reader; those seams are
+  root's next batch, and nothing here is a product claim.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
