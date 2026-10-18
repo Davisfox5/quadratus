@@ -10,6 +10,7 @@ Whole-controller replays below the vendor CLI (tests.lifecycle.harness).
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import pytest
 
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import audit_reply, recheck_reply, requested_obligations
 from tests.lifecycle.test_lifecycle_matrix import DECL_T1, FILES, FIXED, T1, Script
 
 _R1 = "add(a, b) returns the sum of two numbers"
@@ -49,25 +51,55 @@ def _sandboxed() -> bool:
             or (platform.system() == "Darwin" and os.path.exists("/usr/bin/sandbox-exec")))
 
 
-def _auditor(wrong: bool):
+#: T1's one declared acceptance behavior, the executed evidence obligation
+#: the add scenario registers at dispatch (tests.lifecycle.test_lifecycle_matrix.T1).
+_ADD_OBLIGATION = "add(1, 2) == 3"
+
+
+def _add_reassessment(prompt: str) -> str:
+    """The positive reassessment of R1 on the shown negative-sum proof. The
+    reassessment judges one requirement and passes the audit's own
+    implication no map (Session._reassess), so an executed obligation it
+    leaves unjudged keeps the insufficiency its earlier NOT MET implied:
+    the auditor says so explicitly for the obligation T1 declared, on its
+    own basis (the project check ran add(1, 2) == 3 on this source and the
+    proof adds the negative case). Authored for that obligation alone; any
+    other obligation in the prompt is left unjudged."""
+    judged = {o["oid"]: "SUFFICIENT the project check ran add(1, 2) == 3 on this source and the shown proof "
+                        "executed the negative case; together they show the sum"
+              for o in requested_obligations(prompt)
+              if o["behavior"] == _ADD_OBLIGATION and o["execution"] == "ran"}
+    return audit_reply(prompt, {"R1": "MET - app.py:2"}, judged)
+
+
+def _auditor(wrong: bool, *, reassessment=None):
     """Reads the delivered app.py in its copy. ``wrong``: an auditor that
     calls the correct sum NOT MET until it is shown passing executed
-    evidence (R18's shape: a false positive about an error path)."""
+    evidence (R18's shape: a false positive about an error path). The
+    positive reassessment is typed (``_add_reassessment``): R1 and the
+    executed obligation it covers; ``reassessment`` replaces it for the
+    cases that test a reply without that judgment."""
     def auditor(call, replay):
         source = (Path(call.cwd) / "app.py").read_text()
         if "abs(" in source:
             return "R1: NOT MET - negative sums are wrong; at app.py add; example: add(-1, -2) returns 3"
+        if REASSESS in call.prompt and "Result: passed" in call.prompt:
+            return (reassessment or _add_reassessment)(call.prompt)
         if wrong and not ("Result: passed" in call.prompt or "## Executed evidence" in call.prompt):
             return "R1: NOT MET - negative sums are not handled; at app.py add; example: add(-1, -2)"
         return "R1: MET - app.py:2"
     return auditor
 
 
-def _run(tmp_path, monkeypatch, *, source=FIXED, body="asserts", wrong=True, limits=None, again=False):
+def _run(tmp_path, monkeypatch, *, source=FIXED, body="asserts", wrong=True, limits=None, again=False,
+         reassessment=None, blocking=False):
     """t1 delivers ``source``; the first DONE meets the audit's NOT MET; the
     orchestrator answers with one evidence request (``again``: the same
     request once more on its receipt), repairs a confirmed defect with one
-    task, else DONE."""
+    task, else DONE. ``blocking``: each reviewer raises one standing finding
+    on the draft and resolves it on the recheck, so the task spends the
+    revision and the rechecks its selected route counts (the call
+    calibrations need the route's calls actually made)."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     def orchestrator(call, replay):
         n = len(replay.of("orchestrator"))
@@ -88,9 +120,14 @@ def _run(tmp_path, monkeypatch, *, source=FIXED, body="asserts", wrong=True, lim
         H.write(call, {"app.py": source if call.task == "t1" else FIXED})
         return 'Implemented add.\nCHANGED: ["app.py"]'
 
+    def collaborator(call, replay):
+        first = not any(c.role == "revision" and c.task == call.task for c in replay.calls)
+        return f"{_HELD}\nR1: MET - app.py:2" if blocking and first else "NO FINDINGS\nR1: MET - app.py:2"
+
     return H.run(tmp_path, monkeypatch, Script(
-        orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
-        auditor=_auditor(wrong), **{"requirements-review": lambda c, r: "COMPLETE"}),
+        orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision shows negative sums"),
+        auditor=_auditor(wrong, reassessment=reassessment), **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=3, record_complete=False, limits=limits)
 
 
@@ -187,8 +224,20 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
     the finding is still NOT MET."""
     if not _sandboxed():
         pytest.skip("no scratch sandbox here")
-    calibration = _run(tmp_path / "calibrate", monkeypatch)
+    # The route's calls are made (``blocking``: one standing finding per
+    # reviewer, resolved on the recheck): t1 spends its selected seven
+    # (lead draft, two reviews, revision, two rechecks, close-out), so the
+    # call allowance that admits the route at dispatch (two calls used, two
+    # held for the finish) is the one that is spent exactly at the
+    # reassessment. With clean reviews the route's revision and rechecks are
+    # counted but never made, and the same allowance refuses t1 at dispatch
+    # instead (root's calibration finding on bc421f8).
+    calibration = _run(tmp_path / "calibrate", monkeypatch, blocking=True)
     before = next(i for i, c in enumerate(calibration.calls) if REASSESS in c.prompt)
+    roles = [c.role for c in calibration.calls[:before]]
+    assert roles.count("revision") == 1 and roles.count("recheck") == 2, roles
+    admitted = [a for a in H.result_json(calibration)["plan_admissions"] if a["task"] == "t1" and a["scope"] == "full"]
+    assert len(admitted[0]["stages"]) == 7 and before + 1 - admitted[0]["at_attempt"] - 2 >= 7, (admitted, before)
     # The reassessment follows the DONE audit, which has started; the cap's
     # goal question is still held one call (Davis, 2026-10-16), so with one
     # call over the reassessment's position it is the ordinary call refused.
@@ -196,7 +245,8 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
     assert held["started"] == ["audit"] and held["pending"] == ["goal"], held
     limits = RunLimits(max_calls=before + 1, max_reported_tokens=6_000_000, wall_seconds=600,
                        max_concurrent_workers=2)
-    replay = _run(tmp_path / "limited", monkeypatch, limits=limits)
+    replay = _run(tmp_path / "limited", monkeypatch, limits=limits, blocking=True)
+    assert [c.role for c in replay.calls[:before]] == roles, "the same calls up to the reassessment's position"
     assert not _reassessments(replay) and not replay.result.completed
     # The reassessment would spend the cap's held goal-question call, so it is
     # refused as FinishReserved, a budget stop (Davis, 2026-10-16).
@@ -224,11 +274,18 @@ def test_a_held_review_finding_is_tested_and_rechecked_once_by_its_own_reviewer(
         return "DONE"
 
     def collaborator(call, replay):
-        return ("BLOCKING: negative sums are not shown; at app.py add; example: add(-1, -2) should be -3\n"
-                "R1: MET - app.py:2")
+        # A standing finding (basis given): held open through the fix
+        # cycles, so the evidence loop may test it as U<n>.
+        return f"{_HELD}\nR1: MET - app.py:2"
 
     def recheck(call, replay):
-        return verdict if "Result: passed" in call.prompt else "UNRESOLVED: negative sums are not shown"
+        # One disposition per expected finding id, as the recheck protocol
+        # reads it; the finding stays held through the fix cycles and is
+        # judged only on the shown passing proof.
+        word, _, why = verdict.partition(": ")
+        return recheck_reply(call.prompt, default=(f"{word} {why or 'the executed test shows negative sums'}"
+                                                   if "Result: passed" in call.prompt
+                                                   else "UNRESOLVED negative sums are not shown"))
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
@@ -252,7 +309,15 @@ def test_a_held_review_finding_is_tested_and_rechecked_once_by_its_own_reviewer(
         assert replay.result.completed, replay.result.error
     else:
         assert all(r["disposition"].startswith("confirmed on reassessment") for r in records)
-        assert not replay.result.completed and "open finding" in (replay.result.error or "")
+        # The findings stay open on the typed record: the final audit lowers
+        # R1 for them by id, and the capped run ends RequirementsUnmet.
+        assert not replay.result.completed and "RequirementsUnmet" in (replay.result.error or "")
+        result = H.result_json(replay)
+        fids = [f["fid"] for f in result["review_findings"]]
+        assert len(fids) == 2 and not any(f["closed"] for f in result["review_findings"])
+        lowered = result["requirements"]["audits"][-1]["lowered"]
+        assert lowered and "open review finding" in lowered[0]["reason"] and all(fid in lowered[0]["reason"]
+                                                                                  for fid in fids)
 
 
 def test_an_evidence_request_is_read_exactly_or_answered_never_run_as_a_task():
@@ -326,15 +391,54 @@ _CHALLENGE = "may challenge it with executed evidence"
 _ROOT_LIMITS = RunLimits(max_calls=20, max_reported_tokens=2_000_000, wall_seconds=1800,
                          max_concurrent_workers=2, reserve_tokens_per_call=200_000,
                          max_tokens_per_call=500_000)
+#: The ratio family's fundable fixture allowance. Under the default-shaped
+#: bound (_ROOT_LIMITS: 2,000,000 tokens, a 500,000 editing ceiling, a 200,000
+#: reserve) the first task's selected route, counted in exposure classes
+#: (the lead draft and the revision at the editing ceiling, two reviews and
+#: two rechecks at the reserve: 1,800,000; with a model close-out ahead of
+#: later tasks, 2,000,000), cannot be paid from what is left after the held
+#: finish (two calls at the reserve: 1,600,000 less reported usage), and the
+#: task is NOT STARTED before any call (root's Mac receipt on bc421f8, kept
+#: as test_the_default_shaped_bound_refuses_the_ratio_route_before_any_call).
+#: The positive fixtures run under the same calls, ceiling and reserve with
+#: 2,600,000 tokens, which pays the larger route whole with 200,000 of
+#: headroom for reported usage. A fixture allowance, never a claim about the
+#: product's defaults.
+_FUNDED_LIMITS = RunLimits(max_calls=20, max_reported_tokens=2_600_000, wall_seconds=1800,
+                           max_concurrent_workers=2, reserve_tokens_per_call=200_000,
+                           max_tokens_per_call=500_000)
+#: The typed shape of a standing review finding (a basis given): held open
+#: through the fix cycles and offered to the evidence loop as U<n>; a bare
+#: BLOCKING line with no basis is carried to the final audit by id instead.
+_HELD = "BLOCKING: negative sums are not shown; at app.py add; example: add(-1, -2) should be -3 | basis: R1 | impact: correctness"
+#: The ratio scenario's one declared acceptance behavior (_RATIO_SCOPE).
+_RATIO_OBLIGATION = "safe_ratio(1, 0) is None"
 
 
-def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False, limits=_ROOT_LIMITS,
-               review="NO FINDINGS\nR1: MET - ratio.py:4"):
+def _ratio_reassessment(prompt: str) -> str:
+    """The positive reassessment of R1 on a shown proof that executed the
+    zero divisor: R1 MET, and the obligation the task declared judged
+    sufficient on that basis alone (the proof executed exactly its
+    behavior on this source). Only that obligation; the irrelevant proof
+    never reaches here (the auditor keeps its finding)."""
+    judged = {o["oid"]: "SUFFICIENT the shown proof executed safe_ratio(1, 0) is None on this source and passed"
+              for o in requested_obligations(prompt)
+              if o["behavior"] == _RATIO_OBLIGATION and o["execution"] == "ran"}
+    # R1 is an error clause: its MET cites the delivered file and the exact
+    # case shown executed (the executed-evidence rule), never the file alone.
+    return audit_reply(prompt, {"R1": "MET - ratio.py:4, shown by tests/test_ratio_evidence.py::test_zero_divisor"},
+                       judged)
+
+
+def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False, limits=_FUNDED_LIMITS,
+               review="NO FINDINGS\nR1: MET - ratio.py:4", blocking=False):
     """max_tasks=1: t1 writes ratio.py, the cap question is answered DONE,
     the final audit finds R1 NOT MET claiming ZeroDivisionError escapes
     (false for _SAFE), and the orchestrator challenges R1 once with a new
     pytest file. The auditor turns MET only when shown a passing test that
-    divides by zero (``keeps``: never)."""
+    divides by zero (``keeps``: never). ``blocking``: each reviewer raises
+    one standing finding on the draft and resolves it on the recheck, so the
+    task spends the revision and the rechecks its selected route counts."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     request = ("EVIDENCE: R1 - a zero divisor returns None\nFILE: tests/test_ratio_evidence.py\n```python\n"
                + _RATIO_TESTS[test] + "```")
@@ -353,12 +457,19 @@ def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False,
     def auditor(call, replay):
         shown = "Result: passed" in call.prompt and "assert safe_ratio(1, 0) is None" in call.prompt
         if shown and not keeps:
-            return "R1: MET - ratio.py:4"
+            return _ratio_reassessment(call.prompt) if REASSESS in call.prompt else "R1: MET - ratio.py:4"
         return ("R1: NOT MET - ZeroDivisionError escapes safe_ratio; at ratio.py safe_ratio; "
                 "example: safe_ratio(1, 0) raises ZeroDivisionError")
 
+    held = "BLOCKING: the zero divisor is not shown; at ratio.py safe_ratio | basis: R1 | impact: correctness"
+
+    def collaborator(call, replay):
+        first = not any(c.role == "revision" for c in replay.calls)
+        return f"{held}\nR1: MET - ratio.py:4" if blocking and first else review
+
     return H.run(tmp_path, monkeypatch, Script(
-        orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: review,
+        orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision returns None for zero"),
         auditor=auditor, **{"requirements-review": lambda c, r: "COMPLETE"}),
         files={**FILES, "app.py": FIXED, "ratio.py": "def safe_ratio(a, b):\n    return a / b\n"},
         max_tasks=1, record_complete=False, limits=limits)
@@ -382,7 +493,11 @@ def test_a_false_final_audit_finding_is_challenged_after_the_cap_without_another
     challenges R1 read-only, the harness runs its test on the delivered
     source, the same auditor reassesses once and the run completes, with no
     writer, slot or recovery bought and inside the unchanged 20-call
-    allowance."""
+    allowance (the token allowance is the fixture's funded one,
+    _FUNDED_LIMITS). The served record came in while the final audit was
+    current and the acceptance on record consumed it: the terminal's
+    acceptance is current, names E1, and the auditor's own packet beside
+    it (the production path of Session._consume_evidence)."""
     if not _sandboxed():
         pytest.skip("no scratch sandbox here")
     replay = _ratio_run(tmp_path, monkeypatch)
@@ -390,6 +505,13 @@ def test_a_false_final_audit_finding_is_challenged_after_the_cap_without_another
     (record,) = _records(replay)
     assert record["target"] == "R1" and record["receipt"]["status"] == "passed"
     assert record["disposition"].startswith("MET on reassessment by the same auditor")
+    assert record["audit_current"] is True, "the final audit was current when the challenge came in"
+    from quadratus import jobstore
+    acceptance = jobstore.read_terminal(Path(replay.result.run_dir))["acceptance"]
+    assert acceptance["current"] is True and acceptance["consumed"] == ["E1"]
+    assert acceptance["packet_audited"] != acceptance["packet"] and acceptance["requirements"]["R1"]["met"]
+    audit = H.result_json(replay)["requirements"]["audits"][-1]
+    assert acceptance["packet_audited"] == audit["packet_settled"] and acceptance["binding"] != audit["binding"]
     auditors = replay.of("auditor")
     assert len(auditors) == 2 and len({c.vendor for c in auditors}) == 1, "the audit, then its one reassessment"
     assert [c.task for c in _writers(replay)] == ["t1"], "no writer after the cap"
@@ -415,11 +537,15 @@ def test_a_final_challenge_that_does_not_establish_the_requirement_leaves_it_hel
           "skipped": dict(test="skips"), "mutating": dict(test="mutates"),
           "auditor-keeps-finding": dict(keeps=True)}.get(variant, {})
     if variant == "budget":
-        calibration = _ratio_run(tmp_path / "calibrate", monkeypatch)
+        # The route's calls made (``blocking``), so the allowance that admits
+        # t1's six-call route at dispatch is spent exactly at the
+        # reassessment (see test_a_reassessment_the_budget_cannot_admit...).
+        calibration = _ratio_run(tmp_path / "calibrate", monkeypatch, blocking=True)
         before = next(i for i, c in enumerate(calibration.calls) if REASSESS in c.prompt)
-        kw = dict(limits=RunLimits(max_calls=before, max_reported_tokens=2_000_000, wall_seconds=1800,
-                                   max_concurrent_workers=2, reserve_tokens_per_call=200_000,
-                                   max_tokens_per_call=500_000))
+        assert [c.role for c in calibration.calls[:before]].count("recheck") == 2
+        kw = dict(blocking=True, limits=RunLimits(
+            max_calls=before, max_reported_tokens=_FUNDED_LIMITS.max_reported_tokens, wall_seconds=1800,
+            max_concurrent_workers=2, reserve_tokens_per_call=200_000, max_tokens_per_call=500_000))
     replay = _ratio_run(tmp_path / "run", monkeypatch, **kw)
     source = kw.get("source", _SAFE)
     (record,) = _records(replay)
@@ -547,7 +673,7 @@ def test_an_interrupted_challenge_resumes_its_unstarted_judgement_once_and_never
     spent = _budget(parent)
     assert spent["in_flight"] == 0
     before = len(replay.calls)
-    second = Path(_episode(replay, resume_from=parent.name, max_tasks=1, limits=_ROOT_LIMITS).run_dir)
+    second = Path(_episode(replay, resume_from=parent.name, max_tasks=1, limits=_FUNDED_LIMITS).run_dir)
     new = replay.calls[before:]
     result = json.loads((second / "result.json").read_text())
     assert len(runs) == 1, "the proof is never run again"
@@ -626,9 +752,8 @@ def test_a_review_reassessment_is_bound_by_the_original_goal_not_only_the_task_t
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead,
-        collaborator=lambda c, r: "BLOCKING: negative sums are not shown; at app.py add; example: add(-1, -2)\n"
-                                  "R1: MET - app.py:2",
-        recheck=lambda c, r: "UNRESOLVED: still open",
+        collaborator=lambda c, r: f"{_HELD}\nR1: MET - app.py:2",
+        recheck=lambda c, r: recheck_reply(c.prompt, default="UNRESOLVED still open"),
         auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=3, record_complete=False, goal=goal)
     judges = [c for c in replay.of("recheck") if "Result: passed" in c.prompt]
@@ -676,7 +801,8 @@ def test_every_judge_and_writer_after_the_draft_is_given_the_order_of_authority(
 
     (tmp_path / "revision").mkdir()
     revised = H.run(tmp_path / "revision", monkeypatch, Script(
-        orchestrator=_plan_once(DECLARED), lead=lead, collaborator=collaborator, recheck=lambda c, r: "RESOLVED",
+        orchestrator=_plan_once(DECLARED), lead=lead, collaborator=collaborator,
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision shows negative sums"),
         auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=2, record_complete=False)
     revisions = revised.of("revision")
@@ -735,10 +861,11 @@ def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as
 
     tmp_path.mkdir(parents=True, exist_ok=True)
     replay = H.run(tmp_path, monkeypatch, Script(
-        orchestrator=orchestrator, lead=lead, collaborator=collaborator, recheck=lambda c, r: "RESOLVED",
+        orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision returns None for zero"),
         auditor=lambda c, r: "R1: MET - ratio.py:4", **{"requirements-review": lambda c, r: "COMPLETE"}),
         files={**FILES, "app.py": FIXED, "ratio.py": "def safe_ratio(a, b):\n    return a / b\n"},
-        max_tasks=3 if two else 2, record_complete=False, limits=_ROOT_LIMITS)
+        max_tasks=3 if two else 2, record_complete=False, limits=_FUNDED_LIMITS)
     (audit,) = replay.of("auditor")
     section = audit.prompt.split("## Earlier task-review observations")
     if case == "resolved-blocking":
@@ -833,7 +960,7 @@ def test_a_carried_warning_survives_a_pause_and_reaches_the_resumed_reassessment
     review = f"{_LATE}\n\nR1: MET - ratio.py:4\nREVIEW: COMPLETE"
     replay = _ratio_run(tmp_path, monkeypatch, review=review)
     before = len(replay.calls)
-    _episode(replay, resume_from=Path(replay.result.run_dir).name, max_tasks=1, limits=_ROOT_LIMITS)
+    _episode(replay, resume_from=Path(replay.result.run_dir).name, max_tasks=1, limits=_FUNDED_LIMITS)
     (judge,) = [c for c in replay.calls[before:] if REASSESS in c.prompt]
     assert _LATE.strip() in judge.prompt
 
@@ -874,3 +1001,62 @@ def test_an_unnumbered_review_warning_reaches_the_final_audit(tmp_path, monkeypa
     audit = replay.of("auditor")[0].prompt
     assert _UNNUMBERED in audit and "naming no requirement (the task covered R1" in audit
     assert len(replay.of("auditor")) == 2, "no added call: the audit and the challenge's one reassessment"
+
+
+# -- root's Mac receipt on bc421f8: the protocol of a positive reassessment, and the bound ----
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("shape", ["missing", "insufficient", "conflicting"])
+def test_a_positive_reassessment_without_a_sufficiency_judgment_keeps_the_requirement_held(tmp_path, monkeypatch,
+                                                                                            shape):
+    """Root's Mac receipt on bc421f8: the proof executed and passed, the
+    auditor reassessed R1 MET, and R1 stayed held with 'O1: sufficiency
+    insufficient', because the reassessment passes the audit's implication
+    no map (Session._reassess) and the scripted auditor judged no
+    obligation. That is the protocol, kept: a positive line about one
+    requirement never overwrites the insufficiency an earlier independent
+    NOT MET implied. Missing, explicitly insufficient and contradictory
+    sufficiency lines all keep R1 held, the record says why, and the run
+    ends RequirementsUnmet; the proof and the reassessment stay on record."""
+    def reply(prompt):
+        judged = {o["oid"]: {"insufficient": "INSUFFICIENT the proof shows one case only",
+                             "conflicting": "SUFFICIENT shown\n{oid}: INSUFFICIENT not shown"}.get(shape, "")
+                  for o in requested_obligations(prompt) if o["behavior"] == _ADD_OBLIGATION}
+        judged = {oid: text.replace("{oid}", oid) for oid, text in judged.items() if text}
+        return audit_reply(prompt, {"R1": "MET - app.py:2"}, judged)
+    replay = _run(tmp_path, monkeypatch, reassessment=reply)
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    (record,) = _records(replay)
+    assert record["receipt"]["status"] == "passed" and record["reassessment"].startswith("R1: MET")
+    assert record["disposition"].startswith("held: acceptance predicate:"), record["disposition"]
+    assert "sufficiency" in record["disposition"]
+    obligation = next(o for o in H.result_json(replay)["evidence_obligations"] if o["behavior"] == _ADD_OBLIGATION)
+    assert obligation["sufficiency"] == {"conflicting": "unjudged"}.get(shape, "insufficient")
+    assert len(_reassessments(replay)) == 1
+    assert not replay.result.completed and "RequirementsUnmet" in (replay.result.error or "")
+
+
+@pytest.mark.requirements_ledger
+def test_the_default_shaped_bound_refuses_the_ratio_route_before_any_call(tmp_path, monkeypatch):
+    """Root's Mac receipt on bc421f8, kept as the family's bound control:
+    under _ROOT_LIMITS the first task's selected route (six calls,
+    1,800,000 in exposure classes) cannot be paid from what is left after
+    the held finish, so the task is NOT STARTED before any task call, no
+    effect is launched, no evidence or audit record exists, and the result
+    is incomplete and says so. A positive under this bound is not claimed
+    anywhere; the positive fixtures name their own allowance."""
+    replay = _ratio_run(tmp_path, monkeypatch, limits=_ROOT_LIMITS)
+    result = H.result_json(replay)
+    assert not replay.result.completed
+    assert {c.role for c in replay.calls} <= {"orchestrator", "requirements-review"}, [c.role for c in replay.calls]
+    assert _records(replay) == [] and not replay.of("auditor") and not replay.of("lead")
+    (refusal,) = [r for r in result["finish_refusals"] if r["task"] == "t1"]
+    detail = refusal["detail"]
+    assert "cannot pay its selected route" in detail, detail
+    numbers = [int(n.replace(",", "")) for n in re.findall(r"\d[\d,]{2,}", detail)]
+    assert 1_800_000 in numbers, detail
+    available = max(n for n in numbers if n < 1_800_000)
+    assert available <= _ROOT_LIMITS.max_reported_tokens - 2 * _ROOT_LIMITS.reserve_tokens_per_call, detail
+    assert [n["task"] for n in result["not_started"]] == ["t1"]
+    assert (replay.project / "ratio.py").read_text() == "def safe_ratio(a, b):\n    return a / b\n"

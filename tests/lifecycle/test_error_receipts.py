@@ -32,9 +32,18 @@ import json
 import pytest
 
 from quadratus.config import Settings
-from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import Script
+from tests.lifecycle.test_step2_evidence import _FUNDED_LIMITS
+
+# The positive fixtures here run under the evidence file's named fundable
+# allowance (_FUNDED_LIMITS: same calls, editing ceiling and reserve as the
+# default-shaped bound, 2,600,000 tokens). Under the 2,000,000 bound the
+# first task's selected route (six calls, 1,800,000 in exposure classes)
+# cannot be paid after the held finish and is NOT STARTED before any call,
+# so the lead never writes and no scratch receipt exists (root's Mac cap
+# reconciliation on bc421f8; that refusal is kept as a control in
+# test_step2_evidence.py). Never a claim about the product's defaults.
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -94,8 +103,7 @@ def test_explicit_error_contract_cannot_be_discharged_without_executed_current_p
                **{'requirements-review': lambda c,r:'COMPLETE'}),
         files={'switches.py':GOOD, 'tests/test_switches.py':ORIGINAL, 'README.md':'# Switch parser\n'},
         goal=GOAL, max_tasks=1,
-        limits=RunLimits(max_calls=20,max_reported_tokens=2_000_000,wall_seconds=1800,
-                        max_concurrent_workers=2,reserve_tokens_per_call=200_000,max_tokens_per_call=500_000),
+        limits=_FUNDED_LIMITS,
         settings=Settings(backend='cli'))
     # Independently execute the delivered implementation to establish the real
     # negative-path defect, even though its approved positive check passes.
@@ -137,8 +145,7 @@ def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_pat
                collaborator=peer, auditor=auditor, **{'requirements-review':lambda c,r:'COMPLETE'}),
         files={'switches.py':GOOD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},
         goal=GOAL,max_tasks=1,
-        limits=RunLimits(max_calls=20,max_reported_tokens=2_000_000,wall_seconds=1800,
-                        max_concurrent_workers=2,reserve_tokens_per_call=200_000,max_tokens_per_call=500_000),
+        limits=_FUNDED_LIMITS,
         settings=Settings(backend='cli'))
     result = H.result_json(replay)
     proofs = result.get('scratch_proofs') or []

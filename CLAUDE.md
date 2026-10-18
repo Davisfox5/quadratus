@@ -1877,6 +1877,39 @@ Key design decisions already settled:
   revision where measured, and the security fix and the design fixes are
   admitted through the same helper (`_admit_repair`) before their editor
   writes, a refusal recorded and the verdict or render standing as found.
+- **The evidence loop's scripted judges answer the typed protocol** (root's
+  Mac run of `tests/lifecycle/test_step2_evidence.py` on bc421f8: 27 failed,
+  10 passed, no skips; the earlier "environment" label was wrong and is
+  withdrawn). `Session._reassess` passes the audit's implication no found
+  map on purpose, so a positive reassessment of one requirement never
+  overwrites the insufficiency its earlier NOT MET implied: the scripted
+  auditor must judge the executed obligation explicitly, on a basis the case
+  authors (`tests/lifecycle/replies.py`: `audit_reply`, `recheck_reply`,
+  `requested_obligations`; nothing inferred from a MET, a receipt or an
+  obligation's presence, and a malformed-reply case writes its raw reply).
+  Reviewer findings answer one disposition per expected id, and a finding
+  the evidence loop may test is a standing one (a basis given; a bare
+  BLOCKING line is carried to the audit by id instead). The missing,
+  explicit-insufficient and contradictory shapes stay held
+  (`test_a_positive_reassessment_without_a_sufficiency_judgment_keeps_the_
+  requirement_held`). Two product changes came out of the same receipt: the
+  proof the harness itself ran for a challenge is an executed case for that
+  requirement alone, bound to the record's source and identity
+  (`_executed_cases`; without it no error-clause requirement could be
+  established by the challenge the cap offers), and the final path
+  reconciles carried pending evidence before coverage is read
+  (`_requirements_satisfied` calls `_finish_pending_evidence` first; an
+  awaited record moved the packet, the status restore was skipped, and a
+  resumed cap stopped on "never covered"; a judgment that may have started
+  stays held). *The ratio family's bound*: under `_ROOT_LIMITS` (2M, the
+  default shape) the first task's selected route (1,800,000 in exposure
+  classes, 2,000,000 with a close-out) cannot be paid after the held finish
+  and is NOT STARTED before any call; that refusal is kept as a control and
+  the positive fixtures run under a named allowance (`_FUNDED_LIMITS`,
+  2,600,000), never claimed as a default positive. The call calibrations
+  make the route's calls (`blocking=True`: a standing finding per reviewer
+  resolved on the recheck) so the allowance that admits the route is spent
+  exactly at the reassessment.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

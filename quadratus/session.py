@@ -5800,7 +5800,7 @@ class Session:
             # outcome the harness knows, settled as such, never uncertain.
             authority = self._authority_before("routing decision")
             try:
-                with invocation("decide", task_id, authority=authority), self._operation(
+                with invocation(task_id, "decide", authority=authority), self._operation(
                         "routing decision", inputs=dict(task=task_id, decision=key, labels=decision.labels,
                                                         context=context)) as op:
                     try:
@@ -8183,6 +8183,17 @@ class Session:
             final = bool(getattr(self, "_final_check", False))
         ledger = self.memory.ledger
         kept = self._final_audit if final else None
+        if kept is not None:
+            # Evidence a previous episode left pending at the cap (a proof run
+            # and never judged, an intent never run) is reconciled first:
+            # finished once where the record allows, never replayed, and
+            # consumed, so the acceptance on record is current again before
+            # coverage is read. Without this the pending record moved the
+            # packet, the restore below was skipped, and the resumed cap
+            # stopped on 'never covered' before the challenge could finish
+            # it (root on 637a7e2). A judgment that may have started stays
+            # held and unconsumed, as _finish_pending_evidence leaves it.
+            self._finish_pending_evidence()
         if (kept and kept.get("status_before") is not None
                 and kept.get("binding") == self._audit_binding(kept.get("ids"))):
             # Resumed at the cap on exactly the evidence packet the final
@@ -9626,7 +9637,14 @@ class Session:
         - with ``rid``, a scratch demonstration the harness ran and passed in
           full in a review of that requirement, on this source and these
           checks (``scratch_proofs`` provenance), whose rows name this exact
-          case as passed.
+          case as passed;
+        - with ``rid``, the proof the harness itself ran for a challenge of
+          that requirement (the evidence loop, ``_run_evidence``), passed on
+          this source and these checks (the record's bound identity), whose
+          receipt names this exact case as passed. The same demonstration
+          route, by the harness's own run: without it no error-clause
+          requirement could be established by the challenge the cap offers
+          (root's Mac receipt on bc421f8).
 
         Nothing here is a verdict: the seat still judges whether the case
         establishes the requirement. A model's word is never a route."""
@@ -9673,6 +9691,17 @@ class Session:
                         or proof.get("identity") != identity or rid not in (proof.get("requirements") or ())):
                     continue
                 executed |= _proof_cases(proof)
+            evidence_identity = self._evidence_identity()
+            for record in self.evidence_requests:
+                receipt = record.get("receipt") or {}
+                if (record.get("target") != rid or receipt.get("status") != "passed"
+                        or record.get("identity") != evidence_identity or record.get("source") != current):
+                    continue
+                for case in receipt.get("cases") or ():
+                    name, _, outcome = str(case).rpartition(": ")
+                    if outcome == "passed" and "::" in name:
+                        executed.add(name)
+                        executed.add(name.split("[", 1)[0])
         return [c for c in citations if c in executed]
 
     def _lower_unexercised_errors(self, found: dict, audited) -> List[dict]:

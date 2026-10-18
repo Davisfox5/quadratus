@@ -1056,3 +1056,67 @@ def test_a_failed_routing_decisions_receipts_keep_why_the_call_failed(tmp_path, 
     op = s.operations[-1]
     failure = json.loads(jobstore.read_record(run_dir, op["receipt"])["result"])
     assert failure["failure"].startswith("JobStoreUnavailable") and "offline: connection refused" in failure["cause"]
+
+
+# --- root's Mac receipt on bc421f8: the challenge's own proof, and pending evidence at the cap ---
+
+def test_the_harness_run_proof_of_a_challenge_is_an_executed_case_for_that_requirement_alone(tmp_path):
+    """Root's Mac receipt on bc421f8: an error-clause MET must cite a case
+    shown executed, and the proof the harness ran for the challenge was not
+    one of the routes, so no error-clause requirement could be established
+    by the challenge the cap offers. The proof's passed case counts for the
+    requirement it was made for, on the source and checks it was bound to;
+    another target, a failed run, another identity, another source or a
+    case that did not pass counts nothing, and the file alone resolves no
+    citation."""
+    s, prompts = _session(tmp_path, "")
+    identity = s._evidence_identity()
+    case = "tests/test_evidence_negative.py::test_negative_sum"
+
+    def record(**over):
+        body = dict(id="E1", target="R1", kind="audit", reviewer="openai:gpt-5.6-sol", stage="done",
+                    receipt=dict(status="passed", reason="1 passed", cases=[f"{case}: passed"]),
+                    source=s._source_fingerprint(), identity=identity, disposition="held")
+        body.update(over)
+        return body
+    s.evidence_requests = [record()]
+    assert s._executed_cases([case], rid="R1") == [case]
+    assert s._executed_cases([case]) == [], "the route needs the requirement the proof was made for"
+    assert s._executed_cases([case], rid="R5") == []
+    for over in (dict(receipt=dict(status="failed", reason="1 failed", cases=[f"{case}: failed"])),
+                 dict(identity="other"), dict(source="other"),
+                 dict(receipt=dict(status="passed", reason="", cases=[f"{case}: skipped"]))):
+        s.evidence_requests = [record(**over)]
+        assert s._executed_cases([case], rid="R1") == [], over
+    s.evidence_requests = [record()]
+    assert s._executed_cases(["tests/test_evidence_negative.py::test_other"], rid="R1") == []
+
+
+def test_pending_evidence_is_reconciled_on_the_final_path_before_coverage_is_read(tmp_path):
+    """Root on 637a7e2: an evidence record a previous episode left pending
+    at the cap moved the packet, so the resumed final path skipped the
+    status restore and stopped on 'never covered' before the challenge
+    could finish it. The final path now reconciles carried pending evidence
+    first (finished once where the record allows, never replayed): an
+    intent never run is closed and consumed, the acceptance on record is
+    current again, the restore happens and the final audit is not drawn
+    again."""
+    s, prompts = _session(tmp_path, f"R1: MET - {UNIT}\nR5: NOT MET - no console check\n")
+    s._audit_requirements(final=True)
+    s._final_audit["status_before"] = {"R5": "covered by t1"}
+    identity = s._evidence_identity()
+    record = dict(id="E1", target="R5", kind="audit", reviewer="openai:gpt-5.6-sol", task=None,
+                  finding="R5: NOT MET - no console check", original_disposition="NOT MET", claim="",
+                  file="tests/test_e1.py", file_sha256="x", source=s._source_fingerprint(), identity=identity,
+                  key=["audit", "R5", identity], receipt=None, execution=None, reassessment=None, stage="intent",
+                  test="def test_e1(): pass\n", disposition="held: interrupted before the evidence ran",
+                  audit_current=s._final_audit_current())
+    s.evidence_requests.append(record)
+    s.memory.ledger.requirement_status["R5"] = "NOT MET: no console check"
+    assert s._final_audit_current() is False
+    before = len(prompts)
+    s._final_check = True
+    s._requirements_satisfied(final=True)
+    assert record["stage"] == "done" and s._final_audit["consumed"] == ["E1"]
+    assert s._final_audit_current() is True
+    assert not any("independent auditor" in p for p in prompts[before:]), "the final audit is not drawn again"
