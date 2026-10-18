@@ -59,11 +59,12 @@ _CARRIED = (
     "unresolved_reviews", "_cap_goal", "_final_audit", "review_notes", "finish_refusals",
     "review_dispositions", "not_started", "judgment_completions", "judgment_gaps",
     "review_findings", "evidence_obligations", "plan_admissions", "operations", "_requirement_revision_record",
+    "_plan_gate_receipt",
 )
 #: Carried state added by the A+B batch (2026-10-18): absent from earlier
 #: checkpoints, which are still readable and resumable with these empty.
 _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admissions", "operations",
-                          "_requirement_revision_record"})
+                          "_requirement_revision_record", "_plan_gate_receipt"})
 #: State a checkpoint does not carry. Any of it present makes the point not
 #: resumable, rather than resuming a job whose record would be incomplete.
 _NOT_CARRIED = (
@@ -295,13 +296,15 @@ def consumed(budget_record: Optional[dict], *, recorded: bool = False) -> dict:
 
 # -- the file --------------------------------------------------------------------------
 
-def write(run_dir, body: dict, *, store=None, budget_snapshot=None) -> None:
+def write(run_dir, body: dict, *, store=None, budget_snapshot=None, extra=None) -> bool:
     """Record the checkpoint: as a record of the run's committed generation
     when the run has a job store (one generation holding the budget
-    snapshot it agrees with and this body), then as the ``checkpoint.json``
-    export for historical readers. A store publication that fails removes
-    the export rather than leave an older point a resume could mistake for
-    this one; the store itself stays refused (quadratus.jobstore)."""
+    snapshot it agrees with, this body and any ``extra`` records, such as
+    the terminal record), then as the ``checkpoint.json`` export for
+    historical readers. Returns whether the authoritative record was
+    committed. A store publication that fails removes the export rather than
+    leave an older point a resume could mistake for this one; the store
+    itself stays refused (quadratus.jobstore)."""
     target = Path(run_dir) / NAME
     temporary = target.with_suffix(".tmp")
     record = dict(body=body, digest=_digest(body))
@@ -309,6 +312,7 @@ def write(run_dir, body: dict, *, store=None, budget_snapshot=None) -> None:
         updates = {"checkpoint": record}
         if budget_snapshot is not None:
             updates["budget"] = budget_snapshot
+        updates.update(dict(extra or {}))
         try:
             store.publish(updates)
         except Exception:  # noqa: BLE001 -- the store is latched; the export must not outlive it
@@ -318,7 +322,7 @@ def write(run_dir, body: dict, *, store=None, budget_snapshot=None) -> None:
                     path.unlink()
                 except OSError:
                     pass
-            return
+            return False
     try:
         temporary.write_text(json.dumps(record) + "\n")
         os.replace(temporary, target)
@@ -329,16 +333,28 @@ def write(run_dir, body: dict, *, store=None, budget_snapshot=None) -> None:
                 path.unlink()
             except OSError:
                 pass
+        return store is not None
+    return True
 
 
-def seal(run_dir, reason: str, *, store=None) -> None:
+def seal(run_dir, reason: str, *, store=None, extra=None) -> bool:
     """Mark a finished run's checkpoint sealed: a run that ended on its own
-    terms (complete, stopped, refused) is never resumed."""
+    terms (complete, stopped, refused) is never resumed. ``extra`` records
+    (the terminal record) are committed in the same generation. Returns
+    whether the sealed state was committed; a caller that cannot commit it
+    has not finished, whatever it computed in memory."""
     try:
         body = load(run_dir)
     except CheckpointRefused:
-        return
-    write(run_dir, dict(body, sealed=True, resumable=False, sealed_reason=str(reason)[:400]), store=store)
+        if store is None or extra is None:
+            return False
+        try:
+            store.publish(dict(extra))
+            return True
+        except Exception:  # noqa: BLE001 -- latched
+            return False
+    return write(run_dir, dict(body, sealed=True, resumable=False, sealed_reason=str(reason)[:400]), store=store,
+                 extra=extra)
 
 
 def _read_record(run_dir) -> dict:
@@ -438,7 +454,74 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
         raise CheckpointRefused("these differ from the checkpoint: " + ", ".join(differing)
                                 + ". A resumed episode must meet the same source, goal, policy, "
                                 "limits, settings, gate and dependency tree")
+    spent["unconsumed_operations"] = _unconsumed(run_dir, body, budget)
+    _same_authority(run_dir, body)
     return spent
+
+
+def _unconsumed(run_dir, body: dict, budget: dict) -> list:
+    """Operations that settled after the quiescent point this checkpoint
+    recorded (its ``watermark``) and were never consumed by the record. A
+    settled model call that held the write grant, and any harness effect
+    (a check, a capture, a probe, a fixture write, an evidence run), may
+    have changed something the record does not know: the resume is refused
+    rather than repeated. A read-only model call's lost reply is a judgment
+    the new episode asks again; those are returned, named, for the lineage.
+    A checkpoint written before watermarks existed carries none and is read
+    as before."""
+    from . import jobstore
+    watermark = body.get("watermark")
+    if not isinstance(watermark, dict):
+        return []
+    settled = ((budget.get("operations") or {}).get("settled") or [])
+    extra = settled[int(watermark.get("budget_settled") or 0):]
+    editing = [o.get("opid") for o in extra if isinstance(o, dict) and o.get("editing")]
+    if editing:
+        raise CheckpointRefused(f"{len(editing)} editing call(s) settled after the last quiescent point and were "
+                                f"never consumed by the record ({', '.join(map(str, editing[:5]))}); their edits "
+                                "are not reconciled, so the run is not resumed")
+    try:
+        records = jobstore.operation_records(run_dir)
+    except jobstore.GenerationCorrupt as exc:
+        raise CheckpointRefused(f"the parent's committed state is corrupt: {exc}") from exc
+    held = dict(watermark.get("session_settled") or {})
+    named = [str(o.get("opid")) for o in extra if isinstance(o, dict)]
+    for owner, rows in records.items():
+        done = [o for o in rows if isinstance(o, dict) and o.get("status") == "settled"]
+        late = done[int(held.get(owner) or 0):]
+        # A read-only model call that settled late lost only its reply, which
+        # the new episode asks again; any other effect may have changed what
+        # the record does not know.
+        effects = [str(o.get("opid")) for o in late
+                   if set(o.get("allowed_effects") or ()) - {"read"} or o.get("outcome") == "failed"]
+        if effects:
+            raise CheckpointRefused(f"{len(effects)} harness effect(s) settled after the last quiescent point and "
+                                    f"were never consumed by the record ({', '.join(effects[:5])}); their outcome "
+                                    "is not reconciled, so the run is not resumed")
+        named += [str(o.get("opid")) for o in late]
+    return named
+
+
+def _same_authority(run_dir, body: dict) -> None:
+    """A resumed episode continues under the approval authority the
+    checkpoint was written under: the committed authority record (the
+    requirements as numbered, the operator's rulings, the orchestrator's
+    decisions, the plan gate's receipt) must be the one the checkpoint
+    names."""
+    from . import jobstore
+    held = body.get("authority")
+    if held is None:
+        return
+    try:
+        manifest = jobstore.read_manifest(run_dir)
+        record = jobstore.read_record(run_dir, "authority", manifest=manifest) if manifest else None
+    except jobstore.GenerationCorrupt as exc:
+        raise CheckpointRefused(f"the parent's committed authority is corrupt: {exc}") from exc
+    current = (record or {}).get("digest")
+    if current != held:
+        raise CheckpointRefused("the approval authority on record is not the one this checkpoint was written "
+                                f"under ({current} vs {held}); the resume needs the same requirements, rulings, "
+                                "decisions and plan approval")
 
 
 def claim(run_dir, child_run_dir, episode: int) -> None:

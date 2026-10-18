@@ -9,7 +9,7 @@ wiring cannot loosen it.
 import pytest
 
 from quadratus import delivery as D
-from quadratus.judgment import INVALID, RESOLVED, UNRESOLVED, recheck_verdicts
+from quadratus.judgment import INVALID, INVALIDATED, RESOLVED, UNRESOLVED, recheck_verdicts
 
 SRC_A = "a" * 64
 SRC_B = "b" * 64
@@ -47,10 +47,20 @@ def _finding(fid="RF1", basis=("requirement", "R3@1"), impact="correctness", sou
     return D.Finding(fid, author, "collaborator", f"{fid} claim", D.FindingBasis(*basis), impact, source, task="t2")
 
 
-def _apply(findings, text, *, author="claude:opus", role="recheck", binding=B1, judged=None, source=SRC_B):
+#: What the record resolves for these probes: one project test file and
+#: one recorded case; any other reference is not on the record.
+ON_RECORD = ("tests/test_app.py", "test_cycle")
+
+
+def _resolves(why):
+    return any(ref in why for ref in ON_RECORD)
+
+
+def _apply(findings, text, *, author="claude:opus", role="recheck", binding=B1, judged=None, source=SRC_B,
+           resolve=_resolves):
     reading = recheck_verdicts(text, [f.fid for f in findings])
     return D.apply_reading(findings, reading, author=author, role=role, binding=binding,
-                           judged_binding=judged or binding, source_digest=source, call="c7")
+                           judged_binding=judged or binding, source_digest=source, call="c7", resolve=resolve)
 
 
 def test_finding_basis_needs_a_reference_unless_none():
@@ -115,8 +125,19 @@ def test_invalidated_needs_checkable_evidence_and_then_closes():
     reading = recheck_verdicts("RF1: INVALIDATED it is fine really\nRF2: INVALIDATED test_cycle covers it, run 3 passed",
                                ["RF1", "RF2"])
     assert reading.dispositions["RF1"].state == INVALID
-    after = D.apply_reading(findings, reading, author="claude:opus", role="recheck", binding=B1, judged_binding=B1)
+    after = D.apply_reading(findings, reading, author="claude:opus", role="recheck", binding=B1, judged_binding=B1,
+                            resolve=_resolves)
     assert after[0].state == "open" and after[1].state == "invalidated" and after[1].closed
+    # The reference must be on the record: a token that merely looks like one
+    # (root's finding on f4fe5b7: ``UTF8``, a backticked word) closes nothing,
+    # and with no resolver at all nothing is invalidated.
+    looks = recheck_verdicts("RF1: INVALIDATED `UTF8` handling covers it", ["RF1"])
+    assert looks.dispositions["RF1"].state == INVALIDATED
+    unresolved = D.apply_reading(findings[:1], looks, author="claude:opus", role="recheck", binding=B1,
+                                 judged_binding=B1, resolve=_resolves)
+    assert unresolved[0].state == "open" and "not on the record" in unresolved[0].history[-1].why
+    blind = D.apply_reading(findings[1:], reading, author="claude:opus", role="recheck", binding=B1, judged_binding=B1)
+    assert blind[0].state == "open" and "not on the record" in blind[0].history[-1].why
 
 
 def test_immediate_risk_holds_effects_whatever_its_basis_and_is_not_audit_only():

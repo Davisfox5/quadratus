@@ -100,35 +100,51 @@ def test_serial_the_last_wave_closes_factually_and_the_finish_runs_inside_the_li
 
 
 @pytest.mark.requirements_ledger
-def test_serial_a_review_the_finish_cannot_afford_is_refused_recorded_and_never_resolved(tmp_path, monkeypatch):
-    """11 calls: t2's recheck would leave one call for two finishing
-    judgments, so it is refused before it starts. Its finding stays open,
-    the existing open-finding stop ends the run, and neither the goal
-    question nor the audit is forced across that debt. On 12f8 the recheck
-    ran and the run stopped at call_limit on t2's model close-out."""
+def test_serial_a_route_the_finish_cannot_afford_is_refused_at_dispatch_and_nothing_of_it_runs(tmp_path, monkeypatch):
+    """11 calls: after t1 (lead, review, close-out) and the planning call
+    for t2, three calls are left after the held goal question and audit,
+    and t2's selected route is four (its lead, its review, the revision
+    and the recheck a finding buys). The route is refused before t2's first
+    call, exactly counted: no call of t2's is made, nothing is written for
+    it, t2 is NOT RUN, and the run ends on the requirement it left
+    uncovered. Before the route admission the recheck ran out of calls
+    mid-task and its finding was kept open (12f8: the run stopped at
+    call_limit on t2's model close-out)."""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=2,
                    limits=_limits(11), record_complete=False)
-    assert not [c for c in replay.of("recheck")], "the refused recheck never launched"
-    assert not replay.of("auditor") and _roles(replay)[-1] == ("t2", "revision")
-    assert replay.result.error.startswith("FindingsOpen") and "not re-checked after the revision" in replay.result.error
-    refusals = H.result_json(replay)["finish_refusals"]
-    assert [r["what"] for r in refusals] == ["recheck by openai:gpt-5.6-sol"]
+    assert not [c for c in replay.calls if c.task == "t2"], "nothing of t2 ran"
+    assert not replay.of("auditor") and not replay.result.completed
+    result = H.result_json(replay)
+    assert [n["task"] for n in result["not_started"]] == ["t2"]
+    refusal = result["finish_refusals"][-1]
+    assert refusal["what"].startswith("dispatch:") and "cannot pay its selected route" in refusal["detail"]
+    admission = [a for a in result["plan_admissions"] if a["task"] == "t2"][-1]
+    assert admission["scope"] == "full" and not admission["feasible"] and admission["short"] == {"calls": 1}
+    assert admission["stages"] == ["lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)",
+                                   "revision(editing/write)", "recheck by openai:gpt-5.6-sol(reserve)"]
+    assert (replay.project / "README.md").read_text() == FILES["README.md"], "nothing was written"
     budget = _budget(replay)
-    assert budget["stop_reason"] == "" and budget["finish_protection"]["pending"] == ["goal", "audit"]
-    assert budget["finish_protection"]["refusals"][0]["calls_after"] == 1
-    record = json.loads(replay.artifact_texts("factual-closeout")[0])
-    assert record["finish_refused"] == [refusals[0]["what"]]
-    assert [r[1] for r in record["reviews"]][-1] == "recheck not run: refused to keep the finish"
+    assert budget["stop_reason"] == "" and budget["finish_protection"]["refusals"] == []
 
 
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("calls", [13, 12])
-def test_parallel_last_wave_closes_factually_and_a_refused_merge_recheck_stays_open(tmp_path, monkeypatch, calls):
-    """Both children are the last wave and close factually. t2's finding is
-    left open in its copy (UNRESOLVED there, after its two fix rounds) and
-    rechecked once on the merged source. With the calls for it, that recheck resolves it and the goal
-    question and audit follow; one call short, it is refused, its finding is
-    kept, and the run stops on it."""
+@pytest.mark.parametrize("calls", [14, 13])
+def test_parallel_last_wave_closes_factually_and_its_route_is_admitted_whole_or_not_started(tmp_path, monkeypatch,
+                                                                                            calls):
+    """Both children are the last wave and close factually (no close-out
+    on either route). The batch's selected route is ten calls: each child's
+    lead, review, revision and recheck, and one post-merge recheck each;
+    with the two orchestrator calls made and the two finishing judgments
+    held, fourteen calls admit it exactly. t2's finding is left open in its
+    copy (UNRESOLVED there, after its two fix rounds; the second cycle is
+    admitted on its own before it starts) and rechecked once on the merged
+    source, which resolves it; the goal question and audit follow. One call
+    short, the wave is not started before any child's call: both tasks are
+    NOT RUN with the route's shortfall named, nothing is written, and the
+    run ends on the uncovered requirements. The post-merge recheck's own
+    refusal to keep the finish stays a recorded outcome
+    (``_recheck_after_merge``), but an exactly admitted route no longer
+    reaches it."""
     def recheck(call, replay):
         return "RESOLVED" if "now merged" in call.prompt else "UNRESOLVED: no example yet"
 
@@ -137,23 +153,27 @@ def test_parallel_last_wave_closes_factually_and_a_refused_merge_recheck_stays_o
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_limits(calls),
                    record_complete=False)
     assert not replay.of("closeout"), "no model close-out in the last wave"
-    assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
-    batch = H.result_json(replay)["parallel_batches"][0]
-    verdict = batch["post_merge_rechecks"][0]["rechecked"][0]["verdict"]
-    if calls == 13:
-        assert verdict == "resolved" and replay.result.completed, replay.result.error
+    result = H.result_json(replay)
+    admission = [a for a in result["plan_admissions"] if a["scope"] == "full"][-1]
+    assert admission["task"] == "batch:t1,t2" and "close-out(reserve)" not in admission["stages"]
+    assert admission["stages"].count("post-merge recheck by openai:gpt-5.6-sol(reserve)") == 1
+    if calls == 14:
+        assert admission["feasible"]
+        assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
+        batch = result["parallel_batches"][0]
+        assert batch["post_merge_rechecks"][0]["rechecked"][0]["verdict"] == "resolved"
+        assert [a["scope"] for a in result["plan_admissions"] if a["task"] == "t2"] == ["fix-cycle"]
+        assert replay.result.completed, replay.result.error
         assert _roles(replay)[-2:] == [("run", "orchestrator"), ("audit", "auditor")]
+        assert _budget(replay)["reserved_attempts"] == 13
     else:
-        # The reviewer's finding names no basis and claims no immediate risk,
-        # so it is carried to the final audit by id rather than stopping the
-        # run (blueprint stage A): the refused recheck keeps it, the goal
-        # question and the audit run, the audit finds R2 not met over it,
-        # and the run is not complete.
-        assert verdict == "kept: recheck refused to keep the finish"
-        assert not replay.result.completed
-        finding = next(r for r in H.result_json(replay)["review_findings"] if r["fid"] == "RFT2-1")
-        assert finding["state"] == "unresolved" and finding["audit_carried"]
-        assert H.result_json(replay)["finish_refusals"][0]["what"].startswith("post-merge recheck by")
+        assert not admission["feasible"] and admission["short"] == {"calls": 1}
+        assert not [c for c in replay.calls if c.task in ("t1", "t2")], "no child call was made"
+        assert [n["task"] for n in result["not_started"]] == ["t1", "t2"]
+        assert result["finish_refusals"][0]["what"].startswith("batch dispatch:")
+        assert "cannot pay its selected route" in result["finish_refusals"][0]["detail"]
+        assert (replay.project / "app.py").read_text() == FILES["app.py"], "nothing was written"
+        assert not replay.result.completed and not replay.of("recheck")
 
 
 @pytest.mark.requirements_ledger
@@ -193,19 +213,22 @@ def _tight(total):
 
 @pytest.mark.requirements_ledger
 def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follows(tmp_path, monkeypatch):
-    """6,400 tokens. t1's mandatory stages fit (4,180 left after the two
-    1,000 holds). After t1 and the planning call for t2, 5,740 remain, 3,740
-    after the holds: t2's mandatory stages (its lead at the 3,000 ceiling,
-    its review at the 1,000 reserve) cannot be paid, so t2 is refused at
-    dispatch, before its first editing call is even asked of the budget
-    (blueprint stage A: the remaining path is costed before the wave).
-    Old: the lead's own reservation was refused by the hold. Either way t2
-    is NOT RUN, nothing is planned after it, the goal question and the audit
-    run, and the run still is not complete: the work the plan asked for was
-    not done."""
+    """11,400 tokens over three slots. t1's selected route (its lead at
+    the 3,000 ceiling, its review at the 1,000 reserve, one revision at the
+    ceiling, one recheck and its close-out at the reserve: 9,000) fits the
+    9,180 left after the two 1,000 holds. After t1 and the planning call
+    for t2, 8,740 remain after the holds: t2's mandatory stages (4,000)
+    fit, its route (the same 9,000, not the last slot) does not, so t2 is
+    refused at dispatch, before its first editing call is even asked of the
+    budget (blueprint stage A: the selected route is costed before the
+    wave; root's admission finding on f4fe5b7: a recorded shortfall is not
+    an admission). Old: the lead's own reservation was refused by the hold.
+    Either way t2 is NOT RUN, nothing is planned after it, the goal
+    question and the audit run, and the run still is not complete: the
+    work the plan asked for was not done."""
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(6_400),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(11_400),
                    record_complete=False)
     assert not [c for c in replay.calls if c.task == "t2"], "t2's lead never started"
     assert replay.of("auditor"), "the audit still runs after the refusal"
@@ -213,8 +236,11 @@ def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follo
     result = H.result_json(replay)
     assert [n["task"] for n in result["not_started"]] == ["t2"]
     assert result["finish_refusals"][-1]["what"].startswith("dispatch: the calls left cannot pay")
-    admission = [a for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "mandatory"][-1]
-    assert not admission["feasible"] and admission["short"] == {"tokens": 4_000 - 3_740}
+    mandatory = [a for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "mandatory"][-1]
+    assert mandatory["feasible"], "the mandatory stages fit; the route is what does not"
+    admission = [a for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "full"][-1]
+    assert not admission["feasible"] and admission["short"] == {"tokens": 9_000 - 8_740}
+    assert "Plan admission for t2: its selected route could not be paid" in replay.of("auditor")[-1].prompt
     t2 = next(t for t in result["workflow"]["tasks"] if t["task_id"] == "t2")
     assert t2["closed_as"] == "not_started"
     assert not replay.result.completed and "t2 NOT RUN" in replay.result.error
@@ -226,11 +252,12 @@ def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follo
 
 @pytest.mark.requirements_ledger
 def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, monkeypatch):
-    """6,400 tokens: t1's mandatory stages fit (4,180 left after the holds),
-    its lead stops at its turn cap (partial), then t2's mandatory stages do
-    not fit and t2 is refused at dispatch. t2 is NOT RUN; t1's capped work
-    is still debt, so the cap's own decision stops before the goal question
-    and no audit runs."""
+    """11,400 tokens over three slots: t1's selected route fits (9,180 left
+    after the holds for its 9,000), its lead stops at its turn cap
+    (partial), then t2's route (9,000 against 8,960) does not fit and t2 is
+    refused at dispatch. t2 is NOT RUN; t1's capped work is still debt, so
+    the cap's own decision stops before the goal question and no audit
+    runs."""
     from quadratus.config import Settings
 
     def lead(call, replay):
@@ -238,7 +265,7 @@ def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, mon
         return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lead
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(6_400),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(11_400),
                    record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
     assert [n["task"] for n in H.result_json(replay)["not_started"]] == ["t2"]
     assert len(replay.of("orchestrator")) == 2 and not replay.of("auditor"), "no goal question, no audit"
@@ -248,19 +275,23 @@ def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, mon
 
 @pytest.mark.requirements_ledger
 def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monkeypatch):
-    """6,800 tokens: t2's mandatory stages fit at dispatch (4,140 left after
-    the holds), its lead writes README.md, reports 1,510 tokens and asks to
-    FETCH; the second turn, exposed at 3,000 against the 2,630 now left, is
-    refused. Work was written, so this is not a task that never started:
-    the run stops on the refusal as before, with the edit kept and nothing
-    recorded NOT RUN."""
+    """11,400 tokens: t2's selected route (8,000: its lead, review,
+    revision and recheck; the last slot has no model close-out) fits the
+    8,740 left at dispatch after the holds. Its lead writes README.md and
+    asks to FETCH twice, each turn reporting 2,900 tokens (under the 3,000
+    ceiling): the admitted route pays the second turn (5,840 left), and the
+    third, exposed at 3,000 against the 2,940 now left, is refused. Work
+    was written, so this is not a task that never started: the run stops on
+    the refusal as before, with the edit kept and nothing recorded NOT RUN.
+    An exactly admitted route cannot be short after one turn, which is what
+    the admission is for; it is short once the turns have spent it."""
     import json as _json
     import uuid as _uuid
 
-    heavy_usage = {"input_tokens": 1_500, "output_tokens": 10}
+    heavy_usage = {"input_tokens": 2_890, "output_tokens": 10}
 
     def heavy(call, text):
-        """The seat's own envelope, reporting 1,510 tokens for this turn."""
+        """The seat's own envelope, reporting 2,900 tokens for this turn."""
         if call.vendor == "claude":
             return _json.dumps({"type": "result", "subtype": "success", "is_error": False, "num_turns": 1,
                                 "result": text, "stop_reason": "end_turn", "session_id": str(_uuid.uuid4()),
@@ -279,9 +310,9 @@ def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monke
         return heavy(call, "FETCH: no-such-artifact")
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lead
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(6_800),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(11_400),
                    record_complete=False)
-    assert len([c for c in replay.calls if c.task == "t2"]) == 1
+    assert len([c for c in replay.calls if c.task == "t2"]) == 2
     assert replay.result.error.startswith("FinishReserved") and H.result_json(replay)["not_started"] == []
     assert (replay.project / "README.md").read_text() == README
     assert not replay.of("auditor")

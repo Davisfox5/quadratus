@@ -32,7 +32,9 @@ def fault(stage):
         os._exit(7)
 store = JobStore(run_dir, fault=fault)
 store.publish({"budget": {"reserved_attempts": 1, "generation": 1}})
-store.publish({"budget": {"reserved_attempts": 2, "generation": 2}, "checkpoint": {"body": {"n": 2}}},
+store.publish({"budget": {"reserved_attempts": 2, "generation": 2,
+                          "operations": {"started": [{"opid": "O-2", "status": "started"}], "settled": []}},
+               "checkpoint": {"body": {"n": 2}}},
               budget_unsettled=["O-2"], reserved_unfinished=200000)
 sys.stdout.write(json.dumps(dict(died_at=None, seen=seen)) + "\n")
 """

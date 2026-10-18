@@ -2575,21 +2575,41 @@ class Session:
         #: or recheck judges, or a capped task left: evidence for the seats,
         #: never a task check (Session._observe_checks).
         self.review_checks: List[dict] = []
+        #: This session's own operation ids are per owner (``OP<OWNER>-<n>``):
+        #: a parallel child publishes its own record, never a sibling's, and
+        #: a resumed episode is a new owner beside the parent's record.
+        self._operation_owner = uuid.uuid4().hex[:8]
+        #: The approval authority last published to the job store (digest).
+        self._published_authority: Optional[str] = None
+        #: The plan gate's receipt, once the operator approved the plan.
+        self._plan_gate_receipt: Optional[dict] = None
+        #: The acceptance predicate's last result, by requirement.
+        self._last_acceptance: Dict[str, dict] = {}
+
+    #: Interruptions that leave an effect's outcome unknown: the process was
+    #: told to stop, and nothing says whether the effect completed.
+    _INTERRUPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 
     @contextlib.contextmanager
     def _operation(self, purpose: str, *, inputs, effects=("read",)):
         """One of the session's own effects as an operation record
         (delivery.OperationRecord states), published to the job store
-        started before the effect and settled after it. A publication that
-        fails before the effect stops the run with nothing started; one that
-        fails after it leaves the record started (uncertain on restart) and
-        stops the run: nothing is rolled back and nothing is repeated."""
-        number = len(self.operations) + 1
-        record = dict(opid=f"OP-{number}", purpose=purpose, owner="harness", status="prepared",
-                      identity=dict(purpose=purpose, role="harness", policy="session-effect/1",
+        started before the effect and settled after it, under this
+        session's own owner id. A publication that fails before the effect
+        stops the run with nothing started. An effect that raises settles
+        with the failure as its outcome (``outcome: failed``: the harness
+        knows what happened); an interruption leaves it ``uncertain`` and
+        unsettled, so a restart refuses to resume over it rather than
+        repeat or assume it. Nothing is rolled back."""
+        owner = self._operation_owner
+        number = sum(1 for o in self.operations if o.get("owner_id") == owner) + 1
+        record = dict(opid=f"OP{owner}-{number}", purpose=purpose, owner="harness", owner_id=owner,
+                      status="prepared",
+                      identity=dict(purpose=purpose, role="harness", policy="session-effect/2",
                                     input=hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str)
                                                          .encode()).hexdigest()[:32]),
-                      allowed_effects=list(effects), reservation="harness", result_digest=None, note="")
+                      allowed_effects=list(effects), reservation="harness", result_digest=None, note="",
+                      outcome=None)
         self.operations.append(record)
         record["status"] = "started"
         self._publish_operations(record, before=True)
@@ -2597,11 +2617,15 @@ class Session:
         try:
             yield result
         except BaseException as exc:
-            record.update(status="settled", result_digest=hashlib.sha256(
-                f"{type(exc).__name__}: {exc}".encode()).hexdigest(), note=f"stopped: {type(exc).__name__}")
+            if isinstance(exc, self._INTERRUPTIONS) or not isinstance(exc, Exception):
+                record.update(status="uncertain", result_digest=None, outcome="interrupted",
+                              note=f"interrupted before settlement: {type(exc).__name__}")
+            else:
+                record.update(status="settled", outcome="failed", result_digest=hashlib.sha256(
+                    f"{type(exc).__name__}: {exc}".encode()).hexdigest(), note=f"failed: {type(exc).__name__}")
             self._publish_operations(record, before=False, raise_on_failure=False)
             raise
-        record.update(status="settled", result_digest=hashlib.sha256(
+        record.update(status="settled", outcome="completed", result_digest=hashlib.sha256(
             json.dumps(result.get("result", ""), sort_keys=True, default=str).encode()).hexdigest())
         self._publish_operations(record, before=False)
 
@@ -2609,9 +2633,12 @@ class Session:
         store = self.config.job_store
         if store is None:
             return
+        owner = self._operation_owner
+        mine = [o for o in self.operations if o.get("owner_id") == owner]
         try:
-            store.publish({"operations": list(self.operations)},
-                          session_unsettled=[o["opid"] for o in self.operations if o["status"] == "started"])
+            store.publish({f"operations-{owner}": mine},
+                          session_unsettled=(owner, [o["opid"] for o in mine
+                                                     if o["status"] in ("started", "uncertain")]))
         except Exception as exc:  # noqa: BLE001 -- the store is latched; what happens next is decided here
             if before:
                 record.update(status="prepared", note=f"not started: {type(exc).__name__}")
@@ -2771,14 +2798,25 @@ class Session:
         activity_context = dict(call_id=call_id, task=context.get('task', 'run'),
                                 role=context.get('role', 'direct'), model=key)
         self._activity('call-started', **activity_context)
+        writing = bool(allow_writes and (self._writes() if self.project else True))
         try:
             with capture_invocations(), invocation(**context):
-                if self.project:
-                    reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self._writes()))
-                elif allow_writes:
-                    reply = self.invoke(key, prompt, allow_writes=True)
-                else:
-                    reply = self.invoke(key, prompt)
+                # The transport attempt is an operation of this session as
+                # well as a budget ticket: an unbudgeted call (no run limits)
+                # and the patch a bounded editor's reply applies are effects
+                # the record must know about before they happen.
+                with self._operation("model call", inputs=dict(
+                        task=context.get("task", "run"), role=context.get("role", "direct"), model=key,
+                        prompt=hashlib.sha256(prompt.encode()).hexdigest()[:32]),
+                        effects=("project-write",) if writing else ("read",)) as op:
+                    if self.project:
+                        reply = self.invoke(key, prompt, allow_writes=writing)
+                    elif allow_writes:
+                        reply = self.invoke(key, prompt, allow_writes=True)
+                    else:
+                        reply = self.invoke(key, prompt)
+                    op["result"] = hashlib.sha256((reply if isinstance(reply, str) else repr(reply))
+                                                  .encode()).hexdigest()
                 # Fleet leaves its CHANGED classification on this inner
                 # context, which resets on exit; carry it out for _edit.
                 self._last_changed_report = (invocation_context.get() or {}).get("changed_report")
@@ -4786,6 +4824,16 @@ class Session:
                 )
             cycles = 1 + trims + charged + retried
             while unresolved and cycles < self.config.max_fix_cycles and not capped_writer:
+                if self._budget() is not None:
+                    # Beyond the admitted route: one more cycle only when
+                    # what is left pays it whole, decided before its call.
+                    extra = self._admit_plan(spec.task_id, self._fix_cycle_stages(spec, unresolved),
+                                             scope="fix-cycle")
+                    if not extra.feasible:
+                        self._finish_refused(spec, "fix round", FinishReserved(
+                            f"{spec.task_id}: a further fix cycle cannot be paid whole: {extra.detail}"))
+                        capped_writer = True
+                        break
                 self._count("revision")
                 pending = [(p, n) for p, n in blocking if any(p == up for up, _ in unresolved)]
                 try:
@@ -6073,11 +6121,13 @@ class Session:
             self._note("the task list is the operator's; the plan gate is not asked")
         elif self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
-            if not self.config.plan_gate(self.plan()):
+            plan = self.plan()
+            if not self.config.plan_gate(plan):
                 self._stop_with("operator", "PlanDeclined: the operator's plan gate declined the expected task "
                                             "list; no task ran and nothing was changed.")
                 log.info("plan gate declined the run; nothing executed")
                 return []
+            self._plan_gate_receipt = dict(approved=True, plan=hashlib.sha256(str(plan).encode()).hexdigest()[:16])
         previous_description: Optional[str] = None
         # Slots, not iterations: a parallel batch spends one slot per task, so
         # the cap bounds tasks run however they are grouped (Codex review of
@@ -6424,10 +6474,15 @@ class Session:
         self._verify_dependencies(f"before observed check ({spec.task_id})")
         before = project.contents()
         self._activity("check-started", task=spec.task_id)
+        started = time.monotonic()
         try:
-            result = gate.run()
+            with self._operation("observed check", inputs=dict(task=spec.task_id, stage=stage, gate=identity,
+                                                               source=current), effects=("run-check",)) as op:
+                result = gate.run()
+                op["result"] = dict(passed=result.passed, output=(result.output or "")[-2000:])
         finally:
             self._activity("check-ended", task=spec.task_id)
+            self._note_check_wall(gate, time.monotonic() - started)
         self._verify_dependencies(f"during observed check ({spec.task_id})")
         moved = project.contents() != before
         self.review_checks.append({
@@ -6441,6 +6496,7 @@ class Session:
             # same way a task check is (_check_runs; Davis, 2026-10-16).
             "output": (result.output or "")[-4000:], "cases": getattr(result, "cases", None),
             "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
+            "environment": self._environment_id(), "requirements": self._requirement_revisions(),
         })
         self._note(f"task {spec.task_id}: harness ran the checks on the source before {stage}: "
                    + ("passed" if result.passed and not moved else "did not pass"))
@@ -7406,6 +7462,9 @@ class Session:
                 child = Session(self.memory.goal, self.store, invoke, config=child_config,
                                 available=self._available)
                 child._batch_child = True
+                # The same revision record: a child's obligations and findings
+                # bind the revisions the parent holds, not a fresh count.
+                child._requirement_revision_record = {k: list(v) for k, v in self._requirement_revision_record.items()}
                 child._judgment_share = self._judgment_share
                 children.append(child)
                 roots.append(root)
@@ -7463,8 +7522,19 @@ class Session:
                 # plan admissions and its own effects.
                 self.review_findings.extend(child.review_findings)
                 for obligation in child.evidence_obligations:
+                    # Re-based to the parent: the child had no gate of its
+                    # own, so its runner is what the parent's gate can run
+                    # (the merge gate names the task's paths whole), and the
+                    # receipt that discharges it is the parent's own check,
+                    # under the parent's gate and environment.
+                    paths = _item_paths(str(obligation.get("behavior") or "")) if obligation.get("kind") == "not_run" else []
+                    runner = ("gate" if (obligation.get("kind") == "not_run" and self._gate_can_run(paths))
+                              or (obligation.get("kind") != "not_run" and self.config.integration_gate is not None)
+                              else None)
                     self.evidence_obligations.append(dict(
-                        obligation, oid=f"O{len(self.evidence_obligations) + 1}",
+                        obligation, oid=f"O{len(self.evidence_obligations) + 1}", runner=runner,
+                        gate=_gate_identity(self.config.integration_gate),
+                        base_gate=_gate_identity(self.config.integration_gate), environment=self._environment_id(),
                         execution="missing" if obligation["execution"] in ("ran", "failed") else obligation["execution"],
                         receipts=[], source_digest=None, sufficiency="unjudged", judged_by="", judged_binding="",
                         entry=dict(obligation.get("entry") or {}, after_check=len(self.checks))))
@@ -7509,13 +7579,16 @@ class Session:
                     if isinstance(exc, RunBudgetExceeded):
                         fatal = fatal or exc
                     continue
-                for path in changed:
-                    target = Path(self.project) / path
-                    if path in after:
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(after[path])
-                    elif target.exists():
-                        target.unlink()
+                with self._operation("merge", inputs=dict(task=spec.task_id, paths=changed),
+                                     effects=("project-write",)) as op:
+                    for path in changed:
+                        target = Path(self.project) / path
+                        if path in after:
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_bytes(after[path])
+                        elif target.exists():
+                            target.unlink()
+                    op["result"] = dict(paths=changed)
                 self.history.append(summary)
                 self.memory.absorb(summary)
                 if child.unresolved_reviews and mine is not None:
@@ -7920,9 +7993,12 @@ class Session:
             final = bool(getattr(self, "_final_check", False))
         ledger = self.memory.ledger
         kept = self._final_audit if final else None
-        if kept and kept.get("status_before") is not None and kept.get("source") == self._source_fingerprint():
-            # Resumed at the cap: the ledger as it stood when the final audit
-            # was asked, before its own verdicts were written over coverage.
+        if (kept and kept.get("status_before") is not None
+                and kept.get("binding") == self._audit_binding(kept.get("ids"))):
+            # Resumed at the cap on exactly the evidence packet the final
+            # audit judged: the ledger as it stood when that audit was asked,
+            # before its own verdicts were written over coverage. A packet
+            # that moved since leaves every later status as written.
             ledger.requirement_status.update(kept["status_before"])
         refusal = self._original_tests_at_done()
         if refusal:
@@ -8099,7 +8175,7 @@ class Session:
         if auditor is None:
             self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
             return {r: (False, "no auditor from another vendor available") for r in audited}
-        before = self._capture_source() if self.project else None
+        packet_before = self._packet()
         prompt = (
             self._authority_context(audited, ids)
             + self._evidence_block()
@@ -8136,20 +8212,28 @@ class Session:
         saved = self._active_spec
         self._active_spec = None
         audit_binding = self._judgment_binding(SimpleNamespace(task_id="audit"), auditor, "audit")
+        failed = False
         try:
             with invocation("audit", "auditor"), finishing("audit"):
                 reply = self._invoke_model(auditor, prompt)
         except ProviderError as exc:
-            # An audit that could not run is not a pass. Budget stops and
-            # every other exception propagate as from any other call.
-            reply = ""
+            # An audit that could not run is not a pass, and is not a final
+            # audit on record either: the next episode asks again. Budget
+            # stops and every other exception propagate as from any other call.
+            reply, failed = "", True
             self._note(f"requirements audit failed: {type(exc).__name__}: {str(exc)[:160]}")
         finally:
             self._active_spec = saved
-        if self.project and before is not None and self._capture_source() != before:
-            self._note("the source changed during the requirements audit; its verdicts are void")
-            self.requirement_audits.append(dict(auditor=auditor, result="void: the tree changed during the audit"))
-            return {r: (False, "the tree changed during the audit") for r in audited}
+        packet_after = self._packet()
+        if packet_after.digest != packet_before.digest or (self.project and packet_before.source is None):
+            # Anything the verdicts are about moved while they were made:
+            # the source, a requirement's text, the gate, the environment, a
+            # check, a finding or an obligation. Void, never partially kept.
+            moved = ("the tree changed during the audit" if packet_after.source != packet_before.source
+                     or packet_before.source is None else "the evidence packet changed during the audit")
+            self._note(f"{moved}; the verdicts are void")
+            self.requirement_audits.append(dict(auditor=auditor, result=f"void: {moved}"))
+            return {r: (False, moved) for r in audited}
         found, stated = {}, []
         # One strict reading (quadratus.judgment; root reconciliation of the
         # strategy reset): the last line no longer wins, so NOT MET then MET
@@ -8180,38 +8264,215 @@ class Session:
                     self._close_review_finding_by_id(record["fid"], f"{record['state']} by the final audit")
         lowered = self._lower_unexecuted(found)
         lowered += self._lower_unexercised_errors(found, audited)
-        self._judge_obligations(auditor, reply or "", found)
+        self._judge_obligations(auditor, reply or "", found, ids=list(audited))
+        # The one acceptance predicate, after sufficiency is judged: what the
+        # auditor wrote stands only where the record agrees.
+        lowered += self._apply_acceptance(found, audited)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
                                                                        for r, (ok, why) in verdicts.items()},
                                             lowered=lowered, stated=[r for r in stated if r in audited],
                                             source=self._source_fingerprint() if self.project else None,
                                             findings_carried=[r["fid"] for r in carried],
-                                            findings_standing=[r["fid"] for r in standing]))
-        if final:
+                                            findings_standing=[r["fid"] for r in standing],
+                                            acceptance=dict(self._last_acceptance), packet=packet_after.digest,
+                                            failed=failed))
+        if final and not failed:
             self._final_audit = dict(source=self.requirement_audits[-1]["source"],
                                      ids=sorted(ids) if ids is not None else None,
                                      binding=self._audit_binding(ids),
-                                     verdicts={r: [ok, why] for r, (ok, why) in verdicts.items()})
+                                     verdicts={r: [ok, why] for r, (ok, why) in verdicts.items()},
+                                     acceptance=dict(self._last_acceptance))
         return verdicts
 
     def _audit_binding(self, ids: Optional[List[str]]) -> str:
-        """What a final audit's verdicts are about: the source, the audited
-        ids and every requirement's exact text, the effective gate and the
-        evidence identity, the review findings and their states, the
-        obligations and their execution, and the audit policy. A cached
-        audit is reused only on exactly this (Astra audit-cache finding)."""
-        ledger = self.memory.ledger
-        body = dict(source=self._source_fingerprint() if self.project else None,
-                    ids=sorted(ids) if ids is not None else None,
-                    requirements=sorted([rid, hashlib.sha256((text or "").encode()).hexdigest()[:16]]
-                                        for rid, text in ledger.requirements.items()),
-                    gate=_gate_identity(self._current_gate()),
-                    evidence=self._evidence_identity() if self.project else None,
-                    findings=sorted([r["fid"], r["state"]] for r in self.review_findings),
-                    obligations=sorted([o["oid"], o["execution"], o["sufficiency"]] for o in self.evidence_obligations),
-                    rulings=list(ledger.rulings), policy="audit/2")
+        """What a final audit's verdicts are about: the audited ids and the
+        whole evidence packet (``_packet``: source, requirement revisions
+        and texts, gate, environment, evidence identity, every recorded
+        check, the findings with the binding each was last judged on, the
+        obligations with their receipts, rulings, decisions and the approval
+        authority). A cached audit, a status snapshot or a reassessment is
+        reused only on exactly this (Astra audit-cache finding; root's
+        cache, binding and TOCTOU findings on f4fe5b7)."""
+        body = dict(ids=sorted(ids) if ids is not None else None, packet=self._packet().digest, policy="audit/3")
         return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+    def _packet(self) -> "delivery.EvidencePacket":
+        """The current evidence packet (delivery.EvidencePacket): one
+        immutable description of everything a judgment can be about, as the
+        harness holds it now. Every review, cache, restore and final path
+        compares its digest; nothing judged on one packet is reused on
+        another. Check identities include the outcome, source, gate,
+        environment, revisions, receipts and output of each run, so a check
+        that lands after a judgment is a different packet."""
+        ledger = self.memory.ledger
+        revisions = self._requirement_revisions()
+
+        def h(text):
+            return hashlib.sha256((text or "").encode()).hexdigest()[:16]
+
+        def check_identity(check):
+            body = dict(passed=bool(check.get("passed")), source=check.get("source"),
+                        gate=check.get("gate") or "", command=str(check.get("command") or ""),
+                        environment=check.get("environment"), requirements=check.get("requirements"),
+                        receipts=[[r.get("id"), r.get("status"), r.get("reason"), r.get("tests")]
+                                  for r in check.get("receipts") or ()],
+                        cases=check.get("cases"), report=check.get("report"), output=h(check.get("output") or ""))
+            return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+        findings = tuple(sorted((r["fid"], str(r.get("state")),
+                                 str(r["history"][-1].get("binding", "")) if r.get("history") else "")
+                                for r in self.review_findings))
+        obligations = tuple(sorted((o["oid"], str(o.get("execution")), str(o.get("sufficiency")),
+                                    h(json.dumps(list(o.get("receipts") or []), sort_keys=True, default=str)))
+                                   for o in self.evidence_obligations))
+        return delivery.EvidencePacket(
+            source=self._source_fingerprint() if self.project else None,
+            requirements=tuple(sorted((rid, int(revisions.get(rid, 1)), h(text))
+                                      for rid, text in ledger.requirements.items())),
+            gate=_gate_identity(self._current_gate()), environment=self._environment_id(),
+            evidence_identity=self._evidence_identity() if self.project else None,
+            checks=tuple(check_identity(c) for c in self.checks),
+            review_checks=tuple(check_identity(c) for c in self.review_checks),
+            findings=findings, obligations=obligations,
+            rulings=h(json.dumps(list(ledger.rulings), default=str)),
+            decisions=h(json.dumps(dict(decisions=dict(ledger.decisions), ambiguous=dict(ledger.ambiguous)),
+                                   sort_keys=True, default=str)),
+            authority=self._authority_record()["digest"])
+
+    def _apply_acceptance(self, found: dict, audited) -> List[dict]:
+        """The one acceptance predicate (delivery.acceptance) over the
+        verdicts as lowered: a MET stands only when every obligation bound
+        to the requirement has an authorized runner, ran on the current
+        identity and was judged sufficient about exactly that evidence, and
+        no review finding touching it is open. What it lowers is recorded
+        with the judge's own words; the whole result is kept for the
+        record (``_acceptance_record``)."""
+        covers = {o.task_id: list(o.covers or ()) for o in self.task_outcomes}
+        accepted = delivery.acceptance({r: found[r] for r in found if r in audited},
+                                       self.evidence_obligations, self.review_findings, covers)
+        lowered = []
+        for rid, verdict in accepted.items():
+            met, why = found[rid]
+            if met and not verdict.met:
+                reason = ("acceptance predicate: " + "; ".join(verdict.reasons))[:300]
+                found[rid] = (False, reason)
+                lowered.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
+        self._last_acceptance = {rid: dict(met=v.met, reasons=list(v.reasons)) for rid, v in accepted.items()}
+        return lowered
+
+    def _acceptance_record(self) -> Optional[dict]:
+        """The final audit's acceptance as committed with the terminal
+        state: the packet digest it was decided on, whether that packet is
+        still the current one, and each audited requirement's state; None
+        when no final audit is on record."""
+        if self._final_audit is None:
+            return None
+        return dict(binding=self._final_audit.get("binding"), current=self._final_audit_current(),
+                    requirements=dict(self._final_audit.get("acceptance") or {}))
+
+    def _final_audit_current(self) -> bool:
+        """Whether the final audit on record judged exactly the current packet."""
+        kept = self._final_audit
+        return bool(kept and kept.get("binding") and kept.get("binding") == self._audit_binding(kept.get("ids")))
+
+    _EVIDENCE_ID = re.compile(r"\b(?:RF[A-Z0-9]+-\d+|O\d+|R\d+|check-\d+|receipt-o-\d+)\b")
+
+    def _evidence_resolves(self, text: str) -> bool:
+        """Whether an INVALIDATED line names evidence that is on the record:
+        a project file or test that exists (the resolution a MET citation
+        gets), a recorded check or receipt id, a registered finding or
+        obligation id, a requirement on the ledger, or a command one of the
+        recorded checks ran. A token that merely looks like a reference
+        (root's finding on f4fe5b7: ``UTF8``, a backticked word) closes
+        nothing."""
+        if self._resolve_citations(text):
+            return True
+        known = ({r["fid"] for r in self.review_findings} | {o["oid"] for o in self.evidence_obligations}
+                 | set(self.memory.ledger.requirements) | {f"check-{i + 1}" for i in range(len(self.checks))})
+        if set(self._EVIDENCE_ID.findall(text or "")) & known:
+            return True
+        for check in list(self.checks) + list(self.review_checks):
+            for receipt in check.get("receipts") or ():
+                if receipt.get("id") and str(receipt["id"]) in text:
+                    return True
+            command = str(check.get("command") or "")
+            if command and command in text:
+                return True
+        return False
+
+    def _gate_can_run(self, paths) -> bool:
+        """Whether the harness's own gate runs what a NOT RUN item names:
+        every path is a whole operand of one of the effective gate's
+        commands that is not skipped (integration.operand_paths, the same
+        reading ``_discharging_check`` applies to a receipt). A path no
+        command names is a prerequisite nobody here can run: its obligation
+        gets no runner and lowers the requirement until someone can."""
+        gate = self._current_gate()
+        if gate is None or not self.project or not paths:
+            return False
+        from .integration import _gate_commands, operand_paths
+        root = Path(self.project).resolve()
+        try:
+            commands = [c for c in (_gate_commands(gate, root) or []) if not c.skip_reason]
+        except Exception:  # noqa: BLE001 -- an unreadable gate runs nothing
+            return False
+        named = set()
+        for command in commands:
+            named |= set(operand_paths(list(command.argv), root, command.cwd))
+        return all(p in named for p in paths)
+
+    def _obligation_current_gate(self, record: dict) -> str:
+        """The gate identity an obligation is held to now: its own task's
+        effective gate while that task runs; otherwise its recorded gate,
+        unless the configured gate it was derived from changed since (then
+        no gate derived from the old one is the one that ran)."""
+        active = getattr(self._active_spec, "task_id", None)
+        if active is not None and active == record.get("task"):
+            return _gate_identity(self._current_gate())
+        base = _gate_identity(self.config.integration_gate)
+        if record.get("base_gate", base) != base:
+            return f"changed:{base}"
+        return record.get("gate") or ""
+
+    def _authority_record(self) -> dict:
+        """The approval authority a judgment is made under: every
+        requirement as a typed revision (delivery.RequirementRevision; an
+        inferred reading, approved by the cross-vendor requirements review
+        when one succeeded), the operator's rulings, the orchestrator's
+        decisions and ambiguity notes, the goal and the plan gate's
+        receipt. Its digest is in every packet and is what a resumed
+        episode must find committed (checkpoint._same_authority)."""
+        ledger = self.memory.ledger
+        revisions = self._requirement_revisions()
+        review = next((r for r in self.requirement_reviews if r.get("reviewer")
+                       and not str(r.get("result", "")).startswith(("failed", "no reviewer"))), None)
+        receipt = f"requirements-review:{review['reviewer']}" if review else None
+        rows = []
+        for rid, text in ledger.requirements.items():
+            if not str(text or "").strip():
+                continue
+            rows.append(delivery.RequirementRevision(rid, int(revisions.get(rid, 1)), str(text), origin="inferred",
+                                                     decision_receipt=receipt).to_dict())
+        body = dict(goal=hashlib.sha256((self.memory.goal or "").encode()).hexdigest()[:16], requirements=rows,
+                    rulings=list(ledger.rulings), decisions=dict(ledger.decisions), ambiguous=dict(ledger.ambiguous),
+                    plan_gate=self._plan_gate_receipt, policy="authority/1")
+        body["digest"] = hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
+        return body
+
+    def _publish_authority(self) -> Optional[str]:
+        """Commit the current authority record to the job store (once per
+        distinct record) and return its digest, for the checkpoint written
+        at the same quiescent point. No store, no digest: a checkpoint
+        without one is read as before."""
+        store = self.config.job_store
+        if store is None:
+            return None
+        record = self._authority_record()
+        if record["digest"] != self._published_authority:
+            store.publish({"authority": record})
+            self._published_authority = record["digest"]
+        return record["digest"]
 
     def _findings_block(self, carried: List[dict], standing: List[dict]) -> str:
         if not carried and not standing:
@@ -8263,10 +8524,15 @@ class Session:
         judgement may have started is never retried, and an outcome already
         recorded MET on this identity is carried, never re-judged."""
         identity = self._evidence_identity() if self.project else None
+        binding = self._audit_binding(self._final_audit.get("ids") if self._final_audit else None)
         for record in self.evidence_requests:
             if record.get("kind") != "audit" or record.get("identity") != identity:
                 continue
-            if str(record.get("disposition", "")).startswith("MET on reassessment"):
+            if (str(record.get("disposition", "")).startswith("MET on reassessment")
+                    and record.get("acceptance_binding") == binding):
+                # Carried only on exactly the packet the reassessment was
+                # accepted on; a packet that moved since leaves the final
+                # audit's own verdict standing (root's cache finding).
                 self.memory.ledger.requirement_status[record["target"]] = (
                     f"met (reassessed on evidence {record['id']})")
         for record in self.evidence_requests:
@@ -8481,17 +8747,22 @@ class Session:
                  else list(getattr(self, "_inherited_checks", None) or []))
         commands = sorted({shlex.join(argv) for c in every for argv in (tuple(c.argv), tuple(model_facing(c.argv)))})
         try:
-            with project.snapshot() as directory:
+            with self._operation("evidence run", inputs=dict(
+                    path=path, text=hashlib.sha256(text.encode()).hexdigest()[:32], checks=[c.id for c in checks],
+                    source=self._source_fingerprint()), effects=("run-scratch",)) as op, \
+                    project.snapshot() as directory:
                 handed = _copy_digests(directory)
                 target = Path(directory) / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text, encoding="utf-8")
                 proof = _scratch_proof(directory, [path], handed, checks,
                                        private=_private_paths(self.project, commands, directory))
+                op["result"] = dict(status=proof.get("status"), reason=proof.get("reason"))
         except OSError as exc:
             return dict(base, status="not run", reason=f"the copy could not be prepared: {type(exc).__name__}")
-        if self._capture_source() != before:
-            proof = dict(proof, status="not run", reason="the project changed while the evidence ran")
+        if before is None or self._capture_source() != before:
+            proof = dict(proof, status="not run", reason="the project changed while the evidence ran"
+                         if before is not None else "the project could not be read around the evidence run")
         base["execution"]["receipts"] = list(proof.get("receipts") or [])
         return dict(base, status=str(proof.get("status")), reason=str(proof.get("reason") or ""),
                     cases=list(proof.get("cases") or [])[:40])
@@ -8606,13 +8877,19 @@ class Session:
             if entry["kind"] == "audit":
                 rid = target
                 requirement = self.memory.ledger.requirements.get(rid, "")
+                self._refresh_obligations()
+                bound = [o for o in self.evidence_obligations if any(r[0] == rid for r in o["requirements"])]
                 prompt = (self._authority_context({rid: requirement})
                           + f"\n\nYou audited the delivered work and found:\n{entry['finding']}\n\n"
-                          + evidence + "\n\n" + _EVIDENCE_AUTHORITY
+                          + evidence + self._obligations_block(bound) + "\n\n" + _EVIDENCE_AUTHORITY
                           + "\n\nThe project in your working directory is the delivered work. " + _ERROR_PATH_RULE
                           + f" Reassess {rid} alone, once. Reply with exactly one line: '{rid}: MET - <project "
                           f"file path or test name that shows it>' or '{rid}: NOT MET - <what is still missing>'. "
-                          "A MET without a cited project file or test is counted as not met.")
+                          "A MET without a cited project file or test is counted as not met."
+                          + ("" if not any(o.get("execution") == "ran" for o in bound) else
+                             " You may add one line per executed evidence obligation listed above, "
+                             "'<O-id>: SUFFICIENT <why>' or '<O-id>: INSUFFICIENT <what it does not establish>'; "
+                             "an obligation left unjudged or judged insufficient keeps the requirement not met."))
                 self._active_spec = None
                 with invocation("audit", "auditor"):
                     reply = self._invoke_model(reviewer, prompt)
@@ -8673,9 +8950,17 @@ class Session:
         if not self._resolve_citations(why):
             return "held: MET claimed without a project file or test that exists"
         verdict = {target: (True, why)}
+        # The same acceptance the audit's own MET gets: refreshed
+        # obligations, the NOT RUN and error-clause rules, the auditor's
+        # explicit sufficiency lines, then the one predicate.
+        self._refresh_obligations()
         lowered = self._lower_unexecuted(verdict)
+        lowered += self._lower_unexercised_errors(verdict, [target])
+        self._judge_obligations(reviewer, reply or "", {}, ids=[target])
+        lowered += self._apply_acceptance(verdict, [target])
         if lowered:
             return f"held: {lowered[0]['reason'][:200]}"
+        record["acceptance_binding"] = self._audit_binding(self._final_audit.get("ids") if self._final_audit else None)
         self.memory.ledger.requirement_status[target] = f"met (reassessed on evidence {record['id']})"
         if self._done_refusal:
             self._done_refusal = "\n".join(line for line in self._done_refusal.split("\n")
@@ -8886,7 +9171,10 @@ class Session:
                 not result.receipts and result.passed and skipped_count(result)):
             return result
         task = getattr(self._active_spec, "task_id", "run")
-        baseline, problem = run_original_tests(gate, self.project, self._original_tests, start)
+        with self._operation("skip baseline", inputs=dict(task=task, gate=_gate_identity(gate)),
+                             effects=("run-check",)) as op:
+            baseline, problem = run_original_tests(gate, self.project, self._original_tests, start)
+            op["result"] = dict(passed=None if baseline is None else baseline.passed, problem=problem)
         self._verify_dependencies(f"during run-start skip baseline ({task})")
         drift = self._source_drift(current)
         if drift:
@@ -9094,7 +9382,9 @@ class Session:
         if kind == "skipped":
             runner, cases = "gate", tuple(entry.get("cases") or ())
         elif kind == "not_run":
-            runner, cases = ("gate" if _item_paths(behavior) else None), ()
+            # Routed to the gate only where the gate names every path the
+            # item does as a whole operand; otherwise a prerequisite.
+            runner, cases = ("gate" if self._gate_can_run(_item_paths(behavior)) else None), ()
         else:
             runner, cases = ("gate" if self._current_gate() is not None else None), ()
         oid = f"O{len(self.evidence_obligations) + 1}"
@@ -9108,7 +9398,11 @@ class Session:
             runner=runner, cases=cases, environment=self._environment_id(), policy="review/2",
             task=str(entry.get("task") or "run"))
         record = dict(obligation.to_dict(), kind=kind, entry=dict(item=entry.get("item"), receipt=entry.get("receipt"),
-                                                                  after_check=entry.get("after_check")))
+                                                                  after_check=entry.get("after_check")),
+                      # The configured gate the task gate derives from, so a
+                      # later refresh can tell a reconfigured gate from a
+                      # task's own narrowing (_obligation_current_gate).
+                      base_gate=_gate_identity(self.config.integration_gate))
         self.evidence_obligations.append(record)
         if runner is None:
             self._note(f"{record['task']}: evidence obligation {oid} has no authorized runner "
@@ -9132,8 +9426,7 @@ class Session:
                 if index is not None:
                     check = self.checks[index]
                     return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
-                                runner="gate", environment=self._environment_id(),
-                                requirements=[list(r) for r in record["requirements"]], completed=True,
+                                runner="gate", **self._receipt_identity(check, record), completed=True,
                                 passed=bool(check.get("passed")), passed_cases=list(found.get("cases") or ()),
                                 skipped_cases=[])
             return None
@@ -9145,10 +9438,20 @@ class Session:
             check = self.checks[index]
             if check.get("passed") and check.get("source") == current:
                 return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
-                            runner="gate", environment=self._environment_id(),
-                            requirements=[list(r) for r in record["requirements"]], completed=True, passed=True,
+                            runner="gate", **self._receipt_identity(check, record), completed=True, passed=True,
                             passed_cases=[], skipped_cases=[])
         return None
+
+    @staticmethod
+    def _receipt_identity(check: dict, record: dict) -> dict:
+        """The identity a check carries as recorded: the environment it ran
+        in and the requirement revisions current when it ran, read off the
+        check, never relabelled from now (root's receipt finding on
+        f4fe5b7). A check recorded without them discharges nothing: None is
+        no revision and no environment."""
+        revisions = check.get("requirements") if isinstance(check.get("requirements"), dict) else {}
+        return dict(environment=check.get("environment"),
+                    requirements=[[rid, revisions.get(rid)] for rid, _ in record["requirements"]])
 
     def _discharging_check(self, entry: dict) -> Optional[int]:
         """The index of the first later check that discharges a NOT RUN or
@@ -9180,10 +9483,19 @@ class Session:
         current_source = self._source_fingerprint() if self.project else None
         revisions = self._requirement_revisions()
         refreshed = []
+        environment = self._environment_id()
         for record in self.evidence_obligations:
             obligation = delivery.EvidenceObligation.from_dict(record)
-            obligation = delivery.refresh(obligation, current_source=current_source, current_requirements=revisions)
+            current_gate = self._obligation_current_gate(record)
+            obligation = delivery.refresh(obligation, current_source=current_source, current_requirements=revisions,
+                                          current_gate=current_gate, current_environment=environment)
             receipt = self._obligation_receipt(record) if obligation.runner is not None else None
+            # A receipt from a check under a gate or in an environment that
+            # is no longer the effective one discharges nothing now, even
+            # though it matched the obligation when it ran.
+            if receipt is not None and ((receipt.get("gate") or "") != (current_gate or "")
+                                        or (receipt.get("environment") or "") != environment):
+                receipt = None
             if receipt is not None and current_source and (obligation.execution != "ran"
                                                             or obligation.source_digest != current_source):
                 out = delivery.discharge(obligation, receipt, current_source=current_source,
@@ -9192,15 +9504,26 @@ class Session:
             refreshed.append(dict(record, **obligation.to_dict()))
         self.evidence_obligations = refreshed
 
-    def _judge_obligations(self, auditor: str, reply: str, found: dict) -> None:
+    def _judge_obligations(self, auditor: str, reply: str, found: dict, *, ids=None) -> None:
         """Sufficiency from the audit: an explicit '<O-id>: SUFFICIENT|INSUFFICIENT'
         line decides; otherwise the auditor's verdict on every requirement an
         executed obligation binds does (all MET after lowering: sufficient;
-        any NOT MET: insufficient). Bound to exactly the evidence judged."""
-        explicit = judgment.sufficiency_verdicts(reply, [o["oid"] for o in self.evidence_obligations])
+        any NOT MET: insufficient). Two lines for one id (a duplicate or a
+        contradiction) are no verdict: the obligation is left unjudged with
+        the conflict noted. Only obligations binding an audited requirement
+        (``ids``; every one when None) are judged. Bound to exactly the
+        evidence judged."""
+        explicit, conflicts = judgment.sufficiency_reading(reply, [o["oid"] for o in self.evidence_obligations])
         refreshed = []
         for record in self.evidence_obligations:
             obligation = delivery.EvidenceObligation.from_dict(record)
+            if ids is not None and not any(r[0] in ids for r in obligation.requirements):
+                refreshed.append(record)
+                continue
+            if obligation.oid in conflicts:
+                obligation = replace(obligation, sufficiency="unjudged", judged_by="", judged_binding="")
+                refreshed.append(dict(record, **obligation.to_dict(), sufficiency_note=conflicts[obligation.oid]))
+                continue
             verdict = explicit.get(obligation.oid, (None, ""))[0]
             if verdict is None and obligation.execution == "ran":
                 # Only executed evidence is judged by implication; what did
@@ -9251,18 +9574,16 @@ class Session:
             if blockers:
                 reason = ("acceptance reported NOT RUN by the covering task: "
                           + "; ".join(f"{e['task']}: {e['item']}" for e in blockers))[:300]
-            # An obligation with an authorized runner that did not run, ran
-            # on another source or under another identity lowers the MET;
-            # one with no runner is a prerequisite the audit and the planner
-            # see, reported rather than used to lower (the legacy NOT RUN
-            # record still lowers on its own terms).
+            # An obligation that did not run, ran on another source or under
+            # another identity lowers the MET; one with no runner is a
+            # prerequisite nobody can run yet, and lowers it as well: what
+            # cannot be executed is not shown (root's finding on f4fe5b7).
             unmet = [o for o in self.evidence_obligations
-                     if any(r[0] == rid for r in o["requirements"]) and o["execution"] != "ran"
-                     and o.get("runner") is not None]
+                     if any(r[0] == rid for r in o["requirements"]) and o["execution"] != "ran"]
             if unmet:
                 typed = ("evidence obligation not executed: "
-                         + "; ".join(f"{o['oid']} ({o['execution']}" + (f": {o['reason']}" if o.get("reason")
-                                                                       else "") + f") {o['behavior'][:80]}"
+                         + "; ".join(f"{o['oid']} ({'no runner' if o.get('runner') is None else o['execution']}"
+                                     + (f": {o['reason']}" if o.get("reason") else "") + f") {o['behavior'][:80]}"
                                      for o in unmet))
                 reason = (reason + "; " + typed if reason else typed)[:300]
             standing_findings = self._open_findings_touching(rid)
@@ -9311,7 +9632,7 @@ class Session:
         stages = []
         if self._explicit_tasks is None and self._cap_goal is None:
             stages.append("goal")
-        if self.config.requirements_ledger and self._final_audit is None:
+        if self.config.requirements_ledger and not self._final_audit_current():
             stages.append("audit")
         budget.protect_finish(stages)
         if stages:
@@ -9386,7 +9707,8 @@ class Session:
                     checks=integration.checks_digest(self._discovering_checks()),
                     goal=h(self.memory.goal),
                     requirements=sorted([rid, h(text)] for rid, text in self.memory.ledger.requirements.items()),
-                    covered=sorted([rid, h(text)] for rid, text in self._covered_texts()))
+                    covered=sorted([rid, h(text)] for rid, text in self._covered_texts()),
+                    packet=self._packet().digest)
         body["identity"] = h(json.dumps(body, sort_keys=True))
         return body
 
@@ -9505,13 +9827,20 @@ class Session:
             stages.append("design review")
         return stages
 
-    def _plan_stages(self, spec, stages, *, collaborators=(), security: bool = False) -> list:
-        """The whole remaining path of one task as plan stages in the
+    def _plan_stages(self, spec, stages, *, collaborators=(), security: bool = False,
+                     post_merge: bool = False, slots: int = 1) -> list:
+        """The selected finite route of one task as plan stages in the
         budget's exposure classes (delivery.PlanStage): its known mandatory
-        stages, then the correction route the task may take (one revision
-        with the write grant and one recheck per reviewer), its close-out,
-        and the finishing judgments still held. Nothing is cheaper than its
-        class: a call holding the write grant is at the editing ceiling."""
+        stages, then the one correction the route allows (one revision with
+        the write grant and one recheck per reviewer; a second fix cycle is
+        admitted on its own before it starts, ``_fix_cycle_stages``), for a
+        parallel child one post-merge recheck per reviewer, its model
+        close-out where one is made, and the finishing judgments still held.
+        A gate fix is not on the route: it is bought only when a check fails,
+        by the budget at that moment, and a refusal there is recorded loudly
+        (the failed check stands); costing it in advance would refuse every
+        task under the normal bounds. Nothing is cheaper than its class: a
+        call holding the write grant is at the editing ceiling."""
         writes = bool(self._writes())
         rows = []
         for name in stages:
@@ -9520,19 +9849,72 @@ class Session:
         if collaborators and not security:
             rows.append(delivery.PlanStage("revision", "editing" if writes else "reserve", editing=writes))
             rows.extend(delivery.PlanStage(f"recheck by {peer}", "reserve") for peer in collaborators)
-        rows.append(delivery.PlanStage("close-out", "reserve"))
+        if post_merge:
+            rows.extend(delivery.PlanStage(f"post-merge recheck by {peer}", "reserve") for peer in collaborators)
+        if not self._closes_factually(spec, slots=slots):
+            rows.append(delivery.PlanStage("close-out", "reserve"))
         budget = self._budget()
         pending = list(budget.finish_pending()) if budget is not None and hasattr(budget, "finish_pending") else []
         rows.extend(delivery.PlanStage(stage, "reserve", finishing=True) for stage in pending)
         return rows
 
-    def _admit_plan(self, task_id: str, rows: list, *, scope: str = "full") -> "delivery.PlanVerdict":
+    def _route_gate(self, spec):
+        """The gate the task's route runs, read without side effects."""
+        if not self.project or self.config.integration_gate is None:
+            return None
+        if getattr(self, "_batch_child", False):
+            return None
+        return self._gate_for(spec)
+
+    def _closes_factually(self, spec, *, slots: int = 1) -> bool:
+        """Whether this task's close-out is written by the harness rather
+        than asked of a model (``_task_close_out``): the direct tier, or a
+        task in the job's last wave (``slots`` tasks in this wave) of a run
+        with no explicit list."""
+        if self._tier(spec) == "direct":
+            return True
+        total = int(getattr(self, "_max_tasks", 0) or 0)
+        used = int(getattr(self, "_slots_used", 0) or 0)
+        return bool(total) and used + max(1, int(slots)) >= total and self._explicit_tasks is None
+
+    def _fix_cycle_stages(self, spec, unresolved) -> list:
+        """One further fix cycle: a revision with the write grant and one
+        recheck per reviewer whose findings it answers."""
+        writes = bool(self._writes())
+        rows = [delivery.PlanStage("fix revision", "editing" if writes else "reserve", editing=writes)]
+        rows.extend(delivery.PlanStage(f"recheck by {peer}", "reserve")
+                    for peer in sorted({peer for peer, _ in unresolved}))
+        return rows
+
+    def _note_check_wall(self, gate, elapsed: float) -> None:
+        """Keep the measured wall time of one run of ``gate`` (this
+        episode's own measurement; a timeout is a ceiling, not a cost)."""
+        self.__dict__.setdefault("_check_walls", {})
+        identity = _gate_identity(gate)
+        self._check_walls[identity] = max(float(elapsed), self._check_walls.get(identity, 0.0))
+
+    def _gate_wall(self, spec) -> float:
+        """The wall time one run of the task's gate is measured to take:
+        the longest run of the same gate this episode recorded, so the
+        route's admission counts the checks it will run as well as its
+        calls. No measurement, no figure: a configured timeout is the most
+        a run may take, not what it costs, and counting it would refuse
+        every route whose wall is under twice the timeout."""
+        gate = self._route_gate(spec)
+        if gate is None:
+            return 0.0
+        return float((getattr(self, "_check_walls", None) or {}).get(_gate_identity(gate), 0.0))
+
+    def _admit_plan(self, task_id: str, rows: list, *, scope: str = "full", wall_extra: float = 0.0,
+                    ) -> "delivery.PlanVerdict":
         """Cost ``rows`` against what the budget has left after the held
         finish (delivery.admit_plan), and record the decision. ``scope`` is
-        ``mandatory`` (the stages the task cannot close without: refused
-        when short) or ``full`` (the correction route and close-out too:
-        recorded and shown to the planner, never a refusal, because a clean
-        review costs nothing further and an estimate is not a proof)."""
+        ``mandatory`` (the stages the task cannot close without), ``full``
+        (the selected route: the correction, the gate fix and the close-out
+        too), ``fix-cycle`` (a further cycle before it starts) or a batch's
+        name; a shortfall on any of them refuses the work before its first
+        call (``_refuse_unpayable_dispatch``, ``_admit_batch``). ``wall_extra``
+        is the wall time the route's own checks may take."""
         budget = self._budget()
         snap = budget.snapshot()
         limits, fin = snap["limits"], snap.get("finish_protection") or {}
@@ -9553,10 +9935,11 @@ class Session:
             # The finish's wall hold is already withheld from what is left; an
             # ordinary call gets the time left, so no per-stage wall figure is
             # counted beyond needing some time of its own.
-            exposures=dict(editing=editing, reserve=reserve), wall_per_stage=0.0)
+            exposures=dict(editing=editing, reserve=reserve), wall_per_stage=0.0, wall_extra=wall_extra)
         self.plan_admissions.append(dict(task=task_id, scope=scope, feasible=verdict.feasible, detail=verdict.detail,
                                          stages=list(verdict.stages), finishing=[r.name for r in finishing],
-                                         short=dict(verdict.short), at_attempt=snap["reserved_attempts"]))
+                                         short=dict(verdict.short), at_attempt=snap["reserved_attempts"],
+                                         wall_extra=wall_extra))
         return verdict
 
     def _refuse_unpayable_dispatch(self, spec, stages, *, collaborators=(), security: bool = False) -> None:
@@ -9580,10 +9963,17 @@ class Session:
             exc = FinishReserved(f"{spec.task_id}: {obligations.dispatch_floor(list(stages), left) or verdict.detail}")
             exc.infeasible = True
             raise exc
-        whole = self._admit_plan(spec.task_id, full, scope="full")
+        # The route's own checks: one after the draft, one after a revision.
+        checks = 1 + (1 if any(r.name == "revision" for r in full) else 0)
+        whole = self._admit_plan(spec.task_id, full, scope="full", wall_extra=self._gate_wall(spec) * checks)
         if not whole.feasible:
-            self._note(f"{spec.task_id}: its mandatory stages fit, but its correction route and close-out do not: "
-                       f"{whole.detail}")
+            # The route the task would actually take is not payable: it is
+            # not started, before its first call, rather than started on a
+            # path that ends short of its judgments (root's admission
+            # finding on f4fe5b7: a recorded shortfall is not an admission).
+            exc = FinishReserved(f"{spec.task_id}: cannot pay its selected route: {whole.detail}")
+            exc.infeasible = True
+            raise exc
 
     def _admit_batch(self, parsed) -> Optional[str]:
         """Before a parallel wave starts: the sum of every child's remaining
@@ -9603,19 +9993,22 @@ class Session:
                 self._current_covers = list(covers or [])
                 peers = self.collaborators_for(spec, spec.lead or "")
                 stages = self._mandatory_stages(spec, peers)
-                rows.extend(r for r in self._plan_stages(spec, stages, collaborators=peers) if not r.finishing)
+                rows.extend(r for r in self._plan_stages(spec, stages, collaborators=peers, post_merge=True,
+                                                         slots=len(parsed)) if not r.finishing)
         finally:
             self._current_covers = saved
         name = "batch:" + ",".join(spec.task_id for spec, _c, _n in parsed)
+        # The merge gate's one run on the merged source; a fix of it is
+        # bought at that moment, as a task's gate fix is.
+        wall_extra = self._gate_wall(SimpleNamespace(task_id=name, scope=None))
         mandatory = [r for r in rows if r.name in ("lead draft", "security worker draft", "design review",
                                                    "security verification") or r.name.startswith("review by ")]
         verdict = self._admit_plan(name, mandatory, scope="mandatory")
         if not verdict.feasible:
             return verdict.detail
-        whole = self._admit_plan(name, rows, scope="full")
+        whole = self._admit_plan(name, rows, scope="full", wall_extra=wall_extra)
         if not whole.feasible:
-            self._note(f"{name}: its mandatory stages fit, but its correction route and close-outs do not: "
-                       f"{whole.detail}")
+            return f"cannot pay its selected route: {whole.detail}"
         return None
 
     def _obligations(self, ids=None) -> "obligations.View":
@@ -9674,10 +10067,10 @@ class Session:
                          f"{o['behavior'][:120]}; runner {o['runner'] or 'NONE: prerequisite, no authorized runner'}; "
                          f"execution {o['execution']}; sufficiency {o['sufficiency']}"
                          for o in self.evidence_obligations)
-        last = next((a for a in reversed(self.plan_admissions) if a.get("scope") == "full"), None)
+        last = next((a for a in reversed(self.plan_admissions) if a.get("scope") in ("full", "fix-cycle")), None)
         if last is not None and not last["feasible"]:
-            notes.append(f"Plan admission for {last['task']}: its mandatory stages fit, but its correction route "
-                         f"and close-out did not ({last['detail'][:200]}); a blocking finding there would stay open.")
+            notes.append(f"Plan admission for {last['task']}: its selected route could not be paid from what is "
+                         f"left after the held finish, so it was not started ({last['detail'][:200]}).")
         open_findings = [r for r in self.review_findings if not r.get("closed")]
         if open_findings:
             notes.append("Review findings open by id:")
@@ -10173,26 +10566,29 @@ class Session:
         supplied, problems = _parse_fixture_blocks(reply)
         written = []
         flagged = {p.split(":", 1)[0] for p in problems}
-        for path in missing:
-            if path in flagged:
-                continue
-            content = supplied.get(path)
-            if content is None:
-                problems.append(f"{path}: no FIXTURE block in the reply")
-                continue
-            data = content.encode("utf-8")
-            if len(data) > MAX_FIXTURE_BYTES:
-                problems.append(f"{path}: {len(data):,} bytes exceeds {MAX_FIXTURE_BYTES:,}")
-                continue
-            target, why = _confined_fixture_target(self.project, path, spec.task_id)
-            if target is None:
-                problems.append(why)
-                continue
-            why = _write_fixture_bound(self.project, path, data)
-            if why:
-                problems.append(f"{path}: {why}")
-                continue
-            written.append(path)
+        with self._operation("fixture supply", inputs=dict(task=spec.task_id, paths=list(missing)),
+                             effects=("project-write",)) as op:
+            for path in missing:
+                if path in flagged:
+                    continue
+                content = supplied.get(path)
+                if content is None:
+                    problems.append(f"{path}: no FIXTURE block in the reply")
+                    continue
+                data = content.encode("utf-8")
+                if len(data) > MAX_FIXTURE_BYTES:
+                    problems.append(f"{path}: {len(data):,} bytes exceeds {MAX_FIXTURE_BYTES:,}")
+                    continue
+                target, why = _confined_fixture_target(self.project, path, spec.task_id)
+                if target is None:
+                    problems.append(why)
+                    continue
+                why = _write_fixture_bound(self.project, path, data)
+                if why:
+                    problems.append(f"{path}: {why}")
+                    continue
+                written.append(path)
+            op["result"] = dict(written=written, problems=problems)
         record["fixtures_written"] = written
         if problems:
             record["fixture_problems"] = problems
@@ -11462,7 +11858,8 @@ class Session:
         after = delivery.apply_reading(findings, reading, author=peer, role=role, binding=now["identity"],
                                        judged_binding=binding_before["identity"],
                                        source_digest=self._source_fingerprint() or "unavailable", call=call,
-                                       prefix=self._finding_prefix(spec), task=getattr(spec, "task_id", "run"))
+                                       prefix=self._finding_prefix(spec), task=getattr(spec, "task_id", "run"),
+                                       resolve=self._evidence_resolves)
         self.review_findings = [dict(f.to_dict(), text=before.get(f.fid, {}).get("text", f.claim)) for f in after]
         new = [r for r in self.review_findings if r["fid"] not in before]
         for record in new:
@@ -11701,6 +12098,10 @@ class Session:
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
                             "cases": result.cases,
+                            # The identity a receipt is read with: the
+                            # environment and requirement revisions as they
+                            # were when the check ran (_receipt_identity).
+                            "environment": self._environment_id(), "requirements": self._requirement_revisions(),
                             # A single-command gate's parsed report and the
                             # source it ran on (a suite's receipts carry
                             # their own), for the requirements audit.
@@ -11893,9 +12294,11 @@ class Session:
         if result.passed or verdict["product"]:
             return
         self.checks.append({"passed": False, "command": result.command, "output": result.output,
+                            "gate": _gate_identity(gate), "source": self._source_fingerprint(),
                             "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
                             "cases": result.cases,
+                            "environment": self._environment_id(), "requirements": self._requirement_revisions(),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         if self._outcome is not None:
             self._outcome.edge("checks", False)
@@ -11966,6 +12369,7 @@ class Session:
         self._verify_dependencies(f"before check ({task})")
         before = project.contents() if project else None
         self._activity('check-started', task=task)
+        started = time.monotonic()
         try:
             with self._operation("check", inputs=dict(task=task, gate=_gate_identity(gate),
                                                       source=self._source_fingerprint()),
@@ -11974,6 +12378,7 @@ class Session:
                 op["result"] = dict(passed=result.passed, output=result.output[-2000:])
         finally:
             self._activity('check-ended', task=task)
+            self._note_check_wall(gate, time.monotonic() - started)
         # A receipt taken with a changed dependency tree is never accepted.
         self._verify_dependencies(f"during check ({task})")
         if project is not None:
@@ -12128,7 +12533,10 @@ class Session:
                     self._note(f"task {task}: authorized repair(s) {', '.join(repaired)} keep their original "
                                "cases, executed; no other run-start test file changed")
                 return result
-        baseline, problem = run_original_tests(gate, self.project, originals, current, keep=repaired)
+        with self._operation("original tests", inputs=dict(task=task, gate=_gate_identity(gate), changed=changed),
+                             effects=("run-check",)) as op:
+            baseline, problem = run_original_tests(gate, self.project, originals, current, keep=repaired)
+            op["result"] = dict(passed=None if baseline is None else baseline.passed, problem=problem)
         self._verify_dependencies(f"during original tests ({task})")
         drift = self._source_drift(current)
         if drift:
@@ -12238,7 +12646,10 @@ class Session:
             self._unverified_once("Run-start test files changed and no check is configured to "
                                              "run the original tests against the delivered source.")
             return ""
-        baseline, problem = run_original_tests(gate, self.project, self._original_tests, current, keep=keep)
+        with self._operation("original tests", inputs=dict(task="DONE", gate=_gate_identity(gate), changed=changed),
+                             effects=("run-check",)) as op:
+            baseline, problem = run_original_tests(gate, self.project, self._original_tests, current, keep=keep)
+            op["result"] = dict(passed=None if baseline is None else baseline.passed, problem=problem)
         self._verify_dependencies("during original tests (DONE)")
         drift = self._source_drift(current)
         if drift:

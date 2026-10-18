@@ -12,7 +12,8 @@ from types import SimpleNamespace
 import pytest
 
 from quadratus.artifacts import ArtifactStore
-from quadratus.session import Session, SessionConfig
+from quadratus.integration import IntegrationGate
+from quadratus.session import Session, SessionConfig, _gate_identity
 
 SCENARIO = "tests/browser/scenarios/09-project-search.js"
 UNIT = "tests/ui/project_search.test.js"
@@ -25,14 +26,26 @@ def _session(tmp_path, reply):
     (root / UNIT).write_text("// ran through the five-file check\n")
     (root / SCENARIO).write_text("// requested, never executed\n")
     (root / "tests" / "ui" / "new_search.test.js").write_text("// no check names it\n")
+    # The configured gate names the unit file and the scenario whole, as an
+    # operator's check does; a NOT RUN item naming either is routed to it
+    # (Session._gate_can_run), one naming anything else has no runner.
+    gate = IntegrationGate(["node", "--test", UNIT, SCENARIO], cwd=str(root))
     session = Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
-                      config=SessionConfig(project=root, allow_writes=True, requirements_ledger=True))
+                      config=SessionConfig(project=root, allow_writes=True, requirements_ledger=True,
+                                           integration_gate=gate))
     session.memory.ledger.requirements.update({
         "R1": "typing filters the cards", "R5": "the list logs no console errors while typing"})
     prompts = []
     session._auditor = lambda: "openai:gpt-5.6-sol"
     session._invoke_model = lambda key, prompt, **kw: prompts.append(prompt) or reply
     return session, prompts
+
+
+def _identity(session):
+    """What every recorded check carries: the gate it ran, the environment
+    and the requirement revisions current when it ran (Session._check)."""
+    return dict(gate=_gate_identity(session.config.integration_gate), environment=session._environment_id(),
+                requirements=session._requirement_revisions())
 
 
 def _not_run(session, task, covers, reply, role="revision"):
@@ -94,13 +107,13 @@ def test_only_a_later_passing_check_naming_the_item_lifts_a_report(tmp_path):
     session, _ = _session(tmp_path, f"R5: MET - {UNIT}\n")
     _not_run(session, "t3", ["R5"], f"NOT RUN: {SCENARIO} - not approved")
     source = session._source_fingerprint()  # every recorded check carries the source it ran on
-    session.checks.append(dict(passed=True, command="gate suite", source=source,
+    session.checks.append(dict(passed=True, command="gate suite", source=source, **_identity(session),
                                receipts=[dict(id="check", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command="pytest -q")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "an unrelated passing check lifts nothing"
-    session.checks.append(dict(passed=False, command="gate suite", source=source,
+    session.checks.append(dict(passed=False, command="gate suite", source=source, **_identity(session),
                                receipts=[dict(id="extra-2", status="failed", output="# pass 3\n# fail 0\n# skipped 0\n", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "a failing run lifts nothing"
-    session.checks.append(dict(passed=True, command="gate suite", source=source,
+    session.checks.append(dict(passed=True, command="gate suite", source=source, **_identity(session),
                                receipts=[dict(id="extra-2", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is True
     typed = session.evidence_obligations[0]
@@ -154,9 +167,10 @@ def _ran(session, task, covers, result):
     session._note_skips(SimpleNamespace(task_id=task), result)
     session.checks.append(dict(passed=result.passed, command=result.command, output=result.output,
                                receipts=[dataclasses.asdict(r) for r in result.receipts],
-                               # As the session records every check: the source it ran on, so
-                               # the typed obligation's receipt binds to it (delivery.discharge).
-                               source=session._source_fingerprint()))
+                               # As the session records every check: the source it ran on, the
+                               # gate, environment and revisions, so the typed obligation's
+                               # receipt binds to exactly it (delivery.discharge).
+                               source=session._source_fingerprint(), **_identity(session)))
     session._current_covers = []
 
 

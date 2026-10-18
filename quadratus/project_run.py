@@ -55,7 +55,7 @@ def _publish_in_flight(store, run_dir, in_flight: dict) -> None:
 def _store_readable(store) -> bool:
     try:
         store.current()
-        return True
+        return not store.refused
     except Exception:  # noqa: BLE001 -- a corrupt manifest is reported, never read around
         return False
 
@@ -501,11 +501,22 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         uncarried = list(state_now.get('uncarried') or []) if 'uncarried' in state_now else []
         if snapshot.get('in_flight'):
             uncarried.append('a call in flight')
+        settled_ops = {}
+        for op in getattr(session, 'operations', []) or []:
+            if op.get('status') == 'settled':
+                owner = str(op.get('owner_id') or '')
+                settled_ops[owner] = settled_ops.get(owner, 0) + 1
         checkpoint.write(run_dir, dict(
             version=checkpoint.VERSION, lineage=lineage, sealed=False, resumable=not uncarried,
             uncarried=uncarried, consumed=checkpoint.consumed(snapshot) if snapshot else None,
             identities=checkpoint.identities(source=session._source_fingerprint(),
                                              dependency=getattr(baseline, 'digest', None), **held),
+            # What the record has consumed at this quiescent point: every
+            # operation settled past it on restart is unconsumed work.
+            watermark=dict(budget_settled=len(((snapshot or {}).get('operations') or {}).get('settled') or []),
+                           session_settled=settled_ops),
+            # The approval authority this point was recorded under.
+            authority=session._publish_authority() if hasattr(session, '_publish_authority') else None,
             state={} if uncarried else state_now,
             written=datetime.now(timezone.utc).isoformat()), store=job_store,
             budget_snapshot=snapshot or None)
@@ -595,6 +606,35 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     _observe_transcript_children(traces, delegation)
     diff = project.diff(before)
     completed = bool(session and session.completed and not error)
+    # The terminal state is committed before it is announced: the record of
+    # what the run ended as and the acceptance basis it ended on, in the
+    # same generation as the sealed checkpoint. A run whose terminal state
+    # cannot be committed has not finished, whatever memory says.
+    terminal = dict(completed=completed, error=error, interrupted=interrupted,
+                    acceptance=(session._acceptance_record() if session and hasattr(session, '_acceptance_record')
+                                else None), written=datetime.now(timezone.utc).isoformat())
+    if interrupted:
+        try:
+            job_store.publish({'terminal': terminal})
+            terminal_committed = True
+        except Exception:  # noqa: BLE001 -- latched: an interrupted run's terminal is best effort
+            terminal_committed = False
+    else:
+        terminal_committed = checkpoint.seal(run_dir, error or ('completed' if completed else 'incomplete'),
+                                             store=job_store, extra={'terminal': terminal})
+    if not terminal_committed and not interrupted:
+        completed = False
+        error = error or f"JobStoreUnavailable: the terminal state could not be committed ({job_store.refused})"
+        terminal = dict(terminal, completed=False, error=error)
+        if session is not None:
+            # The typed record says the same as the legacy one: a run whose
+            # ending was never committed did not finish, and the stop names
+            # the store (integrity: the record itself is what failed).
+            session.completed = False
+            outcome = getattr(session, 'run_outcome', None)
+            if outcome is not None and not any(f.active and f.detail.startswith('JobStoreUnavailable')
+                                               for f in outcome.facts):
+                outcome.note('integrity', error[:400], legacy='JobStoreUnavailable', full=error)
     checks = session.checks if session else []
     ledger = session.memory.render(current='') if session else ''
     explicit = getattr(session, 'explicit', None) if session else None
@@ -685,8 +725,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'plan_admissions': list(getattr(session, 'plan_admissions', []) or []) if session else [],
         'operations': list(getattr(session, 'operations', []) or []) if session else [],
         'job_store': dict(generation=(job_store.current().number if job_store.current() else None),
-                          refused=job_store.refused) if _store_readable(job_store) else dict(generation=None,
-                                                                                      refused='unreadable'),
+                          refused=job_store.refused, terminal_committed=terminal_committed)
+        if _store_readable(job_store) else dict(generation=None, refused=job_store.refused or 'unreadable',
+                                                terminal_committed=terminal_committed),
         'findings': list(getattr(session, 'findings', []) or []) if session else [],
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),
@@ -727,10 +768,6 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             for r in (session.scope_reports if session else [])
         ],
     }, indent=2), encoding='utf-8')
-    if not interrupted:
-        # A run that ended on its own terms is never resumed; only an
-        # interrupted one keeps its last quiescent checkpoint open.
-        checkpoint.seal(run_dir, error or ('completed' if completed else 'incomplete'), store=job_store)
     (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')

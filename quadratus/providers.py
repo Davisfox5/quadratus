@@ -313,11 +313,21 @@ class LLMProvider:
                 and getattr(spec, 'summary_turn_capped', lambda: False)()):
             from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
             shape = dict(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
+        identity = None
+        if control is not None:
+            import hashlib
+
+            from .delegation import invocation_context
+            context = invocation_context.get() or {}
+            identity = dict(seat=f'{self.name}:{self.model}', task=str(context.get('task') or 'run'),
+                            role=str(context.get('role') or 'direct'),
+                            prompt_digest=hashlib.sha256((prompt or '').encode()).hexdigest()[:32])
         if control is not None and control.limits.max_cost_usd is not None:
             ticket, remaining = control.reserve(transport=self.transport,
-                                                price_key=f'{self.name}:{self.model}', **shape)
+                                                price_key=f'{self.name}:{self.model}', identity=identity, **shape)
         else:
-            ticket, remaining = control.reserve(**shape) if control is not None else (None, None)
+            ticket, remaining = (control.reserve(identity=identity, **shape) if control is not None
+                                 else (None, None))
         previous_timeout = self.timeout if control is not None else None
         if control is not None:
             self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)

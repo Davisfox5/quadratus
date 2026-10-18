@@ -141,7 +141,10 @@ def test_a_call_in_flight_when_the_run_ended_refuses_the_resume(tmp_path, monkey
     first = Path(replay.result.run_dir)
     # The transport accounts the interrupted attempt with no usage: unknown.
     assert _budget(first)["unknown_usage_attempts"] == 1
-    with pytest.raises(CheckpointRefused, match="unknown_usage"):
+    # The session's own record of the call is uncertain (interrupted before
+    # settlement) and is read first; the budget's unknown usage would refuse
+    # the same resume on its own.
+    with pytest.raises(CheckpointRefused, match="started and never settled"):
         _episode(replay, resume_from=first.name)
 
 
@@ -1846,10 +1849,15 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
     # controlled in tests/lifecycle/test_finish_capacity.py.
     monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
     declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1"
-    # Small enough that the task's dispatch admission (its lead and its
-    # review, each at this reserve, blueprint stage A) fits well inside the
-    # calibrated spend, so the audit's own reserve is the one boundary pinned.
-    reserve = 200
+    # One replayed call's usage plus one: the audit admitted at exactly the
+    # reserve must also fit its own 110 tokens under the total, or the
+    # threshold stops the run on the audit's own report. The task's dispatch
+    # admission (its selected route: the lead, two reviews, the revision and
+    # two rechecks, each at this reserve, blueprint stage A) needs 666 of
+    # the calibrated spend, which the lead's two FETCH turns below leave
+    # room for (771 left at dispatch), so the audit's own reserve is the one
+    # boundary pinned.
+    reserve = 111
 
     def run(where, total):
         def orchestrator(call, replay):
@@ -1858,6 +1866,8 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
             return declared if not replay.of("orchestrator")[:-1] else "DONE"
 
         def lead(call, replay):
+            if len(replay.of("lead")) <= 2:
+                return "FETCH: no-such-artifact"
             H.write(call, {"app.py": fixed})
             return 'Implemented add.\nCHANGED: ["app.py"]'
         where.mkdir()

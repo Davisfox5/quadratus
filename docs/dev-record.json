@@ -2237,7 +2237,22 @@
         "quadratus/generations.py",
         "quadratus/judgment.py",
         "tests/test_delivery_records.py",
-        "tests/test_generations.py"
+        "tests/test_generations.py",
+        "quadratus/jobstore.py",
+        "quadratus/session.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "quadratus/run_budget.py",
+        "quadratus/providers.py",
+        "quadratus/monitor.py",
+        "tests/test_jobstore_faults.py",
+        "tests/test_unexecuted_acceptance.py",
+        "tests/test_boundary_records.py",
+        "tests/lifecycle/test_delivery_controller.py",
+        "tests/lifecycle/test_boundary_correction.py",
+        "tests/lifecycle/test_finish_capacity.py",
+        "tests/lifecycle/test_judgment_integrity.py",
+        "tests/lifecycle/test_step2_recovery.py"
       ],
       "author": "claude",
       "reviewer": "codex",
@@ -2251,7 +2266,8 @@
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "claude: Connected A+B (Davis, 2026-10-18, Fable High): per-id findings at every recheck, post-merge, reassessment and audit site; typed evidence obligations routed to the gate with strict receipt binding and audit-only sufficiency; whole-remaining-path admission (mandatory refuses, correction route recorded); durable job store (immutable generations, manifest-first readers, operation records for model calls, checks, captures and probes) with checkpoint and budget publishing through it. recheck_state is no longer a live reader; budget.json and checkpoint.json are exports."
+        "claude: Connected A+B (Davis, 2026-10-18, Fable High): per-id findings at every recheck, post-merge, reassessment and audit site; typed evidence obligations routed to the gate with strict receipt binding and audit-only sufficiency; whole-remaining-path admission (mandatory refuses, correction route recorded); durable job store (immutable generations, manifest-first readers, operation records for model calls, checks, captures and probes) with checkpoint and budget publishing through it. recheck_state is no longer a live reader; budget.json and checkpoint.json are exports.",
+        "claude: scope extended to quadratus/jobstore.py, quadratus/session.py, quadratus/checkpoint.py, quadratus/project_run.py, quadratus/run_budget.py, quadratus/providers.py, quadratus/monitor.py, tests/test_jobstore_faults.py, tests/test_unexecuted_acceptance.py, tests/test_boundary_records.py, tests/lifecycle/test_delivery_controller.py, tests/lifecycle/test_boundary_correction.py, tests/lifecycle/test_finish_capacity.py, tests/lifecycle/test_judgment_integrity.py, tests/lifecycle/test_step2_recovery.py"
       ]
     }
   ],

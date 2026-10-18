@@ -31,7 +31,7 @@ from typing import Dict, Iterable, Optional, Sequence, Tuple
 __all__ = ["MET", "NOT_MET", "DUPLICATE", "Judgment", "combine", "has_blocking",
            "RESOLVED", "UNRESOLVED", "INVALID", "INVALIDATED", "recheck_state",
            "Verdict", "NewFinding", "RecheckReading", "recheck_verdicts", "checkable_reference",
-           "sufficiency_verdicts"]
+           "sufficiency_verdicts", "sufficiency_reading"]
 
 MET, NOT_MET, DUPLICATE = "met", "not met", "duplicate"
 RESOLVED, UNRESOLVED, INVALID = "resolved", "unresolved", "invalid"
@@ -251,10 +251,13 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
     return RecheckReading(dispositions, tuple(new), tuple(foreign), tuple(notes), coverage)
 
 
-def sufficiency_verdicts(text: str, expected: Sequence[str]) -> Dict[str, Tuple[str, str]]:
+def sufficiency_reading(text: str, expected: Sequence[str]) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, str]]:
     """``O3: SUFFICIENT why`` / ``O3: INSUFFICIENT why`` lines for the
-    expected obligation ids: exactly one line per id counts; a duplicate or
-    a contradiction is no verdict and the id is absent from the result."""
+    expected obligation ids. Returns ``(verdicts, conflicts)``: exactly one
+    line per id is its verdict; two or more lines for an id (a duplicate or
+    a contradiction) are a conflict, no verdict, and the id is named in
+    ``conflicts`` with why, so a caller never falls back to a positive
+    default for an id the judge spoke about twice."""
     wanted = {oid.upper(): oid for oid in expected}
     seen: Dict[str, list] = {}
     for raw in (text or "").splitlines():
@@ -262,4 +265,12 @@ def sufficiency_verdicts(text: str, expected: Sequence[str]) -> Dict[str, Tuple[
         if hit and hit.group("oid").upper() in wanted:
             seen.setdefault(hit.group("oid").upper(), []).append((hit.group("state").lower(),
                                                                    hit.group("why").strip()))
-    return {wanted[key]: rows[0] for key, rows in seen.items() if len(rows) == 1}
+    verdicts = {wanted[key]: rows[0] for key, rows in seen.items() if len(rows) == 1}
+    conflicts = {wanted[key]: f"{len(rows)} sufficiency lines ({', '.join(r[0] for r in rows)}); no verdict"
+                 for key, rows in seen.items() if len(rows) > 1}
+    return verdicts, conflicts
+
+
+def sufficiency_verdicts(text: str, expected: Sequence[str]) -> Dict[str, Tuple[str, str]]:
+    """The valid verdicts of :func:`sufficiency_reading`."""
+    return sufficiency_reading(text, expected)[0]

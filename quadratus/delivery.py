@@ -47,7 +47,7 @@ import json
 import math
 import re
 from dataclasses import asdict, dataclass, field, replace
-from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from .judgment import (
     INVALID,
@@ -67,6 +67,7 @@ __all__ = [
     "OPERATION_STATES", "OperationRecord", "start_operation", "settle_operation",
     "uncertain_operation",
     "EXPOSURE_CLASSES", "PlanStage", "PlanVerdict", "admit_plan",
+    "EvidencePacket", "RequirementAcceptance", "acceptance",
 ]
 
 _ID = re.compile(r"[A-Z][A-Z0-9]*-?[0-9]+\Z")
@@ -315,7 +316,8 @@ def _next_number(findings: Iterable[Finding], prefix: str) -> int:
 
 def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, author: str, role: str,
                   binding: str, judged_binding: str, source_digest: str = "", call: str = "",
-                  prefix: str = "RF", task: str = "") -> Tuple[Finding, ...]:
+                  prefix: str = "RF", task: str = "",
+                  resolve: Optional[Callable[[str], bool]] = None) -> Tuple[Finding, ...]:
     """Record one judge's per-id reading against ``findings``.
 
     ``binding`` is the identity the harness holds now (source, checks,
@@ -329,6 +331,13 @@ def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, autho
     findings get the next free ids with the basis and impact the line
     carried, raised by the judge on this source; foreign ids were never
     applied; findings not in the reading are untouched.
+
+    ``resolve`` is the record's own check of an INVALIDATED line's evidence:
+    the harness decides whether the named test, file, receipt, command or id
+    exists on the current record; the judge decides what it means. An
+    INVALIDATED whose evidence does not resolve settles nothing (unjudged,
+    with the reason), so a finding is never closed on evidence that is not
+    there. Without a resolver, no INVALIDATED is accepted.
     """
     _text(binding, "binding")
     _text(judged_binding, "judged_binding")
@@ -346,6 +355,13 @@ def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, autho
             state, why = "unjudged", refusal
         elif verdict.state == INVALID:
             state, why = "unjudged", verdict.why
+        elif verdict.state == RESOLVED and role == "audit":
+            # The audit judges a carried concern by id: it invalidates on
+            # evidence or keeps it. Nothing was revised for the audit, so a
+            # RESOLVED from it is a closure with no basis.
+            state, why = "unjudged", "the audit invalidates a carried finding on evidence or keeps it; it does not resolve"
+        elif verdict.state == INVALIDATED and (resolve is None or not resolve(verdict.why)):
+            state, why = "unjudged", f"INVALIDATED names evidence that is not on the record: {verdict.why[:160]}"
         else:
             state, why = verdict.state, verdict.why
         out.append(replace(finding, history=finding.history + (
@@ -494,13 +510,23 @@ def discharge(obligation: EvidenceObligation, receipt: Mapping, *, current_sourc
 
 
 def refresh(obligation: EvidenceObligation, *, current_source: Optional[str],
-            current_requirements: Mapping[str, int]) -> EvidenceObligation:
-    """What the obligation is on the source and requirements as they are
-    now: an execution on another source is ``stale``, and one bound to a
-    requirement revision that is no longer current is ``stale`` too. Nothing
-    here makes anything current again; only a new receipt does."""
-    if obligation.execution in ("ran", "failed") and obligation.source_digest != current_source:
+            current_requirements: Mapping[str, int], current_gate: Optional[str] = None,
+            current_environment: Optional[str] = None) -> EvidenceObligation:
+    """What the obligation is on the source, requirements, gate and
+    environment as they are now: an execution on another source is
+    ``stale``; one bound to a requirement revision that is no longer current
+    is ``stale``; one executed under a gate or in an environment that is no
+    longer the effective one is ``stale``. Nothing here makes anything
+    current again; only a new receipt on the current identity does, and a
+    sufficiency judgment bound to the old evidence is no longer current
+    (``sufficiency_current``) once the execution field moves."""
+    executed = obligation.execution in ("ran", "failed")
+    if executed and obligation.source_digest != current_source:
         return replace(obligation, execution="stale", reason="executed on another source")
+    if executed and current_gate is not None and (obligation.gate or "") != (current_gate or ""):
+        return replace(obligation, execution="stale", reason="the effective gate changed after the execution")
+    if executed and current_environment is not None and (obligation.environment or "") != (current_environment or ""):
+        return replace(obligation, execution="stale", reason="the environment changed after the execution")
     if any(current_requirements.get(rid) != revision for rid, revision in obligation.requirements):
         if obligation.execution in ("ran", "failed", "pending"):
             return replace(obligation, execution="stale", reason="a bound requirement revision changed")
@@ -519,6 +545,87 @@ def judge_sufficiency(obligation: EvidenceObligation, verdict: str, *, judged_by
         raise ValueError(f"{obligation.oid} execution is {obligation.execution}; nothing to find sufficient")
     return replace(obligation, sufficiency=verdict, judged_by=judged_by.strip(),
                    judged_binding=obligation.evidence_binding)
+
+
+# --- the evidence packet and the acceptance predicate ---------------------
+
+@dataclass(frozen=True)
+class EvidencePacket:
+    """Everything a judgment, a cache or an acceptance is about, as the
+    harness holds it now: the source, every requirement's revision and text
+    digest, the effective gate, the environment, the evidence identity, the
+    recorded checks (each with its outcome, source, gate and receipt digest),
+    the observed checks, the review findings with their states and the
+    binding each was last judged on, the obligations with their execution,
+    sufficiency and receipts, the rulings, the orchestrator's decisions, the
+    approval authority record and the policy version. Its digest is the one
+    binding every consumer compares; two packets that differ anywhere are
+    different bases and nothing judged on one is reused on the other."""
+
+    source: Optional[str]
+    requirements: Tuple[Tuple[str, int, str], ...]
+    gate: str
+    environment: str
+    evidence_identity: Optional[str]
+    checks: Tuple[str, ...]
+    review_checks: Tuple[str, ...]
+    findings: Tuple[Tuple[str, str, str], ...]
+    obligations: Tuple[Tuple[str, str, str, str], ...]
+    rulings: str
+    decisions: str
+    authority: str
+    policy: str = "packet/1"
+
+    @property
+    def digest(self) -> str:
+        return _digest(asdict(self))
+
+    def to_dict(self) -> dict:
+        return dict(asdict(self), digest=self.digest)
+
+
+@dataclass(frozen=True)
+class RequirementAcceptance:
+    rid: str
+    met: bool
+    reasons: Tuple[str, ...]
+
+
+def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[Mapping],
+               findings: Sequence[Mapping], covers: Mapping[str, Sequence[str]]) -> Dict[str, RequirementAcceptance]:
+    """The one acceptance predicate: a requirement is met only when its
+    verdict says MET AND every obligation bound to it has an authorized
+    runner, executed on the current identity and was judged sufficient by an
+    independent seat about exactly that evidence AND no review finding
+    touching it is open. ``covers`` maps task id to the requirement ids it
+    covers, for findings that name no requirement. Unknown, failed, skipped,
+    stale, invalid or unjudged evidence never counts as met."""
+    out: Dict[str, RequirementAcceptance] = {}
+    for rid, (met, why) in verdicts.items():
+        reasons = []
+        if not met:
+            reasons.append(f"verdict: {why[:160]}")
+        for o in obligations:
+            if not any(r[0] == rid for r in o.get("requirements") or ()):
+                continue
+            if o.get("runner") is None:
+                reasons.append(f"{o['oid']}: no authorized runner (prerequisite)")
+            elif o.get("execution") != "ran":
+                reasons.append(f"{o['oid']}: execution {o.get('execution')}"
+                               + (f" ({o['reason']})" if o.get("reason") else ""))
+            elif o.get("sufficiency") != "sufficient":
+                reasons.append(f"{o['oid']}: sufficiency {o.get('sufficiency')}")
+            elif not o.get("sufficiency_current", False):
+                reasons.append(f"{o['oid']}: sufficiency judged on other evidence")
+        for f in findings:
+            if f.get("closed"):
+                continue
+            named = f.get("requirement")
+            touches = (named and named[0] == rid) or (not named and rid in (covers.get(f.get("task"), ()) or ()))
+            if touches:
+                reasons.append(f"{f['fid']}: open ({f.get('state')})")
+        out[rid] = RequirementAcceptance(rid, met and not reasons, tuple(reasons))
+    return out
 
 
 # --- operations -----------------------------------------------------------
@@ -630,17 +737,20 @@ class PlanVerdict:
 
 
 def admit_plan(stages: Sequence[PlanStage], *, calls_left: int, tokens_left: int,
-               wall_left: float, exposures: Mapping[str, int], wall_per_stage: float) -> PlanVerdict:
+               wall_left: float, exposures: Mapping[str, int], wall_per_stage: float,
+               wall_extra: float = 0.0) -> PlanVerdict:
     """Whether the whole remaining path fits what is left, exactly counted in
     the budget's exposure figures. Not a forecast of what calls will report,
     and no stage is cheaper than its class says. A shaped stage with no
     shaped figure supplied is counted at the reserve. With no reserve
     configured (0) the budget admits no token axis, and none is counted
-    here either; the calls and wall axes always count."""
+    here either; the calls and wall axes always count. ``wall_extra`` is
+    wall time the path needs besides its calls (the checks it will run)."""
     calls_left = _count(calls_left, "calls_left")
     tokens_left = _count(tokens_left, "tokens_left")
     wall_left = _amount(wall_left, "wall_left")
     wall_per_stage = _amount(wall_per_stage, "wall_per_stage")
+    wall_extra = _amount(wall_extra, "wall_extra")
     figures = {name: _count(exposures.get(name, 0), f"exposures[{name}]") for name in EXPOSURE_CLASSES}
     tokens_counted = figures["reserve"] > 0
     calls = sum(s.calls for s in stages)
@@ -651,7 +761,7 @@ def admit_plan(stages: Sequence[PlanStage], *, calls_left: int, tokens_left: int
             if stage.exposure == "editing":
                 figure = max(figures["editing"], figures["reserve"])
             tokens += figure * stage.calls
-    wall = wall_per_stage * calls
+    wall = wall_per_stage * calls + wall_extra
     short = {}
     if calls > calls_left:
         short["calls"] = calls - calls_left

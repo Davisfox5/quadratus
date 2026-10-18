@@ -1741,20 +1741,63 @@ Key design decisions already settled:
   source, gate, runner, environment and current requirement revisions, and
   sufficiency comes only from the audit (an explicit `O<n>: SUFFICIENT`
   line, else its requirement verdict), bound to exactly that evidence. The
-  whole remaining path is costed before a task's first call in the budget's
-  own exposure classes (`delivery.admit_plan`): the mandatory stages refuse
-  (NOT RUN before any call), the correction route and close-out are
-  recorded, shown to the planner and the audit, never a refusal and never a
-  cheaper class. The run's state is a durable job store (`jobstore.py`,
-  `generations.py`): immutable content-addressed records under one
-  manifest, fsync before rename, a latched refusal on any failure, readers
-  that take the manifest over `budget.json` and `checkpoint.json` (now
-  exports), model calls as `O-<ticket>` operations settled with the reply
-  digest, checks, captures and probes as `OP-<n>` operations published
-  started before and settled after; a committed generation holding a started
-  operation refuses resume, and nothing falls back to an older generation.
-  The final audit's cache binds to source, requirement texts, gate, evidence,
-  findings, obligations, rulings and policy, not source and ids alone.
+  run's state is a durable job store (`jobstore.py`, `generations.py`):
+  immutable content-addressed records under one manifest, fsync before
+  rename, a latched refusal on any failure, readers that take the manifest
+  over `budget.json` and `checkpoint.json` (now exports), and nothing falls
+  back to an older generation.
+- **The A+B boundary correction** (root's review of f4fe5b7, 2026-10-18)
+  closed the connected batch on three boundaries. *One packet, one
+  predicate*: `Session._packet` (`delivery.EvidencePacket`) is the binding
+  of every judgment, cache, status restore, reassessment carry and final
+  acceptance, and its digest moves with the source, each requirement's
+  revision and text, the gate, the environment, the evidence identity,
+  every recorded check (outcome, receipts, output, the environment and
+  revisions it ran under), the findings with the binding each was last
+  judged on, the obligations with their receipts, the rulings, the
+  decisions and the authority record. An audit whose packet moved while it
+  ran is void, a failed audit is not a final audit on record, and the
+  status snapshot and a reassessment are carried only on the exact packet.
+  After sufficiency, `delivery.acceptance` decides: a MET stands only when
+  every bound obligation has an authorized runner, ran on the current
+  identity and was judged sufficient about exactly that evidence, and no
+  finding touching the requirement is open; INSUFFICIENT, two sufficiency
+  lines for one id (a conflict is no verdict), unjudged, stale and a
+  prerequisite with no runner all lower it. A receipt carries the check's
+  own environment and revisions, never now's; an execution goes stale on
+  gate or environment drift; a NOT RUN item is routed to the gate only when
+  the gate names its paths whole; INVALIDATED closes a finding only on
+  evidence the record resolves (a project file or test, a recorded check,
+  receipt, command, finding, obligation or requirement id), and the audit
+  invalidates or keeps a carried finding, never resolves it. *The route*:
+  the task's selected finite route (mandatory stages, one revision and one
+  recheck per reviewer, a parallel child's post-merge rechecks, the
+  close-out where a model makes one) is admitted whole before the first
+  call or the task is NOT RUN; a second fix cycle is admitted on its own
+  before it starts; the route's checks count on the wall at their measured
+  time, never at the configured timeout. The gate fix is deliberately not
+  on the route: it is bought at the moment a check fails and a refusal
+  there is recorded (the failed check stands), because costing it in
+  advance refuses every task under the normal bounds (2M tokens, 500k
+  editing exposure: the route is exactly 1.6M). *The effect lifecycle*:
+  every model call, check, observed check, original-test run, skip
+  baseline, evidence run, capture, probe, fixture write and merge is an
+  operation under the session's own owner id (`OP<owner>-<n>`, record
+  `operations-<owner>`, a parallel child's own); an exception settles it as
+  failed, an interruption leaves it uncertain and unsettled; an effect
+  settled after the checkpoint's watermark refuses the resume (a late
+  read-only call is only named and asked again); the terminal record is
+  committed with the seal before `result.json`, and a run whose terminal
+  could not be committed is not completed; the authority record (the
+  requirement revisions, rulings, decisions and the plan gate's receipt) is
+  committed at each quiescent point and a resume needs the same one; the
+  store decides on the manifest on disk, never its cache, and refuses to
+  replace a manifest that moved under it. Accepted limits: `.quadratus/`
+  metadata writes (source excludes, retired fixtures, the run lock,
+  resumed-by) are harness-owned and not operations; a capped parallel
+  child's clean-review lift is not packet-bound, the final audit that
+  follows it is; a shared store under two concurrent Sessions is refused at
+  the manifest, not coordinated (root's critical 3, non-blocking).
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

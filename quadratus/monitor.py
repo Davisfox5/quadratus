@@ -694,8 +694,33 @@ def _fill_terminal(status, mark, run_dir: Path, result, problem) -> None:
         mark("terminal_status", problem)
         mark("stop_reason", problem)
         return
+    result, uncommitted = _committed_terminal(run_dir, result)
+    if uncommitted:
+        status["terminal_status"], status["stop_reason"] = "incomplete", uncommitted
+        return
     status["terminal_status"], status["stop_reason"] = _outcome(
         result, "the plan was declined, the task limit was reached, or findings/checks remain open")
+
+
+def _committed_terminal(run_dir: Path, result: Dict[str, Any]):
+    """The completion a reader may act on: when the run has a committed
+    manifest, its terminal record decides and result.json is an export;
+    a manifest with no terminal record means the run never committed how it
+    ended. Returns ``(result, problem)``."""
+    from .jobstore import GenerationCorrupt, read_manifest, read_terminal
+    try:
+        manifest = read_manifest(run_dir)
+    except GenerationCorrupt as exc:
+        return result, f"the run's committed state is corrupt: {exc}"
+    if manifest is None:
+        return result, ""
+    try:
+        terminal = read_terminal(run_dir)
+    except GenerationCorrupt as exc:
+        return result, f"the run's committed terminal record is corrupt: {exc}"
+    if terminal is None:
+        return result, "the run never committed its terminal state; its result.json is not an outcome"
+    return dict(result, completed=bool(terminal.get("completed")), error=terminal.get("error") or ""), ""
 
 
 # -- history ----------------------------------------------------------------
@@ -733,7 +758,11 @@ def _history_row(run_dir: Path) -> Dict[str, Any]:
         row["stop_reason"] = problem
     else:
         row["ended"] = _iso(_mtime(result_path)) or UNKNOWN
-        row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
+        result, uncommitted = _committed_terminal(run_dir, result)
+        if uncommitted:
+            row["status"], row["stop_reason"] = "incomplete", uncommitted
+        else:
+            row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
     from .jobstore import read_budget
     budget, _ = read_budget(run_dir)
     reported = _count(budget.get("reported_tokens")) if isinstance(budget, dict) else None

@@ -305,25 +305,43 @@ def _token_limits(total):
 
 
 @pytest.mark.requirements_ledger
-def test_a_write_revision_the_tokens_cannot_pay_is_recorded_before_the_wave_and_a_mandatory_shortfall_refuses(
+def test_a_route_the_tokens_cannot_pay_refuses_the_task_before_its_first_call_and_a_payable_one_runs(
         tmp_path, monkeypatch):
-    """The controller-reset numbers in miniature. With 1.3M total, t2's
+    """The controller-reset numbers in miniature. With 1.3M total, t1's
     mandatory stages (one editing call at the 500k ceiling, one review at
     the 200k reserve) fit the 900k left after the two 200k holds, and its
-    correction route (another editing call, a recheck, a close-out) does
-    not: recorded and shown to the planner, the task runs. With 1.0M total
-    the mandatory stages themselves do not fit: t2 is not started before any
-    call, with the shortfall named in tokens."""
+    selected route (the revision at the ceiling, the recheck and the
+    close-out at the reserve: 1.6M) does not: the task is not started
+    before any call, the route's shortfall named in tokens (root's
+    admission finding on f4fe5b7: a route merely recorded was still
+    started, and ended short of its judgments). With 2.1M total the route
+    fits exactly (1.7M left) and the run completes; t2's route, without a
+    close-out in the last slot, is admitted the same way. With 1.0M total
+    the mandatory stages themselves do not fit: the shortfall names them."""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md"),
                    files=FILES, max_tasks=2, record_complete=False, limits=_token_limits(1_300_000))
-    admissions = [a for a in H.result_json(replay)["plan_admissions"] if a["task"] == "t2"]
+    admissions = [a for a in H.result_json(replay)["plan_admissions"] if a["task"] == "t1"]
     assert [a["scope"] for a in admissions] == ["mandatory", "full"]
-    assert admissions[0]["feasible"] and not admissions[1]["feasible"] and "tokens" in admissions[1]["short"]
-    assert admissions[1]["stages"] == ["lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)",
-                                       "revision(editing/write)", "recheck by openai:gpt-5.6-sol(reserve)",
+    assert admissions[0]["feasible"] and not admissions[1]["feasible"]
+    assert admissions[1]["short"] == {"tokens": 1_600_000 - 899_780}
+    assert admissions[1]["stages"] == ["lead draft(editing/write)", "review by claude:opus(reserve)",
+                                       "revision(editing/write)", "recheck by claude:opus(reserve)",
                                        "close-out(reserve)"]
-    assert [c for c in replay.calls if c.task == "t2"], "a payable mandatory path runs"
-    assert "Plan admission for t2" in replay.of("auditor")[-1].prompt
+    assert not [c for c in replay.calls if c.task in ("t1", "t2")], "an unpayable route is not started"
+    result = H.result_json(replay)
+    assert [n["task"] for n in result["not_started"]] == ["t1"]
+    assert "cannot pay its selected route" in result["finish_refusals"][-1]["detail"]
+    assert (replay.project / "app.py").read_text() == FILES["app.py"], "nothing was written"
+
+    (tmp_path / "paid").mkdir()
+    paid = H.run(tmp_path / "paid", monkeypatch, _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md"),
+                 files=FILES, max_tasks=2, record_complete=False, limits=_token_limits(2_100_000))
+    assert paid.result.completed, paid.result.error
+    rows = {(a["task"], a["scope"]): a for a in H.result_json(paid)["plan_admissions"]}
+    assert rows[("t1", "full")]["feasible"] and rows[("t2", "full")]["feasible"]
+    assert rows[("t2", "full")]["stages"] == ["lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)",
+                                              "revision(editing/write)", "recheck by openai:gpt-5.6-sol(reserve)"]
+    assert "Plan admission for" not in paid.of("auditor")[-1].prompt, "an admitted route is not a note"
 
     # With 1.0M total the 600k left after the two holds cannot pay even the
     # first task's mandatory stages (one editing call at the 500k ceiling
@@ -350,7 +368,8 @@ def test_every_check_is_a_settled_operation_in_the_committed_generation(tmp_path
     assert replay.result.completed, replay.result.error
     run_dir = Path(replay.result.run_dir)
     manifest = jobstore.read_manifest(run_dir)
-    assert manifest is not None and manifest.clean and {"budget", "checkpoint", "operations"} <= set(manifest.records)
+    assert manifest is not None and manifest.clean and {"budget", "checkpoint", "authority"} <= set(manifest.records)
+    assert any(name.startswith("operations-") for name in manifest.records), "the session's own effects are committed"
     result = H.result_json(replay)
     assert 0 < result["job_store"]["generation"] <= manifest.number and result["job_store"]["refused"] is None
     ops = result["operations"]
@@ -386,6 +405,7 @@ def test_an_interrupted_run_resumes_from_the_committed_generation_and_an_unsettl
                   max_tasks=2, record_complete=False)
     parent = Path(again.result.run_dir)
     store = jobstore.JobStore(parent)
-    store.publish({"operations": [dict(opid="OP-9", purpose="check", status="started")]}, session_unsettled=["OP-9"])
+    store.publish({"operations-x": [dict(opid="OPx-9", purpose="check", status="started", owner_id="x")]},
+                  session_unsettled=("x", ["OPx-9"]))
     with pytest.raises(checkpoint.CheckpointRefused, match="never settled"):
         _episode(again, resume_from=parent)

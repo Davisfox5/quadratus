@@ -402,16 +402,22 @@ class RunBudget:
     def _write(self, *, latch: bool):
         """The one write path. The job store's generation is the authority:
         published first, with the active tickets as unsettled operations and
-        their reserves as unfinished; a failed publication stops the run
-        (latched when ``latch``). The compatibility export at ``path`` is
-        written after it; an export failure is counted and never a reason to
-        act on the export (readers prefer the manifest)."""
+        their reserves as unfinished, and with the raw receipt of a call that
+        just settled; a failed publication stops the run (latched when
+        ``latch``). The compatibility export at ``path`` is written after it;
+        an export failure is counted and never a reason to act on the export
+        (readers prefer the manifest)."""
         snapshot = self._snapshot()
         if self.store is not None:
+            updates = {'budget': snapshot}
+            receipt = getattr(self, '_pending_receipt', None)
+            if receipt is not None:
+                updates[receipt['opid'].lower().replace('o-', 'receipt-o-', 1)] = receipt
             try:
-                self.store.publish({'budget': snapshot},
+                self.store.publish(updates,
                                    budget_unsettled=[o['opid'] for o in self._operations.values()],
                                    reserved_unfinished=sum(a[2] or 0 for a in self._active.values()))
+                self._pending_receipt = None
             except Exception as exc:  # noqa: BLE001 -- any store failure is a stop
                 if latch:
                     self._reason = self._reason or 'budget_state_unavailable'
@@ -498,8 +504,12 @@ class RunBudget:
         later = FINISH_STAGES[FINISH_STAGES.index(stage) + 1:]
         return [s for s in self._finish_pending if s in later]
 
-    def reserve(self, *, transport="cli", price_key="", expected_tokens=None):
+    def reserve(self, *, transport="cli", price_key="", expected_tokens=None, identity=None):
         """Atomically authorize one attempt and return its ID and time remaining.
+
+        ``identity`` names what the attempt is (seat, task, role, prompt
+        digest); it is published on the operation record with the admission,
+        and the raw receipt settles against it.
 
         ``expected_tokens`` names a measured allowance for a call the transport
         holds to one model turn (a summary-only close-out on a CLI whose argv
@@ -513,7 +523,8 @@ class RunBudget:
         with self._lock:
             while True:
                 try:
-                    ticket = self._admit(transport, price_key, expected_tokens, shape, deferral)
+                    ticket = self._admit(transport, price_key, expected_tokens, shape, deferral,
+                                         identity=identity)
                 except _Deferred as wait:
                     if deferral is None:
                         deferral = dict(attempt=self._calls + 1, editing=bool(shape.get('editing')),
@@ -539,7 +550,7 @@ class RunBudget:
                 # the finishing stages still pending after it.
                 return ticket, self._remaining() - self._held_wall(finish_stage.get())
 
-    def _admit(self, transport, price_key, expected_tokens, shape, deferral):
+    def _admit(self, transport, price_key, expected_tokens, shape, deferral, identity=None):
         """One admission decision, under the lock: a ticket, or a raise.
         ``_Deferred`` means only calls in flight stand in the way."""
         self._check()
@@ -617,7 +628,8 @@ class RunBudget:
         self._operations[ticket] = dict(
             opid=f'O-{ticket}', purpose='model call', status='started', reservation=ticket,
             transport=transport, stage=stage, editing=bool(shape.get('editing')), reserve=reserve,
-            exposure=exposure, shaped=shaped, started_at=round(max(0.0, self._clock() - self._started), 3))
+            exposure=exposure, shaped=shaped, started_at=round(max(0.0, self._clock() - self._started), 3),
+            identity=dict(identity or {}, price_key=price_key))
         if deferral is not None:
             # Recorded in the same write as the admission: a deferred call is
             # admitted only if this record is durable (root on cf8cd2b).
@@ -648,14 +660,22 @@ class RunBudget:
                 raise RuntimeError('Unknown or already-finished budget reservation')
             transport, reserved_key, _, _ = self._active.pop(ticket)
             operation = self._operations.pop(ticket, None)
+            receipt = None
             if operation is not None:
                 import hashlib
                 operation.update(status='settled', result_digest=hashlib.sha256((reply or '').encode()).hexdigest(),
                                  settled_at=round(max(0.0, self._clock() - self._started), 3),
+                                 receipt=f'receipt-o-{ticket}',
                                  usage_known=isinstance(usage, dict) and all(
                                      type(usage.get(k)) is int and usage.get(k) >= 0
                                      for k in ('input_tokens', 'output_tokens')))
                 self._settled_operations.append(operation)
+                # The raw receipt: the exact reply, its usage and the
+                # identity it answered, published in the same generation as
+                # the settlement so neither exists without the other.
+                receipt = dict(opid=operation['opid'], reply=reply or '', usage=dict(usage) if isinstance(usage, dict)
+                               else None, identity=dict(operation.get('identity') or {}),
+                               native_children=list(native_children or ()), settled_at=operation['settled_at'])
             self._settled.notify_all()
             usage = usage if isinstance(usage, dict) else {}
             counts = [usage.get('input_tokens'), usage.get('output_tokens')]
@@ -689,6 +709,7 @@ class RunBudget:
                 self._reason = self._reason or 'uncontrolled_native_delegation'
             if self._remaining() <= 0:
                 self._reason = self._reason or 'wall_deadline'
+            self._pending_receipt = receipt
             if self._reason and reply and self.path:
                 folder = self.path.parent / 'budget-responses'
                 try:

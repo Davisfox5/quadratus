@@ -43,7 +43,8 @@ from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 from . import generations as G
 
 __all__ = ["MANIFEST", "StoreUnavailable", "GenerationCorrupt", "JobStore", "read_manifest",
-           "read_record", "read_budget"]
+           "read_record", "read_budget", "read_terminal", "unsettled_operations", "operation_records",
+           "owner_of"]
 
 MANIFEST = "manifest.json"
 RECORDS = "records"
@@ -96,10 +97,12 @@ class JobStore:
         self._history: list = []
         self._loaded = False
         #: Operations started and not settled, by the publisher that owns
-        #: them: the budget's tickets and the session's own effects (checks,
-        #: captures, probes). The manifest carries their union.
+        #: them: the budget's tickets, and each session's own effects
+        #: (checks, captures, probes, fixture writes, evidence runs) under
+        #: that session's owner id. The manifest carries their union; one
+        #: owner never replaces another's set.
         self.budget_unsettled: set = set()
-        self.session_unsettled: set = set()
+        self.session_unsettled: Dict[str, set] = {}
         self.reserved_unfinished: int = 0
 
     # -- state -----------------------------------------------------------------
@@ -126,18 +129,28 @@ class JobStore:
         self._current = manifest
         self._history = _history(self.run_dir, manifest)
         self.budget_unsettled = {o for o in manifest.unsettled if o.startswith("O-")}
-        self.session_unsettled = {o for o in manifest.unsettled if not o.startswith("O-")}
+        self.session_unsettled = {}
+        for opid in manifest.unsettled:
+            if not opid.startswith("O-"):
+                self.session_unsettled.setdefault(owner_of(opid), set()).add(opid)
         self.reserved_unfinished = int(manifest.reserved_unfinished)
 
     def current(self) -> Optional[G.Generation]:
+        """The committed manifest as it is on disk now: re-read on every
+        call, so a reader never sees the cached older generation after a
+        publication that failed past the manifest replace (an uncertain
+        commit is still the commit on disk), and never trusts memory over
+        the file. A corrupt manifest raises; it is never read around."""
         with self._lock:
+            self._loaded = False
             self._load()
             return self._current
 
     # -- publication -----------------------------------------------------------
 
     def publish(self, updates: Mapping[str, object], *, budget_unsettled: Optional[Sequence[str]] = None,
-                session_unsettled: Optional[Sequence[str]] = None, reserved_unfinished: Optional[int] = None,
+                session_unsettled: Optional[Tuple[str, Sequence[str]]] = None,
+                reserved_unfinished: Optional[int] = None,
                 expected: Optional[int] = "current") -> G.Generation:
         """Commit one generation: the current records with ``updates`` (name
         to JSON value) replacing or adding theirs. ``expected`` is the
@@ -149,20 +162,29 @@ class JobStore:
         with self._lock:
             self._check()
             try:
+                # Decided on the generation on disk now, never on this
+                # store's cache: another writer (a second store on the same
+                # run, a concurrent process) may have committed since this
+                # one last read, and a publication planned on stale state
+                # would replace its manifest.
+                self._loaded = False
                 self._load()
                 current = self._current
+                planned = current.digest if current else None
                 if expected == "current":
                     expected = current.number if current else None
                 if budget_unsettled is not None:
                     self.budget_unsettled = set(budget_unsettled)
                 if session_unsettled is not None:
-                    self.session_unsettled = set(session_unsettled)
+                    owner, ids = session_unsettled
+                    self.session_unsettled[str(owner)] = set(ids)
                 if reserved_unfinished is not None:
                     self.reserved_unfinished = int(reserved_unfinished)
                 encoded = {name: _canonical(value) for name, value in updates.items()}
                 digests = dict(current.records) if current else {}
                 digests.update({name: _digest_bytes(data) for name, data in encoded.items()})
-                unsettled = sorted(self.budget_unsettled | self.session_unsettled)
+                unsettled = sorted(self.budget_unsettled | set().union(*self.session_unsettled.values())
+                                   if self.session_unsettled else self.budget_unsettled)
                 publication = G.plan_publication(current, expected=expected, records=digests,
                                                  history=self._history, unsettled=unsettled,
                                                  reserved_unfinished=self.reserved_unfinished)
@@ -178,6 +200,10 @@ class JobStore:
                     _fsync_dir(folder)
                 body = dict(publication.generation.to_dict(), schema=G.SCHEMA_VERSION)
                 self._step("manifest-replace")
+                on_disk = read_manifest(self.run_dir)
+                if (on_disk.digest if on_disk else None) != planned:
+                    raise G.GenerationConflict("the manifest changed under this publication; another writer "
+                                               "committed first, and nothing of this one is published")
                 _write_durable(self.run_dir / MANIFEST, _canonical(body))
                 self._step("manifest-fsync")
                 _fsync_dir(self.run_dir)
@@ -194,11 +220,11 @@ class JobStore:
     # -- reading ---------------------------------------------------------------
 
     def record(self, name: str):
-        with self._lock:
-            self._load()
-            if self._current is None or name not in self._current.records:
-                return None
-            return read_record(self.run_dir, name, manifest=self._current)
+        """One record of the manifest as committed on disk now."""
+        manifest = self.current()
+        if manifest is None or name not in manifest.records:
+            return None
+        return read_record(self.run_dir, name, manifest=manifest)
 
 
 def _history(run_dir: Path, manifest: G.Generation) -> list:
@@ -217,14 +243,20 @@ def read_manifest(run_dir) -> Optional[G.Generation]:
         return None
     try:
         body = json.loads(path.read_text())
-        body.pop("digest", None)
+        stored = body.pop("digest", None)
         body.pop("paths", None)
         body.pop("clean", None)
         body["records"] = dict(body.get("records") or {})
         body["unsettled"] = tuple(body.get("unsettled") or ())
-        return G.Generation(**body)
+        manifest = G.Generation(**body)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise GenerationCorrupt(f"the manifest is unreadable: {type(exc).__name__}: {str(exc)[:160]}") from exc
+    if stored != manifest.digest:
+        # The stored digest is the manifest's own account of itself: a body
+        # that no longer hashes to it was altered or truncated, and its
+        # uncertainty fields are not to be believed.
+        raise GenerationCorrupt("the manifest does not hash to its stored digest; it was altered or truncated")
+    return manifest
 
 
 def read_record(run_dir, name: str, *, manifest: Optional[G.Generation] = None):
@@ -270,10 +302,58 @@ def read_budget(run_dir) -> Tuple[Optional[dict], Optional[str]]:
     return (record, None) if isinstance(record, dict) else (None, "budget.json is not a record")
 
 
+def owner_of(opid: str) -> str:
+    """The session owner id inside an operation id (``OP<OWNER>-<n>``)."""
+    head = opid.split("-", 1)[0]
+    return head[2:] if head.startswith("OP") else ""
+
+
+def operation_records(run_dir, *, manifest: Optional[G.Generation] = None) -> Dict[str, list]:
+    """Every session operations record the manifest names (``operations-
+    <owner>``), each verified against its digest, by owner."""
+    run_dir = Path(run_dir)
+    manifest = manifest or read_manifest(run_dir)
+    if manifest is None:
+        return {}
+    out = {}
+    for name in manifest.records:
+        if name.startswith("operations-"):
+            rows = read_record(run_dir, name, manifest=manifest)
+            if not isinstance(rows, list):
+                raise GenerationCorrupt(f"record {name} is not a list of operations")
+            out[name[len("operations-"):]] = rows
+    return out
+
+
 def unsettled_operations(run_dir) -> Tuple[str, ...]:
-    """Operations the committed generation lists as started and unsettled."""
+    """Operations the committed generation lists as started and unsettled,
+    checked against the records that are supposed to prove it: the budget
+    record's started calls and every owner's operations record must say the
+    same, or the generation is corrupt and nothing is resumed on it."""
     manifest = read_manifest(run_dir)
-    return tuple(manifest.unsettled) if manifest is not None else ()
+    if manifest is None:
+        return ()
+    listed = set(manifest.unsettled)
+    recorded = set()
+    if "budget" in manifest.records:
+        budget = read_record(Path(run_dir), "budget", manifest=manifest)
+        started = ((budget or {}).get("operations") or {}).get("started") or []
+        recorded |= {str(o.get("opid")) for o in started if isinstance(o, dict)}
+    for rows in operation_records(run_dir, manifest=manifest).values():
+        recorded |= {str(o.get("opid")) for o in rows
+                     if isinstance(o, dict) and o.get("status") in ("started", "uncertain")}
+    if listed != recorded:
+        raise GenerationCorrupt("the manifest's unsettled operations do not match its records "
+                                f"(manifest {sorted(listed)}, records {sorted(recorded)})")
+    return tuple(sorted(listed))
+
+
+def read_terminal(run_dir) -> Optional[dict]:
+    """The committed terminal record of the run (what it ended as and on
+    what acceptance basis), or None when the run never committed one. The
+    only completion a reader may act on once a manifest exists."""
+    record = read_record(run_dir, "terminal")
+    return record if isinstance(record, dict) else None
 
 
 def record_names(run_dir) -> Dict[str, str]:
