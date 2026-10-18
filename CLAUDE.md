@@ -1835,7 +1835,48 @@ Key design decisions already settled:
   fix, what the task still owes, and the check's measured wall time, with
   an unmeasured wall said so) is admitted whole before the editor writes,
   or the failed check stands and the refusal is recorded
-  (`_gate_repair_stages`, scope `gate-repair`).
+  (`_gate_repair_stages`, scope `gate-repair`). *Residuals closed on the
+  same contracts* (root and Astra on 6bf1afc): the frozen execution
+  identity carries the gate, its selection and its cwd through every check
+  consumer, so a gate reconfigured at the consumer seam is named as drift
+  and the record keeps the gate that executed; the authority is committed
+  at the common effect-admission boundary (`_operation` and every model
+  call, intake and the requirements review included), its digest is what
+  the effect names, and the requirements review freezes exactly the texts
+  its prompt sent, so a text changed in flight is unreviewed, while its own
+  ADD lines are recorded as its proposals (nobody compared them with the
+  goal) on an id no row holds; readers consult the committed terminal when
+  the export is truncated or malformed as well as absent, keeping the
+  export's problem as a diagnostic, and say when the committed state
+  itself cannot be read. From the author's adversarial review of e688af5:
+  a parallel child's authority is its parent's (`_authority_parent`; a
+  child published a record built from its own empty ledger over the
+  parent's, every child call named it, and no run that ran a batch could
+  be resumed); a routing decision is an operation under the committed
+  authority with the decision as its receipt; operation ids are issued and
+  rows settled under one lock (a sibling's settlement committed a row as
+  settled in a generation holding no receipt for it), a receipt name is
+  written once and a refused settlement is committed uncertain, and a
+  resume checks the receipt it reads back is the operation's own (opid and
+  digest); the acceptance on record consumes each served evidence record
+  (`_consume_evidence`: the final audit's binding moves to the packet the
+  record and its judgment left, a reassessment MET replaces the verdict,
+  the auditor's own packet stays named), since digesting evidence records
+  whole had left every served challenge 'not current' and re-drew the
+  final audit on resume, and an evidence intent a resumed job never runs
+  is closed as it stands and consumed; a failed call's receipts keep why
+  it failed (the budget's stop on unknown usage names the transport
+  failure as its cause, and a failure receipt keeps the cause); a
+  checkpoint with no consumption watermark resumes only when nothing
+  settled at all. *Repair routes*: a task's
+  route peers are its own (set when its reviewers are drawn, cleared per
+  task; before, only a lead recovery set them, so the pre-review subset
+  gate's route omitted its reviews, revision and rechecks), the merge
+  gate's route lists the post-merge rechecks and capped final reviews and
+  no close-out, the subset route's wall counts the full gate after the
+  revision where measured, and the security fix and the design fixes are
+  admitted through the same helper (`_admit_repair`) before their editor
+  writes, a refusal recorded and the verdict or render standing as found.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

@@ -21,6 +21,7 @@ and is not silently abandoned).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -272,7 +273,17 @@ class JevDecider:
                     "criteria": {answer: definitions.get(answer) for answer in decision.answers}}
         ticket = None
         if self.budget is not None:
-            ticket, _remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}")
+            # The committed approval authority the session named for this
+            # decision rides the invocation context, as it does for a
+            # provider call (adversarial review of e688af5).
+            from .delegation import invocation_context
+            authority = str((invocation_context.get() or {}).get("authority") or "")
+            ticket, _remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}",
+                                                     identity=dict(seat=f"jev:{self.model}", task="decide",
+                                                                   role="decider", prompt_digest=hashlib.sha256(
+                                                                       json.dumps(question, sort_keys=True,
+                                                                                  default=str).encode())
+                                                                   .hexdigest()[:32], authority=authority))
         started = time.perf_counter()
         response, failure = None, None
         try:
@@ -283,9 +294,23 @@ class JevDecider:
         finally:
             if ticket is not None:
                 usage = getattr(response, "usage", None)
-                self.budget.finish(ticket, dict(input_tokens=getattr(usage, "input_tokens", None),
-                                                output_tokens=getattr(usage, "output_tokens", None)),
-                                   price_key=f"jev:{getattr(response, 'model', None) or self.model}")
+                # The decision the model gave is the receipt's reply, so a
+                # settled decision is readable from the generation that
+                # settled it, never only its usage.
+                # A failed call's receipt keeps why it failed: the budget's
+                # own stop on unknown usage follows, and names it as its cause.
+                reply = (json.dumps(dict(failure=f"{type(failure).__name__}: {str(failure)[:300]}"))
+                         if response is None and failure is not None else "" if response is None else json.dumps(
+                             getattr(response, "answers", None) or getattr(response, "raw", None) or str(response),
+                             sort_keys=True, default=str))
+                try:
+                    self.budget.finish(ticket, dict(input_tokens=getattr(usage, "input_tokens", None),
+                                                    output_tokens=getattr(usage, "output_tokens", None)),
+                                       price_key=f"jev:{getattr(response, 'model', None) or self.model}", reply=reply)
+                except Exception as stop:
+                    if failure is not None and stop.__cause__ is None:
+                        stop.__cause__ = failure
+                    raise
         if failure is not None:
             raise DecisionsUnavailable(f"Jev call failed: {type(failure).__name__}: {failure}") from failure
         seconds = round(time.perf_counter() - started, 3)

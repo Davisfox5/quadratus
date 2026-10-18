@@ -473,14 +473,22 @@ def _unconsumed(run_dir, body: dict, budget: dict) -> list:
     as before. Returns [] when nothing is unconsumed."""
     from . import jobstore
     watermark = body.get("watermark")
-    if not isinstance(watermark, dict):
-        return []
     settled = ((budget.get("operations") or {}).get("settled") or [])
-    extra = [o for o in settled[int(watermark.get("budget_settled") or 0):] if isinstance(o, dict)]
     try:
         records = jobstore.operation_records(run_dir)
     except jobstore.GenerationCorrupt as exc:
         raise CheckpointRefused(f"the parent's committed state is corrupt: {exc}") from exc
+    if not isinstance(watermark, dict):
+        # Written before consumption watermarks existed: nothing says which
+        # settled operations it consumed. Resumable only when nothing
+        # settled at all; otherwise refused rather than read as consumed.
+        if settled or any(o.get("status") == "settled" for rows in records.values() for o in rows
+                          if isinstance(o, dict)):
+            raise CheckpointRefused("the checkpoint carries no consumption watermark and the record holds settled "
+                                    "operations; nothing proves which of them it consumed, so the run is not "
+                                    "resumed")
+        return []
+    extra = [o for o in settled[int(watermark.get("budget_settled") or 0):] if isinstance(o, dict)]
     held = dict(watermark.get("session_settled") or {})
     late = list(extra)
     for owner, rows in records.items():
@@ -499,6 +507,12 @@ def _unconsumed(run_dir, body: dict, budget: dict) -> list:
         except jobstore.GenerationCorrupt as exc:
             raise CheckpointRefused(f"the receipt of settled operation {op.get('opid')} ({name}) is not readable "
                                     f"from the committed generation: {exc}; the run is not resumed") from exc
+        if record is not None and str(record.get("opid") or "") != str(op.get("opid") or ""):
+            raise CheckpointRefused(f"the receipt settled operation {op.get('opid')} names ({name}) is operation "
+                                    f"{record.get('opid')}'s; the run is not resumed")
+        if record is not None and op.get("receipt_digest") and record.get("full_digest") != op.get("receipt_digest"):
+            raise CheckpointRefused(f"the receipt of settled operation {op.get('opid')} ({name}) does not carry the "
+                                    "digest its settlement recorded; the run is not resumed")
         receipts.append(f"{op.get('opid')}: {name}" + ("" if record is not None else " (missing)"))
     kinds = sorted({str(o.get("purpose") or ("editing call" if o.get("editing") else "model call")) for o in late})
     raise CheckpointRefused(f"{len(late)} operation(s) settled after the last quiescent point and were never "

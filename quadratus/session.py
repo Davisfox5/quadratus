@@ -2587,8 +2587,22 @@ class Session:
         self._last_acceptance: Dict[str, dict] = {}
         #: The execution identity frozen when the last check launched.
         self._last_check_identity: Optional[dict] = None
-        #: The current task's reviewers, for the route a failed check selects.
+        #: Operation ids are issued under this lock: a lead's concurrent
+        #: worker errands call the session from a thread pool, and two
+        #: operations may never share an id or a receipt name.
+        self._operation_lock = threading.Lock()
+        # A parallel child works under its parent's authority and publishes
+        # no record of its own (adversarial review of e688af5: children
+        # committed one built from their empty ledgers over the parent's).
+        self._authority_lock = threading.Lock()
+        self._authority_parent: Optional["Session"] = None
+        self._operation_counter: Dict[str, int] = {}
+        #: The current task's reviewers, for the route a failed check selects:
+        #: cleared as each task starts, set when its reviewers are drawn.
         self._route_peers: List[str] = []
+        #: While the merge gate runs: the post-merge rechecks and capped
+        #: final reviews that follow it, for its repair route.
+        self._route_after_merge: Optional[dict] = None
 
     #: Interruptions that leave an effect's outcome unknown: the process was
     #: told to stop, and nothing says whether the effect completed.
@@ -2606,42 +2620,68 @@ class Session:
         unsettled, so a restart refuses to resume over it rather than
         repeat or assume it. Nothing is rolled back."""
         owner = self._operation_owner
-        number = sum(1 for o in self.operations if o.get("owner_id") == owner) + 1
-        opid = f"OP{owner}-{number}"
-        record = dict(opid=opid, purpose=purpose, owner="harness", owner_id=owner, status="prepared",
-                      identity=dict(purpose=purpose, role="harness", policy="session-effect/3",
-                                    input=hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str)
-                                                         .encode()).hexdigest()[:32],
-                                    # The approval authority the effect runs under.
-                                    authority=self._authority_record()["digest"]),
-                      allowed_effects=list(effects), reservation="harness", result_digest=None, note="",
-                      outcome=None, receipt=f"receipt-{opid.lower()}")
-        self.operations.append(record)
-        record["status"] = "started"
-        self._publish_operations(record, before=True)
+        # The approval authority the effect runs under is committed before
+        # the effect, whatever the effect: a check, a probe, a model call at
+        # intake as much as one inside a task (Astra's dispatch control on
+        # 6bf1afc: the requirements review named an authority not yet on the
+        # record).
+        authority = self._authority_before(purpose)
+        with self._operation_lock:
+            # Issued under the lock, never counted: concurrent worker calls
+            # from one lead's errands would otherwise share an id and a
+            # receipt name, and the later settlement would re-point the
+            # earlier reply (adversarial review of e688af5).
+            number = max(self._operation_counter.get(owner, 0),
+                         sum(1 for o in self.operations if o.get("owner_id") == owner)) + 1
+            self._operation_counter[owner] = number
+            opid = f"OP{owner}-{number}"
+            record = dict(opid=opid, purpose=purpose, owner="harness", owner_id=owner, status="prepared",
+                          identity=dict(purpose=purpose, role="harness", policy="session-effect/3",
+                                        input=hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str)
+                                                             .encode()).hexdigest()[:32],
+                                        authority=authority),
+                          allowed_effects=list(effects), reservation="harness", result_digest=None, note="",
+                          outcome=None, receipt=f"receipt-{opid.lower()}")
+            self.operations.append(record)
+            record["status"] = "started"
+            self._publish_operations(record, before=True)
         result = {}
         try:
             yield result
         except BaseException as exc:
             if self._known_outcome(exc):
                 # The harness itself raised it knowing what happened: a
-                # reported failure is a settled outcome, with its receipt.
+                # reported failure is a settled outcome, with its receipt,
+                # which keeps whatever the transport returned before it
+                # failed (a provider's response, a capped turn's partial
+                # text) beside the failure.
                 failure = f"{type(exc).__name__}: {exc}"
-                record.update(status="settled", outcome="failed", note=f"failed: {type(exc).__name__}",
-                              result_digest=hashlib.sha256(failure.encode()).hexdigest())
-                self._publish_operations(record, before=False, raise_on_failure=False,
-                                         receipt=self._receipt(record, dict(failure=failure)))
+                partial = getattr(exc, "provider_response", None) or getattr(exc, "partial_text", None)
+                cause = exc.__cause__
+                payload = dict(failure=failure, result=result.get("result"), partial=partial,
+                               cause=f"{type(cause).__name__}: {str(cause)[:300]}" if cause is not None else None)
+                with self._operation_lock:
+                    # Settled under the lock: another operation's settlement
+                    # snapshots every row, and a row settled outside it was
+                    # committed settled in a generation holding no receipt
+                    # for it (adversarial review of e688af5).
+                    record.update(status="settled", outcome="failed", note=f"failed: {type(exc).__name__}",
+                                  result_digest=hashlib.sha256(failure.encode()).hexdigest())
+                    self._publish_operations(record, before=False, raise_on_failure=False,
+                                             receipt=self._receipt(record, payload))
             else:
                 # An interruption, or an error nothing in the harness
                 # classified (a timeout, an OS error): the effect's outcome
                 # is unknown, and stays so.
                 record.update(status="uncertain", result_digest=None, outcome="interrupted",
                               note=f"interrupted before settlement: {type(exc).__name__}")
-                self._publish_operations(record, before=False, raise_on_failure=False)
+                with self._operation_lock:
+                    self._publish_operations(record, before=False, raise_on_failure=False)
             raise
-        record.update(status="settled", outcome="completed", result_digest=hashlib.sha256(
-            json.dumps(result.get("result", ""), sort_keys=True, default=str).encode()).hexdigest())
-        self._publish_operations(record, before=False, receipt=self._receipt(record, result.get("result", "")))
+        with self._operation_lock:
+            record.update(status="settled", outcome="completed", result_digest=hashlib.sha256(
+                json.dumps(result.get("result", ""), sort_keys=True, default=str).encode()).hexdigest())
+            self._publish_operations(record, before=False, receipt=self._receipt(record, result.get("result", "")))
 
     #: The bound on a settlement receipt's payload: enough to read a reply,
     #: a check's tail and its receipts back; never a whole stream.
@@ -2684,7 +2724,26 @@ class Session:
         if receipt is not None:
             # Settlement and its receipt are one generation: a settled
             # operation whose receipt cannot be read back was not settled.
-            updates[record["receipt"]] = receipt
+            # A receipt name is written once: a name the manifest already
+            # holds is never re-pointed at other bytes. The row names the
+            # receipt's digest, so a resume can check the receipt it reads
+            # back is this operation's.
+            refused = ""
+            try:
+                current = store.current()
+            except Exception as exc:  # noqa: BLE001 -- an unreadable manifest refuses this settlement
+                current, refused = None, f"the manifest could not be read ({type(exc).__name__})"
+            if current is not None and record["receipt"] in current.records:
+                refused = f"its receipt name {record['receipt']} is already committed"
+            if refused:
+                # Not settled: the row is committed uncertain, never settled
+                # against bytes that are not its own, and the refusal is
+                # raised only where a settlement failure raises.
+                record.update(status="uncertain", outcome="interrupted", receipt_digest=None,
+                              note=f"settlement not published: {refused}")
+            else:
+                record["receipt_digest"] = receipt.get("full_digest")
+                updates[record["receipt"]] = receipt
         try:
             store.publish(updates, session_unsettled=(owner, [o["opid"] for o in mine
                                                               if o["status"] in ("started", "uncertain")]))
@@ -2697,6 +2756,10 @@ class Session:
             if raise_on_failure:
                 raise JobStoreUnavailable(f"{record['purpose']} ran, but its settlement could not be published; "
                                           "its outcome is recorded as uncertain") from exc
+            return
+        if receipt is not None and refused and raise_on_failure:
+            raise JobStoreUnavailable(f"{record['purpose']} ran, but {refused}; its settlement is not published "
+                                      "and its outcome is recorded as uncertain")
 
     def _open_finding(self, kind: str, text: str, *, legacy_route: bool = False) -> None:
         """Append a legacy open finding and record it as a typed fact.
@@ -2785,9 +2848,10 @@ class Session:
             import time as _time
             edit_started = _time.time()
             source_before = self._source_fingerprint()
-        # Every call runs under a named, committed approval authority: its
-        # identity carries the digest the transport and the budget record.
-        context = dict(context, authority=self._authority_record()["digest"])
+        # Every call runs under a named, committed approval authority: the
+        # record is committed here, before the call, and its digest is what
+        # the transport and the budget name.
+        context = dict(context, authority=self._authority_before(f"{context.get('role', 'direct')} call"))
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
         spec = self._active_spec
         if (context.get("role") != "closeout" and context.get('origin') != 'worker'
@@ -4585,6 +4649,10 @@ class Session:
         # security route (map P3.4): security if either the contract or the
         # live classification says so, and a disagreement is recorded.
         live = spec.work_class == WorkClass.SECURITY
+        # A task's route peers are its own: a reviewer drawn for an earlier
+        # task is not on this task's repair route (adversarial review of
+        # e688af5: the list was set only on lead recovery and never cleared).
+        self._route_peers = []
         # Committed before the task's first call: the requirements, rulings
         # and decisions this task runs under are on the record, named by
         # every operation it makes.
@@ -4601,6 +4669,7 @@ class Session:
             self._outcome.lead = lead
         self._bind_contract(lead)
         collaborators = self.collaborators_for(spec, lead)
+        self._route_peers = list(collaborators)
         self._refuse_unpayable_dispatch(spec, self._mandatory_stages(spec, collaborators), collaborators=collaborators)
         self._register_acceptance_obligations(spec, self._current_covers)
         # Selection is recorded separately from invocation. The 2026-09-13
@@ -5466,11 +5535,23 @@ class Session:
                 self._edge("verification", True)
                 return
             if (verdict['verdict'] == 'reject' and round_index == 0
-                    and self._gate_fixes_used < self.config.max_gate_fixes):
+                    and self._gate_fixes_used < self.config.max_gate_fixes
+                    # The route the reject selects, admitted whole before the
+                    # editor writes; refused, the verdict stands as found.
+                    and self._admit_repair(spec, "security fix", "security-repair",
+                                           self._security_repair_stages(spec, verifier),
+                                           after="security verification", wall_extra=self._gate_wall(spec),
+                                           wall_known=self._gate_wall(spec) > 0)):
                 # Share the existing gate repair allowance. A reject can buy
                 # one round, never a separate allowance or parsing retry.
-                draft = self._edit(worker, self._fix_prompt(
-                    spec, draft, [('Security verifier', raw)]), role='security-fix')
+                try:
+                    draft = self._edit(worker, self._fix_prompt(
+                        spec, draft, [('Security verifier', raw)]), role='security-fix')
+                except FinishReserved as exc:
+                    self._finish_refused(spec, "security fix", exc)
+                    self._open_finding("security", f"Security verification {verdict['verdict']}: {raw}")
+                    self._edge("verification", False)
+                    return
                 task.record("assistant", draft)
                 task.keep(draft, kind='security-fix', author=worker)
                 self._gate_fixes_used += 1
@@ -5711,8 +5792,24 @@ class Session:
             # (decision_labels): the first live run sent bare label names.
             decision = describe(key, answers, context=context)
             record = dict(task=task_id, decision=key, default=getattr(meta, attr), labels=decision.labels)
+            # A routing decision is an effect like any other (a billed call
+            # when the decider is Jev): the authority it runs under is
+            # committed first and named by its reservation and its
+            # operation, and the decision given is the operation's receipt
+            # (adversarial review of e688af5). An out-of-set answer is an
+            # outcome the harness knows, settled as such, never uncertain.
+            authority = self._authority_before("routing decision")
             try:
-                verdict = decider.decide(decision)
+                with invocation("decide", task_id, authority=authority), self._operation(
+                        "routing decision", inputs=dict(task=task_id, decision=key, labels=decision.labels,
+                                                        context=context)) as op:
+                    try:
+                        verdict = decider.decide(decision)
+                    except ValueError as exc:
+                        op["result"] = dict(decision=key, refused=f"ValueError: {str(exc)[:300]}")
+                        raise DecisionsUnavailable(f"out-of-set answer: {exc}") from exc
+                    op["result"] = dict(decision=key, answer=verdict.answer, source=verdict.source,
+                                        confidence=verdict.confidence)
             except (DecisionsUnavailable, ValueError) as exc:
                 record.update(answer=None, source=None, error=str(exc)[:300])
                 notes.append(f"{attr}: the decider refused ({str(exc)[:120]}); default kept")
@@ -6533,7 +6630,7 @@ class Session:
         self._verify_dependencies(f"before observed check ({spec.task_id})")
         before = project.contents()
         self._activity("check-started", task=spec.task_id)
-        frozen = self._execution_identity(gate)
+        frozen = dict(self._execution_identity(gate), gate_object=gate)
         started = time.monotonic()
         try:
             with self._operation("observed check", inputs=dict(task=spec.task_id, stage=stage, gate=identity,
@@ -6546,21 +6643,23 @@ class Session:
                                               for r in result.receipts or ()])
         finally:
             self._activity("check-ended", task=spec.task_id)
-            self._note_check_wall(gate, time.monotonic() - started)
+            self._note_check_wall(gate, time.monotonic() - started, identity=frozen["gate"])
         self._verify_dependencies(f"during observed check ({spec.task_id})")
         moved = project.contents() != before
+        consumed = self._consumed_identity(frozen)
         self.review_checks.append({
-            "task": spec.task_id, "stage": stage, "gate": identity, "passed": bool(result.passed) and not moved,
+            "task": spec.task_id, "stage": stage, "passed": bool(result.passed) and not moved,
             "command": result.command, "report": result.report,
-            # A run the tree moved under shows nothing about any one source.
-            "source": None if moved else current,
             "receipts": [dict(dataclasses.asdict(r), output=(r.output or "")[-4000:]) for r in result.receipts],
             # A single-command gate has no receipts: its own output tail,
             # case record, selection and cwd make it execution evidence the
             # same way a task check is (_check_runs; Davis, 2026-10-16).
             "output": (result.output or "")[-4000:], "cases": getattr(result, "cases", None),
-            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
-            **self._consumed_identity(frozen),
+            # The gate, selection, cwd, environment, revisions and source
+            # as frozen when the command launched, drift named.
+            **consumed,
+            # A run the tree moved under shows nothing about any one source.
+            "source": None if moved else consumed["source"],
         })
         self._note(f"task {spec.task_id}: harness ran the checks on the source before {stage}: "
                    + ("passed" if result.passed and not moved else "did not pass"))
@@ -7000,25 +7099,24 @@ class Session:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence shows a problem; one fix call ({problem[:100]})")
             self._count("design_fix")
-            self._edit(lead, (
-                f"Task: {spec.description}\n\nThe harness rendered this design task and the render "
-                f"shows a problem: {problem}.\nFix it in source. Do not start servers or run capture "
-                "commands: the harness captures the declared page again after your fix and the checks. "
-                + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note())),
-                role="design-fix", capped=(spec, task))
-            self._run_integration_gate(lead, spec, task)
-            # The gate set the stage to checks; the recheck is design work again
-            # (Codex, 5863678556), so its facts carry the design stage.
-            self._stage("design")
-            failure = self._harness_capture(spec)
-            if failure:
-                self._hand_off_preview(spec, task, record, failure)
-                ok, problem, shots, records = False, failure, [], [dict(kind="integrity", message=failure)]
-            else:
-                ok, problem, shots, records = check_records(
-                    self.project, spec.task_id, self._last_edit_started or 0,
-                    expected_source=self._trusted_source(), receipt=self._capture_receipt(spec.task_id, harness))
-                self._refuse_mismatched(spec, record, task, records, harness)
+            if self._design_fix_edit(spec, task, record, lead, (
+                    f"Task: {spec.description}\n\nThe harness rendered this design task and the render "
+                    f"shows a problem: {problem}.\nFix it in source. Do not start servers or run capture "
+                    "commands: the harness captures the declared page again after your fix and the checks. "
+                    + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note()))):
+                self._run_integration_gate(lead, spec, task)
+                # The gate set the stage to checks; the recheck is design work again
+                # (Codex, 5863678556), so its facts carry the design stage.
+                self._stage("design")
+                failure = self._harness_capture(spec)
+                if failure:
+                    self._hand_off_preview(spec, task, record, failure)
+                    ok, problem, shots, records = False, failure, [], [dict(kind="integrity", message=failure)]
+                else:
+                    ok, problem, shots, records = check_records(
+                        self.project, spec.task_id, self._last_edit_started or 0,
+                        expected_source=self._trusted_source(), receipt=self._capture_receipt(spec.task_id, harness))
+                    self._refuse_mismatched(spec, record, task, records, harness)
         elif not ok:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
@@ -7037,16 +7135,16 @@ class Session:
                 action = (f"Fix what the render shows is wrong, then capture it again with exactly:\n"
                           f"    {command}\n" + _DESIGN_RENDER_SHOWS + "\nReport what you changed and "
                           "what the new screenshots show. ")
-            self._edit(lead, (
-                f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
-                f"or shows a broken page: {problem}.\n" + action + self._revision_delivery()
-                + _design_fix_delivery(self._interim_edits_note())), role="design-fix", capped=(spec, task))
-            self._run_integration_gate(lead, spec, task)
-            self._stage("design")  # the recheck is design work again, as above
-            ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                        expected_source=self._trusted_source(),
-                                                        receipt=self._capture_receipt(spec.task_id, harness))
-            self._refuse_mismatched(spec, record, task, records, harness)
+            if self._design_fix_edit(spec, task, record, lead, (
+                    f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
+                    f"or shows a broken page: {problem}.\n" + action + self._revision_delivery()
+                    + _design_fix_delivery(self._interim_edits_note()))):
+                self._run_integration_gate(lead, spec, task)
+                self._stage("design")  # the recheck is design work again, as above
+                ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
+                                                            expected_source=self._trusted_source(),
+                                                            receipt=self._capture_receipt(spec.task_id, harness))
+                self._refuse_mismatched(spec, record, task, records, harness)
             problem, records = self._qualify_debt(spec, ok, problem, records)
             if self._audit_debt_applies(spec, ok, records):
                 record.update(verified=False, problem=problem,
@@ -7246,13 +7344,15 @@ class Session:
         fix = record["review_fix"] = dict(reviewer=reviewer, blocking=lines)
         self._note(f"task {spec.task_id}: the design review blocked; one fix call ({lines[0][:100]})")
         self._count("design_fix")
-        self._edit(lead, (
-            f"Task: {spec.description}\n\nAn independent reviewer judged the rendered page and found "
-            "these blocking design problems:\n" + "\n".join(lines) + "\nFix them in source and keep "
-            "every other behaviour and test as it is. Do not start servers or run capture commands: the "
-            "harness runs the checks, captures the page again and the same reviewer judges it. "
-            + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note())),
-            role="design-fix", capped=(spec, task))
+        if not self._design_fix_edit(spec, task, fix, lead, (
+                f"Task: {spec.description}\n\nAn independent reviewer judged the rendered page and found "
+                "these blocking design problems:\n" + "\n".join(lines) + "\nFix them in source and keep "
+                "every other behaviour and test as it is. Do not start servers or run capture commands: the "
+                "harness runs the checks, captures the page again and the same reviewer judges it. "
+                + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note())),
+                reviewer=reviewer):
+            fix["after"] = "the fix was not bought: " + str(fix.get("fix_refused", ""))[:200]
+            return verdict, blocking
         self._run_integration_gate(lead, spec, task)
         self._stage("design")
         if self.checks and not self.checks[-1]["passed"]:
@@ -7527,6 +7627,7 @@ class Session:
                 child = Session(self.memory.goal, self.store, invoke, config=child_config,
                                 available=self._available)
                 child._batch_child = True
+                child._authority_parent = self
                 # The same revision record: a child's obligations and findings
                 # bind the revisions the parent holds, not a fresh count.
                 child._requirement_revision_record = {k: list(v) for k, v in self._requirement_revision_record.items()}
@@ -7689,9 +7790,17 @@ class Session:
             # max_gate_fixes, not what the last serial task left of its own
             # (map G5): that task's counter is its history, not the merge's.
             self._gate_fixes_used = 0
+            # The merge gate's repair route: no reviews and no model close-out
+            # follow it; the merged children's post-merge rechecks and capped
+            # final reviews do (_gate_repair_stages).
+            self._route_peers = []
+            self._route_after_merge = dict(
+                rechecks=sorted({e["peer"] for _, entries, _ in pending_rechecks for e in entries}),
+                capped=[s.task_id for s, _, _ in capped_merged])
             try:
                 self._run_integration_gate(first.lead, merge, task)
             finally:
+                self._route_after_merge = None
                 self._active_spec, self._task_before, self._task_memory = saved
                 record["merge_gate"] = dict(task=merge.task_id, gate_fixes=self._gate_fixes_used,
                                             passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
@@ -7995,9 +8104,13 @@ class Session:
         if reviewer is None:
             self.requirement_reviews.append(dict(reviewer=None, result="no reviewer available"))
             return
+        # Exactly the texts the prompt carries, frozen before the call: the
+        # review is of these bytes, whatever the ledger holds when the reply
+        # arrives (Astra's in-flight control on 6bf1afc).
+        sent = {rid: str(text) for rid, text in ledger.requirements.items()}
         prompt = (
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Numbered requirements\n\n"
-            + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
+            + "\n".join(f"{rid}: {text}" for rid, text in sent.items())
             + "\n\nCompare the list with the goal. Reply exactly COMPLETE if it covers everything "
             "the goal asks for and forbids. Otherwise reply only with lines 'ADD: <one testable "
             "requirement the list misses>' (deliverables, interfaces, user interface, documentation, "
@@ -8036,20 +8149,28 @@ class Session:
                                                  reply=(reply or "")[:400]))
             return
         next_id = len(ledger.requirements) + 1
+        texts = {rid: hashlib.sha256(text.strip().encode()).hexdigest() for rid, text in sent.items()}
+        proposed: Dict[str, str] = {}
         for text in added:
+            while f"R{next_id}" in ledger.requirements:
+                # Never over a row that arrived while the review was out.
+                next_id += 1
             rid = f"R{next_id}"
             next_id += 1
             ledger.requirements[rid] = text
             ledger.requirement_status[rid] = "open (added by the requirements review)"
+            # The reviewer's own proposal, recorded as a proposal: nobody has
+            # compared this text with the goal, so it carries no review.
+            proposed[rid] = hashlib.sha256(text.strip().encode()).hexdigest()
         for rid, why in disputed:
             ledger.ambiguous[rid] = why[:300]
             ledger.ambiguous_since[rid] = len(ledger.rulings)
         self.requirement_reviews.append(dict(reviewer=reviewer, result="reviewed", added=added,
                                              ambiguous=disputed,
-                                             # The exact texts this review covered, by digest: a
-                                             # later revision of any of them is unreviewed.
-                                             texts={rid: hashlib.sha256((text or "").strip().encode()).hexdigest()
-                                                    for rid, text in ledger.requirements.items()}))
+                                             # The exact texts the prompt sent, by digest: a text
+                                             # that changed during the call, or later, is unreviewed.
+                                             # The review's own additions are its proposals.
+                                             texts=texts, proposed=proposed))
 
     def _requirements_satisfied(self, final: Optional[bool] = None) -> bool:
         """Whether DONE may stand: every requirement covered, then audited met.
@@ -8370,7 +8491,17 @@ class Session:
         authority). A cached audit, a status snapshot or a reassessment is
         reused only on exactly this (Astra audit-cache finding; root's
         cache, binding and TOCTOU findings on f4fe5b7)."""
-        body = dict(ids=sorted(ids) if ids is not None else None, packet=self._packet().digest, policy="audit/3")
+        # Beside the packet: what the audit prompt carries that is not
+        # evidence (the reviewers' notes, the judgment gaps on record) still
+        # changes what the auditor was asked, so a cached audit is not
+        # reused across it; these are not judgment bindings, so a recheck's
+        # own completion gap never drifts its reading.
+        body = dict(ids=sorted(ids) if ids is not None else None, packet=self._packet().digest,
+                    notes=hashlib.sha256(json.dumps(list(getattr(self, "review_notes", []) or []), sort_keys=True,
+                                                    default=str).encode()).hexdigest()[:16],
+                    gaps=hashlib.sha256(json.dumps(list(getattr(self, "judgment_gaps", []) or []), sort_keys=True,
+                                                   default=str).encode()).hexdigest()[:16],
+                    policy="audit/4")
         return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
 
     def _packet(self) -> "delivery.EvidencePacket":
@@ -8404,6 +8535,13 @@ class Session:
         obligations = tuple(sorted((o["oid"], str(o.get("execution")), str(o.get("sufficiency")),
                                     h(json.dumps(list(o.get("receipts") or []), sort_keys=True, default=str)))
                                    for o in self.evidence_obligations))
+        # An evidence request's judgment fields are the judgment of the
+        # evidence, not the evidence: a reassessment writes them between a
+        # binding and its reading, and a packet that moved on its own
+        # judgment would refuse every reassessment as drifted (adversarial
+        # review of e688af5). The proof's receipt, file, identity and
+        # target are evidence and stay in.
+        judged = {"stage", "reassessment", "disposition", "acceptance_binding"}
         return delivery.EvidencePacket(
             source=self._source_fingerprint() if self.project else None,
             requirements=tuple(sorted((rid, int(revisions.get(rid, 1)), h(text))
@@ -8419,7 +8557,8 @@ class Session:
             authority=self._authority_record()["digest"],
             design_checks=tuple(whole(c) for c in getattr(self, "design_checks", []) or []),
             scratch_proofs=tuple(whole(p) for p in getattr(self, "scratch_proofs", []) or []),
-            evidence_requests=tuple(whole(r) for r in getattr(self, "evidence_requests", []) or []))
+            evidence_requests=tuple(whole({k: v for k, v in r.items() if k not in judged})
+                                    for r in getattr(self, "evidence_requests", []) or []))
 
     def _apply_acceptance(self, found: dict, audited) -> List[dict]:
         """The one acceptance predicate (delivery.acceptance) over the
@@ -8450,13 +8589,64 @@ class Session:
         if self._final_audit is None:
             return None
         return dict(binding=self._final_audit.get("binding"), packet=self._final_audit.get("packet"),
+                    packet_audited=self._final_audit.get("packet_audited", self._final_audit.get("packet")),
+                    consumed=list(self._final_audit.get("consumed") or []),
                     current=self._final_audit_current(),
                     requirements=dict(self._final_audit.get("acceptance") or {}))
 
     def _final_audit_current(self) -> bool:
-        """Whether the final audit on record judged exactly the current packet."""
+        """Whether the acceptance on record (the final audit, as the
+        evidence it has consumed since left it) is about exactly the
+        current packet."""
         kept = self._final_audit
         return bool(kept and kept.get("binding") and kept.get("binding") == self._audit_binding(kept.get("ids")))
+
+    def _consume_evidence(self, record: dict) -> None:
+        """One evidence record is done, and the acceptance on record has
+        consumed it: the final audit's binding moves to the packet as this
+        record and its own judgment left it, with the record named, so the
+        acceptance stays current across a served challenge; a reassessment
+        MET replaces that requirement's verdict. Only when the acceptance
+        was current as the record came in (``audit_current``) and nothing
+        but this record and its judgment moved the packet since: a record
+        the source moved under carries nothing forward. The auditor's own
+        packet stays named as ``packet_audited``. Without this, every served
+        challenge left the final audit 'not current', a run completed on a
+        reassessed MET committed a terminal saying so, and a resume at the
+        cap asked the final audit again (adversarial review of e688af5)."""
+        kept = self._final_audit
+        if (kept is None or not kept.get("binding") or record.get("stage") != "done"
+                or not record.get("audit_current")):
+            return
+        ids = kept.get("ids")
+        disposition = str(record.get("disposition", ""))
+        reassessed = record.get("kind") == "audit" and disposition.startswith("MET on reassessment")
+        if reassessed:
+            # The reassessment's own binding, taken as its judgment settled;
+            # anything moved since leaves the acceptance where it was.
+            if record.get("acceptance_binding") != self._audit_binding(ids):
+                return
+        else:
+            # Nothing but this record may have moved the packet.
+            index = next((i for i, r in enumerate(self.evidence_requests) if r is record), None)
+            if index is None:
+                return
+            del self.evidence_requests[index]
+            try:
+                without = self._audit_binding(ids)
+            finally:
+                self.evidence_requests.insert(index, record)
+            if without != kept["binding"]:
+                return
+        kept.setdefault("packet_audited", kept.get("packet"))
+        kept["consumed"] = [e for e in (kept.get("consumed") or []) if e != record.get("id")] + [record.get("id")]
+        if reassessed:
+            target = record["target"]
+            kept.setdefault("verdicts", {})[target] = [True, disposition]
+            if target in self._last_acceptance:
+                kept.setdefault("acceptance", {})[target] = dict(self._last_acceptance[target])
+        kept["binding"] = self._audit_binding(ids)
+        kept["packet"] = self._packet().digest
 
     _EVIDENCE_ID = re.compile(r"\b(?:RF[A-Z0-9]+-\d+|O\d+|R\d+|check-\d+|receipt-o-\d+)\b")
 
@@ -8525,18 +8715,28 @@ class Session:
         decisions and ambiguity notes, the goal and the plan gate's
         receipt. Its digest is in every packet and is what a resumed
         episode must find committed (checkpoint._same_authority)."""
+        parent = getattr(self, "_authority_parent", None)
+        if parent is not None:
+            # A parallel child judges under the parent's requirements,
+            # rulings, decisions and plan gate: its authority is the
+            # parent's record, never one built from its own empty ledger.
+            return parent._authority_record()
         ledger = self.memory.ledger
         revisions = self._requirement_revisions()
         # The cross-vendor requirements review that covered a text exactly as
         # it stands is recorded beside the row as a review, never as the
         # decision receipt: a model's review is not the human's consent, and
         # a revision it never saw is not reviewed (Astra's authority control
-        # on 04a967d).
-        reviewed: Dict[str, str] = {}
+        # on 04a967d). A text the reviewer itself proposed (an ADD line) is
+        # its proposal, not a review: nobody has compared it with the goal.
+        reviewed: Dict[tuple, str] = {}
+        proposed: Dict[tuple, str] = {}
         for review in self.requirement_reviews:
             if review.get("reviewer") and str(review.get("result", "")) == "reviewed":
                 for rid, digest in (review.get("texts") or {}).items():
                     reviewed[(rid, digest)] = str(review["reviewer"])
+                for rid, digest in (review.get("proposed") or {}).items():
+                    proposed[(rid, digest)] = str(review["reviewer"])
         rows = []
         for rid, text in ledger.requirements.items():
             if not str(text or "").strip():
@@ -8544,11 +8744,13 @@ class Session:
             row = delivery.RequirementRevision(rid, int(revisions.get(rid, 1)), str(text), origin="inferred",
                                                decision_receipt=None)
             reviewer = reviewed.get((rid, row.text_digest))
-            rows.append(dict(row.to_dict(), review=(dict(reviewer=reviewer, text_digest=row.text_digest)
-                                                    if reviewer else None)))
+            proposer = proposed.get((rid, row.text_digest))
+            rows.append(dict(row.to_dict(),
+                             review=(dict(reviewer=reviewer, text_digest=row.text_digest) if reviewer else None),
+                             proposal=(dict(reviewer=proposer, text_digest=row.text_digest) if proposer else None)))
         body = dict(goal=hashlib.sha256((self.memory.goal or "").encode()).hexdigest()[:16], requirements=rows,
                     rulings=list(ledger.rulings), decisions=dict(ledger.decisions), ambiguous=dict(ledger.ambiguous),
-                    plan_gate=self._plan_gate_receipt, policy="authority/2")
+                    plan_gate=self._plan_gate_receipt, policy="authority/3")
         body["digest"] = hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
         return body
 
@@ -8557,24 +8759,34 @@ class Session:
         distinct record) and return its digest, for the checkpoint written
         at the same quiescent point. No store, no digest: a checkpoint
         without one is read as before."""
+        parent = getattr(self, "_authority_parent", None)
+        if parent is not None:
+            return parent._publish_authority()
         store = self.config.job_store
         if store is None:
             return None
-        record = self._authority_record()
-        if record["digest"] != self._published_authority:
-            store.publish({"authority": record})
-            self._published_authority = record["digest"]
-        return record["digest"]
+        with self._authority_lock:
+            # Under a lock: a parallel wave's children commit through the
+            # parent at once.
+            record = self._authority_record()
+            if record["digest"] != self._published_authority:
+                store.publish({"authority": record})
+                self._published_authority = record["digest"]
+            return record["digest"]
 
-    def _authority_before(self, what: str) -> None:
+    def _authority_before(self, what: str) -> str:
         """Commit the authority an effect is about to run under, before the
-        effect: a task's first call, a parallel wave's children. A store
-        that cannot commit it stops the run here, with nothing started."""
+        effect (every operation and every model call, a task's and a wave's
+        first call among them), and return its digest: the one the effect's
+        identity names. Idempotent on an unchanged record. A store that
+        cannot commit it stops the run here, with nothing started; with no
+        store the digest is still the effect's name for it."""
         try:
-            self._publish_authority()
+            published = self._publish_authority()
         except Exception as exc:  # noqa: BLE001 -- the store is latched; nothing starts without the record
             raise JobStoreUnavailable(f"{what} not started: the approval authority could not be committed "
                                       f"({type(exc).__name__})") from exc
+        return published or self._authority_record()["digest"]
 
     def _findings_block(self, carried: List[dict], standing: List[dict]) -> str:
         if not carried and not standing:
@@ -8638,20 +8850,32 @@ class Session:
                 self.memory.ledger.requirement_status[record["target"]] = (
                     f"met (reassessed on evidence {record['id']})")
         for record in self.evidence_requests:
+            if record.get("stage") == "intent":
+                # A durable intent a resumed job never runs (the evidence
+                # never started): closed as it stands and consumed, so the
+                # acceptance on record stays current rather than the final
+                # audit being drawn again over a record nobody will finish
+                # (adversarial review of e688af5).
+                record["stage"] = "done"
+                self._consume_evidence(record)
+        for record in self.evidence_requests:
             if record.get("stage") != "awaiting reassessment":
                 continue
             if record.get("identity") != identity or not record.get("test"):
                 record["stage"] = "done"
                 record["disposition"] = "held: the source or checks changed before the pending reassessment"
+                self._consume_evidence(record)
                 continue
             entry = self._disputable().get(record["target"])
             if entry is None or entry["kind"] != record["kind"] or entry["finding"] != record.get("finding"):
                 record["stage"] = "done"
                 record["disposition"] = "held: the finding is no longer the one the proof was made for"
+                self._consume_evidence(record)
                 continue
             self._note(f"evidence {record['id']}: finishing the reassessment a resumed job left unstarted")
             record["disposition"] = self._reassess(record["target"], entry, record, record["test"])
             record["stage"] = "done"
+            self._consume_evidence(record)
             self._quiescent()
 
     def _final_challenge(self, unmet: dict) -> dict:
@@ -8913,6 +9137,10 @@ class Session:
                       source=self._source_fingerprint(), identity=identity, key=key,
                       receipt=None, execution=None, reassessment=None, stage="intent", test=text,
                       disposition="held: interrupted before the evidence ran")
+        # Whether the acceptance on record was current as this record came
+        # in: only then does consuming it carry the acceptance forward
+        # (_consume_evidence).
+        record["audit_current"] = self._final_audit_current()
         # Durable intent: a job resumed after this point never runs it again.
         self.evidence_requests.append(record)
         self._quiescent()
@@ -8932,11 +9160,14 @@ class Session:
             record["disposition"] = "held: reassessment not made"
         pending = entry is not None and receipt["status"] == "passed" and not drifted
         record["stage"] = "awaiting reassessment" if pending else "done"
+        if not pending:
+            self._consume_evidence(record)
         # Durable receipt, before the reassessment call is reserved.
         self._quiescent()
         if pending:
             record["disposition"] = self._reassess(target, entry, record, text)
             record["stage"] = "done"
+            self._consume_evidence(record)
             self._quiescent()
         self._note(f"evidence {record['id']} on {target}: {receipt['status']}; {record['disposition'][:160]}")
         cases = "; ".join(receipt.get("cases") or ()) or "none shown"
@@ -9987,6 +10218,16 @@ class Session:
         where a model makes one. The check that judges the repair is wall
         time, counted by ``_gate_wall_of``."""
         rows = [delivery.PlanStage("gate fix", "editing" if self._writes() else "reserve", editing=self._writes())]
+        after_merge = getattr(self, "_route_after_merge", None)
+        if after_merge is not None:
+            # The merge gate: no review and no model close-out follow it; the
+            # merged children's post-merge rechecks and capped final reviews
+            # do, once it passes.
+            rows.extend(delivery.PlanStage(f"post-merge recheck by {peer}", "reserve")
+                        for peer in after_merge.get("rechecks") or ())
+            rows.extend(delivery.PlanStage(f"capped final review of {task_id}", "reserve")
+                        for task_id in after_merge.get("capped") or ())
+            return rows
         peers = list(getattr(self, "_route_peers", None) or [])
         if kind == "subset" and peers:
             rows.extend(delivery.PlanStage(f"review by {peer}", "reserve") for peer in peers)
@@ -9996,6 +10237,80 @@ class Session:
         if not self._closes_factually(spec):
             rows.append(delivery.PlanStage("close-out", "reserve"))
         return rows
+
+    def _gate_repair_wall(self, spec, gate, kind: str):
+        """The check wall time the gate's repair route runs: the check that
+        judges the fix (one run of ``gate``) and, after a pre-review subset
+        gate whose reviews and revision lie ahead, the full gate that runs
+        after the revision. Counted where measured this episode; an
+        unmeasured run is reported as such, never guessed."""
+        extra = self._gate_wall_of(gate)
+        known = extra > 0
+        if kind == "subset" and (getattr(self, "_route_peers", None) or []):
+            full = self._gate_wall(spec)
+            extra += full
+            known = known and full > 0
+        return extra, known
+
+    def _admit_repair(self, spec, what: str, scope: str, rows: list, *, after: str,
+                      wall_extra: float = 0.0, wall_known: Optional[bool] = None) -> bool:
+        """Admit a repair editor's route whole before it writes: ``rows``
+        is the route a failed check, a rejecting verifier or a broken render
+        selected (the fix holding the write grant, the judgment that follows
+        it, what the task still owes). A refused route is recorded
+        (``_finish_refused``), no editor is called and the failure stands as
+        found; returns False. With no budget there is nothing to admit."""
+        if self._budget() is None:
+            return True
+        verdict = self._admit_plan(spec.task_id, rows, scope=scope, wall_extra=wall_extra, wall_known=wall_known)
+        if verdict.feasible:
+            return True
+        self._finish_refused(spec, what, FinishReserved(
+            f"{spec.task_id}: the repair route after the failed {after} cannot be paid whole: {verdict.detail}"))
+        return False
+
+    def _security_repair_stages(self, spec, verifier: str) -> list:
+        """The route a rejecting security verifier selects: one fix holding
+        the write grant, the verifier's second look, the close-out where a
+        model makes one. The check between them is wall time."""
+        writes = bool(self._writes())
+        rows = [delivery.PlanStage("security fix", "editing" if writes else "reserve", editing=writes),
+                delivery.PlanStage(f"security verification by {verifier}", "reserve")]
+        if not self._closes_factually(spec):
+            rows.append(delivery.PlanStage("close-out", "reserve"))
+        return rows
+
+    def _design_repair_stages(self, spec, reviewer: Optional[str] = None) -> list:
+        """The route a broken render or a blocking design review selects:
+        one fix holding the write grant, the same reviewer's judgment of the
+        new renders where a reviewer blocked, the close-out where a model
+        makes one. The check and the recapture are wall time; the recapture
+        is unmeasured, so the route's wall is reported unknown."""
+        writes = bool(self._writes())
+        rows = [delivery.PlanStage("design fix", "editing" if writes else "reserve", editing=writes)]
+        if reviewer:
+            rows.append(delivery.PlanStage(f"design review by {reviewer}", "reserve"))
+        if not self._closes_factually(spec):
+            rows.append(delivery.PlanStage("close-out", "reserve"))
+        return rows
+
+    def _design_fix_edit(self, spec, task, record: dict, lead: str, prompt: str, *,
+                         reviewer: Optional[str] = None) -> bool:
+        """One design fix, bought whole before the editor writes
+        (``_admit_repair``); a refusal, at admission or at the call, is
+        recorded on the design record and the render's problem stands as
+        found. Returns whether the fix was made."""
+        if not self._admit_repair(spec, "design fix", "design-repair", self._design_repair_stages(spec, reviewer),
+                                  after="render", wall_extra=self._gate_wall(spec), wall_known=False):
+            record["fix_refused"] = self.finish_refusals[-1]["detail"] if self.finish_refusals else "refused"
+            return False
+        try:
+            self._edit(lead, prompt, role="design-fix", capped=(spec, task))
+        except FinishReserved as exc:
+            self._finish_refused(spec, "design fix", exc)
+            record["fix_refused"] = str(exc)[:300]
+            return False
+        return True
 
     def _gate_wall_of(self, gate) -> float:
         """The measured wall time of one run of exactly ``gate`` this
@@ -10013,11 +10328,15 @@ class Session:
         return rows
 
     def _execution_identity(self, gate) -> dict:
-        """What a run of ``gate`` launched now is evidence of: the source,
-        the gate, the environment and every requirement's revision at
-        launch. Frozen before the command starts and carried by its record
-        as frozen (``_consumed_identity``)."""
-        return dict(gate=_gate_identity(gate), source=self._source_fingerprint() if self.project else None,
+        """What a run of ``gate`` launched now is evidence of: the gate (its
+        commands, settings, cwd and test minimum), the selection its
+        configuration applies, the working directory it runs in, the source,
+        the environment and every requirement's revision at launch. Frozen
+        before the command starts and carried by its record as frozen
+        (``_consumed_identity``)."""
+        return dict(gate=_gate_identity(gate), selection=self._gate_selection(gate), command_cwd=self._gate_cwd(gate),
+                    cwd=str(self.project or getattr(gate, "cwd", "")),
+                    source=self._source_fingerprint() if self.project else None,
                     environment=self._environment_id(), requirements=dict(self._requirement_revisions()))
 
     def _consumed_identity(self, frozen: Optional[dict]) -> dict:
@@ -10031,8 +10350,9 @@ class Session:
         if not frozen:
             # No launch identity (a record appended by a path that ran
             # nothing): nothing to credit, and a receipt from it binds no
-            # revision.
-            return dict(environment=None, requirements={}, source=None, identity_drift="no launch identity")
+            # revision and no gate.
+            return dict(gate="", selection="", command_cwd=".", cwd="", environment=None, requirements={},
+                        source=None, identity_drift="no launch identity")
         now = self._requirement_revisions()
         drift = [f"{rid} {frozen['requirements'].get(rid)}->{rev}" for rid, rev in now.items()
                  if frozen["requirements"].get(rid) != rev]
@@ -10042,14 +10362,23 @@ class Session:
         current = self._source_fingerprint() if self.project else None
         if current != frozen["source"]:
             drift.append("source changed")
-        return dict(environment=frozen["environment"], requirements=dict(frozen["requirements"]),
+        gate = frozen.get("gate_object")
+        if gate is not None and _gate_identity(gate) != frozen["gate"]:
+            # The gate object was reconfigured while or after the command
+            # ran (root's control on 6bf1afc: a test minimum raised at the
+            # consumer seam): the record keeps the gate that executed.
+            drift.append("gate changed")
+        return dict(gate=frozen["gate"], selection=frozen.get("selection", ""),
+                    command_cwd=frozen.get("command_cwd", "."), cwd=frozen.get("cwd", ""),
+                    environment=frozen["environment"], requirements=dict(frozen["requirements"]),
                     source=frozen["source"], identity_drift="; ".join(drift))
 
-    def _note_check_wall(self, gate, elapsed: float) -> None:
+    def _note_check_wall(self, gate, elapsed: float, *, identity: Optional[str] = None) -> None:
         """Keep the measured wall time of one run of ``gate`` (this
-        episode's own measurement; a timeout is a ceiling, not a cost)."""
+        episode's own measurement; a timeout is a ceiling, not a cost),
+        filed under the identity frozen at launch when the caller has it."""
         self.__dict__.setdefault("_check_walls", {})
-        identity = _gate_identity(gate)
+        identity = identity or _gate_identity(gate)
         self._check_walls[identity] = max(float(elapsed), self._check_walls.get(identity, 0.0))
 
     def _gate_wall(self, spec) -> float:
@@ -12234,19 +12563,14 @@ class Session:
         attempt_facts = [self._record_check_attempt(result, gate_kind=kind)]
         self._handoff_unattributable(gate, result, task)
         while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
-            if self._budget() is not None:
-                # The failure has selected a route: this repair, the check
-                # that judges it, and what the task still owes after it.
-                # Admitted whole before the editor writes, or the failed
-                # check stands (root's narrowed route finding on 04a967d).
-                verdict = self._admit_plan(spec.task_id, self._gate_repair_stages(spec, gate, kind),
-                                           scope="gate-repair", wall_extra=self._gate_wall_of(gate),
-                                           wall_known=self._gate_wall_of(gate) > 0)
-                if not verdict.feasible:
-                    self._finish_refused(spec, "gate fix", FinishReserved(
-                        f"{spec.task_id}: the repair route after the failed check cannot be paid whole: "
-                        f"{verdict.detail}"))
-                    break
+            # The failure has selected a route: this repair, the check that
+            # judges it, and what the task still owes after it. Admitted
+            # whole before the editor writes, or the failed check stands
+            # (root's narrowed route finding on 04a967d).
+            wall_extra, wall_known = self._gate_repair_wall(spec, gate, kind)
+            if not self._admit_repair(spec, "gate fix", "gate-repair", self._gate_repair_stages(spec, gate, kind),
+                                      after="check", wall_extra=wall_extra, wall_known=wall_known):
+                break
             try:
                 fix = self._edit(
                     lead,
@@ -12272,14 +12596,13 @@ class Session:
             task.record("user", result.for_models())
             attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
             self._handoff_unattributable(gate, result, task)
-        self.checks.append({"passed": result.passed, "command": result.command, "gate": _gate_identity(gate),
-                            "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
-                            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
-                            "cases": result.cases,
-                            # The identity a receipt is read with: the
-                            # environment and requirement revisions frozen
-                            # when the command launched (_check), with any
-                            # drift since named (_receipt_identity).
+        self.checks.append({"passed": result.passed, "command": result.command,
+                            "output": result.output, "cases": result.cases,
+                            # The identity a receipt is read with: the gate,
+                            # selection, cwd, environment and requirement
+                            # revisions frozen when the command launched
+                            # (_check), with any drift since named; never the
+                            # gate as it stands now (_receipt_identity).
                             **self._consumed_identity(self._last_check_identity),
                             # A single-command gate's parsed report (a suite's
                             # receipts carry their own), for the audit.
@@ -12472,9 +12795,6 @@ class Session:
         if result.passed or verdict["product"]:
             return
         self.checks.append({"passed": False, "command": result.command, "output": result.output,
-                            "gate": _gate_identity(gate),
-                            "cwd": str(self.project or getattr(gate, 'cwd', '')),
-                            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
                             "cases": result.cases,
                             **self._consumed_identity(self._last_check_identity),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
@@ -12550,7 +12870,7 @@ class Session:
         # Frozen before the command launches: what the run is evidence of is
         # decided then, not when its record is appended (root's control on
         # 04a967d: a requirement revised during the run was credited).
-        frozen = self._execution_identity(gate)
+        frozen = dict(self._execution_identity(gate), gate_object=gate)
         self._last_check_identity = frozen
         started = time.monotonic()
         try:
@@ -12564,7 +12884,7 @@ class Session:
                                               for r in result.receipts or ()])
         finally:
             self._activity('check-ended', task=task)
-            self._note_check_wall(gate, time.monotonic() - started)
+            self._note_check_wall(gate, time.monotonic() - started, identity=frozen["gate"])
         # A receipt taken with a changed dependency tree is never accepted.
         self._verify_dependencies(f"during check ({task})")
         if project is not None:
@@ -12748,7 +13068,12 @@ class Session:
             id="check", status="passed" if result.passed else "failed",
             reason="exit 0" if result.passed else "nonzero exit", required=True,
             command=result.command, returncode=result.returncode, output=result.output,
-            report=result.report, cwd=self._gate_cwd(gate), selection=self._gate_selection(gate),
+            # The identity frozen when the command launched, never the gate
+            # as it stands now (adversarial review of e688af5).
+            report=result.report,
+            cwd=(self._last_check_identity or {}).get("command_cwd") or self._gate_cwd(gate),
+            selection=((self._last_check_identity or {}).get("selection")
+                       if self._last_check_identity else self._gate_selection(gate)),
             cases=result.cases),)
         restored = [n for n in changed if n not in added]
         heading = ("Original tests (" + "; ".join(part for part in (

@@ -542,11 +542,23 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
         status["last_write"] = f"{_iso(last_write)} ({_age(now - last_write)})"
 
     result, result_problem = _read_json(run_dir / "result.json")
-    if result is None and not (run_dir / "result.json").exists():
-        # No export: the committed terminal, when the run committed one, is
-        # the outcome (the crash boundary between the committed terminal
-        # and the compatibility export).
-        result, result_problem = _terminal_result(run_dir)
+    if result is None:
+        # No readable export (absent, truncated, malformed): the committed
+        # terminal, when the run committed one, is the outcome (the crash
+        # boundary between the committed terminal and the compatibility
+        # export; the export's own problem stays a diagnostic).
+        export_problem = result_problem if (run_dir / "result.json").exists() else ""
+        result, terminal_problem = _terminal_result(run_dir)
+        if export_problem and result is not None:
+            unknown = status.get("unknown")
+            if isinstance(unknown, dict):
+                unknown["result.json"] = f"export unreadable, committed terminal used: {export_problem}"
+        # An unreadable export with no committed terminal is reported as the
+        # export's own problem; a missing export as the terminal's absence.
+        result_problem = _reader_problem(result, export_problem, terminal_problem)
+    # A committed state that cannot be read is said so: a reader must tell a
+    # running run from one whose record is altered or truncated.
+    corrupt = terminal_problem if (result is None and _corrupt_state(terminal_problem)) else ""
     status["finished"] = result is not None or (run_dir / "result.json").exists()
 
     _fill_calls(status, mark, run_dir, now)
@@ -555,11 +567,13 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
     if status["finished"]:
         if status["live"] == UNKNOWN or (lock_pid is None and status["live"] is not True):
             status["live"] = False
-            status["liveness"] = "latest run has written result.json; it is over"
+            status["liveness"] = ("latest run has written result.json; it is over"
+                                  if (run_dir / "result.json").exists()
+                                  else "latest run committed its terminal state; it is over")
         _fill_terminal(status, mark, run_dir, result, result_problem)
     else:
         for field in ("terminal_status", "stop_reason"):
-            mark(field, "run has not finished")
+            mark(field, corrupt or "run has not finished")
         report = run_dir / "report.md"
         status["report"] = str(report) if report.exists() else UNKNOWN
         if status["report"] == UNKNOWN:
@@ -707,6 +721,22 @@ def _fill_terminal(status, mark, run_dir: Path, result, problem) -> None:
         result, "the plan was declined, the task limit was reached, or findings/checks remain open")
 
 
+def _corrupt_state(problem: str) -> bool:
+    return str(problem or "").startswith("the run's committed state is corrupt")
+
+
+def _reader_problem(result, export_problem: str, terminal_problem: str) -> str:
+    """What a reader says when neither the export nor the committed
+    terminal gave an outcome: an unreadable export's own problem, with a
+    corrupt committed state named beside it; a missing export reads as the
+    terminal's absence."""
+    if result is not None or not export_problem:
+        return terminal_problem
+    if _corrupt_state(terminal_problem):
+        return f"{export_problem}; {terminal_problem}"
+    return export_problem
+
+
 def _terminal_result(run_dir: Path):
     """A result-shaped view of the committed terminal record, for a run
     whose export is missing: ``(result, problem)``; ``(None, why)`` when the
@@ -772,15 +802,19 @@ def _history_row(run_dir: Path) -> Dict[str, Any]:
                            "stop_reason": UNKNOWN, "path": str(run_dir)}
     result_path = run_dir / "result.json"
     result, problem = _read_json(result_path)
+    export_problem = problem if result is None and result_path.exists() else ""
+    if result is None:
+        result, terminal_problem = _terminal_result(run_dir)
+        problem = _reader_problem(result, export_problem, terminal_problem)
     if result is None and not result_path.exists():
-        result, problem = _terminal_result(run_dir)
-    if result is None and not result_path.exists():
-        row["status"] = "unfinished"
-        row["stop_reason"] = "no result.json"
-    elif result is not None and result.get("committed_terminal") and not result_path.exists():
-        manifest_path = run_dir / "manifest.json"
-        row["ended"] = _iso(_mtime(manifest_path)) or UNKNOWN
+        row["status"] = UNKNOWN if _corrupt_state(problem) else "unfinished"
+        row["stop_reason"] = problem if _corrupt_state(problem) else "no result.json"
+    elif result is not None and result.get("committed_terminal"):
+        ended = result_path if result_path.exists() else run_dir / "manifest.json"
+        row["ended"] = _iso(_mtime(ended)) or UNKNOWN
         row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
+        if export_problem:
+            row["export"] = f"export unreadable, committed terminal used: {export_problem}"
     elif result is None:
         row["ended"] = _iso(_mtime(result_path)) or UNKNOWN
         row["status"] = UNKNOWN

@@ -379,7 +379,7 @@ def test_the_approval_authority_is_committed_before_the_first_call_and_named_by_
     assert replay.result.completed, replay.result.error
     record = seen["lead"]
     rows = {r["rid"]: r for r in record["requirements"]}
-    assert set(rows) == {"R1", "R2"} and record["policy"] == "authority/2"
+    assert set(rows) == {"R1", "R2"} and record["policy"] == "authority/3"
     assert all(r["origin"] == "inferred" and r["decision_receipt"] is None and r["approved"] is False
                for r in rows.values()), "a model review is not the human's consent"
     assert all(r["review"]["reviewer"] == "openai:gpt-5.6-sol" and r["review"]["text_digest"] == r["text_digest"]
@@ -474,3 +474,191 @@ def test_combined_debt_names_every_reason_and_commits_an_incomplete_terminal(tmp
     terminal = jobstore.read_terminal(_run_dir(replay))
     assert terminal["completed"] is False and terminal["acceptance"]["requirements"]["R2"]["reasons"] == reasons
     assert "RFT1-1" in replay.result.error or "R2" in replay.result.error
+
+
+@pytest.mark.requirements_ledger
+def test_every_operation_names_an_authority_already_committed_when_it_starts(tmp_path, monkeypatch):
+    """Astra's dispatch control on 6bf1afc: the requirements review named
+    the newly inferred requirements while the committed record still held
+    the pre-intake authority. Now every operation (intake calls included)
+    commits the authority it names before it starts: at each operation's
+    start publication the committed record's digest is the one the
+    operation names."""
+    original = jobstore.JobStore.publish
+    seen, violations = [], []
+
+    def publish(self, updates, **kw):
+        for name, rows in updates.items():
+            if name.startswith("operations-"):
+                committed = (jobstore.read_record(self.run_dir, "authority") or {}).get("digest")
+                for op in rows:
+                    if op.get("status") == "started":
+                        seen.append((op["purpose"], committed))
+                        if op["identity"].get("authority") != committed:
+                            violations.append((op["purpose"], op["identity"].get("authority"), committed))
+        return original(self, updates, **kw)
+    monkeypatch.setattr(jobstore.JobStore, "publish", publish)
+    replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2), files=FILES, max_tasks=2,
+                   record_complete=False)
+    assert replay.result.completed, replay.result.error
+    assert violations == [] and len(seen) >= 10
+    assert len({digest for _, digest in seen}) >= 2, "the authority moved at intake and every later call named the new one"
+    assert seen[0][1] is not None, "the very first call already ran under a committed authority"
+    run_dir = _run_dir(replay)
+    budget = jobstore.read_budget(run_dir)[0]
+    review = next(o for o in budget["operations"]["settled"] if o["identity"]["role"] == "requirements-review")
+    assert review["identity"]["authority"] in {digest for _, digest in seen}
+
+
+# --- from the author's adversarial review of e688af5 ----------------------------------
+
+@pytest.mark.requirements_ledger
+def test_parallel_children_work_under_the_parents_committed_authority_and_the_resume_holds(tmp_path, monkeypatch):
+    """Adversarial review of e688af5: a parallel child built its authority
+    record from its own empty ledger and committed it over the parent's,
+    every child call named that record, the parent's cache went stale and
+    the checkpoint written after the wave could never be resumed. A
+    child's authority is its parent's: through the wave only the parent's
+    record is committed, every operation names the record committed when
+    it started, and the resume holds."""
+    from tests.lifecycle.test_step2_recovery import _interrupt_after, _simple
+    batch = ("REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": FIXED})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    published, violations = [], []
+    original = jobstore.JobStore.publish
+
+    def publish(self, updates, **kw):
+        if "authority" in updates:
+            published.append((updates["authority"]["digest"], len(updates["authority"]["requirements"])))
+        for name, rows in updates.items():
+            if name.startswith("operations-"):
+                committed = (jobstore.read_record(self.run_dir, "authority") or {}).get("digest")
+                for op in rows:
+                    if op.get("status") == "started" and op["identity"].get("authority") != committed:
+                        violations.append((op["purpose"], op["identity"].get("authority"), committed))
+        return original(self, updates, **kw)
+    monkeypatch.setattr(jobstore.JobStore, "publish", publish)
+    _interrupt_after(monkeypatch, 2)
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead), files=FILES,
+                   max_tasks=3, record_complete=False)
+    assert "KeyboardInterrupt" in replay.result.error
+    run_dir = _run_dir(replay)
+    batches = H.result_json(replay).get("parallel_batches") or []
+    assert batches and batches[0]["tasks"] == ["t1", "t2"]
+    assert violations == []
+    assert [n for _, n in published] == [0, 2], "the pre-intake record, then the one with R1/R2, and nothing from a child"
+    committed = jobstore.read_record(run_dir, "authority")
+    assert len(committed["requirements"]) == 2 and checkpoint.load(run_dir)["authority"] == committed["digest"]
+    budget = jobstore.read_budget(run_dir)[0]
+    children = [o for o in budget["operations"]["settled"] if o["identity"].get("task") in ("t1", "t2")]
+    assert children and all(o["identity"]["authority"] == committed["digest"] for o in children)
+    resumed = _episode(replay, resume_from=run_dir.name, max_tasks=3)
+    assert "CheckpointRefused" not in (resumed.error or "") and (Path(resumed.run_dir) / "lineage.json").exists()
+    assert json.loads((Path(resumed.run_dir) / "lineage.json").read_text())["parent"] == run_dir.name
+
+
+@pytest.mark.requirements_ledger
+def test_a_routing_decision_is_an_operation_under_the_committed_authority(tmp_path, monkeypatch):
+    """Adversarial review of e688af5: the Jev decider's reservation (a
+    billed call) named no authority, and with no cross-vendor reviewer it
+    ran before the record covering the freshly numbered requirements was
+    committed. A routing decision now commits the authority first, names
+    it on the reservation and on a session operation, and keeps the
+    decision or the refusal as that operation's receipt."""
+    from quadratus.decisions import JevDecider
+    decider = JevDecider(meter=None, budget=None)
+    decider.api_key = "fake"
+    monkeypatch.setattr(JevDecider, "available", lambda self: "")
+
+    class Offline:
+        def system_one(self, **kw):
+            raise RuntimeError("offline")
+    decider._client = Offline()
+    monkeypatch.setattr(Session, "_auditor", lambda self: None)
+    seen = []
+    original = Session._route_with_decider
+
+    def observe(self, meta, task_id=None):
+        committed = jobstore.read_record(self.config.job_store.run_dir, "authority") or {}
+        seen.append(dict(ledger=sorted(self.memory.ledger.requirements), committed=committed.get("digest"),
+                         rows=len(committed.get("requirements", []))))
+        return original(self, meta, task_id)
+    monkeypatch.setattr(Session, "_route_with_decider", observe)
+    task = ("REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: README documents add\n"
+            "SCOPE: " + json.dumps({"permitted_paths": ["app.py"], "intended_result": "app.py written",
+                                    "acceptance": ["app.py meets the task"], "max_lines": 20})
+            + "\nImplement add in app.py.\nCOVERS: R1")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(task), lead=lead), files=FILES, max_tasks=1,
+                   decider=decider, record_complete=False)
+    run_dir = _run_dir(replay)
+    assert seen and seen[0]["ledger"] == ["R1", "R2"]
+    budget = jobstore.read_budget(run_dir)[0]
+    reservations = [o for o in budget["operations"]["settled"] if o["identity"].get("role") == "decider"]
+    assert reservations, "the decider was never asked"
+    committed = jobstore.read_record(run_dir, "authority")
+    assert len(committed["requirements"]) == 2
+    assert all(o["identity"]["authority"] == committed["digest"] for o in reservations)
+    ops = [o for rows in jobstore.operation_records(run_dir).values() for o in rows
+           if o["purpose"] == "routing decision"]
+    assert len(ops) == len(reservations) and all(o["status"] == "settled" and o["outcome"] == "failed" for o in ops)
+    assert all(o["identity"]["authority"] == committed["digest"] for o in ops)
+    receipt = jobstore.read_record(run_dir, ops[0]["receipt"])
+    assert receipt["opid"] == ops[0]["opid"] and receipt["full_digest"] == ops[0]["receipt_digest"]
+    failure = json.loads(receipt["result"])["failure"]
+    assert failure.split(":")[0] in ops[0]["note"], "the receipt keeps the failure the harness reported"
+    assert all(d["error"] for d in H.result_json(replay).get("decisions") or [{"error": "x"}])
+
+
+@pytest.mark.requirements_ledger
+def test_a_pre_review_subset_gate_repair_route_carries_the_reviews_ahead_of_it(tmp_path, monkeypatch):
+    """Adversarial review of e688af5 (route lens): on the normal dispatch
+    path the cheap pre-review gate's repair route listed the gate fix and
+    the close-out alone, because the task's reviewers were recorded for
+    the route only on a lead recovery. The reviews, the revision and the
+    rechecks that follow the repaired subset gate are on the admitted
+    route, and the admission precedes the gate-fix call."""
+    import sys
+
+    from quadratus import project_run
+    from quadratus.integration import GateCommand
+    lint = (sys.executable, "-m", "pytest", "-q", "tests/test_app.py", "--quadratus-report={report}")
+    monkeypatch.setattr(project_run, "_extra_gate_commands",
+                        lambda extra_checks: [GateCommand(id="lint", argv=lint, cheap=True)])
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return "Implemented add.\nCHANGED: []"
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    def gate_fix(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Fixed add.\nCHANGED: ["app.py"]'
+    script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
+    script.overrides["lead"] = lead
+    script.overrides["gate-fix"] = gate_fix
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
+    result = H.result_json(replay)
+    repair = [a for a in result["plan_admissions"] if a["scope"] == "gate-repair"]
+    assert repair and repair[0]["task"] == "t1" and repair[0]["feasible"]
+    stages = repair[0]["stages"]
+    fix_index = next(i for i, c in enumerate(replay.calls) if c.role == "gate-fix")
+    reviewers = {(c.vendor, c.model) for i, c in enumerate(replay.calls)
+                 if c.role.startswith("collaborator") and c.task == "t1" and i > fix_index}
+    assert reviewers, "the reviews followed the repaired subset gate"
+    assert len([s for s in stages if s.startswith("review by")]) == len(reviewers), stages
+    assert any(s.startswith("revision") for s in stages) and any(s.startswith("recheck by") for s in stages)
+    assert repair[0]["at_attempt"] <= fix_index, "admitted before the editor wrote"

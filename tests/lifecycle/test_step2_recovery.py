@@ -284,7 +284,10 @@ def test_a_record_with_known_zero_uncertainty_still_resumes(tmp_path, monkeypatc
 
 def test_time_between_calls_reaches_the_record_the_checkpoint_is_written_against(tmp_path):
     """The quiescent checkpoint and budget.json come from one persisted
-    snapshot, so time spent on checks between calls is carried."""
+    snapshot, so time spent on checks between calls is carried. The
+    checkpoint carries the consumption watermark the production writer
+    always records (one settled call consumed): without one, a record
+    holding settled operations is not resumed."""
     clock = [0.0]
     budget = RunBudget(LIMITS, path=tmp_path / "budget.json", clock=lambda: clock[0])
     ticket, _ = budget.reserve(transport="cli", price_key="openai:gpt-5.6-sol")
@@ -294,7 +297,8 @@ def test_time_between_calls_reaches_the_record_the_checkpoint_is_written_against
     snapshot = budget.persist()
     identity = dict(goal="g")
     checkpoint.write(tmp_path, dict(version=checkpoint.VERSION, sealed=False, resumable=True,
-                                    identities=identity, consumed=checkpoint.consumed(snapshot)))
+                                    identities=identity, consumed=checkpoint.consumed(snapshot),
+                                    watermark=dict(budget_settled=1, session_settled={})))
     spent = checkpoint.validate(tmp_path, checkpoint.load(tmp_path), identity)
     assert spent["elapsed_seconds"] == 30.0 and spent["calls"] == 1 and spent["input_tokens"] == 100
 
