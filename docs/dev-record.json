@@ -2126,6 +2126,58 @@
         "candidate": "67dca03fb996e2e4c2f58dc949f1066e1c25b9d5",
         "at": "2026-10-16T03:43:32Z"
       }
+    },
+    {
+      "id": "T-research-verifier-usage",
+      "purpose": "User-authorized side task: verifier valid alternatives and offline usage report; preserve active engine milestone",
+      "base": "34354d5bb398afb1448faefb672877826c0851e6",
+      "owns": [
+        "tools/research_usage_report.py",
+        "tests/test_research_usage_report.py",
+        "tests/test_verifier_valid_alternatives.py",
+        "docs/RESEARCH_FOLLOWUPS.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-10-17T17:02:11Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "c85eabcc458a0c37362c00df65b18ae40d05ec01",
+        "at": "2026-10-17T17:15:44Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "9dca3b10e21ca96566b7a60cf6431b2a01d1ab0c",
+          "verdict": "stale",
+          "evidence": "Independent Codex source review: complete vs partial totals, malformed schema handling, selected vs invoked, retry counting, cache subset, exact-source synthetic verifier alternatives. 43 focused tests pass and Ruff clean. Historical saved ledgers reproduce 440752 and117743 tokens with not-met outcomes and null verified denominator. No engine/policy/budget changes. PR81. Mechanical reviewer corrections: missing good_record test fixture and documentation of changes.diff read. Full suite and CI pending.",
+          "scope": [
+            "tools/research_usage_report.py",
+            "tests/test_research_usage_report.py",
+            "tests/test_verifier_valid_alternatives.py",
+            "docs/RESEARCH_FOLLOWUPS.md"
+          ],
+          "at": "2026-10-17T17:10:49Z",
+          "stale_reason": "delivery moved from 9dca3b1 to c85eabc"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "c85eabcc458a0c37362c00df65b18ae40d05ec01",
+          "verdict": "cleared",
+          "evidence": "Independent Codex review cleared exact delivered code. Includes valid incomplete audit compatibility, fail-closed ledger totals, unknown usage and verified denominator. 44 focused tests and full Ruff pass. Historical ledger reports reproduce 440752 and117743 tokens with not-met verdicts and no ratio. Final full suite delegated to CI; outdated local full run stopped intentionally after code changed. No engine or live experiment launched. PR81.",
+          "scope": [
+            "tools/research_usage_report.py",
+            "tests/test_research_usage_report.py",
+            "tests/test_verifier_valid_alternatives.py",
+            "docs/RESEARCH_FOLLOWUPS.md"
+          ],
+          "at": "2026-10-17T17:15:44Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [],
+      "acknowledged_at": "2026-10-17T17:02:11Z"
     }
   ],
   "receipts": [
