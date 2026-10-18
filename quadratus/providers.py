@@ -321,7 +321,8 @@ class LLMProvider:
             context = invocation_context.get() or {}
             identity = dict(seat=f'{self.name}:{self.model}', task=str(context.get('task') or 'run'),
                             role=str(context.get('role') or 'direct'),
-                            prompt_digest=hashlib.sha256((prompt or '').encode()).hexdigest()[:32])
+                            prompt_digest=hashlib.sha256((prompt or '').encode()).hexdigest()[:32],
+                            authority=str(context.get('authority') or ''))
         if control is not None and control.limits.max_cost_usd is not None:
             ticket, remaining = control.reserve(transport=self.transport,
                                                 price_key=f'{self.name}:{self.model}', identity=identity, **shape)

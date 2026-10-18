@@ -482,6 +482,9 @@ def render_story(status):
     result, events, replies = None, [], []
     if run_dir:
         result, _ = _read_json(run_dir / 'result.json')
+        if result is None and not (run_dir / 'result.json').exists():
+            from .monitor import _terminal_result
+            result, _ = _terminal_result(run_dir)
         events, _ = _tail_jsonl(run_dir / 'activity.jsonl')
         replies = _read_replies(run_dir)
     work = _task_work(events, result)

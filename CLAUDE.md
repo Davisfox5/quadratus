@@ -1798,6 +1798,44 @@ Key design decisions already settled:
   child's clean-review lift is not packet-bound, the final audit that
   follows it is; a shared store under two concurrent Sessions is refused at
   the manifest, not coordinated (root's critical 3, non-blocking).
+- **The remaining-boundary correction** (root review of 04a967d and
+  Astra's durability review, 2026-10-18) closed what the first correction
+  left as shared contracts, not sample patches. *Packet*: every record an
+  acceptance path consumes is digested whole (checks and observed checks
+  with their receipts' provenance, selection, requiredness, skips and
+  output; design checks; scratch proofs; evidence requests), and a check's
+  execution identity (environment, requirement revisions, gate, source) is
+  frozen before the command launches (`_execution_identity`) and carried
+  frozen with any drift named (`_consumed_identity`): a run is never
+  credited to a revision that did not exist when it launched, and a receipt
+  built from it binds the superseded revision, which discharges nothing
+  current. *Continuation*: any operation settled after the last quiescent
+  point and never consumed by the record refuses the resume, a read-only
+  judgment included (a NOT MET the coordinator died before parsing is not
+  asked again as if never given); the reply or outcome is retained as the
+  operation's bounded immutable receipt (`receipt-<opid>`, 64,000 chars
+  with the whole's digest) committed in the settlement generation and
+  named in the refusal, and a receipt that cannot be read back refuses on
+  its own. Only an outcome the harness itself reported (one of this
+  package's exception classes) settles an operation as failed; a suspected
+  partial turn, an interruption and any library or OS error leave it
+  uncertain. *Authority*: the authority record is committed before a
+  task's or a batch's first call (`_authority_before`) as well as at each
+  quiescent point; every operation and every budget reservation names its
+  digest; the cross-vendor requirements review is recorded beside a
+  requirement row as a review of exactly that text digest, never as the
+  human's decision receipt, so an inferred requirement is never
+  `approved` by a model and a revision the review never saw carries no
+  review. *Readers*: the committed terminal carries the goal, the
+  explicit-task semantics, each task's closing state and the budget stop,
+  and the monitor, the history and the story derive completion from it
+  when no export exists; no committed terminal is unfinished, never
+  completed. *Route*: a hypothetical gate fix is still not pre-reserved at
+  dispatch; once a real check has failed, the repair it selected (the gate
+  fix, what the task still owes, and the check's measured wall time, with
+  an unmeasured wall said so) is admitted whole before the editor writes,
+  or the failed check stands and the refusal is recorded
+  (`_gate_repair_stages`, scope `gate-repair`).
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

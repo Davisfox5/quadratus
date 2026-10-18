@@ -574,7 +574,15 @@ class EvidencePacket:
     rulings: str
     decisions: str
     authority: str
-    policy: str = "packet/1"
+    policy: str = "packet/2"
+    #: Every other evidence the audit or an acceptance path consumes, each
+    #: entry as one digest of its whole record: the design checks (final
+    #: review verdicts), the scratch proofs (status, eligibility, cases) and
+    #: the evidence requests (receipts, reassessments). Added on packet/2;
+    #: a packet built without them is a different packet.
+    design_checks: Tuple[str, ...] = ()
+    scratch_proofs: Tuple[str, ...] = ()
+    evidence_requests: Tuple[str, ...] = ()
 
     @property
     def digest(self) -> str:

@@ -33,7 +33,7 @@ from tests.lifecycle.test_delivery_controller import (
     _recheck_script,
 )
 from tests.lifecycle.test_finish_capacity import PLAN_1, PLAN_2, _script
-from tests.lifecycle.test_lifecycle_matrix import DECL_T1, DECL_T2, FILES, Script
+from tests.lifecycle.test_lifecycle_matrix import DECL_T1, DECL_T2, FILES, FIXED, Script
 from tests.lifecycle.test_step2_recovery import _commit, _episode, _interrupted, _plan
 
 CLEAN_T2 = "NO FINDINGS\nR2: MET - README.md"
@@ -194,23 +194,32 @@ def test_an_effect_interrupted_before_settlement_is_uncertain_and_refuses_the_re
 
 
 def test_an_effect_settled_after_the_last_quiescent_point_refuses_the_resume(tmp_path, monkeypatch):
-    """A parent whose committed records hold an effect settled after its
-    last quiescent point (a check that ran and settled before the process
-    died, with no checkpoint written since): the records are consistent,
-    nothing is unsettled, and the resume is still refused rather than
-    resumed over an effect the record never consumed. A late read-only
-    call is only named. (An in-session interruption after a task's check is
-    refused earlier, on the source the edit moved: the same answer.)"""
+    """A parent whose committed records hold an operation settled after its
+    last quiescent point (a reply or a check that settled before the
+    process died, with no checkpoint written since): the records are
+    consistent, nothing is unsettled, and the resume is still refused
+    rather than resumed over what the record never consumed. A read-only
+    call's settled reply is a judgment the record must consume under its
+    original identity, never re-draw: refused, with its receipt named
+    (Astra's readonly_negative control). (An in-session interruption after
+    a task's check is refused earlier, on the source the edit moved: the
+    same answer.)"""
     replay, first = _interrupted(tmp_path, monkeypatch)
     store = jobstore.JobStore(first)
     late = dict(opid="OPzz-1", purpose="model call", status="settled", owner_id="zz", allowed_effects=["read"],
-                outcome="completed", result_digest="d" * 64)
-    store.publish({"operations-zz": [late]}, session_unsettled=("zz", []))
+                outcome="completed", result_digest="d" * 64, receipt="receipt-opzz-1")
+    store.publish({"operations-zz": [late], "receipt-opzz-1": dict(opid="OPzz-1", result="R2: NOT MET - no example")},
+                  session_unsettled=("zz", []))
     assert jobstore.unsettled_operations(first) == ()
     body = checkpoint.load(first)
-    assert checkpoint._unconsumed(first, body, jobstore.read_budget(first)[0]) == ["OPzz-1"]
-    store.publish({"operations-zz": [late, dict(late, opid="OPzz-2", purpose="check", allowed_effects=["run-check"])]})
-    with pytest.raises(checkpoint.CheckpointRefused, match="settled after the last quiescent point"):
+    with pytest.raises(checkpoint.CheckpointRefused, match="OPzz-1: receipt-opzz-1"):
+        checkpoint._unconsumed(first, body, jobstore.read_budget(first)[0])
+    with pytest.raises(checkpoint.CheckpointRefused, match="never consumed by the record"):
+        _episode(replay, resume_from=first)
+    store.publish({"operations-zz": [late, dict(late, opid="OPzz-2", purpose="check", allowed_effects=["run-check"],
+                                                receipt="receipt-opzz-2")],
+                   "receipt-opzz-2": dict(opid="OPzz-2", result="1 passed")})
+    with pytest.raises(checkpoint.CheckpointRefused, match="check, model call"):
         _episode(replay, resume_from=first)
 
 
@@ -283,7 +292,22 @@ def test_a_clean_two_task_run_commits_its_terminal_with_its_acceptance_basis(tmp
                                                                                                     "R2": True}
     result = H.result_json(replay)
     assert result["job_store"]["terminal_committed"] is True and result["job_store"]["refused"] is None
-    assert acceptance["binding"] == result["requirements"]["audits"][-1]["packet"] or acceptance["binding"]
+    audit = result["requirements"]["audits"][-1]
+    # Like with like: the terminal's packet is the one the audit's own
+    # dispositions settled, its binding the audit's binding; the packet the
+    # auditor was handed is named beside them and differs where the audit
+    # closed something.
+    assert acceptance["packet"] == audit["packet_settled"] and acceptance["binding"] == audit["binding"]
+    assert audit["packet"] and acceptance["packet"] != acceptance["binding"]
+    # Every settled operation's receipt is readable from the committed
+    # generation: a check's tail and receipts, a seat's whole reply.
+    rows = [o for rows in jobstore.operation_records(run_dir).values() for o in rows]
+    check = next(o for o in rows if o["purpose"] == "check")
+    receipt = jobstore.read_record(run_dir, check["receipt"])
+    assert '"passed": true' in receipt["result"] and "1 passed" in receipt["result"]
+    lead = next(o for o in rows if o["purpose"] == "model call" and o["allowed_effects"] == ["project-write"])
+    assert "CHANGED" in jobstore.read_record(run_dir, lead["receipt"])["result"]
+    assert all(jobstore.read_record(run_dir, o["receipt"]) is not None for o in rows if o["status"] == "settled")
     assert all(o["established"] for o in result["evidence_obligations"]) and result["evidence_obligations"]
     assert all(o["status"] == "settled" and o["outcome"] == "completed" for o in result["operations"])
     assert {o["purpose"] for o in result["operations"]} >= {"model call", "check"}
@@ -291,3 +315,162 @@ def test_a_clean_two_task_run_commits_its_terminal_with_its_acceptance_basis(tmp
     assert manifest.clean and {"terminal", "checkpoint", "budget", "authority"} <= set(manifest.records)
     assert checkpoint.load(run_dir)["sealed"] is True
     assert json.loads((run_dir / "result.json").read_text())["completed"] is True
+
+
+# -- the remaining boundaries (root review of 04a967d, Astra durability review) ------------
+
+@pytest.mark.requirements_ledger
+def test_a_settled_judgment_the_record_never_consumed_is_not_asked_again_on_resume(tmp_path, monkeypatch):
+    """Astra's readonly_negative control through the real controller: the
+    final audit's reply (a NOT MET) settles, both operation layers settle,
+    and the coordinator dies before the audit consumer folds it into the
+    record. The resume is refused, the reply is retained as the settled
+    operation's receipt and named, and no second audit is drawn."""
+    original = Session._apply_acceptance
+    fired = []
+
+    def die_before_consumption(self, found, audited):
+        if not fired:
+            fired.append(True)
+            raise KeyboardInterrupt
+        return original(self, found, audited)
+    monkeypatch.setattr(Session, "_apply_acceptance", die_before_consumption)
+    script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
+    script.overrides["auditor"] = lambda call, replay: ("R1: MET - app.py\nR2: NOT MET - README lacks the example the "
+                                                        "goal asks for; at README.md; example: none")
+    # Three slots: the planner's DONE after t2 follows a quiescent point, so
+    # the source the checkpoint holds is the delivered one and the only
+    # thing between the checkpoint and the death is the settled judgment.
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, record_complete=False)
+    assert "KeyboardInterrupt" in replay.result.error and replay.of("auditor")
+    run_dir = _run_dir(replay)
+    assert checkpoint.load(run_dir)["identities"]["source"] == H.result_json(replay)["source_fingerprint"]
+    assert checkpoint.load(run_dir)["state"].get("_final_audit") is None, "the audit never reached the record"
+    rows = [o for rows in jobstore.operation_records(run_dir).values() for o in rows]
+    negative = [o for o in rows if o["status"] == "settled" and o["receipt"]
+                and "R2: NOT MET" in (jobstore.read_record(run_dir, o["receipt"]) or {}).get("result", "")]
+    assert len(negative) == 1 and negative[0]["purpose"] == "model call", "the NOT MET is retained as a receipt"
+    with pytest.raises(checkpoint.CheckpointRefused, match="never consumed by the record") as refused:
+        _episode(replay, resume_from=run_dir, max_tasks=3)
+    assert negative[0]["receipt"] in str(refused.value) and "not re-drawn" in str(refused.value)
+    assert len(replay.of("auditor")) == 1, "no second audit was drawn"
+    budget = jobstore.read_budget(run_dir)[0]
+    raw = [o for o in budget["operations"]["settled"] if o["identity"]["role"] == "auditor"]
+    assert raw and "R2: NOT MET" in jobstore.read_record(run_dir, raw[0]["receipt"])["reply"]
+
+
+@pytest.mark.requirements_ledger
+def test_the_approval_authority_is_committed_before_the_first_call_and_named_by_every_operation(tmp_path, monkeypatch):
+    """Astra's ordering control on 04a967d: at the first lead dispatch the
+    committed authority record held no requirements. It now holds the
+    requirements as revisions, with the cross-vendor review recorded as a
+    review of exactly those texts and never as the human's decision, and
+    every operation's identity names its digest."""
+    seen = {}
+    original = Session._invoke_model
+
+    def capture(self, key, prompt, **kw):
+        if (invocation_context.get() or {}).get("role") == "lead" and "lead" not in seen:
+            seen["lead"] = jobstore.read_record(self.config.job_store.run_dir, "authority")
+        return original(self, key, prompt, **kw)
+    monkeypatch.setattr(Session, "_invoke_model", capture)
+    replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2), files=FILES, max_tasks=2,
+                   record_complete=False)
+    assert replay.result.completed, replay.result.error
+    record = seen["lead"]
+    rows = {r["rid"]: r for r in record["requirements"]}
+    assert set(rows) == {"R1", "R2"} and record["policy"] == "authority/2"
+    assert all(r["origin"] == "inferred" and r["decision_receipt"] is None and r["approved"] is False
+               for r in rows.values()), "a model review is not the human's consent"
+    assert all(r["review"]["reviewer"] == "openai:gpt-5.6-sol" and r["review"]["text_digest"] == r["text_digest"]
+               for r in rows.values())
+    run_dir = _run_dir(replay)
+    budget = jobstore.read_budget(run_dir)[0]
+    lead = next(o for o in budget["operations"]["settled"] if o["identity"]["role"] == "lead")
+    assert lead["identity"]["authority"] == record["digest"]
+    rows_ops = [o for rows in jobstore.operation_records(run_dir).values() for o in rows]
+    assert rows_ops and all(o["identity"]["authority"] for o in rows_ops)
+    assert {o["identity"]["authority"] for o in rows_ops if o["purpose"] == "model call"} >= {record["digest"]}
+
+
+@pytest.mark.requirements_ledger
+def test_the_repair_route_after_a_failed_check_is_admitted_before_the_editor_writes(tmp_path, monkeypatch):
+    """Root's narrowed route finding on 04a967d: a hypothetical gate fix is
+    not pre-reserved at dispatch, but once the real check has failed the
+    repair, the check that judges it and what the task still owes are
+    admitted whole before the editor writes. Unpayable, the failed check
+    stands and the refusal is recorded; the gate's wall time counts only
+    when measured, and says so when it is not."""
+    from tests.lifecycle.test_finish_capacity import README
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return "Implemented add.\nCHANGED: []"
+        H.write(call, {"README.md": README})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    def gate_fix(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Fixed add.\nCHANGED: ["app.py"]'
+    script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
+    script.overrides["lead"] = lead
+    script.overrides["gate-fix"] = gate_fix
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
+    assert replay.result.completed, replay.result.error
+    assert len(replay.of("gate-fix")) == 1
+    repair = [a for a in H.result_json(replay)["plan_admissions"] if a["scope"] == "gate-repair"]
+    assert len(repair) == 1 and repair[0]["task"] == "t1" and repair[0]["feasible"]
+    assert repair[0]["stages"] == ["gate fix(editing/write)", "close-out(reserve)"]
+    assert repair[0]["wall_known"] is True and repair[0]["wall_extra"] > 0, "the failed run measured the gate"
+    assert "unmeasured" not in repair[0]["detail"]
+
+    (tmp_path / "short").mkdir()
+    from quadratus import delivery
+    monkeypatch.setattr(Session, "_gate_repair_stages", lambda self, spec, gate, kind: [
+        delivery.PlanStage("gate fix", "editing", editing=True)] + [
+        delivery.PlanStage(f"owed {n}", "reserve") for n in range(300)])
+    short = H.run(tmp_path / "short", monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
+    assert not short.result.completed and not short.of("gate-fix"), "no editor wrote on an unpayable route"
+    result = H.result_json(short)
+    refusal = [r for r in result["finish_refusals"] if r["what"] == "gate fix"][-1]
+    assert "repair route after the failed check cannot be paid whole" in refusal["detail"]
+    assert result["checks"][-1]["passed"] is False, "the failed check stands"
+    assert (short.project / "app.py").read_text() == FILES["app.py"]
+
+
+@pytest.mark.requirements_ledger
+def test_combined_debt_names_every_reason_and_commits_an_incomplete_terminal(tmp_path, monkeypatch):
+    """The composite negative through the real controller (V23): one
+    requirement carries an executed obligation the auditor finds
+    insufficient and an open review finding the auditor keeps; the other
+    is met. Every reason is on the acceptance, the obligation and the
+    finding keep their own states, and the committed terminal says
+    incomplete with both reasons."""
+    script = _http_script("tests/test_http.py - the sandbox denied binding 127.0.0.1")
+    script.overrides["collaborator"] = lambda call, replay: (
+        "BLOCKING: the handler ignores query parameters | impact: other\n"
+        "R1: MET - app.py\nR2: MET - tests/test_http.py")
+    script.overrides["recheck"] = lambda call, replay: "RFT1-1: UNRESOLVED still ignores them"
+
+    def auditor(call, replay):
+        lines = ["R1: MET - app.py", "R2: MET - tests/test_http.py", "RFT1-1: UNRESOLVED it stands"]
+        for oid in dict.fromkeys(re.findall(r"^- (O\d+) \(", call.prompt, re.MULTILINE)):
+            if "tests/test_http.py" in call.prompt.split(f"- {oid} (", 1)[1].split("\n", 1)[0]:
+                lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
+        return "\n".join(lines)
+    script.overrides["auditor"] = auditor
+    replay = H.run(tmp_path, monkeypatch, script, files=HTTP_FILES, check=GATE_FILES, max_tasks=1,
+                   lead_runs_commands=False, record_complete=False)
+    assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
+    typed = next(o for o in _obligations(replay) if o["kind"] == "not_run")
+    assert typed["execution"] == "ran" and typed["sufficiency"] == "insufficient"
+    finding = _findings(replay)["RFT1-1"]
+    assert finding["state"] == "unresolved" and finding["audit_carried"] and finding["history"][-1]["role"] == "audit"
+    audit = H.result_json(replay)["requirements"]["audits"][-1]
+    reasons = audit["acceptance"]["R2"]["reasons"]
+    assert any(f"{typed['oid']}: sufficiency insufficient" == r for r in reasons)
+    assert any(r.startswith("RFT1-1: open") for r in reasons)
+    assert audit["acceptance"]["R1"]["met"] is False, "the obligation and the finding bind R1 too"
+    terminal = jobstore.read_terminal(_run_dir(replay))
+    assert terminal["completed"] is False and terminal["acceptance"]["requirements"]["R2"]["reasons"] == reasons
+    assert "RFT1-1" in replay.result.error or "R2" in replay.result.error

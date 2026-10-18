@@ -542,6 +542,11 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
         status["last_write"] = f"{_iso(last_write)} ({_age(now - last_write)})"
 
     result, result_problem = _read_json(run_dir / "result.json")
+    if result is None and not (run_dir / "result.json").exists():
+        # No export: the committed terminal, when the run committed one, is
+        # the outcome (the crash boundary between the committed terminal
+        # and the compatibility export).
+        result, result_problem = _terminal_result(run_dir)
     status["finished"] = result is not None or (run_dir / "result.json").exists()
 
     _fill_calls(status, mark, run_dir, now)
@@ -702,6 +707,24 @@ def _fill_terminal(status, mark, run_dir: Path, result, problem) -> None:
         result, "the plan was declined, the task limit was reached, or findings/checks remain open")
 
 
+def _terminal_result(run_dir: Path):
+    """A result-shaped view of the committed terminal record, for a run
+    whose export is missing: ``(result, problem)``; ``(None, why)`` when the
+    run committed no terminal or its state is corrupt."""
+    from .jobstore import GenerationCorrupt, read_manifest, read_terminal
+    try:
+        manifest = read_manifest(run_dir)
+        terminal = read_terminal(run_dir) if manifest is not None else None
+    except GenerationCorrupt as exc:
+        return None, f"the run's committed state is corrupt: {exc}"
+    if terminal is None:
+        return None, "result.json: FileNotFoundError"
+    return dict(completed=bool(terminal.get("completed")), error=terminal.get("error") or "",
+                explicit_tasks=terminal.get("explicit_tasks"), goal=terminal.get("goal"),
+                budget=dict(stop_reason=terminal.get("budget_stop_reason") or ""),
+                tasks=terminal.get("tasks") or [], committed_terminal=True), ""
+
+
 def _committed_terminal(run_dir: Path, result: Dict[str, Any]):
     """The completion a reader may act on: when the run has a committed
     manifest, its terminal record decides and result.json is an export;
@@ -750,8 +773,14 @@ def _history_row(run_dir: Path) -> Dict[str, Any]:
     result_path = run_dir / "result.json"
     result, problem = _read_json(result_path)
     if result is None and not result_path.exists():
+        result, problem = _terminal_result(run_dir)
+    if result is None and not result_path.exists():
         row["status"] = "unfinished"
         row["stop_reason"] = "no result.json"
+    elif result is not None and result.get("committed_terminal") and not result_path.exists():
+        manifest_path = run_dir / "manifest.json"
+        row["ended"] = _iso(_mtime(manifest_path)) or UNKNOWN
+        row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
     elif result is None:
         row["ended"] = _iso(_mtime(result_path)) or UNKNOWN
         row["status"] = UNKNOWN

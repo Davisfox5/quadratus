@@ -461,45 +461,50 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
 
 def _unconsumed(run_dir, body: dict, budget: dict) -> list:
     """Operations that settled after the quiescent point this checkpoint
-    recorded (its ``watermark``) and were never consumed by the record. A
-    settled model call that held the write grant, and any harness effect
-    (a check, a capture, a probe, a fixture write, an evidence run), may
-    have changed something the record does not know: the resume is refused
-    rather than repeated. A read-only model call's lost reply is a judgment
-    the new episode asks again; those are returned, named, for the lineage.
+    recorded (its ``watermark``) and were never consumed by the record.
+    Any of them refuses the resume: a call that held the write grant or a
+    harness effect may have changed what the record does not know, and a
+    settled judgment (an audit, a review, a recheck: a NOT MET, a blocking
+    finding) would otherwise be asked again as if it had never been given
+    (Astra's readonly_negative control on 04a967d). Nothing is re-drawn:
+    the reply is retained as the operation's receipt, named here for the
+    operator, and must itself be readable from the committed generation.
     A checkpoint written before watermarks existed carries none and is read
-    as before."""
+    as before. Returns [] when nothing is unconsumed."""
     from . import jobstore
     watermark = body.get("watermark")
     if not isinstance(watermark, dict):
         return []
     settled = ((budget.get("operations") or {}).get("settled") or [])
-    extra = settled[int(watermark.get("budget_settled") or 0):]
-    editing = [o.get("opid") for o in extra if isinstance(o, dict) and o.get("editing")]
-    if editing:
-        raise CheckpointRefused(f"{len(editing)} editing call(s) settled after the last quiescent point and were "
-                                f"never consumed by the record ({', '.join(map(str, editing[:5]))}); their edits "
-                                "are not reconciled, so the run is not resumed")
+    extra = [o for o in settled[int(watermark.get("budget_settled") or 0):] if isinstance(o, dict)]
     try:
         records = jobstore.operation_records(run_dir)
     except jobstore.GenerationCorrupt as exc:
         raise CheckpointRefused(f"the parent's committed state is corrupt: {exc}") from exc
     held = dict(watermark.get("session_settled") or {})
-    named = [str(o.get("opid")) for o in extra if isinstance(o, dict)]
+    late = list(extra)
     for owner, rows in records.items():
         done = [o for o in rows if isinstance(o, dict) and o.get("status") == "settled"]
-        late = done[int(held.get(owner) or 0):]
-        # A read-only model call that settled late lost only its reply, which
-        # the new episode asks again; any other effect may have changed what
-        # the record does not know.
-        effects = [str(o.get("opid")) for o in late
-                   if set(o.get("allowed_effects") or ()) - {"read"} or o.get("outcome") == "failed"]
-        if effects:
-            raise CheckpointRefused(f"{len(effects)} harness effect(s) settled after the last quiescent point and "
-                                    f"were never consumed by the record ({', '.join(effects[:5])}); their outcome "
-                                    "is not reconciled, so the run is not resumed")
-        named += [str(o.get("opid")) for o in late]
-    return named
+        late += done[int(held.get(owner) or 0):]
+    if not late:
+        return []
+    receipts = []
+    for op in late:
+        name = str(op.get("receipt") or "")
+        if not name:
+            receipts.append(f"{op.get('opid')}: no receipt recorded")
+            continue
+        try:
+            record = jobstore.read_record(run_dir, name)
+        except jobstore.GenerationCorrupt as exc:
+            raise CheckpointRefused(f"the receipt of settled operation {op.get('opid')} ({name}) is not readable "
+                                    f"from the committed generation: {exc}; the run is not resumed") from exc
+        receipts.append(f"{op.get('opid')}: {name}" + ("" if record is not None else " (missing)"))
+    kinds = sorted({str(o.get("purpose") or ("editing call" if o.get("editing") else "model call")) for o in late})
+    raise CheckpointRefused(f"{len(late)} operation(s) settled after the last quiescent point and were never "
+                            f"consumed by the record ({', '.join(kinds)}); their replies and outcomes are "
+                            f"retained as receipts ({'; '.join(receipts[:6])}) and are not re-drawn, so the run "
+                            "is not resumed")
 
 
 def _same_authority(run_dir, body: dict) -> None:

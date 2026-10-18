@@ -54,6 +54,7 @@ def _packet(**over):
     ("findings", (("RF1", "open", "b7"),)), ("findings", (("RF1", "resolved", ""),)),
     ("obligations", (("O1", "ran", "unjudged", "r1"),)), ("obligations", (("O1", "ran", "sufficient", "r2"),)),
     ("rulings", "ru2"), ("decisions", "de2"), ("authority", "au2"), ("policy", "packet/0"),
+    ("design_checks", ("d1",)), ("scratch_proofs", ("s1",)), ("evidence_requests", ("e1",)),
 ])
 def test_the_packet_digest_moves_with_any_field(field, value):
     base = _packet()
@@ -285,21 +286,204 @@ def test_a_tampered_manifest_is_corrupt_not_an_older_generation(tmp_path):
         store.current()
 
 
-def test_a_late_effect_refuses_the_resume_where_a_late_read_only_call_is_only_named(tmp_path):
+def test_any_settled_operation_the_record_never_consumed_refuses_the_resume_and_names_its_receipt(tmp_path):
+    """A settled read-only call is a judgment as much as an effect is an
+    effect: a NOT MET the coordinator died before parsing is not asked
+    again as if never given (Astra's readonly_negative control). The
+    receipt is named, must be readable from the committed generation, and
+    is never re-drawn."""
     store = jobstore.JobStore(tmp_path)
     budget = {"operations": {"started": [], "settled": []}}
 
     def op(n, purpose, effects, outcome="completed"):
         return dict(opid=f"OPab-{n}", purpose=purpose, status="settled", owner_id="ab", allowed_effects=effects,
-                    outcome=outcome)
-    store.publish({"budget": budget, "operations-ab": [op(1, "check", ["run-check"]), op(2, "model call", ["read"])]},
+                    outcome=outcome, receipt=f"receipt-opab-{n}")
+    receipt = dict(opid="OPab-2", result="R1: NOT MET - app.py: observed data-loss on import")
+    store.publish({"budget": budget, "operations-ab": [op(1, "check", ["run-check"]), op(2, "model call", ["read"])],
+                   "receipt-opab-1": dict(opid="OPab-1", result="1 passed"), "receipt-opab-2": receipt},
                   session_unsettled=("ab", []))
+    consumed = dict(watermark=dict(budget_settled=0, session_settled={"ab": 2}))
+    assert checkpoint._unconsumed(tmp_path, consumed, budget) == []
     body = dict(watermark=dict(budget_settled=0, session_settled={"ab": 1}))
-    assert checkpoint._unconsumed(tmp_path, body, budget) == ["OPab-2"], "a lost reply is asked again"
+    with pytest.raises(checkpoint.CheckpointRefused, match="never consumed") as refused:
+        checkpoint._unconsumed(tmp_path, body, budget)
+    assert "model call" in str(refused.value) and "OPab-2: receipt-opab-2" in str(refused.value)
+    assert "not re-drawn" in str(refused.value)
+    assert jobstore.read_record(tmp_path, "receipt-opab-2")["result"].startswith("R1: NOT MET")
+    # A late effect refuses the same way, and a receipt that cannot be read
+    # back from the generation refuses on its own account.
     store.publish({"operations-ab": [op(1, "check", ["run-check"]), op(2, "model call", ["read"]),
                                      op(3, "observed check", ["run-check"])]})
-    with pytest.raises(checkpoint.CheckpointRefused, match="settled after the last quiescent point"):
+    with pytest.raises(checkpoint.CheckpointRefused, match="observed check"):
         checkpoint._unconsumed(tmp_path, body, budget)
-    store.publish({"operations-ab": [op(1, "check", ["run-check"]), op(2, "model call", ["read"], outcome="failed")]})
-    with pytest.raises(checkpoint.CheckpointRefused, match="never consumed"):
+    path = tmp_path / jobstore.G.record_path("receipt-opab-2", jobstore.read_manifest(tmp_path).records["receipt-opab-2"])
+    path.write_text("{}")
+    with pytest.raises(checkpoint.CheckpointRefused, match="not readable from the committed generation"):
         checkpoint._unconsumed(tmp_path, body, budget)
+
+
+# --- the remaining boundaries (root review of 04a967d, Astra durability review) ---------
+
+@pytest.mark.parametrize("field", ["design", "scratch", "receipt_output"])
+def test_every_evidence_the_audit_consumes_is_in_the_packet(tmp_path, field):
+    """Root's three Session controls on 04a967d: a final design review,
+    an eligible scratch proof and a nested receipt's output each changed
+    under an equal binding and the earlier approval was reused. The packet
+    now digests each record whole."""
+    s, prompts = _session(tmp_path, f"R1: MET - {UNIT}\nR5: NOT MET - no console check\n")
+    if field == "design":
+        s.design_checks.append(dict(task="t1", screenshots=["actual-desktop.png"], verified=True,
+                                    final_review=dict(reviewer="openai:independent", verdict="APPROVED")))
+    elif field == "scratch":
+        s.scratch_proofs.append(dict(task="t1", peer="openai:independent", status="passed", eligible=True,
+                                     requirements=["R1"],
+                                     identity=s._scratch_identity(s._source_fingerprint(), s._current_checks_digest()),
+                                     cases=["test_unit.py::test_add"]))
+    else:
+        s.checks.append(dict(passed=True, source=s._source_fingerprint(), command="gate suite", gate="g",
+                             receipts=[dict(id="actual-required", status="passed", reason="", tests=1,
+                                            command="python -m pytest test_unit.py", output="1 passed, 0 skipped",
+                                            required=True)]))
+    first = s._audit_requirements(final=True)
+    assert first["R1"][0] and len(prompts) == 1
+    before = s._audit_binding(None)
+    if field == "design":
+        s.design_checks[0]["final_review"]["verdict"] = "BLOCKING: control is inaccessible"
+    elif field == "scratch":
+        s.scratch_proofs[0]["status"] = "failed"
+    else:
+        s.checks[0]["receipts"][0]["output"] = "1 passed, 1 skipped"
+    assert s._audit_binding(None) != before, f"{field} is in the packet"
+    s._audit_requirements(final=True)
+    assert len(prompts) == 2, f"{field} changed: the independent auditor is asked about the changed evidence"
+
+
+def test_a_check_is_credited_to_the_requirement_revisions_frozen_when_it_launched(tmp_path, monkeypatch):
+    """Root's execution-identity control on 04a967d: a real local command
+    passes, the requirement is revised before the result is consumed, and
+    the record must not be credited to the revision that did not exist
+    when the command ran. The record carries the frozen revision and names
+    the drift; a receipt built from it binds the superseded revision."""
+    import sys
+    from types import SimpleNamespace
+
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import SessionConfig
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "app.py").write_text("def add(a, b): return a + b\n")
+    gate = IntegrationGate([sys.executable, "-c", 'assert 1 + 2 == 3; print("1 passed")'], cwd=project,
+                           minimum_tests=1)
+    s = Session("Implement addition", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
+                config=SessionConfig(project=project, integration_gate=gate, requirements_ledger=True))
+    s.memory.ledger.requirements["R1"] = "Addition returns the sum"
+    before = s._requirement_revisions()["R1"]
+    actual = gate.run
+
+    def changed_after_execution():
+        result = actual()
+        assert result.passed, "the real local check passes"
+        s.memory.ledger.requirements["R1"] = "Addition additionally exposes a documented API"
+        return result
+    monkeypatch.setattr(gate, "run", changed_after_execution)
+    s._observe_checks(SimpleNamespace(task_id="t1"), "review")
+    assert len(s.review_checks) == 1
+    current = s._requirement_revisions()["R1"]
+    assert current > before
+    record = s.review_checks[0]
+    assert record["passed"] and record["requirements"]["R1"] == before, "credited to the revision it ran under"
+    assert "R1 1->2" in record["identity_drift"]
+    receipt = Session._receipt_identity(record, dict(requirements=[["R1", current]]))
+    assert receipt["requirements"] == [["R1", before]], "a receipt from it binds the superseded revision"
+    # The task check path freezes the same way: the record appended after
+    # the run carries the launch identity, with the drift named.
+    s.memory.ledger.requirements["R1"] = "Addition returns the sum, revised again"
+    launch = s._requirement_revisions()["R1"]
+    monkeypatch.setattr(gate, "run", changed_after_execution)
+    result = s._check(gate)
+    assert result.passed and s._last_check_identity["requirements"]["R1"] == launch
+    consumed = s._consumed_identity(s._last_check_identity)
+    assert consumed["requirements"]["R1"] == launch and "R1" in consumed["identity_drift"]
+
+
+def test_only_an_outcome_the_harness_reported_settles_an_operation_as_failed(tmp_path):
+    """A library or OS error inside an effect proves nothing about what the
+    effect did: the operation stays uncertain. The harness's own exception
+    classes are reported outcomes and settle as failed, with the failure in
+    the receipt; a suspected partial turn is not one of them."""
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.providers import PartialWorkSuspected, ProviderError
+    from quadratus.session import PartialWorkStopped, SessionConfig
+    store = jobstore.JobStore(tmp_path / "run")
+    s = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "", config=SessionConfig(job_store=store))
+    for exc, expected in ((TimeoutError("no answer"), "uncertain"), (OSError("disk"), "uncertain"),
+                          (PartialWorkSuspected("cut off"), "uncertain"),
+                          (PartialWorkStopped("stopped by the harness"), "settled"),
+                          (ProviderError("the transport reported a failure"), "settled")):
+        with pytest.raises(type(exc)):
+            with s._operation("probe", inputs=dict(what=repr(exc)), effects=("run-probe",)):
+                raise exc
+        record = s.operations[-1]
+        assert record["status"] == expected, repr(exc)
+        if expected == "settled":
+            assert record["outcome"] == "failed"
+            receipt = jobstore.read_record(tmp_path / "run", record["receipt"])
+            assert type(exc).__name__ in receipt["result"] and receipt["identity"]["authority"]
+        else:
+            assert record["outcome"] == "interrupted" and record["result_digest"] is None
+            assert record["opid"] in jobstore.read_manifest(tmp_path / "run").unsettled
+
+
+def test_a_settled_effects_receipt_is_readable_from_the_settlement_generation(tmp_path):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import SessionConfig
+    store = jobstore.JobStore(tmp_path / "run")
+    s = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "", config=SessionConfig(job_store=store))
+    with s._operation("check", inputs=dict(task="t1"), effects=("run-check",)) as op:
+        op["result"] = dict(passed=False, output="FAILED tests/test_app.py::test_add - assert 0 == 3 (unique-7f3a)")
+    record = s.operations[-1]
+    manifest = jobstore.read_manifest(tmp_path / "run")
+    assert record["status"] == "settled" and record["receipt"] in manifest.records
+    receipt = jobstore.read_record(tmp_path / "run", record["receipt"])
+    assert "unique-7f3a" in receipt["result"] and receipt["chars"] == len(receipt["result"])
+    assert not receipt["truncated"] and receipt["full_digest"]
+    with s._operation("model call", inputs=dict(task="t1"), effects=("read",)) as op:
+        op["result"] = "x" * (Session._RECEIPT_CHARS + 10)
+    bounded = jobstore.read_record(tmp_path / "run", s.operations[-1]["receipt"])
+    assert bounded["truncated"] and len(bounded["result"]) == Session._RECEIPT_CHARS
+    assert bounded["chars"] == Session._RECEIPT_CHARS + 10
+
+
+def test_readers_derive_completion_from_the_committed_terminal_when_no_export_exists(tmp_path):
+    """Astra's reader control on 04a967d: the crash boundary between the
+    committed terminal and the compatibility export. The monitor, the
+    history and the story read the terminal."""
+    from quadratus import monitor, monitor_story
+    root = tmp_path / "project"
+    run_dir = root / ".quadratus" / "runs" / "20261018T000000Z-abcd1234"
+    run_dir.mkdir(parents=True)
+    store = jobstore.JobStore(run_dir)
+    body = dict(version=checkpoint.VERSION, lineage={}, sealed=False, resumable=True, uncarried=[], consumed=None,
+                identities={}, state={}, written="now")
+    assert checkpoint.write(run_dir, body, store=store, budget_snapshot={"reserved_attempts": 3})
+    terminal = dict(completed=True, error="", interrupted=False, goal="Build the feature.", explicit_tasks=None,
+                    tasks=[dict(task_id="t1", outcome="closed")], budget_stop_reason="", acceptance=None)
+    assert checkpoint.seal(run_dir, "completed", store=store, extra={"terminal": terminal})
+    assert not (run_dir / "result.json").exists()
+    status = monitor.read_status(root)
+    assert status["finished"] is True and status["terminal_status"] == "complete"
+    assert status["stop_reason"] == "goal reported complete"
+    row = monitor._history_row(run_dir)
+    assert row["status"] == "complete" and row["stop_reason"] == "goal reported complete" and row["ended"] != "unknown"
+    html = monitor_story.render_story(status)
+    assert "Completed" in html and "has not finished" not in html
+    # Listed tasks: the committed terminal says the goal was not judged.
+    listed = dict(terminal, explicit_tasks=dict(listed=2, goal_judged=False))
+    store.publish({"terminal": listed})
+    assert monitor._history_row(run_dir)["status"] == "listed tasks complete"
+    # No terminal committed: unfinished, never completed.
+    bare = tmp_path / "bare" / ".quadratus" / "runs" / "20261018T000001Z-00000000"
+    bare.mkdir(parents=True)
+    jobstore.JobStore(bare).publish({"budget": {"reserved_attempts": 0}})
+    assert monitor._history_row(bare)["status"] == "unfinished"
+    assert monitor.read_status(tmp_path / "bare")["finished"] is False

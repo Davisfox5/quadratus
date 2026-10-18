@@ -610,9 +610,19 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # what the run ended as and the acceptance basis it ended on, in the
     # same generation as the sealed checkpoint. A run whose terminal state
     # cannot be committed has not finished, whatever memory says.
+    explicit_record = _explicit_record(session, completed)
     terminal = dict(completed=completed, error=error, interrupted=interrupted,
                     acceptance=(session._acceptance_record() if session and hasattr(session, '_acceptance_record')
-                                else None), written=datetime.now(timezone.utc).isoformat())
+                                else None), written=datetime.now(timezone.utc).isoformat(),
+                    # What a reader needs when no export exists: the goal,
+                    # whether the goal was judged or only listed tasks ran,
+                    # and each task's closing state.
+                    goal=goal, explicit_tasks=(dict(listed=explicit_record.get('listed'),
+                                                    goal_judged=explicit_record.get('goal_judged'))
+                                               if explicit_record else None),
+                    tasks=[dict(task_id=s.task_id, outcome=getattr(s, 'outcome', 'closed'))
+                           for s in (getattr(session, 'history', None) or [])] if session else [],
+                    budget_stop_reason=(budget.snapshot().get('stop_reason') if budget is not None else None))
     if interrupted:
         try:
             job_store.publish({'terminal': terminal})

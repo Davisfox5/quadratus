@@ -116,8 +116,12 @@ def record_invocation(ledger, event):
 
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
-               evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None):
+               evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None, authority=None):
     context = dict(task=task, role=role, origin=origin)
+    if authority:
+        # The committed approval authority (requirements, rulings, decisions)
+        # the call runs under; the provider names it on the reservation.
+        context["authority"] = str(authority)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
     if worker_tool:
