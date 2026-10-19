@@ -163,7 +163,9 @@ def test_the_decomposition_prompt_asks_for_final_text_and_a_split_estimate(tmp_p
                       config=SessionConfig(project=tmp_path, allow_writes=True))
     session.next_task()
     text = prompts[0]
-    assert "Estimate code lines and test lines separately" in text
+    assert "Size the implementation and its executed proof together" in text
+    assert "estimate implementation lines, proof lines" in text and '"estimate": {"implementation": 45' in text
+    assert "never describe a delivery whose tests are only deferred" in text
     assert "The description is final text" in text
     assert "exactly one signature" in text and "verbatim" in text
 
@@ -249,3 +251,40 @@ def test_review_only_is_declared_not_inferred_from_a_small_ceiling():
     for bad in ("some", True, None, ""):
         with pytest.raises(ValueError, match='edits must be "none"'):
             read_scope(_declaration(FINAL, edits=bad), max_lines=100)
+
+
+# -- the optional SCOPE estimate: strict when given, unknown when not ------------------------
+
+def test_an_estimate_is_read_strictly_rendered_and_kept_but_widens_nothing():
+    estimate = {"implementation": 45, "proof": 45, "setup": 10}
+    scope, _body = read_scope(_declaration(FINAL, max_lines=100, estimate=estimate), max_lines=100)
+    assert scope.estimate == estimate and scope.max_lines == 100
+    assert scope.to_dict()["estimate"] == estimate
+    rendered = scope.render()
+    assert "implementation 45, proof 45, setup 10" in rendered and "every line counts the same" in rendered
+    # The measured bound is max_lines and its 1.5 stop, whatever the split says.
+    diff = "+++ b/app.py\n" + "+x\n" * 93 + "+++ b/tests/test_app.py\n" + "+y\n" * 60
+    report = scope.assess(diff)
+    assert (report.changed_lines, report.code_lines, report.test_lines) == (153, 93, 60)
+    assert report.oversized and report.max_lines == 100
+
+
+@pytest.mark.parametrize("estimate, reason", [
+    ({"implementation": 45, "proof": 45}, "exactly implementation, proof and setup"),
+    ({"implementation": 45, "proof": 45, "setup": 10, "docs": 0}, "exactly implementation, proof and setup"),
+    ({"implementation": True, "proof": 89, "setup": 10}, "non-negative integer"),
+    ({"implementation": -5, "proof": 95, "setup": 10}, "non-negative integer"),
+    ({"implementation": 45.0, "proof": 45, "setup": 10}, "non-negative integer"),
+    ({"implementation": 40, "proof": 40, "setup": 10}, "must equal max_lines"),
+    (["implementation", "proof", "setup"], "exactly implementation, proof and setup"),
+])
+def test_a_malformed_estimate_is_refused_not_read_as_a_lower_figure(estimate, reason):
+    with pytest.raises(ValueError, match=reason):
+        read_scope(_declaration(FINAL, max_lines=100, estimate=estimate), max_lines=100)
+
+
+def test_a_declaration_without_an_estimate_is_unknown_and_unchanged():
+    scope, _body = read_scope(_declaration(FINAL), max_lines=100)
+    assert scope.estimate is None and "estimate" not in scope.to_dict()
+    assert "planner's split" not in scope.render()
+    assert TaskScope(max_lines=50).estimate is None

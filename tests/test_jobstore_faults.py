@@ -214,3 +214,32 @@ def test_a_route_forfeit_is_carried_through_the_checkpoint_and_absent_from_older
     state.pop("_route_forfeit")
     checkpoint.restore_state(older, state)
     assert older._route_forfeit is None
+
+
+def test_a_terminal_commitment_survives_the_checkpoint_and_dispatches_no_ordinary_work(tmp_path, monkeypatch):
+    """The job's commitment to end after one task (admission/3) is carried;
+    a resumed episode reads it and goes to the cap's decision without
+    asking for, or running, another task. Older checkpoints carry none."""
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "", config=SessionConfig())
+    record = dict(task="t2", reason="its ordinary route could not be paid", selected="4 call(s)",
+                  slots_used=2, relinquished=1, max_tasks=3)
+    session._terminal_route = dict(record)
+    session._slots_used = 2
+    state = checkpoint.capture_state(session)
+    assert state["_terminal_route"] == record
+    fresh = Session("goal", ArtifactStore(tmp_path / "b"), lambda *a, **k: "", config=SessionConfig())
+    checkpoint.restore_state(fresh, state)
+    assert fresh._terminal_route == record and fresh._terminal_committed()
+    decided = []
+    monkeypatch.setattr(fresh, "next_task", lambda *a, **k: (_ for _ in ()).throw(AssertionError("planned")))
+    monkeypatch.setattr(fresh, "_completion_decision", lambda site, n: decided.append((site, n)) or None)
+    monkeypatch.setattr(fresh, "_apply_completion", lambda decision: None)
+    monkeypatch.setattr(fresh, "_recheck_resolved_findings", lambda: None)
+    fresh.run(max_tasks=3)
+    assert decided == [("cap", 3)] and fresh._slots_used == 2, "straight to the cap's decision, slots as spent"
+    older = Session("goal", ArtifactStore(tmp_path / "c"), lambda *a, **k: "", config=SessionConfig())
+    state.pop("_terminal_route")
+    checkpoint.restore_state(older, state)
+    assert older._terminal_route is None and not older._terminal_committed()

@@ -597,14 +597,20 @@ _SCOPE_REQUEST = (
     '"edits": "none" to SCOPE; its findings then go to separately scoped tasks. '
     'These bounds are measured after every editing call; an overrun stops the task '
     'with its work preserved. The line estimate has 50 percent tolerance. '
-    'Estimate code lines and test lines separately and set max_lines to their sum: '
-    'test lines count in full, and a named list of test scenarios is usually the '
-    'larger half. A new test file also pays a fixed setup cost before its first '
-    'case: imports, fixtures, and stubs or fakes for what the environment lacks '
-    '(a DOM, a browser API, a server, a clock). Count that setup too. When the setup '
-    'alone would take about a third of max_lines or more, make it its own earlier '
-    'task (the harness and one smoke case) and let the behaviour task add cases to '
-    'it. The description is final text: write it once, with no revisions, '
+    'Size the implementation and its executed proof together: every requirement the '
+    'task COVERS is delivered in this task only with the executed tests that prove it '
+    '(for an error or refusal requirement, a passing case per rejecting path), so '
+    'estimate implementation lines, proof lines (the named cases: usually the larger '
+    'half) and the fixed setup a new test file pays before its first case (imports, '
+    'fixtures, stubs or fakes for what the environment lacks) separately, and set '
+    'max_lines to their sum. You may state that split as '
+    '"estimate": {"implementation": 45, "proof": 45, "setup": 10} inside SCOPE: exactly '
+    'those three keys, exact non-negative integers, summing to max_lines; it is kept on '
+    'the record and widens nothing. If the implementation and its proof do not fit '
+    'together, narrow what the task COVERS to what it proves and leave the rest '
+    'uncovered for a later task; never describe a delivery whose tests are only '
+    'deferred. Name the proof scenarios concretely in acceptance. '
+    'The description is final text: write it once, with no revisions, '
     'alternatives or thinking aloud; if you change your mind, rewrite the line. Give '
     'each function exactly one signature, and quote that signature verbatim in '
     'intended_result and acceptance. A declaration whose signatures disagree is '
@@ -1319,6 +1325,11 @@ _REQUIREMENTS_REQUEST = (
 )
 _COVERS_REQUEST = (
     "Include one line 'COVERS: R2, R5' naming the requirements this task delivers. "
+    "A requirement is delivered only with its executed proof in the same task: tests "
+    "that run and pass on the delivered source, and for a requirement about errors, "
+    "refusals or invalid input a passing case per rejecting path. Cover only what this "
+    "task will prove within its size; a requirement whose proof is left to a later task "
+    "is not covered by this one. "
     "The run is complete only when every requirement is covered by a finished task "
     "and an independent audit finds it met; DONE before that is sent back to you."
 )
@@ -2603,6 +2614,9 @@ class Session:
         #: A task route refused at dispatch that forfeited the remaining
         #: slots; carried, and named by the cap's stop.
         self._route_forfeit: Optional[dict] = None
+        #: The job's commitment to end after one task whose ordinary route
+        #: could not be paid (admission/3, ``_commit_terminal``); carried.
+        self._terminal_route: Optional[dict] = None
         #: While the merge gate runs: the post-merge rechecks and capped
         #: final reviews that follow it, for its repair route.
         self._route_after_merge: Optional[dict] = None
@@ -4112,7 +4126,10 @@ class Session:
             f"full) against a stated bound of ~{report.max_lines}, and the run stops at {stop}. "
             f"You have {room} lines of room for this revision. Make the fixes that fit. For a "
             "finding whose fix does not fit, do not make it: write a line 'BLOCKER: <finding> "
-            "needs about N more lines' so it goes to the record as an open question."
+            "needs about N more lines' so it goes to the record as an open question. A test a "
+            "review asks for that does not fit is reported the same way, with 'NOT RUN: <case> - "
+            "<why>' for each case not added; it is recorded as owed, the finding stays open, and "
+            "no such line resolves anything. Never compress tests onto one line to fit."
         )
 
     def _assess_scope(self, spec: TaskSpec, task: TaskMemory, before) -> Optional[ScopeReport]:
@@ -6244,6 +6261,7 @@ class Session:
         left = max(0, total - int(getattr(self, "_slots_used", 0) or 0))
         text = (f"\n\nTask slots: {left} of {total} remain for this job, counting the task you name now. "
                 "A parallel batch spends one slot per task, and a task that is sent back spends one too.")
+        text += self._allowance_note()
         ledger = self.memory.ledger
         if self.config.requirements_ledger and ledger.requirements:
             status = ledger.requirement_status
@@ -6254,6 +6272,41 @@ class Session:
                          "remaining slots can reach every one of them within the size ceiling; if they "
                          "cannot, say which will be left open rather than spend the slots unaware.")
         return text
+
+    def _allowance_note(self) -> str:
+        """The job's allowance as the admission will charge the next task,
+        for the planner: ordinary calls, tokens and wall left after the held
+        finish, the exposure classes a route is costed in, and what a
+        reviewed task's known route costs before and in the last slot.
+        Facts from the budget's own snapshot, nothing promised: reported
+        usage can be below an exposure, admission still charges the
+        exposure, and a route the allowance cannot pay is not started."""
+        budget = self._budget()
+        if budget is None or not hasattr(budget, "snapshot"):
+            return ""
+        try:
+            snap = budget.snapshot()
+        except Exception:  # noqa: BLE001 -- a note never fails planning
+            return ""
+        limits, fin = snap.get("limits") or {}, snap.get("finish_protection") or {}
+        held = len(fin.get("pending") or [])
+        reserve = int(limits.get("reserve_tokens_per_call") or 0)
+        editing = int(fin.get("editing_exposure") or 0) or reserve
+        calls = max(0, int(limits.get("max_calls") or 0) - int(snap.get("reserved_attempts") or 0) - held)
+        tokens = max(0, int(limits.get("max_reported_tokens") or 0) - int(snap.get("reported_tokens") or 0)
+                     - held * reserve)
+        wall = max(0.0, float(limits.get("wall_seconds") or 0) - float(snap.get("elapsed_seconds") or 0)
+                   - float(fin.get("held_wall_seconds") or 0))
+        if not reserve:
+            return (f" Allowance after the held finish ({held} stage(s) held): {calls} call(s), {wall:.0f} s; "
+                    "no token reserve is configured, so tokens are not counted at admission.")
+        return (f" Allowance after the held finish ({held} stage(s) held): {calls} ordinary call(s), "
+                f"{tokens:,} tokens, {wall:.0f} s. Admission charges exposures, not reported usage: an editing "
+                f"call {editing:,} tokens, any other call {reserve:,}. A reviewed task's known route is one "
+                f"editing call plus one reserve call per required review, plus a close-out at the reserve "
+                f"before the last slot; a correction a review selects adds an editing call and one reserve "
+                f"call per recheck. A route the allowance cannot pay is not started, so name a task whose "
+                f"route fits, or say which requirements will be left open.")
 
     def _quiescent(self) -> None:
         """Offer the quiescent point to the checkpoint writer; a failure to
@@ -6352,7 +6405,7 @@ class Session:
         # An explicit list that fills the cap exactly still ends through its
         # own completion path, never the cap's goal question, which is an
         # orchestrator call (Codex on #42, 357d40a P2).
-        while used < max_tasks or self._explicit_list_spent():
+        while (used < max_tasks and not self._terminal_committed()) or self._explicit_list_spent():
             self._slots_used = used
             self._quiescent()
             used += 1
@@ -6611,7 +6664,8 @@ class Session:
             check_debt = self._record_check_debt(spec, covers)
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
-            review_debt = self._review_debt_continues(covers, used, max_tasks)
+            review_debt = self._review_debt_continues(covers, used if not self._terminal_committed() else max_tasks,
+                                                      max_tasks)
             if ((self._findings_stop_due() and not review_debt)
                     or (self.checks and not self.checks[-1]['passed'] and not check_debt)):
                 self._name_findings_stop({spec.task_id})
@@ -10341,7 +10395,7 @@ class Session:
         than asked of a model (``_task_close_out``): the direct tier, or a
         task in the job's last wave (``slots`` tasks in this wave) of a run
         with no explicit list."""
-        if self._tier(spec) == "direct":
+        if self._tier(spec) == "direct" or self._terminal_for(spec):
             return True
         total = int(getattr(self, "_max_tasks", 0) or 0)
         used = int(getattr(self, "_slots_used", 0) or 0)
@@ -10578,9 +10632,16 @@ class Session:
         finish must pay the task's whole remaining path, exactly counted in
         the budget's exposure classes (delivery.admit_plan), or the task
         cannot reach its judgments and is not started
-        (``_settle_not_started``). Decided before the first editing call,
-        never after work has begun. A parallel child is never refused here
-        (its batch decides, ``_admit_batch``)."""
+        (``_settle_not_started``). Two deterministic candidates are costed
+        (admission/3): the ordinary selected route, and when that cannot
+        be paid, the same task, reviewers, gates, design and security
+        stages closed by the harness's factual record (``_commit_terminal``:
+        the job ends after it, later ordinary slots relinquished, a choice
+        recorded before any call and never a proof that no later task
+        could have fitted). The mandatory stages must fit either way.
+        Decided before the first editing call, never after work has begun.
+        A parallel child is never refused here (its batch decides,
+        ``_admit_batch``), and an explicit list never commits."""
         budget = self._budget()
         if budget is None or not self._serial_dispatch or self._batch_child:
             return
@@ -10597,14 +10658,58 @@ class Session:
         # The route's own checks: one after the draft, one after a revision.
         checks = 1 + (1 if any(r.name == "revision" for r in full) else 0)
         whole = self._admit_plan(spec.task_id, full, scope="full", wall_extra=self._gate_wall(spec) * checks)
-        if not whole.feasible:
-            # The route the task would actually take is not payable: it is
-            # not started, before its first call, rather than started on a
-            # path that ends short of its judgments (root's admission
-            # finding on f4fe5b7: a recorded shortfall is not an admission).
-            exc = FinishReserved(f"{spec.task_id}: cannot pay its selected route: {whole.detail}")
-            exc.infeasible = True
-            raise exc
+        if whole.feasible:
+            return
+        terminal = [r for r in full if r.name != "close-out"]
+        if len(terminal) < len(full) and self._explicit_tasks is None:
+            # The second candidate (admission/3): the same task, reviewers,
+            # gates, design and security stages, closed by the harness's
+            # factual record instead of a model close-out, and the job
+            # committed to end after it. A policy choice to relinquish the
+            # later ordinary slots, recorded before any call; not a proof
+            # that no later task could have fitted.
+            last = self._admit_plan(spec.task_id, terminal, scope="terminal",
+                                    wall_extra=self._gate_wall(spec) * checks)
+            if last.feasible:
+                self._commit_terminal(spec, whole.detail, last.detail)
+                return
+            detail = f"{whole.detail}; nor its terminal route: {last.detail}"
+        else:
+            detail = whole.detail
+        # Neither route the task could take is payable: it is not started,
+        # before its first call, rather than started on a path that ends
+        # short of its judgments (root's admission finding on f4fe5b7: a
+        # recorded shortfall is not an admission).
+        exc = FinishReserved(f"{spec.task_id}: cannot pay its selected route: {detail}")
+        exc.infeasible = True
+        raise exc
+
+    def _commit_terminal(self, spec, ordinary: str, selected: str) -> None:
+        """Commit the job to end after ``spec``: recorded on the session
+        (carried by the checkpoint), kept as an artifact, and noted before
+        the task's first call. From here no ordinary task is planned or
+        dispatched; the task's close-out is factual, every repair's known
+        remainder is costed without one, and the cap's decision (the goal
+        question and the audit where the gates allow) follows the task.
+        ``_slots_used`` keeps the actual count; the relinquished slots are
+        named, not spent."""
+        total = int(getattr(self, "_max_tasks", 0) or 0)
+        used = int(getattr(self, "_slots_used", 0) or 0)
+        record = dict(task=spec.task_id, reason=f"its ordinary route could not be paid: {ordinary[:400]}",
+                      selected=selected[:400], slots_used=used + 1, relinquished=max(0, total - used - 1),
+                      max_tasks=total)
+        self._terminal_route = record
+        self._last_wave = True
+        self.store.put(json.dumps(record), kind="terminal-route", author="harness")
+        self._note(f"{spec.task_id}: terminal route committed; {record['relinquished']} later slot(s) relinquished")
+
+    def _terminal_for(self, spec) -> bool:
+        """Whether ``spec`` is the task the job committed to end after."""
+        record = getattr(self, "_terminal_route", None)
+        return bool(record) and record.get("task") == getattr(spec, "task_id", None)
+
+    def _terminal_committed(self) -> bool:
+        return bool(getattr(self, "_terminal_route", None))
 
     def _admit_batch(self, parsed) -> Optional[str]:
         """Before a parallel wave starts: the sum of every child's remaining
@@ -13353,6 +13458,10 @@ class Session:
         otherwise the lead's model close-out."""
         if mechanical and self._tier(spec) == "direct":
             return self._mechanical_close_out(lead, spec, task)
+        if self._terminal_for(spec):
+            return self._factual_close_out(lead, spec, task, why=(
+                "no later planning call reads it: the job committed to end after this task when its "
+                "ordinary route could not be paid (terminal route)"))
         if getattr(self, "_last_wave", False):
             return self._factual_close_out(lead, spec, task, why=(
                 "no later planning call reads it: this task is in the job's last dispatched wave"))

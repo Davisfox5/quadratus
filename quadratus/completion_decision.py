@@ -166,6 +166,10 @@ class CompletionInputs:
     #: (``Session._route_forfeit``): the cap's stop names it, never the cap
     #: alone.
     route_forfeit: Optional[dict] = None
+    #: The job's commitment to end after one task whose ordinary route could
+    #: not be paid (``Session._terminal_route``): the cap's stop names the
+    #: relinquished slots as a choice, never as the cap reached.
+    terminal_route: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -344,7 +348,8 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
         # No slot is left to repay them, so the goal question is not asked.
         if inputs.goal_confirmed is not None or inputs.requirements_satisfied is not None:
             raise ValueError("open audit findings at the cap forbid the goal question")
-        return _findings_stop(site, debt, _reached(inputs) if inputs.route_forfeit else "the task cap was reached")
+        return _findings_stop(site, debt, _reached(inputs) if inputs.route_forfeit or inputs.terminal_route
+                              else "the task cap was reached")
     mismatches = debt.partial_mismatches
     confirmed = satisfied = None
     if debt.partial:
@@ -364,7 +369,7 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
                      and not _checks_standing_failed(debt))
     if completed:
         where = "the cap's goal confirmation"
-        if inputs.route_forfeit:
+        if inputs.route_forfeit or inputs.terminal_route:
             where = f"the goal confirmation (asked when {_reached(inputs)})"
         return _guard(inputs, debt, where, done_accepted=True, partial_mismatches=mismatches)
     if confirmed is False:
@@ -392,6 +397,11 @@ def _reached(inputs: CompletionInputs) -> str:
         return (f"{forfeit.get('task')}'s route could not be paid from the allowance left "
                 f"({forfeit.get('detail')}), so {forfeit.get('slots_unused')} of {inputs.max_tasks} task "
                 "slot(s) were forfeited")
+    terminal = inputs.terminal_route
+    if terminal:
+        return (f"the job committed to end after {terminal.get('task')} on its terminal route "
+                f"({terminal.get('reason')}), relinquishing {terminal.get('relinquished')} of "
+                f"{inputs.max_tasks} task slot(s)")
     return f"the task cap ({inputs.max_tasks}) was reached"
 
 
@@ -535,6 +545,7 @@ def snapshot_session(session, *, site: str, max_tasks: int = 0, **answers) -> Co
         legacy_partial=frozenset(session._partial_tasks),
         max_tasks=max_tasks,
         route_forfeit=getattr(session, "_route_forfeit", None),
+        terminal_route=getattr(session, "_terminal_route", None),
         reopens=answers.pop("reopens", session._requirement_reopens),
         max_reopens=answers.pop("max_reopens", session.config.max_requirement_reopens),
         **answers,

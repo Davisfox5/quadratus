@@ -733,6 +733,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'review_findings': list(getattr(session, 'review_findings', []) or []) if session else [],
         'evidence_obligations': list(getattr(session, 'evidence_obligations', []) or []) if session else [],
         'plan_admissions': list(getattr(session, 'plan_admissions', []) or []) if session else [],
+        'terminal_route': dict(getattr(session, '_terminal_route', None) or {}) or None if session else None,
         'operations': list(getattr(session, 'operations', []) or []) if session else [],
         'job_store': dict(generation=(job_store.current().number if job_store.current() else None),
                           refused=job_store.refused, terminal_committed=terminal_committed)

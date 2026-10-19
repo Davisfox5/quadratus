@@ -837,6 +837,19 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     assert [r.name for r in s._design_repair_stages(spec, "openai:independent")] == [
         "design fix", "design review by openai:independent", "close-out"]
     assert [r.name for r in s._known_remainder(spec, after="design")] == ["close-out"]
+    # The task the job committed to end after (admission/3) closes
+    # factually whatever its slot: its repairs owe the design review and
+    # the security verification still, never a close-out; another task's
+    # routes are unchanged.
+    s._terminal_route = dict(task="t1", reason="r", selected="s", slots_used=1, relinquished=3, max_tasks=4)
+    assert s._closes_factually(spec) and not s._closes_factually(TaskSpec("t9", "other"))
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
+    assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "design review"]
+    assert [r.name for r in s._security_repair_stages(spec, "openai:gpt-5.6-sol")] == [
+        "security fix", "security verification by openai:gpt-5.6-sol"]
+    assert [r.name for r in s._design_repair_stages(spec, None)] == ["design fix", "design review"]
+    s._terminal_route = None
     s._slots_used = 3
     assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
         "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]

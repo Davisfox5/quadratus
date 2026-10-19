@@ -1943,6 +1943,48 @@ Key design decisions already settled:
   have no close-out, so there the known stages are the route and a
   shortfall is found at the mandatory admission (`dispatch_floor`); the
   serial full-route control therefore runs over three slots.
+- **Two route candidates before NOT RUN; the second ends the job**
+  (admission/3, the fresh job on bfd7a9a: t2's ordinary route, 900,000,
+  missed the 884,138 left by 15,862 and the run forfeited two slots with
+  nothing of t2 run). `_refuse_unpayable_dispatch` now costs the ordinary
+  selected route and, when it cannot be paid, the same task, reviewers,
+  gates, design and security stages closed by the harness's factual record
+  (`scope: terminal`). Admitted, `_commit_terminal` records the job's
+  commitment to end after that task before any call (`_terminal_route`:
+  task, reason, selected cost, actual slots used, relinquished slots;
+  carried by the checkpoint, kept as a `terminal-route` artifact, exported
+  in result.json), `_closes_factually` and `_task_close_out` consult it so
+  every repair's known remainder and the actual close-out agree, the main
+  loop dispatches no ordinary task after it (a resumed episode included),
+  and the cap's decision follows with the goal question and audit where the
+  existing gates allow; the stop names the choice and the relinquished
+  slots (`completion_decision._reached`). It is a policy choice to
+  relinquish later slots, not a proof that no later task could fit:
+  reported usage can be below an exposure and a read-only task is cheaper.
+  No review is dropped, `_slots_used` stays the actual count, the finish
+  hold is counted, a mandatory deficit is refused as before with no
+  candidate, explicit lists and parallel batches are unchanged, and a
+  failed predecessor, an open finding or a capped task still blocks
+  completion.
+- **A task is sized for its implementation and its executed proof
+  together.** `_COVERS_REQUEST` says a requirement is delivered only with
+  the tests that prove it in the same task (a passing case per rejecting
+  path for an error clause); `_SCOPE_REQUEST` asks for implementation,
+  proof and setup estimates summed into `max_lines` and refuses a delivery
+  described with its tests merely deferred, and the blanket "make the
+  setup its own task" advice is gone. The optional SCOPE `estimate`
+  object (`scope.read_estimate`: exactly implementation, proof, setup;
+  exact non-negative ints; sum equal to `max_lines`; a bool or an extra key
+  refused) is kept on `TaskScope.estimate`, rendered to the lead and
+  serialized; omitted is unknown, and it widens nothing: the bound, the
+  1.5 stop and every counted line are unchanged. `_slots_note` now shows
+  the planner the allowance after the held finish in the exposure classes
+  admission charges (ordinary calls, tokens, wall; editing and reserve
+  exposures; what a reviewed route and a correction cost), facts from the
+  budget's snapshot. A revision told its room is also told to report a
+  test that does not fit as `NOT RUN: <case> - <why>` (recorded as owed,
+  the finding stays open, nothing resolved by saying so) rather than
+  compress tests onto one line.
 - **Every selected repair carries the task's known remainder** (root's
   control on fef1e27, the default bound: a fix cycle admitted as
   revision + recheck, 700,000 against 773,864, omitted t1's known 200,000

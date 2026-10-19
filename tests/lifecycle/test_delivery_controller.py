@@ -310,29 +310,40 @@ def test_a_route_the_tokens_cannot_pay_refuses_the_task_before_its_first_call_an
     """The controller-reset numbers in miniature. With 1.3M total, t1's
     mandatory stages (one editing call at the 500k ceiling, one review at
     the 200k reserve) fit the 899,780 left after the two 200k holds and
-    the 220 of intake, and its selected route (the close-out at the
-    reserve too: 900k, admission/2) does not, by those 220: the task is
-    not started before any call, the route's shortfall named in tokens
-    (root's admission finding on f4fe5b7: a route merely recorded was
-    still started, and ended short of its judgments). The revision and
-    the recheck are not on the route: a correction is admitted when a
+    the 220 of intake, and its ordinary route (the close-out at the
+    reserve too: 900k, admission/2) does not, by those 220. Its terminal
+    route (admission/3: the same stages closed factually, 700k) does, so
+    t1 runs with the job committed to end after it, its shortfall and the
+    choice both recorded (root's admission finding on f4fe5b7: a route
+    merely recorded was still started, and ended short of its judgments;
+    now a route is started only as admitted). The revision and the
+    recheck are not on the route: a correction is admitted when a
     finding selects it. With 2.1M total the route fits and the run
     completes; t2's route, without a close-out in the last slot, is
     admitted the same way. With 1.0M total the mandatory stages themselves
     do not fit: the shortfall names them."""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md"),
                    files=FILES, max_tasks=2, record_complete=False, limits=_token_limits(1_300_000))
-    admissions = [a for a in H.result_json(replay)["plan_admissions"] if a["task"] == "t1"]
-    assert [a["scope"] for a in admissions] == ["mandatory", "full"]
-    assert admissions[0]["feasible"] and not admissions[1]["feasible"]
+    result = H.result_json(replay)
+    admissions = [a for a in result["plan_admissions"] if a["task"] == "t1"]
+    assert [(a["scope"], a["feasible"]) for a in admissions] == [("mandatory", True), ("full", False), ("terminal", True)]
     assert admissions[1]["short"] == {"tokens": 900_000 - 899_780}
     assert admissions[1]["stages"] == ["lead draft(editing/write)", "review by claude:opus(reserve)",
                                        "close-out(reserve)"]
-    assert not [c for c in replay.calls if c.task in ("t1", "t2")], "an unpayable route is not started"
-    result = H.result_json(replay)
-    assert [n["task"] for n in result["not_started"]] == ["t1"]
-    assert "cannot pay its selected route" in result["finish_refusals"][-1]["detail"]
-    assert (replay.project / "app.py").read_text() == FILES["app.py"], "nothing was written"
+    assert admissions[2]["stages"] == ["lead draft(editing/write)", "review by claude:opus(reserve)"]
+    # The terminal route (admission/3): the same task and reviewer, closed
+    # factually, the job committed to end after it; t2 is never planned,
+    # the goal question is asked, and the stop names the choice.
+    assert [(c.task, c.role) for c in replay.calls if c.task in ("t1", "t2")] == [("t1", "lead"), ("t1", "collaborator")]
+    terminal = result["terminal_route"]
+    assert (terminal["task"], terminal["slots_used"], terminal["relinquished"]) == ("t1", 1, 1)
+    assert result["not_started"] == [] and not replay.of("closeout")
+    assert [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t1"]
+    assert (replay.project / "app.py").read_text() == FIXED, "t1 wrote"
+    assert not replay.result.completed and "committed to end after t1" in replay.result.error
+    assert "relinquishing 1 of 2 task slot(s)" in replay.result.error
+    assert "the task cap (2) was reached" not in replay.result.error
+    assert _budget(replay)["finish_protection"]["started"] == ["goal"]
 
     (tmp_path / "paid").mkdir()
     paid = H.run(tmp_path / "paid", monkeypatch, _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md"),

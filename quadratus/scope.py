@@ -156,6 +156,15 @@ class TaskScope:
     #: so a declared file that becomes a directory puts every descendant out
     #: of scope. Set by the harness at dispatch, never declared by a task.
     exact: bool = False
+    #: The planner's own split of ``max_lines`` (SCOPE ``"estimate"``):
+    #: ``{"implementation", "proof", "setup"}``, exact non-negative integers
+    #: summing to ``max_lines``, so a task is sized for its implementation
+    #: and the executed proof its COVERS promise together. Rendered to the
+    #: lead and kept on the record for calibration; it widens nothing (the
+    #: bound and the stop are ``max_lines``, every line counts in full) and
+    #: proves nothing about what the proof covers. None when not declared
+    #: (legacy declarations): unknown, not zero.
+    estimate: Optional[Dict[str, int]] = None
 
     def permits(self, path: str) -> bool:
         """Whether ``path`` may be edited under this scope."""
@@ -225,6 +234,10 @@ class TaskScope:
             )
         if self.review_only:
             parts.append("Declared review-only: report findings; do not change project source.")
+        if self.estimate:
+            parts.append("The planner's split of that size: "
+                         + ", ".join(f"{k} {v}" for k, v in self.estimate.items())
+                         + " lines. The bound below is the sum; every line counts the same.")
         if self.max_lines:
             # The lead is told what the harness measures, not only the
             # estimate (series rule-2ffa7f6 f3, f4 and f7: first tasks of 85
@@ -258,6 +271,7 @@ class TaskScope:
             **({"edits": "none"} if self.review_only else {}),
             **({"capture": self.capture} if self.capture else {}),
             **({"exact": True} if self.exact else {}),
+            **({"estimate": dict(self.estimate)} if self.estimate else {}),
         }
 
 
@@ -446,6 +460,25 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
             )
 
 
+ESTIMATE_KEYS = ("implementation", "proof", "setup")
+
+
+def read_estimate(data, max_lines: int) -> Dict[str, int]:
+    """The optional SCOPE ``estimate`` object, strictly: exactly the keys
+    implementation, proof and setup, each an exact non-negative int (a bool
+    is not one), summing to ``max_lines``. Anything else is refused rather
+    than read as a lower figure. Omitted is unknown and allowed."""
+    if not isinstance(data, dict) or set(data) != set(ESTIMATE_KEYS):
+        raise ValueError("SCOPE estimate must be an object with exactly implementation, proof and setup")
+    for key in ESTIMATE_KEYS:
+        value = data[key]
+        if type(value) is not int or value < 0:
+            raise ValueError(f"SCOPE estimate {key} must be a non-negative integer")
+    if sum(data[key] for key in ESTIMATE_KEYS) != max_lines:
+        raise ValueError("SCOPE estimate implementation + proof + setup must equal max_lines")
+    return {key: int(data[key]) for key in ESTIMATE_KEYS}
+
+
 def read_scope(description: str, *, max_lines: int):
     """Require a structured declaration before normal project dispatch."""
     matches = list(re.finditer(r"^SCOPE:\s*(.+)$", description, re.MULTILINE))
@@ -483,7 +516,9 @@ def read_scope(description: str, *, max_lines: int):
     if "capture" in data:
         from .preview import validate_capture
         capture = validate_capture(data["capture"])
+    estimate = read_estimate(data["estimate"], bound) if "estimate" in data else None
     body = (description[:matches[0].start()] + description[matches[0].end():]).strip()
-    scope = TaskScope(paths, result, acceptance, bound, review_only=edits == "none", capture=capture)
+    scope = TaskScope(paths, result, acceptance, bound, review_only=edits == "none", capture=capture,
+                      estimate=estimate)
     lint_declaration(body, scope)
     return scope, body
