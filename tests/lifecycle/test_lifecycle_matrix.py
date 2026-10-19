@@ -557,10 +557,14 @@ def _continuation_run(tmp_path, monkeypatch, cases, estimate=60):
                 settings=Settings(backend="cli", lead_max_turns=14))
 
 
-def test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup(tmp_path, monkeypatch):
+def test_the_planner_is_told_to_count_test_setup_and_size_proof_with_the_implementation(tmp_path, monkeypatch):
+    """The setup a new test file pays is still counted; the blanket advice
+    to make it its own earlier task is gone (a delivery is sized with the
+    executed proof its COVERS promise, in the same task)."""
     replay = _continuation_run(tmp_path, monkeypatch, cases=6)
     first, second = replay.of("orchestrator")[:2]
-    assert "fixed setup cost" in first.prompt and "its own earlier" in first.prompt
+    assert "fixed setup a new test file pays" in first.prompt and "its own earlier" not in first.prompt
+    assert "Size the implementation and its executed proof together" in first.prompt
     assert "count every test not yet written in full, including its" in second.prompt
 
 
