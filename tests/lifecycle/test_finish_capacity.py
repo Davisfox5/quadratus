@@ -289,6 +289,11 @@ def test_a_selected_repair_carries_the_known_nonfinal_closeout(tmp_path, monkeyp
     refusal = [r for r in result["finish_refusals"] if r["what"] == "fix round"]
     assert refusal and "the correction the review selected cannot be paid whole" in refusal[0]["detail"]
     assert replay.of("closeout") and replay.of("auditor"), roles
+    audit = replay.of("auditor")[-1].prompt
+    assert "so it was not started" not in audit, "a refused correction is not a task not started"
+    assert ("Plan admission for t1: a correction its review selected could not be paid" in audit
+            and "the task had started" in audit and "stay open as written" in audit)
+    assert "task slots usable 2 of 3 (1 spent)" in audit
     assert roles[:6] == [("run", "orchestrator"), ("plan", "requirements-review"), ("t1", "lead"),
                          ("t1", "collaborator"), ("t1", "closeout"), ("run", "orchestrator")], roles
     assert not replay.result.completed, "the finding is open and R1 uncovered: not complete"
@@ -353,6 +358,17 @@ def test_a_route_the_finish_cannot_afford_whole_runs_on_its_terminal_route_and_t
     assert replay.result.completed, replay.result.error
     assert "the task cap (3) was reached" not in (replay.result.error or "")
     assert result["requirements"]["audits"][-1]["verdicts"]["R1"]["met"] is True
+    # The audit is told what was chosen, not that the task was not started
+    # (Astra A1 on 0ae5bb6): the ordinary refusal, the admitted terminal
+    # route, the spent and relinquished slots, and no usable slot.
+    audit = replay.of("auditor")[-1].prompt
+    assert "so it was not started" not in audit
+    assert ("Plan admission for t2: its ordinary route could not be paid" in audit
+            and "its terminal route (the same stages, closed factually) was admitted" in audit
+            and "2 of 3 slot(s) spent, 1 relinquished" in audit and "Admission is not execution" in audit)
+    assert "task slots usable 0 of 3 (2 spent, 1 relinquished by the terminal commitment)" in audit
+    assert result["obligations"]["capacity"]["slots_left"] == 0
+    assert (result["obligations"]["capacity"]["slots_spent"], result["obligations"]["capacity"]["slots_relinquished"]) == (2, 1)
     budget = _budget(replay)
     assert budget["finish_protection"]["refusals"] == [] and budget["stop_reason"] == ""
     assert budget["finish_protection"]["started"] == ["goal", "audit"]
@@ -378,6 +394,55 @@ def test_a_mandatory_deficit_has_no_terminal_candidate_and_nothing_is_written(tm
     assert (replay.project / "app.py").read_text() == FILES["app.py"], "nothing was written"
     assert not replay.result.completed and "t1's route could not be paid" in replay.result.error
     assert "forfeited" in replay.result.error and not replay.artifact_texts("terminal-route")
+
+
+@pytest.mark.requirements_ledger
+def test_a_terminal_tasks_capped_checked_source_meets_the_same_bounded_review_as_the_last_slot(tmp_path, monkeypatch):
+    """Astra A2 on 0ae5bb6: 7,000 tokens over three slots, t1's ordinary
+    route (5,000) misses the 4,780 left by 220 and its terminal route is
+    admitted, so the job commits to end after t1. Its lead writes the
+    correct source inside its scope and stops at its turn cap. No later
+    planning call can continue it, exactly as in the numeric last slot,
+    so the capped source takes the same bounded handoff: the harness's
+    check passes on that exact source, one cross-vendor reviewer reads
+    it, the goal question and the audit run, and the run completes with
+    the cap recorded as a non-blocking fact. Before the shared predicate
+    the terminal task was left capped with no reviewer, goal or audit."""
+    from quadratus.config import Settings
+
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return H.grok_ok("Wrote add; no final answer.", stop="cancelled", num_turns=14)
+    script = _script([ONE], t2_review="NO FINDINGS\nR1: MET - app.py")
+    script.overrides["lead"] = lead
+    script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_000),
+                   record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
+    result = H.result_json(replay)
+    assert result["terminal_route"]["task"] == "t1" and result["terminal_route"]["relinquished"] == 2
+    assert [(c.task, c.role) for c in replay.calls][2:] == [("t1", "lead"), ("t1", "collaborator"),
+                                                            ("run", "orchestrator"), ("audit", "auditor")]
+    assert replay.result.completed, replay.result.error
+    t1 = next(t for t in result["workflow"]["tasks"] if t["task_id"] == "t1")
+    assert t1["edges"].get("review") is True
+    assert any(f["kind"] == "cap" and (f["recovered"] or not f["terminal"]) for f in t1["facts"]), t1["facts"]
+    assert not replay.of("closeout") and [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t1"]
+
+    # The same commitment with a capped source whose check fails: no
+    # handoff, no reviewer, the task stays capped and the run incomplete.
+    (tmp_path / "broken").mkdir()
+
+    def broken(call, replay):
+        H.write(call, {"app.py": "def add(a, b):\n    return a - b\n"})
+        return H.grok_ok("Wrote add; no final answer.", stop="cancelled", num_turns=14)
+    script = _script([ONE], t2_review="NO FINDINGS\nR1: MET - app.py")
+    script.overrides["lead"] = broken
+    held = H.run(tmp_path / "broken", monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_000),
+                 record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
+    assert H.result_json(held)["terminal_route"]["task"] == "t1"
+    assert [(c.task, c.role) for c in held.calls][2:] == [("t1", "lead")], "no reviewer for a failing capped source"
+    assert not held.result.completed and held.result.error.startswith("GoalUnconfirmedAtCap")
+    assert "t1 not continued" in held.result.error and "committed to end after t1" in held.result.error
 
 
 @pytest.mark.requirements_ledger

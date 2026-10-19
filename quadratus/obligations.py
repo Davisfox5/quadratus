@@ -76,6 +76,10 @@ class Capacity:
     wall_seconds: float
     slots_left: Optional[int] = None
     slots_total: Optional[int] = None
+    #: Slots actually spent, and slots relinquished by a terminal commitment
+    #: (``Session._commit_terminal``); ``slots_left`` is what is usable.
+    slots_spent: Optional[int] = None
+    slots_relinquished: Optional[int] = None
     recovery_left: Optional[int] = None
 
 
@@ -163,7 +167,12 @@ def render(view: View) -> str:
         line = (f"Capacity left after the held finish: {max(c.calls, 0)} call(s), {max(c.tokens, 0):,} "
                 f"reported tokens, {max(c.wall_seconds, 0):.0f} s")
         if c.slots_total is not None:
-            line += f"; task slots {c.slots_left} of {c.slots_total}"
+            line += f"; task slots usable {c.slots_left} of {c.slots_total}"
+            if c.slots_spent is not None:
+                line += f" ({c.slots_spent} spent"
+                if c.slots_relinquished:
+                    line += f", {c.slots_relinquished} relinquished by the terminal commitment"
+                line += ")"
         if c.recovery_left is not None:
             line += f"; recovery tasks left {c.recovery_left}"
         out.append(line + ". A task needs one call per mandatory stage (its lead, each required review, a "

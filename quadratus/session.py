@@ -5144,10 +5144,7 @@ class Session:
         recorded unverified, and the cap and DONE audits still decide the
         goal and requirements. The cap is recorded on the task as a
         non-blocking fact; no slot, recovery, call or turn is added."""
-        total = getattr(self, "_max_tasks", None)
-        if (not total or self._explicit_tasks is not None
-                or int(getattr(self, "_slots_used", 0) or 0) + 1 < total
-                or not self._write_ceiling() or spec.scope is None):
+        if not self._final_work_slot(spec) or not self._write_ceiling() or spec.scope is None:
             return None, collaborators
         vendor = lead.partition(":")[0]
         reviewers = [p for p in collaborators if p.partition(":")[0] != vendor]
@@ -5261,10 +5258,7 @@ class Session:
         slot's measured, in-scope source and the task's checks passed on
         exactly it; None otherwise. The capped draft's conditions without its
         reviewer choice (_capped_final_draft)."""
-        total = getattr(self, "_max_tasks", None)
-        if (not total or self._explicit_tasks is not None
-                or int(getattr(self, "_slots_used", 0) or 0) + 1 < total
-                or not self._write_ceiling() or spec.scope is None):
+        if not self._final_work_slot(spec) or not self._write_ceiling() or spec.scope is None:
             return None
         state = self._inspect_partial_edits(before)
         if not state["inspected"] or not state["changed"]:
@@ -10708,6 +10702,25 @@ class Session:
         record = getattr(self, "_terminal_route", None)
         return bool(record) and record.get("task") == getattr(spec, "task_id", None)
 
+    def _final_work_slot(self, spec) -> bool:
+        """Whether no later planning call can continue ``spec``'s work: a
+        serial planner task in the job's numeric last slot, or the exact
+        task the job committed to end after (``_commit_terminal``). Never an
+        explicit list (its own completion path) and never a parallel child
+        (its batch decides). The one boundary the capped-source handoffs
+        (``_capped_final_draft``, ``_checked_final_source``) and the factual
+        close-out read, so a terminal task's capped work meets the same
+        bounded review the numeric last slot's does; every other guard
+        (measured in-scope edits, passing checks on that exact source, the
+        write ceiling, an available cross-vendor reviewer, one cap) stays
+        with its caller."""
+        if self._explicit_tasks is not None or getattr(self, "_batch_child", False):
+            return False
+        if self._terminal_for(spec):
+            return True
+        total = getattr(self, "_max_tasks", None)
+        return bool(total) and int(getattr(self, "_slots_used", 0) or 0) + 1 >= int(total)
+
     def _terminal_committed(self) -> bool:
         return bool(getattr(self, "_terminal_route", None))
 
@@ -10785,14 +10798,21 @@ class Session:
             limits = snap["limits"]
             total = getattr(self, "_max_tasks", None)
             survey = self.config.survey
+            terminal = getattr(self, "_terminal_route", None) or None
+            spent = int(getattr(self, "_slots_used", 0) or 0)
+            counted = bool(total) and self._explicit_tasks is None
+            # Usable slots: none once the job committed to end after a task
+            # (the later ones are relinquished, not spent); the spent and
+            # relinquished counts are shown as they are.
             capacity = obligations.Capacity(
                 calls=limits["max_calls"] - snap["reserved_attempts"] - held,
                 tokens=limits["max_reported_tokens"] - snap["reported_tokens"]
                 - held * int(limits.get("reserve_tokens_per_call") or 0),
                 wall_seconds=limits["wall_seconds"] - snap["elapsed_seconds"] - float(fin.get("held_wall_seconds") or 0),
-                slots_left=(max(0, total - int(getattr(self, "_slots_used", 0) or 0))
-                            if total and self._explicit_tasks is None else None),
-                slots_total=total if total and self._explicit_tasks is None else None,
+                slots_left=(0 if terminal else max(0, total - spent)) if counted else None,
+                slots_total=total if counted else None,
+                slots_spent=spent if counted else None,
+                slots_relinquished=(int(terminal.get("relinquished") or 0) if terminal else None) if counted else None,
                 recovery_left=(max(0, survey.recovery_tasks - int(self.survey.get("recovery_used", 0) or 0))
                                if survey is not None else None))
         self._refresh_obligations()
@@ -10803,10 +10823,7 @@ class Session:
                          f"{o['behavior'][:120]}; runner {o['runner'] or 'NONE: prerequisite, no authorized runner'}; "
                          f"execution {o['execution']}; sufficiency {o['sufficiency']}"
                          for o in self.evidence_obligations)
-        last = next((a for a in reversed(self.plan_admissions) if a.get("scope") in ("full", "fix-cycle")), None)
-        if last is not None and not last["feasible"]:
-            notes.append(f"Plan admission for {last['task']}: its selected route could not be paid from what is "
-                         f"left after the held finish, so it was not started ({last['detail'][:200]}).")
+        notes.extend(self._admission_notes())
         open_findings = [r for r in self.review_findings if not r.get("closed")]
         if open_findings:
             notes.append("Review findings open by id:")
@@ -10816,6 +10833,42 @@ class Session:
                          for r in open_findings)
         return obligations.View(requirements=requirements, tasks=tuple(tasks), evidence=evidence,
                                 judgments=judgments, capacity=capacity, notes=tuple(notes))
+
+    def _admission_notes(self) -> list:
+        """What the last route decision was, as the record holds it: a task
+        refused at dispatch and NOT RUN (``not_started`` says so; a refused
+        admission alone does not), a task admitted on its terminal route
+        with the job committed to end after it (admitted, which is not
+        proof any call ran: the task rows and evidence say what ran), or a
+        later correction refused after the task had started, its findings
+        left open as written."""
+        last = next((a for a in reversed(self.plan_admissions)
+                     if a.get("scope") in ("full", "fix-cycle", "terminal")), None)
+        if last is None:
+            return []
+        task, detail = last["task"], last["detail"][:200]
+        if last["scope"] == "terminal":
+            if not last["feasible"]:
+                return []  # the refusal that followed is the full route's, below
+            terminal = getattr(self, "_terminal_route", None) or {}
+            if terminal.get("task") != task:
+                return []
+            return [f"Plan admission for {task}: its ordinary route could not be paid from what is left after the "
+                    f"held finish ({terminal.get('reason', '')[:200]}); its terminal route (the same stages, closed "
+                    f"factually) was admitted and the job committed to end after it: {terminal.get('slots_used')} "
+                    f"of {terminal.get('max_tasks')} slot(s) spent, {terminal.get('relinquished')} relinquished. "
+                    "Admission is not execution: what ran is in the task rows and evidence above."]
+        if last["feasible"]:
+            return []
+        if last["scope"] == "fix-cycle":
+            return [f"Plan admission for {task}: a correction its review selected could not be paid from what is "
+                    f"left after the held finish ({detail}); the task had started, no editor was called for that "
+                    "correction, and the findings it would have answered stay open as written."]
+        if any(n.get("task") == task for n in self.not_started):
+            return [f"Plan admission for {task}: its selected route could not be paid from what is left after the "
+                    f"held finish, so it was not started ({detail})."]
+        return [f"Plan admission for {task}: its selected route could not be paid from what is left after the "
+                f"held finish ({detail})."]
 
     def _obligation_view(self, *, ids=None) -> str:
         """The same recorded view for the planner and the audit (an explicit

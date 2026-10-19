@@ -849,8 +849,20 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     assert [r.name for r in s._security_repair_stages(spec, "openai:gpt-5.6-sol")] == [
         "security fix", "security verification by openai:gpt-5.6-sol"]
     assert [r.name for r in s._design_repair_stages(spec, None)] == ["design fix", "design review"]
+    # One final-work boundary for the capped-source handoffs (Astra A2 on
+    # 0ae5bb6): the committed task or the numeric last slot, never an
+    # explicit list or a parallel child.
+    assert s._final_work_slot(spec) and not s._final_work_slot(TaskSpec("t9", "other"))
+    s._batch_child = True
+    assert not s._final_work_slot(spec)
+    s._batch_child = False
+    s._explicit_tasks = []
+    assert not s._final_work_slot(spec)
+    s._explicit_tasks = None
     s._terminal_route = None
+    assert not s._final_work_slot(spec)
     s._slots_used = 3
+    assert s._final_work_slot(spec)
     assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
         "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
     s._slots_used = 0
@@ -1163,3 +1175,36 @@ def test_pending_evidence_is_reconciled_on_the_final_path_before_coverage_is_rea
     assert record["stage"] == "done" and s._final_audit["consumed"] == ["E1"]
     assert s._final_audit_current() is True
     assert not any("independent auditor" in p for p in prompts[before:]), "the final audit is not drawn again"
+
+
+def test_the_admission_note_names_the_candidate_the_record_holds(tmp_path):
+    """Astra A1 on 0ae5bb6: the obligation view said a task 'was not
+    started' whenever its last route admission was infeasible, including
+    when its terminal route then ran and when only a later correction was
+    refused. The note now follows the record: NOT RUN only when
+    ``not_started`` says so; the terminal choice named with its spent and
+    relinquished slots and never as execution; a refused correction named
+    as a correction after the task had started."""
+    s, _prompts = _session(tmp_path, "")
+    full = dict(task="t1", scope="full", feasible=False, detail="short by tokens 220")
+    assert s._admission_notes() == []
+    s.plan_admissions = [full]
+    assert s._admission_notes() == ["Plan admission for t1: its selected route could not be paid from what is "
+                                    "left after the held finish (short by tokens 220)."]
+    s.not_started = [dict(task="t1")]
+    assert s._admission_notes()[0].endswith("so it was not started (short by tokens 220).")
+    s.not_started = []
+    s.plan_admissions = [full, dict(task="t1", scope="terminal", feasible=True, detail="2 call(s)")]
+    assert s._admission_notes() == [], "a terminal admission with no commitment on record says nothing"
+    s._terminal_route = dict(task="t1", reason="its ordinary route could not be paid: short by tokens 220",
+                             selected="2 call(s)", slots_used=1, relinquished=2, max_tasks=3)
+    note = s._admission_notes()[0]
+    assert "its terminal route (the same stages, closed factually) was admitted" in note
+    assert "1 of 3 slot(s) spent, 2 relinquished" in note and "Admission is not execution" in note
+    assert "not started" not in note
+    s.plan_admissions.append(dict(task="t1", scope="fix-cycle", feasible=False, detail="short by calls 2"))
+    note = s._admission_notes()[0]
+    assert note.startswith("Plan admission for t1: a correction its review selected could not be paid")
+    assert "the task had started" in note and "stay open as written" in note and "not started" not in note
+    s.plan_admissions.append(dict(task="t1", scope="fix-cycle", feasible=True, detail="2 call(s)"))
+    assert s._admission_notes() == []

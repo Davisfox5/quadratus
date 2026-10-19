@@ -1965,7 +1965,19 @@ Key design decisions already settled:
   hold is counted, a mandatory deficit is refused as before with no
   candidate, explicit lists and parallel batches are unchanged, and a
   failed predecessor, an open finding or a capped task still blocks
-  completion.
+  completion. Two consumers were missed on 0ae5bb6 (Astra A1, A2) and
+  are corrected together: `_final_work_slot` is the one task-bound
+  boundary the capped-source handoffs (`_capped_final_draft`,
+  `_checked_final_source`) read, so a terminal task's capped, checked,
+  in-scope source meets the same bounded cross-vendor review as the
+  numeric last slot's (every other guard stays with its caller, explicit
+  lists and parallel children excluded); and `_admission_notes` tells the
+  planner and audit what the record holds: NOT RUN only when
+  `not_started` says so, the terminal choice with its spent and
+  relinquished slots and never as execution, a refused correction as a
+  correction after the task had started. `obligations.Capacity` shows
+  usable slots (none after the commitment) beside the spent and
+  relinquished counts.
 - **A task is sized for its implementation and its executed proof
   together.** `_COVERS_REQUEST` says a requirement is delivered only with
   the tests that prove it in the same task (a passing case per rejecting
