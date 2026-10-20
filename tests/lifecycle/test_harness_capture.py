@@ -50,8 +50,45 @@ def _decl(kind_line, scope, text, covers="R1, R2"):
     return f"{kind_line}\nSCOPE: {json.dumps(scope)}\n{text}\nCOVERS: {covers}"
 
 
+#: This file's own capture scenarios for its repairs: what its fixture page
+#: (a toolbar reading "tools") can show at both viewports, one per covered
+#: requirement. The shared REPAIR_SCOPE proof expects an Import button this
+#: page never has, and a verdict about one would describe nothing here.
+FIT_PROOFS = [
+    dict(id="P1", requirements=["R1"], operation="the import page is rendered at 390 px and desktop",
+         state="the toolbar overflowed the 390 px viewport", expect="the toolbar fits inside the viewport at both widths",
+         location="templates/index.html", evidence="capture"),
+    dict(id="P2", requirements=["R2"], operation="the toolbar text is read in both renders", state="the toolbar fits",
+         expect="the toolbar text is visible and legible", location="templates/index.html", evidence="capture"),
+]
+FIT_SCOPE = dict(REPAIR_SCOPE, proofs=FIT_PROOFS)
+#: This file's own explicit per-row verdicts, written by the scripted design
+#: reviewer that was shown the renders: one concrete observation per covered
+#: requirement, addressed to the capture rows the prompt lists and no other.
+FIT_OBSERVED = {
+    "R1": "SUFFICIENT the 390 px and desktop renders show the toolbar inside the viewport with no horizontal overflow",
+    "R2": "SUFFICIENT both renders show the toolbar text 'tools' visible and legible",
+}
 AUDIT = _decl("KIND: frontend standard", dict(AUDIT_SCOPE, capture=CAPTURE), "Audit the import page.")
-REPAIR = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=CAPTURE), "Fix the mobile overflow.")
+REPAIR = _decl("KIND: frontend standard", dict(FIT_SCOPE, capture=CAPTURE), "Fix the mobile overflow.")
+
+
+def _observed(observations, base="APPROVED"):
+    """A scripted design reviewer: ``base`` (a reply or a handler) plus one
+    explicit line per capture row the prompt lists, the observation keyed by
+    the row's requirement. A base that is not APPROVED judges no row, and a
+    row of a requirement with no observation is left unjudged; nothing here
+    decides anything, the text is the case's own judgment."""
+    def review(call, replay):
+        reply = base(call, replay) if callable(base) else base
+        if not reply.strip().startswith("APPROVED"):
+            return reply
+        lines = {}
+        for rid, line in observations.items():
+            for oid in H.obligation_ids(call.prompt, modality="capture", requirement=rid):
+                lines.setdefault(oid, f"{oid}: {line}")
+        return reply + "".join("\n" + line for line in lines.values())
+    return review
 
 
 def _profile(tmp_path, preview=None):
@@ -81,7 +118,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True
         "orchestrator": lambda call, replay: plan.pop(0) if plan else "DONE",
         "lead": lambda call, replay: leads[call.task](call, replay),
         "revision": lambda call, replay: NO_EDIT,
-        "design-review": lambda call, replay: "APPROVED",
+        "design-review": _observed(FIT_OBSERVED),
         "requirements-review": lambda call, replay: "COMPLETE",
         "auditor": judging(lambda call, replay: MET, legacy=LEGACY_JUDGED),
         "design-fix": lambda call, replay: NO_EDIT,
@@ -141,7 +178,7 @@ def test_a_design_fix_that_edits_is_recaptured_by_the_harness(tmp_path, monkeypa
     def fix(call, replay):
         fixes.append(call.prompt)
         return _fix(call, replay)
-    build = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=CAPTURE), "Add the toolbar.")
+    build = _decl("KIND: frontend standard", dict(FIT_SCOPE, capture=CAPTURE), "Add the toolbar.")
     replay = _run(tmp_path, monkeypatch, [REQS + build], {"t1": _no_edit}, profile=profile,
                   roles={"design-fix": fix})
     assert len(fixes) == 1 and "The harness rendered this design task" in fixes[0]
@@ -322,6 +359,21 @@ def _with_fixture(task, then):
     return lead
 
 
+#: The upload page's own scenarios and the reviewer's observations of it:
+#: the state the capture reaches is the table after the CSV upload.
+TABLE_PROOFS = [
+    dict(id="P1", requirements=["R1"], operation="the CSV is uploaded and the preview table is rendered at 390 px and desktop",
+         state="the uploaded row overflowed the 390 px viewport", expect="the preview table fits inside the viewport",
+         location="templates/index.html", evidence="capture"),
+    dict(id="P2", requirements=["R2"], operation="the uploaded row is read in both renders", state="the table fits",
+         expect="the uploaded values are shown in the table", location="templates/index.html", evidence="capture"),
+]
+TABLE_OBSERVED = {
+    "R1": "SUFFICIENT after the upload both renders show the preview table inside the viewport with no overflow",
+    "R2": "SUFFICIENT both renders show the uploaded row 'a,b 1,2' in the table",
+}
+
+
 @browser
 def test_an_interaction_state_survives_preview_restarts_from_audit_to_repair(tmp_path, monkeypatch):
     profile, port = _profile(tmp_path)
@@ -329,7 +381,7 @@ def test_an_interaction_state_survives_preview_restarts_from_audit_to_repair(tmp
                   dict(AUDIT_SCOPE, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t1")}),
                   "Audit the preview table.")
     repair = _decl("KIND: frontend standard",
-                   dict(REPAIR_SCOPE, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t2")}),
+                   dict(REPAIR_SCOPE, proofs=TABLE_PROOFS, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t2")}),
                    "Let the preview table fit.")
 
     def fix(call, replay):
@@ -337,7 +389,8 @@ def test_an_interaction_state_survives_preview_restarts_from_audit_to_repair(tmp
         return 'Let the rows wrap.\nCHANGED: ["templates/index.html"]'
     replay = _run(tmp_path, monkeypatch, [REQS + audit, repair + "\nRESOLVES: F1"],
                   {"t1": _with_fixture("t1", _no_edit), "t2": _with_fixture("t2", fix)}, profile=profile,
-                  files={**_design_files(), "templates/index.html": UPLOAD_PAGE.format(style="display:block;width:450px")})
+                  files={**_design_files(), "templates/index.html": UPLOAD_PAGE.format(style="display:block;width:450px")},
+                  roles={"design-review": _observed(TABLE_OBSERVED)})
     (f1,) = replay.findings
     assert [s[:2] for s in f1["steps"]] == [["file", "#csv"], ["wait", "#done"]] and f1["steps"][0][2]
     assert f1["status"] == "resolved" and f1["resolved_by"] == "t2", replay.result.error

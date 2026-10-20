@@ -7908,6 +7908,12 @@ class Session:
             record["recapture"] = dict(declared=capture, problem=why)
             return None
         spec.scope = replace(spec.scope, capture=capture)
+        # The rows' claimed state follows the accepted declaration before the
+        # fresh review: what is captured, what the reviewer is shown and what
+        # the row says are one state (root on c9a665b: the rows kept the
+        # dispatched "/" while /#q=Alpha was captured and reviewed).
+        record.setdefault("declared_capture", dict(current) if current else None)
+        self._rebind_capture_rows(spec, record, f"redeclared after {source} reported: {verdict.strip()[:200]}")
         self._note(f"task {spec.task_id}: recapturing {capture['path']} after {len(capture['steps'])} step(s)")
         self._stage("design")
         failure = self._harness_capture(spec)
@@ -11220,10 +11226,82 @@ class Session:
             if (same and [s for s in same if s[0] != "proof"] == [s for s in scenario if s[0] != "proof"]
                     and [list(r) for r in earlier.get("requirements") or ()] == wanted
                     and earlier.get("modality") == record.get("modality")):
+                earlier["pre_supersession"] = dict(reason=earlier.get("reason", ""))
                 earlier["superseded_by"] = record.get("task")
                 earlier["reason"] = f"superseded by task {record.get('task')}'s declaration of the same scenario"
                 self._note(f"{earlier['oid']} ({earlier.get('task')}): superseded by {record.get('task')}'s "
                            f"declaration of the same scenario")
+
+    def _rebind_capture_rows(self, spec, record: dict, why: str) -> List[str]:
+        """After the one accepted redeclaration (``_recapture_declared``):
+        this task's capture rows now claim the effective declared state,
+        not the dispatched one, before the fresh independent design review
+        is asked. The dispatched declaration, its problem and whatever was
+        measured or judged under it are kept on the row as lineage
+        (``capture_lineage``, never rewritten; ``capture_declared`` is the
+        first declaration), and nothing judged or measured under the old
+        state carries over: execution, receipts and sufficiency start
+        again, so a reviewer shown the dispatched state is never relabelled
+        as having judged the redeclared one (``_design_context_drift``
+        compares the shown row to the row as it stands). Rows of other
+        tasks, other modalities and superseded rows are untouched. Returns
+        the rebound row ids (root's recapture identity gap on c9a665b)."""
+        effective = self._capture_context(spec.scope)
+        rebound = []
+        for row in self.evidence_obligations:
+            if (row.get("task") != spec.task_id or row.get("modality") != "capture" or row.get("superseded_by")
+                    or row.get("kind") != "acceptance"):
+                continue
+            scenario = [list(s) for s in row.get("scenario") or []]
+            before = dict(scenario).get("capture")
+            if before == effective:
+                continue
+            lineage = list(row.get("capture_lineage") or [])
+            lineage.append(dict(capture=before, why=str(why)[:300], execution=row.get("execution"),
+                                sufficiency=row.get("sufficiency"), judged_by=row.get("judged_by", ""),
+                                receipts=list(row.get("receipts") or [])))
+            row.update(scenario=[[k, effective] if k == "capture" else [k, v] for k, v in scenario],
+                       capture_lineage=lineage, capture_declared=row.get("capture_declared", before),
+                       execution="missing", sufficiency="unjudged", judged_by="", judged_binding="", receipts=[],
+                       source_digest=None, reason="capture redeclared; measured and judged afresh")
+            self._sync_obligation(row)
+            self._reconcile_supersession(row, [s for s in scenario if s[0] != "proof"])
+            rebound.append(row["oid"])
+        if rebound:
+            record["rebound_rows"] = list(rebound)
+            self._note(f"task {spec.task_id}: capture rows {', '.join(rebound)} rebound to the redeclared state")
+        return rebound
+
+    def _reconcile_supersession(self, row: dict, previous: list) -> None:
+        """Supersession follows the effective scenario. A capture row this
+        task's dispatched declaration superseded (``previous``: the same
+        state and requirements, now redeclared away from) is lifted:
+        ``superseded_by`` is removed and its reason restored, and its own
+        execution and judgment, insufficient or otherwise, stay exactly as
+        they were; a row of an earlier task that declares the effective
+        state is superseded now, by the ordinary rule. Nothing else on the
+        record moves: a reading or test row this task superseded, or a
+        capture row superseded for another state, stays as it is (root on
+        c9a665b: t1 superseded by t2's A must not stay superseded by t2's
+        B)."""
+        scenario = [s for s in ([list(x) for x in row.get("scenario") or []]) if s[0] != "proof"]
+        wanted = [list(r) for r in row.get("requirements") or ()]
+        for earlier in self.evidence_obligations:
+            if (earlier is row or earlier.get("superseded_by") != row.get("task")
+                    or earlier.get("modality") != row.get("modality")):
+                continue
+            same = [s for s in ([list(x) for x in earlier.get("scenario") or []]) if s[0] != "proof"]
+            if same != previous or [list(r) for r in earlier.get("requirements") or ()] != wanted:
+                continue
+            if same == scenario:
+                continue
+            earlier.pop("superseded_by", None)
+            earlier["reason"] = (earlier.pop("pre_supersession", None) or {}).get("reason", "")
+            earlier["supersession_lifted"] = (f"task {row.get('task')} redeclared its capture to another state; "
+                                              f"{earlier['oid']} holds its own proof again")
+            self._note(f"{earlier['oid']} ({earlier.get('task')}): no longer superseded; {row.get('task')} "
+                       "redeclared its capture to another state")
+        self._supersede_obligation(row)
 
     def _register_acceptance_obligations(self, spec, covers) -> None:
         """At dispatch: each acceptance behavior the task's scope declares,

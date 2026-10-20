@@ -43,6 +43,20 @@ def _run_dir(replay) -> Path:
     return Path(replay.result.run_dir)
 
 
+def _not_run_rows(prompt, path):
+    """The ids of the lead's NOT RUN obligation (kind not_run: its behavior
+    is exactly the item's path), never a declared acceptance scenario
+    (behavior "P<n>: ...") that names the same test file in its location
+    (root's full suite on c9a665b: the declared P2 row also carries
+    tests/test_http.py)."""
+    out = []
+    for oid in H.obligation_ids(prompt):
+        row = prompt.split(f"- {oid} (", 1)[1].split("\n", 1)[0].split("): ", 1)[1]
+        if re.split(r"; (?:evidence|runner) ", row, maxsplit=1)[0] == path:
+            out.append(oid)
+    return out
+
+
 # -- boundary 1: one packet, one predicate ---------------------------------------------------
 
 @pytest.mark.requirements_ledger
@@ -59,9 +73,7 @@ def test_an_explicit_insufficient_or_a_conflicting_sufficiency_keeps_the_require
 
     def auditor(call, replay):
         lines = ["R1: MET - app.py", "R2: MET - tests/test_http.py"]
-        for oid in dict.fromkeys(re.findall(r"^- (O\d+) \(", call.prompt, re.MULTILINE)):
-            if "tests/test_http.py" not in call.prompt.split(f"- {oid} (", 1)[1].split("\n", 1)[0]:
-                continue
+        for oid in _not_run_rows(call.prompt, "tests/test_http.py"):
             lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
             if shape == "conflict":
                 lines.append(f"{oid}: SUFFICIENT it does answer /add")
@@ -440,8 +452,10 @@ def test_the_repair_route_after_a_failed_check_is_admitted_before_the_editor_wri
         return 'Documented add.\nCHANGED: ["README.md"]'
 
     def gate_fix(call, replay):
+        # The repair is the editing call that delivers P1, so it binds it
+        # to the case the check runs (the draft changed nothing).
         H.write(call, {"app.py": FIXED})
-        return 'Fixed add.\nCHANGED: ["app.py"]'
+        return 'Fixed add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
     script.overrides["lead"] = lead
     script.overrides["gate-fix"] = gate_fix
@@ -484,9 +498,8 @@ def test_combined_debt_names_every_reason_and_commits_an_incomplete_terminal(tmp
 
     def auditor(call, replay):
         lines = ["R1: MET - app.py", "R2: MET - tests/test_http.py", "RFT1-1: UNRESOLVED it stands"]
-        for oid in dict.fromkeys(re.findall(r"^- (O\d+) \(", call.prompt, re.MULTILINE)):
-            if "tests/test_http.py" in call.prompt.split(f"- {oid} (", 1)[1].split("\n", 1)[0]:
-                lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
+        for oid in _not_run_rows(call.prompt, "tests/test_http.py"):
+            lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
         return "\n".join(lines)
     script.overrides["auditor"] = auditor
     replay = H.run(tmp_path, monkeypatch, script, files=HTTP_FILES, check=GATE_FILES, max_tasks=1,

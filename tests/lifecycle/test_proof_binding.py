@@ -1342,6 +1342,111 @@ def test_a_later_declaration_of_the_same_scenario_takes_an_unrun_row_over_and_no
     assert not same_task.get("superseded_by"), "a task never supersedes its own row"
 
 
+def test_a_redeclared_capture_rebinds_the_rows_with_lineage_and_reconciles_supersession(tmp_path, monkeypatch):
+    """Root's recapture identity gap on c9a665b: the one accepted
+    redeclaration moved the captured state while the rows kept the
+    dispatched one, so the fresh review was compared to a row it was not
+    about. At the accepted declaration the task's capture rows claim the
+    effective state, keep the dispatched one as lineage with whatever was
+    measured or judged under it, start execution and sufficiency again,
+    and the context an earlier review was shown is stale for them. A
+    repeated, wait-less, fixture-less, invalid or withdrawn declaration
+    rebinds nothing. Supersession follows the effective state: a row this
+    task superseded by its dispatched state is lifted with its own
+    insufficient judgment intact, and an earlier row of the effective
+    state is superseded now; other tasks' rows and the task's reading row
+    are untouched."""
+    from types import SimpleNamespace as NS
+
+    from quadratus import design_evidence
+    from quadratus.scope import TaskScope
+    from quadratus.session import Session
+    project = tmp_path / "project"
+    (project / "templates").mkdir(parents=True)
+    (project / "templates" / "index.html").write_text("<button id=clear>Clear</button>\n")
+    session = _session(tmp_path, project)
+    session.config.requirements_ledger = True
+    session.memory.ledger.requirements["R1"] = "Clear is disabled exactly when the field is empty"
+    capture = H.proofs_for("R1", "templates/index.html", evidence="capture", operation="Clear is clicked",
+                           state="the field holds Alpha", expect="Clear is disabled")
+    reading = [dict(id="P2", requirements=["R1"], operation="the README is read", state="Clear is built",
+                    expect="README names Clear", location="README.md", evidence="reading")]
+    A = dict(path="/", steps=[dict(action="wait", selector="#clear:disabled")])
+    B = dict(path="/#q=Alpha", steps=[dict(action="wait", selector="#clear:enabled"), dict(action="click", selector="#clear"),
+                                     dict(action="wait", selector="#clear:disabled")])
+    ctx = lambda c: Session._capture_context(NS(capture=c))  # noqa: E731
+
+    def spec(tid, declared, proofs=capture):
+        return NS(task_id=tid, description="Disable Clear when empty", kind="frontend",
+                  scope=TaskScope(permitted_paths=("templates/index.html",), proofs=tuple(dict(p) for p in proofs),
+                                  capture=dict(declared)))
+    t0, t1, t2, t3 = (spec("t0", B), spec("t1", A, capture + reading), spec("t2", A, capture + reading),
+                      spec("t3", dict(A, path="/other")))
+    for sp in (t0, t1, t2, t3):
+        session._register_acceptance_obligations(sp, ["R1"])
+    rows = {(o["task"], o["modality"]): o for o in session.evidence_obligations}
+    r0, r1, r1r, r2, r2r, r3 = (rows[k] for k in (("t0", "capture"), ("t1", "capture"), ("t1", "reading"),
+                                                   ("t2", "capture"), ("t2", "reading"), ("t3", "capture")))
+    assert r1["superseded_by"] == "t2" and r1r["superseded_by"] == "t2", "t2 took over t1's capture and reading rows"
+    assert not r0.get("superseded_by") and not r3.get("superseded_by")
+    # t1 was judged insufficient under A by an earlier review: its own
+    # judgment, which nothing may erase.
+    r1.update(execution="ran", source_digest="earlier", sufficiency="insufficient", judged_by="codex:gpt",
+              judged_binding="earlier-binding")
+    # The context a review of t2 under A was shown (_final_design_review).
+    shown = dict(task="t2", review_context=dict(goal=session.memory.goal.strip(), requirements={"R1": [1, session.memory.ledger.requirements["R1"]]},
+                                                 rows={r2["oid"]: dict(scenario=[list(x) for x in r2["scenario"]],
+                                                                       requirements=[["R1", 1]], behavior=r2["behavior"])}))
+    assert session._design_context_drift(shown) == ""
+    replies = []
+    task = NS(record=lambda *a, **k: None, keep=lambda *a, **k: None)
+    monkeypatch.setattr(session, "_invoke_model", lambda lead, prompt: replies.pop(0))
+    monkeypatch.setattr(session, "_harness_capture", lambda sp: "")
+    monkeypatch.setattr(session, "_refuse_mismatched", lambda *a, **k: None)
+    monkeypatch.setattr(session, "_capture_receipt", lambda *a, **k: None)
+    monkeypatch.setattr(design_evidence, "check_records", lambda *a, **k: (True, "", [], []))
+    before = json.dumps(session.evidence_obligations, sort_keys=True, default=str)
+    blocked = {"repeated": "CAPTURE: " + json.dumps(A),
+               "no final wait": "CAPTURE: " + json.dumps(dict(path="/#q=Alpha", steps=[])),
+               "missing fixture": "CAPTURE: " + json.dumps(dict(path="/#q=Alpha", steps=[
+                   dict(action="file", selector="#f", path="tests/fixtures/none.csv"), dict(action="wait", selector="#x")])),
+               "invalid": "CAPTURE: {not json", "withdrawn": "CAPTURE: none\nno page reaches it"}
+    for why, reply in blocked.items():
+        replies.append(reply)
+        record = dict(task="t2")
+        assert session._recapture_declared(t2, "claude:opus", task, record, "BLOCKING: not shown") is None, why
+        assert "rebound_rows" not in record and t2.scope.capture == A, why
+        assert json.dumps(session.evidence_obligations, sort_keys=True, default=str) == before, why
+    assert session._design_context_drift(shown) == ""
+    # The accepted declaration.
+    replies.append("CAPTURE: " + json.dumps(B))
+    record = dict(task="t2")
+    assert session._recapture_declared(t2, "claude:opus", task, record, "BLOCKING: the renders do not show the changed interface")[0] is True
+    assert t2.scope.capture == B and record["declared_capture"] == A and record["rebound_rows"] == [r2["oid"]]
+    assert dict(r2["scenario"])["capture"] == ctx(B) and r2["capture_declared"] == ctx(A)
+    assert [e["capture"] for e in r2["capture_lineage"]] == [ctx(A)]
+    assert r2["capture_lineage"][0]["why"].startswith("redeclared after the design reviewer from another vendor reported: BLOCKING")
+    assert r2["execution"] == "missing" and r2["sufficiency"] == "unjudged" and not r2["receipts"] and not r2["judged_by"]
+    assert r2["established"] is False
+    assert "changed since the review" in session._design_context_drift(shown), "the review under A judges nothing under B"
+    # Supersession follows the effective state, and t1's own judgment stays.
+    assert "superseded_by" not in r1 and "redeclared its capture to another state" in r1["supersession_lifted"]
+    assert r1["sufficiency"] == "insufficient" and r1["judged_by"] == "codex:gpt" and r1["execution"] == "ran"
+    assert dict(r1["scenario"])["capture"] == ctx(A) and not r1.get("capture_lineage")
+    assert r0["superseded_by"] == "t2", "t0 declared the state t2 now declares"
+    assert not r3.get("superseded_by") and dict(r3["scenario"])["capture"] == ctx(dict(A, path="/other"))
+    assert r2r["modality"] == "reading" and "capture" not in dict(r2r["scenario"]) and not r2r.get("capture_lineage")
+    assert r1r["superseded_by"] == "t2", "the reading row t2 superseded is not a capture state and stays superseded"
+    # A refresh keeps the lifted row's judgment; the one redeclaration is spent.
+    session._refresh_obligations()
+    lifted = next(o for o in session.evidence_obligations if o["task"] == "t1")
+    assert lifted["sufficiency"] == "insufficient" and lifted["judged_by"] == "codex:gpt" and "superseded_by" not in lifted
+    replies.append("CAPTURE: " + json.dumps(dict(B, path="/#q=Beta")))
+    assert session._recapture_declared(t2, "claude:opus", task, record, "BLOCKING: again") is None
+    assert "spent" in record["recapture_blocked"] and t2.scope.capture == B
+    assert len([e for o in session.evidence_obligations for e in o.get("capture_lineage") or []]) == 1
+
+
 def test_the_audit_is_shown_the_whole_canonical_scenario_or_told_it_is_not_shown(tmp_path):
     """Astra's finding on 00cfc02: the audit and a reassessment read the
     full scenario and location, never a prefix that hides the expected

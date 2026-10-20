@@ -13,11 +13,33 @@ import pytest
 
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_direct_tier import FAVICON, _files, _task
+from tests.lifecycle.test_direct_tier import FAVICON, _task
+from tests.lifecycle.test_direct_tier import _files as _direct_files
 from tests.lifecycle.test_lifecycle_matrix import CLOSEOUT, FILES, FIXED, T1, T2, Script
 
 FAVICON_TASK = "KIND: frontend simple\nSCOPE: " + json.dumps(FAVICON) + "\nAdd a favicon route and link."
-README_TASK = "KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md."
+# The explicit cases that audit cover R1 ("README documents add"); T2's own
+# reading scenario names R2, so the listed task declares the same scenario
+# against R1 (root's full suite on c9a665b: a proof naming a requirement
+# outside COVERS binds nothing, and the reading row was never on the record).
+README_T2 = dict(T2, proofs=H.proofs_for("R1", "README.md", operation="the README is read",
+                                         state="add is implemented", expect="README names add",
+                                         evidence="reading"))
+README_TASK = "KIND: docs simple\nSCOPE: " + json.dumps(README_T2) + "\nDocument add in README.md."
+#: This file's own explicit judgment of the README reading scenario, written
+#: per obligation id by a scripted auditor that was shown the row (opt-in).
+READING_JUDGED = "SUFFICIENT README.md on the delivered source names add(a, b) and says it returns a + b"
+#: The explicit-task baseline: a valid, distinct, pre-existing favicon, so
+#: tests/test_basic.py::test_favicon_file passes before any listed task runs
+#: and a README-only task's check is about that task (root's full suite on
+#: c9a665b: the direct tier's empty favicon failed every explicit run's check
+#: and masked the audit assertions). The favicon task still changes the
+#: bytes; the direct tier keeps its own broken baseline.
+PLACEHOLDER_SVG = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><!-- placeholder --></svg>\n"
+
+
+def _files():
+    return {**_direct_files(), "static/favicon.svg": PLACEHOLDER_SVG}
 ADD_TASK = "KIND: architect complex\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py."
 
 

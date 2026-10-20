@@ -2152,6 +2152,36 @@ Key design decisions already settled:
   modality, a legacy row, a NOT RUN or skip fact, predecessor cap debt
   and open findings are untouched; sharing COVERS alone supersedes
   nothing.
+  **The rows claim the effective capture, and supersession follows it**
+  (`_rebind_capture_rows`, `_reconcile_supersession`; root's recapture
+  identity gap on c9a665b). The one accepted redeclaration
+  (`_recapture_declared`) replaced the captured state while the task's
+  capture rows kept the dispatched one, so the fresh review was compared
+  with a row it was not about and the rows said ran with no mismatch. At
+  the accepted declaration, before any capture or review of it, this
+  task's capture rows take the effective declared state as their
+  scenario; the dispatched declaration, its problem and whatever was
+  measured or judged under it are kept on the row (`capture_declared`,
+  `capture_lineage`, never rewritten; `declared_capture` and
+  `rebound_rows` on the design record), and execution, receipts and
+  sufficiency start again, so a reviewer shown the dispatched state is
+  never relabelled as having judged the redeclared one
+  (`_design_context_drift` finds the shown row changed). Goal and
+  requirement texts, operation, state, expectation and location are not
+  touched; rows of other tasks, other modalities and superseded rows are
+  not touched; a repeated, wait-less, fixture-less, invalid or withdrawn
+  declaration, and any declaration after the one is spent, rebinds
+  nothing. Supersession follows the effective state: a row this task's
+  dispatched state superseded is lifted with its own execution and
+  judgment, insufficient or otherwise, exactly as they were
+  (`supersession_lifted`; the pre-supersession reason is stashed and
+  restored), and an earlier task's row that declares the effective state
+  is superseded now by the ordinary rule. Fixture-side, a scripted design
+  reviewer that approves verified renders judges each row it is shown
+  with a concrete observation of that fixture's page
+  (`test_harness_capture._observed`), and a fixture whose page is not the
+  shared REPAIR_SCOPE's Import toolbar declares its own scenarios: a
+  verdict about an Import button the page never has describes nothing.
 - **A trim is evidence, and its assertion preservation is owed a verdict**
   (`_trim_snapshot`, `_trim_settle`, `_trim_pre_contents`, `_trim_owed`,
   `_trim_block`, `_read_trim_disposition`). Every trim has a record id

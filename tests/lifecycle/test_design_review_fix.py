@@ -19,6 +19,7 @@ from tests.lifecycle.test_harness_capture import (
     ICON,
     _decl,
     _no_edit,
+    _observed,
     _profile,
     _run,
     browser,
@@ -26,13 +27,29 @@ from tests.lifecycle.test_harness_capture import (
 
 pytestmark = pytest.mark.requirements_ledger
 
-BUILD = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=CAPTURE), "Add the toolbar hint.")
+#: This task's own scenarios: the hint beside the search field, as its
+#: fixture page shows it; the shared REPAIR_SCOPE proof names an Import
+#: button this page never has.
+HINT_PROOFS = [
+    dict(id="P1", requirements=["R1"], operation="the import page with the toolbar hint is rendered at 390 px and desktop",
+         state="the hint squeezed the search field", expect="the search field keeps its room inside the viewport",
+         location="templates/index.html", evidence="capture"),
+    dict(id="P2", requirements=["R2"], operation="the toolbar text is read in both renders", state="the hint is shown",
+         expect="the toolbar text is visible beside the hint", location="templates/index.html", evidence="capture"),
+]
+BUILD = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, proofs=HINT_PROOFS, capture=CAPTURE), "Add the toolbar hint.")
 WIDER = f"<html>{ICON}<body><div class=toolbar style='max-width:100%'>tools, wider search</div></body></html>\n"
+#: The scripted reviewer's observations of the fixed page (WIDER), one per
+#: covered requirement; a BLOCKING verdict judges no row.
+HINT_OBSERVED = {
+    "R1": "SUFFICIENT both renders show the search field with room beside the hint inside the viewport",
+    "R2": "SUFFICIENT both renders show the toolbar text 'tools, wider search' visible",
+}
 
 
 def _verdicts(*replies):
     queue = list(replies)
-    return lambda call, replay: queue.pop(0) if queue else "APPROVED"
+    return _observed(HINT_OBSERVED, base=lambda call, replay: queue.pop(0) if queue else "APPROVED")
 
 
 def _run_review(tmp_path, monkeypatch, review, fixes):

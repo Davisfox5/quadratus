@@ -37,7 +37,14 @@ from tests.lifecycle.test_lifecycle_matrix import T2
 pytestmark = pytest.mark.requirements_ledger
 
 REQS = "REQUIREMENTS:\nR1: the toolbar fits a phone\nR2: the import page keeps its tests passing\n"
-BUILD = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=CAPTURE), "Make the toolbar fit.", covers="R1")
+# BUILD covers R1 alone, so its capture scenario names R1 only: the shared
+# REPAIR_SCOPE proofs name R1 and R2, and a proof naming a requirement outside
+# COVERS is refused at dispatch (root's full suite on c9a665b).
+FIT_R1 = [dict(id="P1", requirements=["R1"], operation="the import page is rendered at 390 px and desktop",
+               state="the toolbar overflowed a phone viewport", expect="the toolbar fits inside the viewport at both widths",
+               location="templates/index.html", evidence="capture")]
+BUILD = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, proofs=FIT_R1, capture=CAPTURE), "Make the toolbar fit.",
+              covers="R1")
 VERIFY = _decl("KIND: frontend standard", dict(AUDIT_SCOPE, capture=CAPTURE),
                "Verify the import page and run its tests.", covers="R2")
 # The docs task covers R1 here, so its reading scenario names R1 (T2's names R2).

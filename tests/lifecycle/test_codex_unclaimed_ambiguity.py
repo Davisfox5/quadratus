@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.lifecycle.test_explicit_tasks import README_TASK, _run, _script
+from tests.lifecycle.test_explicit_tasks import READING_JUDGED, README_TASK, _run, _script
+from tests.lifecycle.test_lifecycle_matrix import judging
 
 
 @pytest.mark.requirements_ledger
@@ -13,7 +14,7 @@ def test_ambiguity_is_scoped_to_explicit_claims(tmp_path, monkeypatch, rid, comp
         ['REQUIREMENTS:\nR1: README documents add\nR2: unrelated CSV quoting behavior\n' + README_TASK + '\nCOVERS: R1'],
         max_tasks=1, record_complete=False,
         script=_script(**{'requirements-review': lambda c,r: f'AMBIGUOUS: {rid} - two incompatible readings',
-                         'auditor': lambda c,r: 'R1: MET - README.md'}))
+                         'auditor': judging(lambda c, r: 'R1: MET - README.md', reading=READING_JUDGED)}))
     assert replay.of('orchestrator') == []
     assert replay.result.completed is complete, replay.result.error
     if complete:
