@@ -59,13 +59,13 @@ _CARRIED = (
     "unresolved_reviews", "_cap_goal", "_final_audit", "review_notes", "finish_refusals",
     "review_dispositions", "not_started", "judgment_completions", "judgment_gaps",
     "review_findings", "evidence_obligations", "plan_admissions", "operations", "_requirement_revision_record",
-    "_plan_gate_receipt", "_route_forfeit", "_terminal_route",
+    "_plan_gate_receipt", "_route_forfeit", "_terminal_route", "trim_records", "proof_binding_problems",
 )
 #: Carried state added by the A+B batch (2026-10-18): absent from earlier
 #: checkpoints, which are still readable and resumable with these empty.
 _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admissions", "operations",
                           "_requirement_revision_record", "_plan_gate_receipt", "_route_forfeit",
-                          "_terminal_route"})
+                          "_terminal_route", "trim_records", "proof_binding_problems"})
 #: State a checkpoint does not carry. Any of it present makes the point not
 #: resumable, rather than resuming a job whose record would be incomplete.
 _NOT_CARRIED = (

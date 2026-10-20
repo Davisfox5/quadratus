@@ -184,8 +184,9 @@ def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp
     from quadratus.session import Session
     from tests.lifecycle.test_lifecycle_matrix import T2
     reqs = "REQUIREMENTS:\nR1: add returns the sum\nR2: the README documents add\n"
-    build = ('KIND: architect complex\nSCOPE: {"permitted_paths": ["app.py"], "intended_result": "add works", '
-             '"acceptance": ["add(1, 2) == 3"], "max_lines": 40}\nImplement add in app.py.\nCOVERS: R1')
+    build = ("KIND: architect complex\nSCOPE: " + json.dumps(dict(
+        permitted_paths=["app.py"], intended_result="add works", acceptance=["add(1, 2) == 3"], max_lines=40,
+        proofs=H.proofs_for("R1", "app.py"))) + "\nImplement add in app.py.\nCOVERS: R1")
     verify = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, max_lines=1, edits="none"))
               + "\nCheck the README against app.py.\nCOVERS: R2")
     forbid = ("README.md",) if gate_changes == "forbidden" else ()

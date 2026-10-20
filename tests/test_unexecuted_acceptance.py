@@ -358,7 +358,7 @@ def test_parallel_children_bring_their_not_run_reports_to_the_parent(tmp_path):
     """Codex review of b6ba3ba, F5."""
     from tests.test_parallel_tasks import Orchestrated, _block
     from tests.test_parallel_tasks import _session as _parallel_session
-    batch = "PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py") + "\nCOVERS: R2"
+    batch = "PARALLEL\n" + _block("a.py", covers="R1") + "\n---\n" + _block("b.py", covers="R2")
 
     class Script(Orchestrated):
         def invoke_for(self, root):

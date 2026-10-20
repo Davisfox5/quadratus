@@ -26,7 +26,7 @@ class FakeDecider:
 
 def _lead(call, replay):
     H.write(call, {"app.py": FIXED})
-    return 'Implemented add.\nCHANGED: ["app.py"]'
+    return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
 
 def _run(tmp_path, monkeypatch, decl, decider):

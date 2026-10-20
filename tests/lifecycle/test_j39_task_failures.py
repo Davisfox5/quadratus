@@ -100,7 +100,7 @@ def test_an_unparsed_request_fails_the_task_and_keeps_the_reply(tmp_path, monkey
         if call.task == "t1":
             return "I need more context.\nWORKER {not json"
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_then_continue_then_done, lead=lead),
                    files=FILES, max_tasks=3)
     t1 = _task(replay, "t1")
@@ -116,7 +116,7 @@ def test_a_lead_that_never_stops_asking_fails_its_task_only(tmp_path, monkeypatc
         if call.task == "t1":
             return "CONSULT Sol: what should add return?"
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_then_continue_then_done, lead=lead,
                                                  consultant=lambda call, replay: "The sum."),
                    files=FILES, max_tasks=3)

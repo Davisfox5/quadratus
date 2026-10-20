@@ -7,17 +7,23 @@ RESOLVES task repairs, not the end of the run. Integrity stops stay stops.
 """
 
 import json
+import re
 from pathlib import Path
 
 from quadratus.integration import GateResult
 from tests.gate_facts import ASSERTION_FAILURE
+from tests.lifecycle import harness as H
 from tests.test_parallel_tasks import BATCH, Orchestrated, _block
 from tests.test_parallel_tasks import _session as parallel_session
 
 
 def _continuation(paths, text="work in b.py", extra=""):
-    scope = json.dumps({"permitted_paths": paths, "intended_result": "b.py written",
-                        "acceptance": ["b.py exists"], "max_lines": 20})
+    covers = next((m.group(1) for m in [re.search(r"COVERS:\s*(.+)", extra)] if m), None)
+    scope = {"permitted_paths": paths, "intended_result": "b.py written", "acceptance": ["b.py exists"],
+             "max_lines": 20}
+    if covers:
+        scope["proofs"] = H.proofs_for(covers, paths[0])
+    scope = json.dumps(scope)
     return f"KIND: backend simple\nSCOPE: {scope}\n{text}\nCONTINUES: t2{extra}"
 
 
@@ -87,7 +93,7 @@ REQS = "REQUIREMENTS:\nR1: a.py works\nR2: b.py works\n"
 
 
 def _covered(path, rid):
-    return _block(path) + f"\nCOVERS: {rid}"
+    return _block(path, covers=rid)
 
 
 def test_merged_work_that_fails_the_check_becomes_repairable_debt(tmp_path):

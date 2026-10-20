@@ -559,7 +559,7 @@ def test_parallel_children_work_under_the_parents_committed_authority_and_the_re
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -625,12 +625,13 @@ def test_a_routing_decision_is_an_operation_under_the_committed_authority(tmp_pa
     monkeypatch.setattr(Session, "_route_with_decider", observe)
     task = ("REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: README documents add\n"
             "SCOPE: " + json.dumps({"permitted_paths": ["app.py"], "intended_result": "app.py written",
-                                    "acceptance": ["app.py meets the task"], "max_lines": 20})
+                                    "acceptance": ["app.py meets the task"], "max_lines": 20,
+                                    "proofs": H.proofs_for("R1", "app.py")})
             + "\nImplement add in app.py.\nCOVERS: R1")
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(task), lead=lead), files=FILES, max_tasks=1,
                    decider=decider, record_complete=False)
     run_dir = _run_dir(replay)

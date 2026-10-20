@@ -29,6 +29,8 @@ FAVICON = dict(
 
 
 def _decl(scope=FAVICON, tier="direct", extra="", covers="R1"):
+    if covers and "proofs" not in scope:
+        scope = dict(scope, proofs=H.proofs_for(covers, "tests/test_basic.py"))
     return ("KIND: frontend simple\nSCOPE: " + json.dumps(scope) + "\nAdd a favicon route and link."
             + (f"\nCOVERS: {covers}" if covers else "") + (f"\nTIER: {tier}" if tier else "") + extra)
 

@@ -29,9 +29,13 @@ FIXED = "def add(a, b):\n    return a + b\n"
 #: gate result is about the case, not about a broken fixture.
 FILES_OK = {**FILES, "app.py": FIXED}
 T1 = dict(permitted_paths=["app.py", "tests/test_app.py"], intended_result="add works",
-          acceptance=["add(1, 2) == 3"], max_lines=40)
+          acceptance=["add(1, 2) == 3"], max_lines=40,
+          proofs=H.proofs_for("R1", "tests/test_app.py", operation="add(1, 2)", state="nothing stored",
+                              expect="3 is returned"))
 T2 = dict(permitted_paths=["README.md"], intended_result="README documents add",
-          acceptance=["README names add"], max_lines=20)
+          acceptance=["README names add"], max_lines=20,
+          proofs=H.proofs_for("R2", "README.md", operation="the README is read", state="add is implemented",
+                              expect="README names add"))
 DECL_T1 = "KIND: architect complex\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py."
 DECL_T2 = "KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md."
 CLOSEOUT = "SUMMARY: done\nDECISIONS: none recorded\nDEAD ENDS: none"
@@ -88,7 +92,7 @@ class Script:
     def _lead(self, call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -138,7 +142,7 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
             return _fetch_request(style, ids[0])
         assert "tested in tests/test_app.py" in call.prompt, "the fetched artifact reached the lead"
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def collaborator(call, replay):
         if call.vendor == "codex":

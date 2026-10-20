@@ -218,7 +218,7 @@ def test_application_output_that_mentions_a_sandbox_is_not_an_infrastructure_fai
         if call.task != "t1":
             return Script()._lead(call, replay)
         H.write(call, {"app.py": FIXED})
-        return _codex('Implemented add.\nCHANGED: ["app.py"]',
+        return _codex('Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]',
                       ("pytest -q", "E   AssertionError: expected 'bwrap: denied' and seccomp profile", 1))
 
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_orchestrator, lead=lead), files=FILES)

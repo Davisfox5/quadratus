@@ -7,13 +7,17 @@ from pathlib import Path
 
 from quadratus.artifacts import ArtifactStore
 from quadratus.session import Session, SessionConfig, _parallel_blocks
+from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import covered_met
 
 
-def _block(path, text="work"):
-    scope = json.dumps({"permitted_paths": [path], "intended_result": f"{path} written",
-                        "acceptance": [f"{path} exists"], "max_lines": 20})
-    return f"KIND: backend simple\nSCOPE: {scope}\n{text} in {path}"
+def _block(path, text="work", covers=None):
+    scope = {"permitted_paths": [path], "intended_result": f"{path} written",
+             "acceptance": [f"{path} exists"], "max_lines": 20}
+    if covers:
+        scope["proofs"] = H.proofs_for(covers, path)
+    scope = json.dumps(scope)
+    return f"KIND: backend simple\nSCOPE: {scope}\n{text} in {path}" + (f"\nCOVERS: {covers}" if covers else "")
 
 
 BATCH = "PARALLEL\n" + _block("a.py") + "\n---\n" + _block("b.py")
@@ -144,7 +148,7 @@ def test_a_parallel_batch_does_not_cover_a_requirement_owed_to_an_open_finding(t
     """Codex review of e47c7ed: a disjoint batch marked R1 covered while F1 was open."""
     import pytest
     reqs = "REQUIREMENTS:\nR1: a works\nR2: b works\n"
-    batch = ("PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py") + "\nCOVERS: R2")
+    batch = ("PARALLEL\n" + _block("a.py", covers="R1") + "\n---\n" + _block("b.py", covers="R2"))
     script = Orchestrated([reqs + batch, "DONE"])
     session, project = _session(tmp_path, script, requirements_ledger=True, max_requirement_reopens=0)
     session.findings.append(dict(id="F1", task="t0", requirements=["R1"], status="open", view="mobile",

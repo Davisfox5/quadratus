@@ -200,6 +200,20 @@ def ended_at_cap(replay, cap: int) -> bool:
             and stop.get("kind") == "cap" and stop.get("legacy") == "GoalUnconfirmedAtCap")
 
 
+def proofs_for(covers, location: str, *, operation=None, state="the project as delivered",
+               expect=None) -> list:
+    """An opt-in builder for a scripted planner's SCOPE ``proofs`` (proof/1):
+    one declared scenario per covered requirement, in the test file the
+    fixture's own checks execute. Fixture code calls it where its planner
+    is asked for the mapping; nothing supplies it for a planner that omits
+    it, and no lead's PROVES line, trim verdict or sufficiency is ever
+    synthesized here."""
+    rids = [r.strip() for r in (covers.split(",") if isinstance(covers, str) else covers) if r.strip()]
+    return [dict(id=f"P{i}", requirements=[rid], operation=operation or f"{location} exercises {rid}",
+                 state=state, expect=expect or f"{rid} holds on the delivered source", location=location)
+            for i, rid in enumerate(rids, 1)]
+
+
 def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None, extra_checks=(), lead_runs_commands=True,
         capture_profile=None, readiness=None, record_complete=True, survey=None,

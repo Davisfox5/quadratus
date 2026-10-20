@@ -118,7 +118,7 @@ def _run(tmp_path, monkeypatch, *, source=FIXED, body="asserts", wrong=True, lim
 
     def lead(call, replay):
         H.write(call, {"app.py": source if call.task == "t1" else FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def collaborator(call, replay):
         first = not any(c.role == "revision" and c.task == call.task for c in replay.calls)
@@ -288,7 +288,7 @@ def test_a_held_review_finding_is_tested_and_rechecked_once_by_its_own_reviewer(
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead, collaborator=collaborator, recheck=recheck,
@@ -350,7 +350,7 @@ def test_an_evidence_file_must_be_a_new_project_test_file(tmp_path, monkeypatch,
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
@@ -376,7 +376,9 @@ _SAFE = ("def safe_ratio(a, b):\n    try:\n        return a / b\n"
          "    except ArithmeticError:\n        return None\n")
 _UNSAFE = _SAFE.replace("ArithmeticError", "ValueError")
 _RATIO_SCOPE = dict(permitted_paths=["ratio.py"], intended_result="safe_ratio is safe",
-                    acceptance=["safe_ratio(1, 0) is None"], max_lines=40)
+                    acceptance=["safe_ratio(1, 0) is None"], max_lines=40,
+                    proofs=H.proofs_for("R1", "ratio.py", operation="safe_ratio(1, 0)", state="no state",
+                                        expect="None is returned, nothing raised"))
 _RATIO_DECL = ("REQUIREMENTS:\nR1: " + _RATIO_REQ + "\nKIND: architect complex\nSCOPE: "
                + json.dumps(_RATIO_SCOPE) + "\nImplement safe_ratio in ratio.py.\nCOVERS: R1")
 _RATIO_TESTS = {
@@ -745,7 +747,7 @@ def test_a_review_reassessment_is_bound_by_the_original_goal_not_only_the_task_t
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead,
@@ -794,7 +796,7 @@ def test_every_judge_and_writer_after_the_draft_is_given_the_order_of_authority(
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     (tmp_path / "revision").mkdir()
     revised = H.run(tmp_path / "revision", monkeypatch, Script(

@@ -444,7 +444,7 @@ def test_every_task_review_judges_the_original_goal_not_only_the_task_paraphrase
         H.write(call, {"app.py": fixed})
         if closing == "capped":
             return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     seen = []
 
@@ -479,7 +479,8 @@ _TYPED = ("def add(a, b):\n"
 
 def _simple(path, text, covers):
     scope = json.dumps({"permitted_paths": [path], "intended_result": f"{path} written",
-                        "acceptance": [f"{path} meets the task"], "max_lines": 20})
+                        "acceptance": [f"{path} meets the task"], "max_lines": 20,
+                        "proofs": H.proofs_for(covers, "tests/test_app.py" if path == "app.py" else path)})
     return f"KIND: backend simple\nSCOPE: {scope}\n{text}\nCOVERS: {covers}"
 
 
@@ -502,7 +503,7 @@ def test_goal_bearing_simple_parallel_work_meets_one_cross_vendor_review(tmp_pat
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": _TYPED if source == "met" else fixed})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -568,7 +569,7 @@ def test_goal_bearing_work_is_reviewed_or_held_never_closed_unreviewed(tmp_path,
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     reviews = []
 
@@ -622,7 +623,7 @@ def test_a_goal_bearing_review_gives_a_verdict_per_covered_requirement(tmp_path,
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     reviews = []
 
@@ -742,7 +743,7 @@ def test_review_and_audit_trace_every_error_path_and_judge_the_goal_over_require
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
                                                  collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
@@ -892,7 +893,7 @@ def test_the_review_seat_is_asked_for_a_scratch_run_and_the_auditor_never_sees_a
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
                                         collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
@@ -935,7 +936,7 @@ def test_a_parallel_finding_on_sibling_work_is_rechecked_once_on_the_merged_sour
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": fixed})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -1048,7 +1049,7 @@ def test_a_parallel_childs_reviewer_gets_the_scratch_rule_and_the_harness_runs_i
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": fixed})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -1365,7 +1366,7 @@ def test_a_revision_past_the_size_stop_spends_the_remaining_fix_allowance_bringi
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def revision(call, replay):
         n = len(replay.of("revision"))
@@ -1429,7 +1430,7 @@ def test_every_editing_call_after_the_draft_carries_the_original_goal_over_a_gen
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed if path == "revision-and-fix" else "def add(a, b):\n    return a - b\n"})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def revision(call, replay):
         H.write(call, {"app.py": _TYPED})
@@ -1473,7 +1474,7 @@ def test_a_parallel_childs_draft_carries_the_requirements_it_covers_verbatim(tmp
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": fixed})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -1589,7 +1590,7 @@ def test_a_capped_writing_call_after_the_draft_is_told_its_real_round_budget(tmp
 
     def lead(call, replay):
         H.write(call, {"app.py": "def add(a, b):\n    return a - b\n" if failing else fixed})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def revision(call, replay):
         H.write(call, {"app.py": _TYPED})
@@ -1679,7 +1680,7 @@ def test_a_finished_draft_past_the_size_stop_spends_one_fix_cycle_coming_back_un
             H.write(call, {"README.md": "# app\n\nadd.\n"})
         if case == "capped-draft":
             return H.grok_ok("I'll trim it next", stop="cancelled", num_turns=8)
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def revision(call, replay):
         n = len(replay.of("revision"))
@@ -1757,7 +1758,7 @@ def test_a_parallel_childs_finished_draft_past_the_stop_is_trimmed_inside_the_ch
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": bloated})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -1873,7 +1874,7 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
             if len(replay.of("lead")) <= 2:
                 return "FETCH: no-such-artifact"
             H.write(call, {"app.py": fixed})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         where.mkdir()
         return H.run(where, monkeypatch, Script(
             orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
@@ -1912,7 +1913,7 @@ def test_a_capped_revision_that_changed_nothing_gets_one_measured_retry_from_the
 
     def lead(call, replay):
         H.write(call, {"app.py": _BLOATED if case == "no-cycle" else fixed})
-        return H.claude_ok('Implemented add.\nCHANGED: ["app.py"]')
+        return H.claude_ok('Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]')
 
     def revision(call, replay):
         n = len(replay.of("revision"))
@@ -1974,7 +1975,7 @@ def test_a_parallel_childs_capped_no_edit_revision_gets_the_same_measured_retry(
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": fixed})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -2033,7 +2034,7 @@ def test_a_capped_trim_is_never_taken_for_a_no_edit_revision(tmp_path, monkeypat
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": fixed})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 

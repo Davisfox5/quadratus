@@ -48,7 +48,7 @@ def _script(plan, *, t2_review="BLOCKING: README lacks an example\nR2: MET - REA
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": README})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -260,7 +260,7 @@ def test_a_selected_repair_carries_the_known_nonfinal_closeout(tmp_path, monkeyp
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     plan = "REQUIREMENTS:\nR1: add(a, b) returns the sum\n" + _simple("app.py", "Implement add in app.py.", "R1")
     script = Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
                     collaborator=lambda c, r: ("BLOCKING: negative-number behavior needs an explicit regression "
@@ -329,7 +329,7 @@ def test_a_route_the_finish_cannot_afford_whole_runs_on_its_terminal_route_and_t
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"app.py": FIXED.replace("def add(a, b):", 'def add(a, b):\n    """Return a + b."""')})
         return 'Added the docstring.\nCHANGED: ["app.py"]'
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
@@ -512,7 +512,7 @@ def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monke
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": README})
         return heavy(call, "FETCH: no-such-artifact")
     script = _script([PLAN_1, PLAN_2])
@@ -557,7 +557,7 @@ def test_a_task_closing_into_a_failed_check_stop_gets_no_model_close_out(tmp_pat
     the run after t1. The harness records the close-out."""
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lambda call, replay: (H.write(call, {"app.py": "def add(a, b):\n    return a - b\n"})
-                                                     or 'Implemented add.\nCHANGED: ["app.py"]')
+                                                     or 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]')
     script.overrides["collaborator"] = lambda call, replay: "NO FINDINGS\nR1: MET - app.py"
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert not H.result_json(replay)["checks"][-1]["passed"]

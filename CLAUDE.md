@@ -1997,6 +1997,65 @@ Key design decisions already settled:
   test that does not fit as `NOT RUN: <case> - <why>` (recorded as owed,
   the finding stays open, nothing resolved by saying so) rather than
   compress tests onto one line.
+- **A task's proof is declared, bound and judged; never inferred from a
+  green check** (proof/1, the fresh job on 136ebee: the planner's
+  acceptance omitted three rejection paths the reviewer then demanded, its
+  "empty history" expectation was wrong for the prior state, and the
+  size trim deleted a mutation assertion inside an unchanged case that no
+  record showed). SCOPE may carry `"proofs"`: scenarios with a stable
+  `P<n>` id, the requirement ids shown, the operation, the starting state,
+  the expected behaviour and the intended test location (`scope.read_proofs`,
+  strict, refused whole when malformed; omitted is unknown, never complete).
+  A planned write task under the requirements ledger must map every COVERS
+  requirement to a scenario and name no uncovered one (`_proof_problem`,
+  corrected once through the COVERS send-back allowance); the harness
+  validates the mapping, not its completeness. Each scenario is an evidence
+  obligation at dispatch; the lead binds it with `PROVES: P<n> -
+  file::Class::case` lines at any editing delivery (`_record_proves`;
+  malformed lines are recorded as problems and bind nothing). An acceptance
+  obligation is discharged only by one passing check on the current source,
+  under its gate and environment, whose own complete runs name every bound
+  case as passed (`_acceptance_receipt`); a green check that ran something
+  else discharges nothing, and a rebinding on the same source resets
+  execution and sufficiency before any re-discharge (`evidence_binding`
+  now covers the case set and behaviour). A scenario in a test file is an
+  executable claim: unexecuted, it lowers its requirement
+  (`_lower_unexecuted`) and fails the acceptance predicate. A scenario
+  located outside the test files is a reading claim, and a legacy
+  acceptance string is an unknown mapping: neither is ever discharged by a
+  check, neither is exempt, and each counts only when the audit, shown the
+  row as such, judged it sufficient on the current source
+  (`_judge_obligations` records `judged_source`; the predicate compares
+  it, so an edit after the judgment makes it stale). An error or refusal
+  requirement still needs executed cited cases whatever a scenario's
+  location says. Sufficiency stays the audit's judgment: a bound executed
+  case proves only that it ran.
+  The reviewer and the rechecker read the task's scenarios with their
+  binding and execution states (`_proof_rows`) and are asked to challenge
+  completeness against the covered requirement text, each expectation
+  against its stated prior state ("unchanged" is not "empty"), and the
+  bound cases as written. The planner's estimate against the first measured
+  split is appended to the codebase map under `sizing` as evidence
+  (`_assess_scope`), never a floor or a multiplier.
+- **A trim is evidence, and its assertion preservation is owed a verdict**
+  (`_trim_snapshot`, `_trim_settle`, `_trim_block`, `_read_trim_disposition`).
+  Before a draft, capped-draft or revision trim writes, the full
+  policy-filtered test files and their hashes, the proof bindings and the
+  source identity are kept as an immutable artifact (`pre-trim-tests`,
+  bounded by `_TRIM_EVIDENCE_MAX_CHARS`; past it only hashes, and the trim
+  cannot be judged preserved); after it, the diff of those files is kept
+  (`trim-diff`, bounded by `_TRIM_DIFF_MAX_CHARS`). Case names and counts
+  decide nothing: the diff is shown to the task's reviewer and rechecker,
+  and to the final audit for every trim still owed, with one rule: judge
+  whether every assertion the covered requirements and declared scenarios
+  need survived (a helper, loop or renaming is preservation; a deleted
+  mutation or state assertion is not) and reply exactly one line
+  `TRIM: PRESERVED` or `TRIM: LOST - <what>`. The disposition is bound to
+  the source it judged: editing afterwards makes it stale, two lines settle
+  nothing, PRESERVED on evidence not on file is refused, and an owed trim
+  sends DONE back after the audit (`_requirements_satisfied`) rather than
+  being approved by silence. `trim_records` and `proof_binding_problems`
+  are carried by the checkpoint and merged from parallel children.
 - **Every selected repair carries the task's known remainder** (root's
   control on fef1e27, the default bound: a fix cycle admitted as
   revision + recheck, 700,000 against 773,864, omitted t1's known 200,000

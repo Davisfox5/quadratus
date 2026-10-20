@@ -21,12 +21,13 @@ from tests.lifecycle.test_lifecycle_matrix import DESIGN, T2, Script, _design_fi
 pytestmark = pytest.mark.requirements_ledger
 
 AUDIT_SCOPE = dict(DESIGN, max_lines=1, edits="none")
-REPAIR_SCOPE = dict(DESIGN, max_lines=40)
+REPAIR_SCOPE = dict(DESIGN, max_lines=40, proofs=H.proofs_for("R1, R2", "templates/index.html"))
 REQS = "REQUIREMENTS:\nR1: the import page works on a phone\nR2: the import button is labelled\n"
 AUDIT = "KIND: frontend standard\nSCOPE: " + json.dumps(AUDIT_SCOPE) + "\nAudit the import page.\nCOVERS: R1, R2"
 REPAIR = "KIND: frontend standard\nSCOPE: " + json.dumps(REPAIR_SCOPE) + "\nFix the mobile overflow.\nCOVERS: R1, R2"
 RECAPTURE = AUDIT.replace("Audit the import page.", "Re-check the import page.")
-DOCS = "KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md.\nCOVERS: R1, R2"
+DOCS = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, proofs=H.proofs_for("R1, R2", "README.md")))
+        + "\nDocument add in README.md.\nCOVERS: R1, R2")
 MET = "R1: MET - templates/index.html\nR2: MET - templates/index.html"
 WIDE = {"mobile": 450}
 NO_EDIT = "Nothing to change after review.\nCHANGED: []"

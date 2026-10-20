@@ -40,7 +40,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 __all__ = ["TaskScope", "ScopeReport", "changed_paths", "count_change_lines",
            "count_change_lines_by_path", "is_test_path", "declared_signatures",
@@ -165,6 +165,14 @@ class TaskScope:
     #: proves nothing about what the proof covers. None when not declared
     #: (legacy declarations): unknown, not zero.
     estimate: Optional[Dict[str, int]] = None
+    #: The planner's proof scenarios (SCOPE ``"proofs"``, ``read_proofs``):
+    #: each a stable id, the requirement ids it shows, the operation, the
+    #: starting state, the expected behaviour or state, and the intended test
+    #: location. Each becomes an evidence obligation at dispatch that only a
+    #: named executed case the lead binds (``PROVES: P<n> - file::case``) can
+    #: discharge. None when not declared (legacy declarations): the mapping is
+    #: unknown, never read as complete.
+    proofs: Optional[Tuple[Dict[str, object], ...]] = None
 
     def permits(self, path: str) -> bool:
         """Whether ``path`` may be edited under this scope."""
@@ -234,6 +242,11 @@ class TaskScope:
             )
         if self.review_only:
             parts.append("Declared review-only: report findings; do not change project source.")
+        if self.proofs:
+            parts.append("Proof scenarios (each is shown only by a named test case that runs and passes; "
+                         "deliver one line per scenario 'PROVES: P<n> - path/test_x.py::Class::test_case'):\n"
+                         + "\n".join(f"  - {p['id']} [{', '.join(p['requirements'])}] {p['operation']}; given "
+                                      f"{p['state']}; expect {p['expect']}; in {p['location']}" for p in self.proofs))
         if self.estimate:
             parts.append("The planner's split of that size: "
                          + ", ".join(f"{k} {v}" for k, v in self.estimate.items())
@@ -272,6 +285,7 @@ class TaskScope:
             **({"capture": self.capture} if self.capture else {}),
             **({"exact": True} if self.exact else {}),
             **({"estimate": dict(self.estimate)} if self.estimate else {}),
+            **({"proofs": [dict(p) for p in self.proofs]} if self.proofs is not None else {}),
         }
 
 
@@ -460,6 +474,48 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
             )
 
 
+PROOF_KEYS = ("id", "requirements", "operation", "state", "expect", "location")
+_PROOF_ID = re.compile(r"^P[1-9]\d*$")
+_REQUIREMENT_ID = re.compile(r"^R[1-9]\d*$")
+
+
+def read_proofs(data) -> Tuple[Dict[str, object], ...]:
+    """The optional SCOPE ``proofs`` list, strictly: a non-empty list of
+    objects with exactly id, requirements, operation, state, expect and
+    location; ids ``P<n>`` and unique; requirements a non-empty list of
+    ``R<n>`` ids; the texts non-empty strings; the location a narrow
+    project-relative path. Anything else is refused rather than read
+    partially. Omitted is unknown and allowed."""
+    if not isinstance(data, list) or not data:
+        raise ValueError("SCOPE proofs must be a non-empty list of scenario objects")
+    seen = set()
+    proofs = []
+    for item in data:
+        if not isinstance(item, dict) or set(item) != set(PROOF_KEYS):
+            raise ValueError("SCOPE proofs items must be objects with exactly id, requirements, operation, "
+                             "state, expect and location")
+        pid = item["id"]
+        if not isinstance(pid, str) or not _PROOF_ID.match(pid) or pid in seen:
+            raise ValueError("SCOPE proofs ids must be unique P<n> ids")
+        seen.add(pid)
+        rids = item["requirements"]
+        if (not isinstance(rids, list) or not rids
+                or any(not isinstance(r, str) or not _REQUIREMENT_ID.match(r) for r in rids)
+                or len(set(rids)) != len(rids)):
+            raise ValueError(f"SCOPE proof {pid} must name a non-empty list of distinct R<n> requirement ids")
+        for key in ("operation", "state", "expect", "location"):
+            if not isinstance(item[key], str) or not item[key].strip():
+                raise ValueError(f"SCOPE proof {pid} needs a non-empty {key}")
+        location = item["location"]
+        if (location != location.strip() or PurePosixPath(location).is_absolute()
+                or ".." in PurePosixPath(location).parts or "\\" in location
+                or location.startswith(("~", ".quadratus")) or location.strip("./*?[]") == ""):
+            raise ValueError(f"SCOPE proof {pid} location must be a narrow project-relative path")
+        proofs.append(dict(id=pid, requirements=list(rids), operation=item["operation"].strip(),
+                           state=item["state"].strip(), expect=item["expect"].strip(), location=location))
+    return tuple(proofs)
+
+
 ESTIMATE_KEYS = ("implementation", "proof", "setup")
 
 
@@ -517,8 +573,9 @@ def read_scope(description: str, *, max_lines: int):
         from .preview import validate_capture
         capture = validate_capture(data["capture"])
     estimate = read_estimate(data["estimate"], bound) if "estimate" in data else None
+    proofs = read_proofs(data["proofs"]) if "proofs" in data else None
     body = (description[:matches[0].start()] + description[matches[0].end():]).strip()
     scope = TaskScope(paths, result, acceptance, bound, review_only=edits == "none", capture=capture,
-                      estimate=estimate)
+                      estimate=estimate, proofs=proofs)
     lint_declaration(body, scope)
     return scope, body

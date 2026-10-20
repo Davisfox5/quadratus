@@ -133,7 +133,7 @@ def test_every_trim_site_carries_the_measured_change(tmp_path, monkeypatch, site
         H.write(call, {"app.py": _TYPED if site == "revision" else _BLOATED})
         if site == "capped-draft":
             return H.grok_ok("Still adding helpers", stop="cancelled", num_turns=8)
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def revision(call, replay):
         if "Bring the change down" in call.prompt:
@@ -202,7 +202,7 @@ def _starved_run(tmp_path, monkeypatch, where, total):
 
     def lead(call, replay):
         H.write(call, {"app.py": _TYPED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     where.mkdir()
     return H.run(where, monkeypatch, Script(
         orchestrator=_plan(declared), lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:5",

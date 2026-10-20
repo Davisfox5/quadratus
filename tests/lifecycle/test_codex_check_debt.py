@@ -32,7 +32,7 @@ def test_a_repair_without_the_failed_gate_cannot_settle_check_debt(tmp_path, mon
     }
     repair = ('KIND: docs simple\nSCOPE: ' + json.dumps(dict(
         permitted_paths=['README.md'], intended_result='Document add',
-        acceptance=['README describes add'], max_lines=20))
+        acceptance=['README describes add'], max_lines=20, proofs=H.proofs_for('R1', 'README.md')))
         + '\nDocument add.\nCOVERS: R1\nRESOLVES: F1')
     files = {**{k.replace('tests/', 'checks/'): v for k, v in FILES.items()},
              'checks/test_smoke.py': 'def test_smoke():\n    assert True\n',

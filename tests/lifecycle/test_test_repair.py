@@ -29,7 +29,8 @@ REPAIRED = "def test_reset_keeps_order():\n    assert [1, 2] == sorted([2, 1])\n
 FILES = {"app.py": FIXED, "tests/test_app.py": "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n",
          "tests/test_reset.py": BROKEN, "README.md": "# app\n"}
 SCOPE = dict(permitted_paths=["app.py", "tests/test_reset.py", "tests/test_app.py"],
-             intended_result="the reset test is repaired", acceptance=["tests pass"], max_lines=40)
+             intended_result="the reset test is repaired", acceptance=["tests pass"], max_lines=40,
+             proofs=H.proofs_for("R1", "tests/test_reset.py"))
 DECL = ("REQUIREMENTS:\nR1: tests/test_reset.py is repaired and passes\n"
         "KIND: testing standard\nSCOPE: " + json.dumps(SCOPE) + "\nRepair tests/test_reset.py.\nCOVERS: R1")
 

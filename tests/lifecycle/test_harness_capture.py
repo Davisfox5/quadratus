@@ -44,6 +44,8 @@ def _free_port():
 
 
 def _decl(kind_line, scope, text, covers="R1, R2"):
+    if scope.get("edits") != "none" and "proofs" not in scope:
+        scope = dict(scope, proofs=H.proofs_for(covers, scope["permitted_paths"][0]))
     return f"{kind_line}\nSCOPE: {json.dumps(scope)}\n{text}\nCOVERS: {covers}"
 
 

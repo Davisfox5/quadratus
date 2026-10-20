@@ -435,7 +435,8 @@ class EvidenceObligation:
         policy. Any of them changing makes the judgment stale."""
         return _digest(dict(receipts=list(self.receipts), source=self.source_digest,
                             requirements=[list(r) for r in self.requirements], gate=self.gate,
-                            environment=self.environment, policy=self.policy, execution=self.execution))
+                            environment=self.environment, policy=self.policy, execution=self.execution,
+                            cases=list(self.cases), behavior=self.behavior))
 
     @property
     def sufficiency_current(self) -> bool:
@@ -533,15 +534,18 @@ def refresh(obligation: EvidenceObligation, *, current_source: Optional[str],
     return obligation
 
 
-def judge_sufficiency(obligation: EvidenceObligation, verdict: str, *, judged_by: str) -> EvidenceObligation:
-    """An independent seat's judgment of what the executed evidence
-    establishes, bound to exactly that evidence. Only a completed execution
-    can be judged sufficient; the harness never judges."""
+def judge_sufficiency(obligation: EvidenceObligation, verdict: str, *, judged_by: str,
+                      reading: bool = False) -> EvidenceObligation:
+    """An independent seat's judgment of what the evidence establishes,
+    bound to exactly that evidence. Only a completed execution can be
+    judged sufficient, except a reading claim (``reading``: an obligation
+    that names no runnable proof and was judged by reading, as the caller
+    records and binds to the source judged); the harness never judges."""
     if verdict not in ("sufficient", "insufficient"):
         raise ValueError("a sufficiency verdict is sufficient or insufficient")
     if not judged_by.strip() or judged_by.strip().lower() == "harness":
         raise ValueError("sufficiency is an independent seat's judgment, never the harness's")
-    if verdict == "sufficient" and obligation.execution != "ran":
+    if verdict == "sufficient" and obligation.execution != "ran" and not reading:
         raise ValueError(f"{obligation.oid} execution is {obligation.execution}; nothing to find sufficient")
     return replace(obligation, sufficiency=verdict, judged_by=judged_by.strip(),
                    judged_binding=obligation.evidence_binding)
@@ -607,7 +611,14 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
     independent seat about exactly that evidence AND no review finding
     touching it is open. ``covers`` maps task id to the requirement ids it
     covers, for findings that name no requirement. Unknown, failed, skipped,
-    stale, invalid or unjudged evidence never counts as met."""
+    stale, invalid or unjudged evidence never counts as met. An obligation
+    recorded with ``executable_claim`` False (a declared scenario located
+    outside the test files, or a legacy acceptance string whose mapping is
+    unknown) claims no runnable proof: it is never discharged by a check
+    that ran something else, and it counts only when an independent seat
+    judged it sufficient and that judgment is current for the source
+    (``sufficiency_current`` as the caller computes it for such rows);
+    unjudged or stale, it keeps the requirement unmet."""
     out: Dict[str, RequirementAcceptance] = {}
     for rid, (met, why) in verdicts.items():
         reasons = []
@@ -615,6 +626,13 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
             reasons.append(f"verdict: {why[:160]}")
         for o in obligations:
             if not any(r[0] == rid for r in o.get("requirements") or ()):
+                continue
+            if o.get("executable_claim") is False:
+                if o.get("sufficiency") != "sufficient":
+                    reasons.append(f"{o['oid']}: reading claim judged {o.get('sufficiency')}"
+                                   + (" (legacy mapping unknown)" if o.get("legacy") else ""))
+                elif not o.get("sufficiency_current", False):
+                    reasons.append(f"{o['oid']}: reading claim judged on another source")
                 continue
             if o.get("runner") is None:
                 reasons.append(f"{o['oid']}: no authorized runner (prerequisite)")

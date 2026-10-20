@@ -288,3 +288,41 @@ def test_a_declaration_without_an_estimate_is_unknown_and_unchanged():
     assert scope.estimate is None and "estimate" not in scope.to_dict()
     assert "planner's split" not in scope.render()
     assert TaskScope(max_lines=50).estimate is None
+
+
+# -- the optional SCOPE proofs: strict scenarios, unknown when absent ------------------------
+
+GOOD_PROOF = dict(id="P1", requirements=["R1"], operation="add(1, 2)", state="nothing stored",
+                  expect="3 is returned", location="tests/test_import_preview.py")
+
+
+def test_proof_scenarios_are_read_strictly_rendered_and_serialized():
+    scope, _body = read_scope(_declaration(FINAL, proofs=[GOOD_PROOF]), max_lines=100)
+    assert scope.proofs == (GOOD_PROOF,) and scope.to_dict()["proofs"] == [GOOD_PROOF]
+    rendered = scope.render()
+    assert "Proof scenarios" in rendered and "P1 [R1] add(1, 2); given nothing stored; expect 3 is returned" in rendered
+    assert "PROVES: P<n> - path/test_x.py::Class::test_case" in rendered
+
+
+@pytest.mark.parametrize("proofs, reason", [
+    ([], "non-empty list"),
+    ({"id": "P1"}, "non-empty list"),
+    ([dict(GOOD_PROOF, extra=1)], "exactly id, requirements"),
+    ([{k: v for k, v in GOOD_PROOF.items() if k != "state"}], "exactly id, requirements"),
+    ([dict(GOOD_PROOF, id="S1")], "unique P<n> ids"),
+    ([GOOD_PROOF, dict(GOOD_PROOF)], "unique P<n> ids"),
+    ([dict(GOOD_PROOF, requirements=[])], "distinct R<n> requirement ids"),
+    ([dict(GOOD_PROOF, requirements=["R1", "R1"])], "distinct R<n> requirement ids"),
+    ([dict(GOOD_PROOF, requirements="R1")], "distinct R<n> requirement ids"),
+    ([dict(GOOD_PROOF, expect=" ")], "non-empty expect"),
+    ([dict(GOOD_PROOF, location="/abs/test.py")], "narrow project-relative path"),
+    ([dict(GOOD_PROOF, location="../tests/test_x.py")], "narrow project-relative path"),
+])
+def test_a_malformed_proof_list_is_refused_whole(proofs, reason):
+    with pytest.raises(ValueError, match=reason):
+        read_scope(_declaration(FINAL, proofs=proofs), max_lines=100)
+
+
+def test_a_declaration_without_proofs_is_unknown_not_complete():
+    scope, _body = read_scope(_declaration(FINAL), max_lines=100)
+    assert scope.proofs is None and "proofs" not in scope.to_dict() and "Proof scenarios" not in scope.render()

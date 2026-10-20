@@ -29,7 +29,10 @@ from tests.lifecycle.test_step2_recovery import _simple
 
 def _scoped(paths, text, covers):
     scope = json.dumps({"permitted_paths": paths, "intended_result": "add refuses non-numbers",
-                        "acceptance": ["add refuses non-numbers"], "max_lines": 30})
+                        "acceptance": ["add refuses non-numbers"], "max_lines": 30,
+                        "proofs": H.proofs_for(covers, next((p for p in paths if "test" in p), paths[0]),
+                                               operation="add('x', 1)", state="nothing stored",
+                                               expect="TypeError is raised")})
     return f"KIND: backend simple\nSCOPE: {scope}\n{text}\nCOVERS: {covers}"
 
 R1 = "add(a, b) raises TypeError when either argument is not a number"

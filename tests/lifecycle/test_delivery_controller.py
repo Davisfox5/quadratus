@@ -283,18 +283,35 @@ def test_a_not_run_item_no_runner_can_execute_is_a_reported_prerequisite_and_the
 @pytest.mark.requirements_ledger
 def test_a_receipt_on_another_source_does_not_discharge_and_the_declared_acceptance_binds_to_the_task_check(
         tmp_path, monkeypatch):
-    """Two serial tasks: t1's declared acceptance is discharged by t1's own
-    passing check; after t2 edits README.md the source moves, so the
-    obligation is stale until the gate runs on the new source, and the
-    final record shows every obligation executed on the final source."""
-    replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md"),
-                   files=FILES, max_tasks=2, record_complete=False)
+    """Two serial tasks. t1's declared scenario is bound by its lead to the
+    case the task's check names as passed and is discharged by that check;
+    after t2 edits README.md the source moves, so the obligation is stale
+    until the gate runs on the new source, and the final record shows it
+    executed on the final source. t2's scenario names README.md, which no
+    test case shows: its lead binds nothing, and no green check discharges
+    it (proof/1: a scenario is discharged only by its own named executed
+    case, and a documentation scenario with no case stays honestly
+    unexecuted)."""
+    script = _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md")
+    plain = script.overrides["lead"]
+
+    def lead(call, replay):
+        reply = plain(call, replay)
+        return reply.replace("CHANGED:", "PROVES: P1 - tests/test_app.py::test_add\nCHANGED:") if call.task == "t1" else reply
+    script.overrides["lead"] = lead
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     final = H.result_json(replay)["source_fingerprint"]
-    rows = _obligations(replay)
-    assert {o["kind"] for o in rows} == {"acceptance"} and len(rows) == 2
-    assert all(o["execution"] == "ran" and o["source_digest"] == final and o["established"] for o in rows)
-    assert all(o["gate"] and o["environment"] and o["policy"] == "review/2" for o in rows)
+    rows = {o["task"]: o for o in _obligations(replay)}
+    assert {o["kind"] for o in rows.values()} == {"acceptance"} and len(rows) == 2
+    t1, t2 = rows["t1"], rows["t2"]
+    assert t1["binding"] == "bound" and t1["cases"] == ["tests/test_app.py::test_add"]
+    assert t1["execution"] == "ran" and t1["source_digest"] == final and t1["established"]
+    assert t2["binding"].startswith("reading claim") and t2["execution"] == "missing" and not t2["established"]
+    assert t2["runner"] is None and not t2["executable_claim"]
+    assert t2["sufficiency"] == "sufficient" and t2["judged_source"] == final, "judged by the audit on the final source"
+    assert H.result_json(replay)["requirements"]["audits"][-1]["acceptance"]["R2"]["met"] is True
+    assert all(o["gate"] and o["environment"] and o["policy"] == "review/2" for o in rows.values())
 
 
 # -- C: the remaining path is costed before the first call -------------------------------------------
