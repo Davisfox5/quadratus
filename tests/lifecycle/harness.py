@@ -201,16 +201,20 @@ def ended_at_cap(replay, cap: int) -> bool:
 
 
 def proofs_for(covers, location: str, *, operation=None, state="the project as delivered",
-               expect=None) -> list:
+               expect=None, evidence=None) -> list:
     """An opt-in builder for a scripted planner's SCOPE ``proofs`` (proof/1):
     one declared scenario per covered requirement, in the test file the
     fixture's own checks execute. Fixture code calls it where its planner
     is asked for the mapping; nothing supplies it for a planner that omits
     it, and no lead's PROVES line, trim verdict or sufficiency is ever
-    synthesized here."""
+    synthesized here. ``evidence`` is the modality the fixture's planner
+    declares (``"reading"`` for a documentation scenario); omitted, the
+    scenario declares none and the product's default (test) applies: the
+    builder never infers one from the location."""
     rids = [r.strip() for r in (covers.split(",") if isinstance(covers, str) else covers) if r.strip()]
     return [dict(id=f"P{i}", requirements=[rid], operation=operation or f"{location} exercises {rid}",
-                 state=state, expect=expect or f"{rid} holds on the delivered source", location=location)
+                 state=state, expect=expect or f"{rid} holds on the delivered source", location=location,
+                 **({"evidence": evidence} if evidence else {}))
             for i, rid in enumerate(rids, 1)]
 
 

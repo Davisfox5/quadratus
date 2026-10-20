@@ -406,9 +406,16 @@ class EvidenceObligation:
     judged_by: str = ""
     judged_binding: str = ""
     reason: str = ""
+    #: The declared evidence modality (proof/1): ``test``, an executable
+    #: claim a named executed case discharges, or ``reading``, a
+    #: documentation scenario that no check discharges and that counts
+    #: only on an independent judgment about the current evidence.
+    modality: str = "test"
 
     def __post_init__(self):
         _check_id(self.oid, "obligation id")
+        if self.modality not in ("test", "reading"):
+            raise ValueError("modality must be test or reading")
         _text(self.behavior, f"{self.oid} behavior")
         if not self.requirements:
             raise ValueError(f"{self.oid} binds no requirement revision")
@@ -445,7 +452,11 @@ class EvidenceObligation:
     @property
     def established(self) -> bool:
         """Both fields, never one standing in for the other, and the
-        judgment about exactly this evidence."""
+        judgment about exactly this evidence. A reading claim has no
+        execution to show: it is established only by the judgment, about
+        the current evidence (its binding carries the current source)."""
+        if self.modality == "reading":
+            return self.sufficiency == "sufficient" and self.sufficiency_current
         return self.execution == "ran" and self.sufficiency == "sufficient" and self.sufficiency_current
 
     def to_dict(self) -> dict:
@@ -578,13 +589,16 @@ class EvidencePacket:
     rulings: str
     decisions: str
     authority: str
-    policy: str = "packet/2"
+    policy: str = "packet/3"
     #: Every other evidence the audit or an acceptance path consumes, each
     #: entry as one digest of its whole record: the design checks (final
     #: review verdicts), the scratch proofs (status, eligibility, cases) and
     #: the evidence requests (receipts, reassessments). Added on packet/2;
     #: a packet built without them is a different packet.
     design_checks: Tuple[str, ...] = ()
+    #: packet/3: the trim evidence on record (each record's identity without
+    #: its disposition, which is a judgment of it).
+    trims: Tuple[str, ...] = ()
     scratch_proofs: Tuple[str, ...] = ()
     evidence_requests: Tuple[str, ...] = ()
 
@@ -604,7 +618,8 @@ class RequirementAcceptance:
 
 
 def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[Mapping],
-               findings: Sequence[Mapping], covers: Mapping[str, Sequence[str]]) -> Dict[str, RequirementAcceptance]:
+               findings: Sequence[Mapping], covers: Mapping[str, Sequence[str]],
+               current_requirements: Optional[Mapping[str, int]] = None) -> Dict[str, RequirementAcceptance]:
     """The one acceptance predicate: a requirement is met only when its
     verdict says MET AND every obligation bound to it has an authorized
     runner, executed on the current identity and was judged sufficient by an
@@ -612,13 +627,16 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
     touching it is open. ``covers`` maps task id to the requirement ids it
     covers, for findings that name no requirement. Unknown, failed, skipped,
     stale, invalid or unjudged evidence never counts as met. An obligation
-    recorded with ``executable_claim`` False (a declared scenario located
-    outside the test files, or a legacy acceptance string whose mapping is
-    unknown) claims no runnable proof: it is never discharged by a check
-    that ran something else, and it counts only when an independent seat
-    judged it sufficient and that judgment is current for the source
-    (``sufficiency_current`` as the caller computes it for such rows);
-    unjudged or stale, it keeps the requirement unmet."""
+    whose declared evidence modality is ``reading`` (a documentation
+    scenario, declared as such and admitted as such at dispatch) claims no
+    runnable proof: it is never discharged by a check, and it counts only
+    when an independent seat judged it sufficient about exactly the current
+    evidence (``sufficiency_current``: its binding carries the current
+    source). Nothing else is exempt: a scenario with no bound case, a legacy
+    acceptance string, or a behavioural scenario wherever it is located is
+    unproved until its named case ran. With ``current_requirements``, an
+    obligation bound to a requirement revision that is no longer current
+    keeps the requirement unmet whatever its judgment says."""
     out: Dict[str, RequirementAcceptance] = {}
     for rid, (met, why) in verdicts.items():
         reasons = []
@@ -627,12 +645,15 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
         for o in obligations:
             if not any(r[0] == rid for r in o.get("requirements") or ()):
                 continue
-            if o.get("executable_claim") is False:
+            if current_requirements is not None and any(
+                    current_requirements.get(r[0]) != r[1] for r in o.get("requirements") or ()):
+                reasons.append(f"{o['oid']}: bound requirement revision changed")
+                continue
+            if o.get("modality") == "reading":
                 if o.get("sufficiency") != "sufficient":
-                    reasons.append(f"{o['oid']}: reading claim judged {o.get('sufficiency')}"
-                                   + (" (legacy mapping unknown)" if o.get("legacy") else ""))
+                    reasons.append(f"{o['oid']}: reading claim judged {o.get('sufficiency')}")
                 elif not o.get("sufficiency_current", False):
-                    reasons.append(f"{o['oid']}: reading claim judged on another source")
+                    reasons.append(f"{o['oid']}: reading claim judged on other evidence")
                 continue
             if o.get("runner") is None:
                 reasons.append(f"{o['oid']}: no authorized runner (prerequisite)")

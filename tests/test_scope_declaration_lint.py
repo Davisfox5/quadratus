@@ -298,7 +298,8 @@ GOOD_PROOF = dict(id="P1", requirements=["R1"], operation="add(1, 2)", state="no
 
 def test_proof_scenarios_are_read_strictly_rendered_and_serialized():
     scope, _body = read_scope(_declaration(FINAL, proofs=[GOOD_PROOF]), max_lines=100)
-    assert scope.proofs == (GOOD_PROOF,) and scope.to_dict()["proofs"] == [GOOD_PROOF]
+    kept = dict(GOOD_PROOF, evidence="test")
+    assert scope.proofs == (kept,) and scope.to_dict()["proofs"] == [kept], "the default modality is made explicit"
     rendered = scope.render()
     assert "Proof scenarios" in rendered and "P1 [R1] add(1, 2); given nothing stored; expect 3 is returned" in rendered
     assert "PROVES: P<n> - path/test_x.py::Class::test_case" in rendered
@@ -317,10 +318,26 @@ def test_proof_scenarios_are_read_strictly_rendered_and_serialized():
     ([dict(GOOD_PROOF, expect=" ")], "non-empty expect"),
     ([dict(GOOD_PROOF, location="/abs/test.py")], "narrow project-relative path"),
     ([dict(GOOD_PROOF, location="../tests/test_x.py")], "narrow project-relative path"),
+    ([dict(GOOD_PROOF, evidence="docs")], "evidence must be one of test, reading"),
+    ([dict(GOOD_PROOF, evidence=None)], "evidence must be one of test, reading"),
 ])
 def test_a_malformed_proof_list_is_refused_whole(proofs, reason):
     with pytest.raises(ValueError, match=reason):
         read_scope(_declaration(FINAL, proofs=proofs), max_lines=100)
+
+
+def test_a_declared_reading_modality_is_kept_verbatim_and_never_inferred_from_the_location():
+    """A1: the modality is what the planner declared. A README scenario
+    without ``evidence`` is a test scenario on the record (the default,
+    written out, never inferred from the .md location); one declaring
+    reading keeps it."""
+    docs = dict(GOOD_PROOF, location="README.md")
+    scope, _body = read_scope(_declaration(FINAL, proofs=[docs]), max_lines=100)
+    assert scope.proofs == (dict(docs, evidence="test"),)
+    reading = dict(docs, evidence="reading")
+    scope, _body = read_scope(_declaration(FINAL, proofs=[reading]), max_lines=100)
+    assert scope.proofs[0]["evidence"] == "reading" and scope.to_dict()["proofs"] == [reading]
+    assert "reading" in scope.render()
 
 
 def test_a_declaration_without_proofs_is_unknown_not_complete():

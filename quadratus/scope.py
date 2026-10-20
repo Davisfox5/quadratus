@@ -243,10 +243,14 @@ class TaskScope:
         if self.review_only:
             parts.append("Declared review-only: report findings; do not change project source.")
         if self.proofs:
-            parts.append("Proof scenarios (each is shown only by a named test case that runs and passes; "
-                         "deliver one line per scenario 'PROVES: P<n> - path/test_x.py::Class::test_case'):\n"
+            parts.append("Proof scenarios (a test scenario is shown only by a named test case that runs and passes; "
+                         "deliver one line per test scenario 'PROVES: P<n> - path/test_x.py::Class::test_case'. "
+                         "A scenario marked 'evidence: reading' is a documentation claim the audit reads and cites; "
+                         "it takes no PROVES line):\n"
                          + "\n".join(f"  - {p['id']} [{', '.join(p['requirements'])}] {p['operation']}; given "
-                                      f"{p['state']}; expect {p['expect']}; in {p['location']}" for p in self.proofs))
+                                      f"{p['state']}; expect {p['expect']}; in {p['location']}"
+                                      + ("; evidence: reading" if p.get("evidence") == "reading" else "")
+                                      for p in self.proofs))
         if self.estimate:
             parts.append("The planner's split of that size: "
                          + ", ".join(f"{k} {v}" for k, v in self.estimate.items())
@@ -475,6 +479,11 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
 
 
 PROOF_KEYS = ("id", "requirements", "operation", "state", "expect", "location")
+#: Supported evidence modalities a scenario may declare: ``test`` (the
+#: default: a named test case that runs and passes) or ``reading`` (a
+#: documentation file the audit reads and cites; refused at dispatch for a
+#: behavioural location or an error or refusal requirement).
+PROOF_EVIDENCE = ("test", "reading")
 _PROOF_ID = re.compile(r"^P[1-9]\d*$")
 _REQUIREMENT_ID = re.compile(r"^R[1-9]\d*$")
 
@@ -491,9 +500,12 @@ def read_proofs(data) -> Tuple[Dict[str, object], ...]:
     seen = set()
     proofs = []
     for item in data:
-        if not isinstance(item, dict) or set(item) != set(PROOF_KEYS):
+        if not isinstance(item, dict) or not set(PROOF_KEYS) <= set(item) or not set(item) <= set(PROOF_KEYS) | {"evidence"}:
             raise ValueError("SCOPE proofs items must be objects with exactly id, requirements, operation, "
-                             "state, expect and location")
+                             "state, expect and location (and optionally evidence)")
+        evidence = item.get("evidence", "test")
+        if evidence not in PROOF_EVIDENCE:
+            raise ValueError(f"SCOPE proof {item.get('id')} evidence must be one of {', '.join(PROOF_EVIDENCE)}")
         pid = item["id"]
         if not isinstance(pid, str) or not _PROOF_ID.match(pid) or pid in seen:
             raise ValueError("SCOPE proofs ids must be unique P<n> ids")
@@ -512,7 +524,8 @@ def read_proofs(data) -> Tuple[Dict[str, object], ...]:
                 or location.startswith(("~", ".quadratus")) or location.strip("./*?[]") == ""):
             raise ValueError(f"SCOPE proof {pid} location must be a narrow project-relative path")
         proofs.append(dict(id=pid, requirements=list(rids), operation=item["operation"].strip(),
-                           state=item["state"].strip(), expect=item["expect"].strip(), location=location))
+                           state=item["state"].strip(), expect=item["expect"].strip(), location=location,
+                           evidence=evidence))
     return tuple(proofs)
 
 

@@ -35,7 +35,7 @@ T1 = dict(permitted_paths=["app.py", "tests/test_app.py"], intended_result="add 
 T2 = dict(permitted_paths=["README.md"], intended_result="README documents add",
           acceptance=["README names add"], max_lines=20,
           proofs=H.proofs_for("R2", "README.md", operation="the README is read", state="add is implemented",
-                              expect="README names add"))
+                              expect="README names add", evidence="reading"))
 DECL_T1 = "KIND: architect complex\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py."
 DECL_T2 = "KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md."
 CLOSEOUT = "SUMMARY: done\nDECISIONS: none recorded\nDEAD ENDS: none"

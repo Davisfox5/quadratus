@@ -2011,25 +2011,36 @@ Key design decisions already settled:
   corrected once through the COVERS send-back allowance); the harness
   validates the mapping, not its completeness. Each scenario is an evidence
   obligation at dispatch; the lead binds it with `PROVES: P<n> -
-  file::Class::case` lines at any editing delivery (`_record_proves`;
-  malformed lines are recorded as problems and bind nothing). An acceptance
-  obligation is discharged only by one passing check on the current source,
-  under its gate and environment, whose own complete runs name every bound
-  case as passed (`_acceptance_receipt`); a green check that ran something
-  else discharges nothing, and a rebinding on the same source resets
-  execution and sufficiency before any re-discharge (`evidence_binding`
-  now covers the case set and behaviour). A scenario in a test file is an
-  executable claim: unexecuted, it lowers its requirement
-  (`_lower_unexecuted`) and fails the acceptance predicate. A scenario
-  located outside the test files is a reading claim, and a legacy
-  acceptance string is an unknown mapping: neither is ever discharged by a
-  check, neither is exempt, and each counts only when the audit, shown the
-  row as such, judged it sufficient on the current source
-  (`_judge_obligations` records `judged_source`; the predicate compares
-  it, so an edit after the judgment makes it stale). An error or refusal
-  requirement still needs executed cited cases whatever a scenario's
-  location says. Sufficiency stays the audit's judgment: a bound executed
-  case proves only that it ran.
+  file::Class::case` lines at any editing delivery (`_record_proves`:
+  every PROVES line is read; a malformed line naming a scenario makes that
+  scenario's declaration invalid, cases cleared, and one naming none
+  invalidates the whole reply's declaration, every scenario reset; a later
+  reply of only well-formed lines restores a binding; problems are
+  recorded). An acceptance obligation is discharged only by one passing
+  check on the current source, under its gate and environment, whose own
+  complete runs name every bound case as passed (`_acceptance_receipt`); a
+  green check that ran something else discharges nothing, and a rebinding
+  on the same source resets execution and sufficiency before any
+  re-discharge (`evidence_binding` covers the case set and behaviour).
+  **Modality is declared, never inferred** (root and Astra on d515d51):
+  a scenario is an executable claim wherever its location points, and
+  unexecuted it lowers its requirement (`_lower_unexecuted`) and fails the
+  acceptance predicate. Only a scenario declaring `"evidence": "reading"`
+  is a documentation claim, admitted at dispatch only for a documentation
+  file and never for an error or refusal requirement (`_proof_problem`,
+  applied to serial and parallel intake alike); it is never discharged by
+  a check and counts only when the audit's own verdict cites the file it
+  names, on the current source (`_judge_obligations`; the obligation's
+  binding carries the current source, so an edit afterwards makes the
+  judgment stale by the ordinary `sufficiency_current` rule). A legacy
+  acceptance string is an unknown mapping and stays visibly unknown on the
+  record: no case can bind to it, no check discharges it, no verdict is
+  read as its sufficiency, and it lowers its requirement as any unexecuted
+  executable claim does. The evidence packet (packet/3) carries each
+  obligation's cases, behaviour, bound revisions, gate, environment,
+  modality and binding, and every trim record; judgment fields stay out.
+  Sufficiency stays the audit's judgment: a bound executed case proves only
+  that it ran.
   The reviewer and the rechecker read the task's scenarios with their
   binding and execution states (`_proof_rows`) and are asked to challenge
   completeness against the covered requirement text, each expectation
@@ -2038,24 +2049,36 @@ Key design decisions already settled:
   split is appended to the codebase map under `sizing` as evidence
   (`_assess_scope`), never a floor or a multiplier.
 - **A trim is evidence, and its assertion preservation is owed a verdict**
-  (`_trim_snapshot`, `_trim_settle`, `_trim_block`, `_read_trim_disposition`).
-  Before a draft, capped-draft or revision trim writes, the full
-  policy-filtered test files and their hashes, the proof bindings and the
-  source identity are kept as an immutable artifact (`pre-trim-tests`,
-  bounded by `_TRIM_EVIDENCE_MAX_CHARS`; past it only hashes, and the trim
-  cannot be judged preserved); after it, the diff of those files is kept
-  (`trim-diff`, bounded by `_TRIM_DIFF_MAX_CHARS`). Case names and counts
-  decide nothing: the diff is shown to the task's reviewer and rechecker,
-  and to the final audit for every trim still owed, with one rule: judge
-  whether every assertion the covered requirements and declared scenarios
-  need survived (a helper, loop or renaming is preservation; a deleted
-  mutation or state assertion is not) and reply exactly one line
-  `TRIM: PRESERVED` or `TRIM: LOST - <what>`. The disposition is bound to
-  the source it judged: editing afterwards makes it stale, two lines settle
-  nothing, PRESERVED on evidence not on file is refused, and an owed trim
-  sends DONE back after the audit (`_requirements_satisfied`) rather than
-  being approved by silence. `trim_records` and `proof_binding_problems`
-  are carried by the checkpoint and merged from parallel children.
+  (`_trim_snapshot`, `_trim_settle`, `_trim_pre_contents`, `_trim_owed`,
+  `_trim_block`, `_read_trim_disposition`). Every trim has a record id
+  `T<n>`. Before a draft, capped-draft or revision trim writes, the full
+  policy-filtered test files and the support files assertions lean on
+  (conftest, fixtures, helpers, by name: `_TRIM_SUPPORT_MARKS`) are kept
+  with their hashes, the proof bindings and the source identity as an
+  immutable artifact whose sha256 the record carries (`pre-trim-tests`,
+  bounded by `_TRIM_EVIDENCE_MAX_CHARS`; past it only hashes). The
+  artifact is read back and verified against that digest on every
+  consumption; missing, unreadable or altered is "not on file". Unknown is
+  owed, never clear (root's four controls on d515d51): a project that
+  could not be read before or after the trim leaves a record whose effect
+  is unknown and which stays owed. A judging seat (the task's reviewer and
+  rechecker; the final audit for every owed trim) is shown, per id, the
+  comparison from the immutable pre-trim evidence to the test and support
+  files *as they are now*, so an edit after an earlier PRESERVED is
+  re-judged against the full pre-trim assertions, not the trim's own hunk,
+  and the earlier approval is named stale. Case names and counts decide
+  nothing: the seat judges whether every assertion the covered
+  requirements and declared scenarios need survived (a helper, loop or
+  renaming is preservation; a deleted mutation or state assertion is not)
+  and answers one line per id, `TRIM T<n>: PRESERVED` or `TRIM T<n>: LOST
+  - <what>` (a bare `TRIM:` line applies only when one trim was shown).
+  A disposition is bound to exactly the evidence shown (record id, verified
+  artifact digest, current source); PRESERVED without the evidence on file
+  and shown is refused and recorded as such, two lines for one id settle
+  nothing, a verdict on another id judges nothing, and an owed trim sends
+  DONE back after the audit (`_requirements_satisfied`) rather than being
+  approved by silence. `trim_records` and `proof_binding_problems` are
+  carried by the checkpoint and merged from parallel children.
 - **Every selected repair carries the task's known remainder** (root's
   control on fef1e27, the default bound: a fix cycle admitted as
   revision + recheck, 700,000 against 773,864, omitted t1's known 200,000

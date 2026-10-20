@@ -480,7 +480,8 @@ _TYPED = ("def add(a, b):\n"
 def _simple(path, text, covers):
     scope = json.dumps({"permitted_paths": [path], "intended_result": f"{path} written",
                         "acceptance": [f"{path} meets the task"], "max_lines": 20,
-                        "proofs": H.proofs_for(covers, "tests/test_app.py" if path == "app.py" else path)})
+                        "proofs": H.proofs_for(covers, "tests/test_app.py" if path == "app.py" else path,
+                                               evidence="reading" if path == "README.md" else None)})
     return f"KIND: backend simple\nSCOPE: {scope}\n{text}\nCOVERS: {covers}"
 
 

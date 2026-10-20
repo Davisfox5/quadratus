@@ -211,7 +211,7 @@ def test_a_scratch_proof_on_an_earlier_source_is_not_credited_at_the_final_audit
     the review's scratch proof passed: the proof's handed source is no
     longer the source the audit judges, so the cited scratch cases do not
     count and R1 is NOT MET (stale). R2 is not an error clause."""
-    plan2 = ('KIND: docs simple\nSCOPE: ' + json.dumps(dict(permitted_paths=['README.md'], proofs=H.proofs_for('R2', 'README.md'),
+    plan2 = ('KIND: docs simple\nSCOPE: ' + json.dumps(dict(permitted_paths=['README.md'], proofs=H.proofs_for('R2', 'README.md', evidence='reading'),
              intended_result='README documents parse_switch', acceptance=['README names parse_switch'],
              max_lines=20)) + '\nDocument parse_switch.\nCOVERS: R2')
     plan1 = PLAN.replace('REQUIREMENTS:\nR1: ' + REQ, 'REQUIREMENTS:\nR1: ' + REQ + '\nR2: README documents parse_switch')
@@ -284,7 +284,7 @@ def test_actual_declared_quiet_check_can_credit_the_negative_cases_it_executed(t
     scope=dict(permitted_paths=['switches.py','tests/test_errors.py'],intended_result=REQ,acceptance=[REQ],max_lines=60,
                proofs=H.proofs_for('R1','tests/test_errors.py'))
     first='REQUIREMENTS:\nR1: '+REQ+'\nR2: README documents parse_switch.\nKIND: backend simple\nSCOPE: '+json.dumps(scope)+'\nImplement and test switch parsing.\nCOVERS: R1'
-    second='KIND: docs simple\nSCOPE: '+json.dumps(dict(permitted_paths=['README.md'],intended_result='README documents parse_switch',acceptance=['README names function'],max_lines=20,proofs=H.proofs_for('R2','README.md')))+'\nDocument parsing.\nCOVERS: R2'
+    second='KIND: docs simple\nSCOPE: '+json.dumps(dict(permitted_paths=['README.md'],intended_result='README documents parse_switch',acceptance=['README names function'],max_lines=20,proofs=H.proofs_for('R2','README.md',evidence='reading')))+'\nDocument parsing.\nCOVERS: R2'
     def planner(c,r):return first if len(r.of('orchestrator'))==1 else second if len(r.of('orchestrator'))==2 else 'DONE'
     def lead(c,r):
         if c.task=='t1':

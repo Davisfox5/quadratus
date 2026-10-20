@@ -26,7 +26,7 @@ REQS = "REQUIREMENTS:\nR1: the import page works on a phone\nR2: the import butt
 AUDIT = "KIND: frontend standard\nSCOPE: " + json.dumps(AUDIT_SCOPE) + "\nAudit the import page.\nCOVERS: R1, R2"
 REPAIR = "KIND: frontend standard\nSCOPE: " + json.dumps(REPAIR_SCOPE) + "\nFix the mobile overflow.\nCOVERS: R1, R2"
 RECAPTURE = AUDIT.replace("Audit the import page.", "Re-check the import page.")
-DOCS = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, proofs=H.proofs_for("R1, R2", "README.md")))
+DOCS = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, proofs=H.proofs_for("R1, R2", "README.md", evidence="reading")))
         + "\nDocument add in README.md.\nCOVERS: R1, R2")
 MET = "R1: MET - templates/index.html\nR2: MET - templates/index.html"
 WIDE = {"mobile": 450}
