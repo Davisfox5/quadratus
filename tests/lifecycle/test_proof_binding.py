@@ -615,7 +615,8 @@ def test_truncated_trim_evidence_is_never_preserved_and_two_lines_settle_nothing
     short = _trim_job(_at(tmp_path, "short"), monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM: PRESERVED",
                       max_chars=10)
     record = _trim(short)[0]
-    assert not record["complete"] and record["changed"] and record["artifact"]
+    assert not record["complete"] and record["changed"] is None and record["artifact"]
+    assert "over the evidence bound" in record["state"] and "incomplete" in record["state"]
     assert "not on file" in short.of("collaborator")[-1].prompt
     assert record["disposition"]["verdict"] == "REFUSED" and not short.result.completed
     assert not short.artifact_texts("pre-trim-tests") and short.artifact_texts("pre-trim-hashes")
@@ -635,7 +636,7 @@ def test_a_trim_whose_pre_trim_evidence_could_not_be_captured_is_owed_and_never_
 
     def flaky(self, policy, before):
         calls.append(1)
-        return None if len(calls) == 1 else real(self, policy, before)
+        return (None, "the project could not be read") if len(calls) == 1 else real(self, policy, before)
     monkeypatch.setattr(Session, "_trim_files", flaky)
     replay = _trim_job(tmp_path, monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM T-t1-1: PRESERVED",
                        auditor=lambda c, r: "TRIM T-t1-1: PRESERVED\nR1: MET - tests/test_app.py::test_add")
@@ -657,7 +658,7 @@ def test_a_trim_whose_post_trim_files_could_not_be_read_is_owed_not_unchanged(tm
 
     def flaky(self, policy, before):
         calls.append(1)
-        return None if len(calls) == 2 else real(self, policy, before)
+        return (None, "the project could not be read") if len(calls) == 2 else real(self, policy, before)
     monkeypatch.setattr(Session, "_trim_files", flaky)
     replay = _trim_job(tmp_path, monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py")
     record = _trim(replay)[0]
@@ -718,7 +719,7 @@ def test_a_trim_shown_once_is_not_judged_on_that_display_after_the_files_become_
     session._trim_settle(record, None)
     assert "```diff" in session._trim_block(spec) and record["shown"]
     real = Session._trim_files
-    monkeypatch.setattr(Session, "_trim_files", lambda self, policy, before: None)
+    monkeypatch.setattr(Session, "_trim_files", lambda self, policy, before: (None, "the project could not be read"))
     block = session._trim_block(spec)
     assert "could not be read" in block and record["shown"] is None
     session._read_trim_disposition(spec, "auditor", "TRIM T-t1-1: PRESERVED")
@@ -726,7 +727,7 @@ def test_a_trim_shown_once_is_not_judged_on_that_display_after_the_files_become_
     monkeypatch.setattr(Session, "_trim_files", real)
     record["disposition"] = None
     assert "```diff" in session._trim_block(spec)
-    monkeypatch.setattr(Session, "_trim_files", lambda self, policy, before: None)
+    monkeypatch.setattr(Session, "_trim_files", lambda self, policy, before: (None, "the project could not be read"))
     session._read_trim_disposition(spec, "auditor", "TRIM T-t1-1: PRESERVED")
     assert record["disposition"]["verdict"] == "REFUSED", "readability is re-checked when the verdict is consumed"
 
@@ -838,21 +839,92 @@ def test_trim_evidence_covers_the_support_files_assertions_lean_on(tmp_path):
                        "fixtures_data.py": "w", "app.py": "code", "README.md": "doc"}.items():
         (project / name).write_text(text)
     session = _session(tmp_path, project)
-    files = session._trim_files([TaskScope.unbounded().to_dict()], None)
-    assert files == {"tests/test_app.py": "x", "tests/conftest.py": "y", "tests/helpers.py": "z", "fixtures_data.py": "w"}
+    files, problem = session._trim_files([TaskScope.unbounded().to_dict()], None)
+    assert files == {"tests/test_app.py": "x", "tests/conftest.py": "y", "tests/helpers.py": "z", "fixtures_data.py": "w",
+                     "app.py": "code"}, "every permitted Python source and support text, whole; README is neither"
+    assert problem is None
     bounded = TaskScope(permitted_paths=["tests/test_app.py"], intended_result="x", acceptance=["y"], max_lines=10)
-    assert session._trim_files([bounded.to_dict()], None) == {"tests/test_app.py": "x"}
-    assert session._trim_files(None, None) is None, "no policy is unknown, never unbounded"
-    # An explicit, validated dependency inventory: the project modules the
-    # test files import, under the same policy, whatever their names.
-    (project / "tests" / "test_app.py").write_text("from app import add\nimport checks.asserts\n")
+    assert session._trim_files([bounded.to_dict()], None) == ({"tests/test_app.py": "x"}, None)
+    assert session._trim_files(None, None)[0] is None, "no policy is unknown, never unbounded"
+    # The conservative capture: every permitted Python source file and
+    # support text, whole, with no import grammar deciding what an
+    # assertion leans on (imports of any form, aliased, multiline or
+    # dynamic, change nothing about what is captured).
+    (project / "tests" / "test_app.py").write_text("import app, checks.asserts as ca\nfrom pkg import (\n    child,\n)\n")
     (project / "checks").mkdir()
-    (project / "checks" / "asserts.py").write_text("def check(x): assert x\n")
-    files = session._trim_files([TaskScope.unbounded().to_dict()], None)
-    assert "app.py" in files and "checks/asserts.py" in files and "README.md" not in files
+    (project / "checks" / "asserts.py").write_text("from .deep import more\n")
+    (project / "checks" / "deep.py").write_text("import importlib\nmod = importlib.import_module('support_x')\n")
+    (project / "support_x.py").write_text("X = 1\n")
+    (project / "pkg").mkdir()
+    (project / "pkg" / "__init__.py").write_text("")
+    (project / "pkg" / "child.py").write_text("Y = 1\n")
+    files, problem = session._trim_files([TaskScope.unbounded().to_dict()], None)
+    assert problem is None
+    for name in ("app.py", "checks/asserts.py", "checks/deep.py", "support_x.py", "pkg/__init__.py", "pkg/child.py"):
+        assert name in files, name
+    assert "README.md" not in files
     narrow = TaskScope(permitted_paths=["tests/**", "app.py"], intended_result="x", acceptance=["y"], max_lines=10)
-    files = session._trim_files([narrow.to_dict()], None)
-    assert "app.py" in files and "checks/asserts.py" not in files, "the inventory never reaches past the policy"
+    files, problem = session._trim_files([narrow.to_dict()], None)
+    assert "app.py" in files and "checks/asserts.py" not in files, "the capture never reaches past the policy"
+
+
+def test_a_capture_past_the_bound_is_never_called_complete_and_the_trim_stays_owed(tmp_path, monkeypatch):
+    """Root's ninth control on 00cfc02: more permitted modules than the
+    bound, each holding a required assertion; the record never says
+    complete, an assertion removed from a module past the bound is not an
+    unchanged trim, and PRESERVED is refused. The same past the contents
+    bound."""
+    monkeypatch.setattr("quadratus.session._TRIM_SUPPORT_MAX_FILES", 50)
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    n = 51
+    (project / "tests" / "test_state.py").write_text("".join(f"import m{i:03d}\n" for i in range(n)))
+    for i in range(n):
+        (project / f"m{i:03d}.py").write_text(f"def check_{i}():\n    assert {i} == {i}\n")
+    session = _session(tmp_path, project)
+    spec = SimpleNamespace(task_id="t1", scope=TaskScope.unbounded())
+    session._active_spec = spec
+    files, problem = session._trim_files([TaskScope.unbounded().to_dict()], None)
+    assert problem and "over the 50-file evidence bound" in problem
+    record = session._trim_snapshot(spec, "draft", None)
+    assert not record["complete"] and record["inventory_problem"] and "not on file" in record["state"]
+    (project / f"m{n - 1:03d}.py").write_text(f"def check_{n - 1}():\n    pass\n")
+    session._trim_settle(record, None)
+    assert record["changed"] is None and "incomplete" in record["state"]
+    assert session._trim_owed() == [record]
+    block = session._trim_block(spec)
+    assert "not on file" in block and "cannot be judged PRESERVED" in block
+    session._read_trim_disposition(spec, "auditor", "TRIM T-t1-1: PRESERVED")
+    assert record["disposition"]["verdict"] == "REFUSED" and session._trim_owed() == [record]
+
+    monkeypatch.setattr("quadratus.session._TRIM_EVIDENCE_MAX_CHARS", 100)
+    small = tmp_path / "small"
+    (small / "tests").mkdir(parents=True)
+    (small / "tests" / "test_x.py").write_text("x" * 200)
+    session = _session(tmp_path / "s", small)
+    files, problem = session._trim_files([TaskScope.unbounded().to_dict()], None)
+    assert "over the evidence bound" in problem and "tests/test_x.py" in files
+
+
+def test_the_audit_is_shown_the_whole_canonical_scenario_or_told_it_is_not_shown(tmp_path):
+    """Astra's finding on 00cfc02: the audit and a reassessment read the
+    full scenario and location, never a prefix that hides the expected
+    result; a scenario over the render bound is said to be not shown."""
+    from quadratus.session import _SCENARIO_RENDER_MAX_CHARS
+    session = _session(tmp_path)
+    long_op = "x" * 260
+    row = dict(oid="O1", task="t1", kind="acceptance", behavior=f"P1: {long_op}; given s; expect e; in README.md"[:300],
+               requirements=[["R1", 1]], runner=None, execution="missing", sufficiency="unjudged", modality="reading",
+               location="README.md", cases=[],
+               scenario=[["evidence", "reading"], ["expect", "the README names add and its result"],
+                         ["location", "README.md"], ["operation", long_op], ["proof", "P1"], ["state", "add exists"]])
+    block = session._obligations_block([row])
+    assert "expect: the README names add and its result" in block and "location: README.md" in block
+    assert long_op in block
+    huge = dict(row, scenario=[["evidence", "reading"], ["expect", "e"], ["location", "README.md"],
+                               ["operation", "y" * (_SCENARIO_RENDER_MAX_CHARS + 1)], ["proof", "P1"], ["state", "s"]])
+    block = session._obligations_block([huge])
+    assert "not shown; leave this row unjudged" in block and "y" * 100 not in block
 
 
 def test_trim_records_and_binding_problems_are_carried_by_the_checkpoint(tmp_path):

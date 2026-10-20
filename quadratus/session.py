@@ -37,7 +37,7 @@ from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import delivery, judgment, obligations
 from .artifacts import ArtifactStore
@@ -1394,8 +1394,8 @@ _PROVES_ANY = re.compile(r"^\s*PROVES:(.*)$", re.MULTILINE)
 _PROVES_BODY = re.compile(r"(P\d+)\s*-\s*(\S+)")
 _PROVES_PID = re.compile(r"\s*(P\d+)\b")
 _TRIM_LINE = re.compile(r"^\s*TRIM(?:\s+(T[\w.-]+))?:\s*(PRESERVED|LOST)(?:\s*-\s*(.*?))?\s*$", re.MULTILINE)
-_TRIM_SUPPORT_MAX_FILES = 50
-_IMPORT_LINE = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+))", re.MULTILINE)
+_TRIM_SUPPORT_MAX_FILES = 400
+_SCENARIO_RENDER_MAX_CHARS = 4_000
 #: Name marks of the support files a trim's evidence keeps beside the tests.
 _TRIM_SUPPORT_MARKS = ("conftest", "fixture", "helper", "support", "factor", "stub", "fake", "mock")
 def _check_runs(check: dict, root=None) -> List[dict]:
@@ -4090,21 +4090,29 @@ class Session:
                          forbidden_paths=tuple(data.get("forbidden_paths") or ()),
                          review_only=data.get("edits") == "none", exact=bool(data.get("exact")))
 
-    def _trim_files(self, policy: Optional[list], before) -> Optional[dict]:
-        """The task's test and support files as they are now, filtered by
+    def _trim_files(self, policy: Optional[list], before) -> Tuple[Optional[dict], Optional[str]]:
+        """The evidence a trim is judged against, as it is now, filtered by
         ``policy`` (serialized scopes: the task's own and the operator
         limits bound when the trim was taken) and by the live operator
-        limit, as ``{path: text}``: test files by convention, the support
-        files assertions lean on by name (conftest, fixtures, helpers,
-        support, factories), and the project modules the test files import
-        (an explicit, validated dependency inventory, bounded by
-        ``_TRIM_SUPPORT_MAX_FILES``). None when there is no policy or the
-        project cannot be read: unknown, never empty or widened."""
-        if not policy or not self.project:
-            return None
+        limit, as ``({path: text}, problem)``: every permitted Python
+        source file and every permitted test or support file by name
+        (conftest, fixtures, helpers, support, factories), whole. No import
+        grammar decides what an assertion leans on (root's ninth control on
+        00cfc02: a walk that follows some import forms and slices in
+        silence describes partial evidence as complete); the capture is
+        the permitted Python and support text itself, bounded by
+        ``_TRIM_SUPPORT_MAX_FILES`` files and ``_TRIM_EVIDENCE_MAX_CHARS``
+        characters, and past either bound ``problem`` says so and nothing
+        built on the capture is judged preserved. ``(None, problem)`` when
+        there is no policy or the project cannot be read: unknown, never
+        empty or widened."""
+        if not policy:
+            return None, "the policy the trim was taken under was not recorded"
+        if not self.project:
+            return None, "no project"
         after = self._capture_source()
         if after is None:
-            return None
+            return None, "the project could not be read"
         scopes = [self._scope_from_dict(s) for s in policy]
         if self.config.default_scope is not None:
             scopes.append(self.config.default_scope)
@@ -4112,37 +4120,18 @@ class Session:
         def permitted(name):
             return not scopes[0].review_only and all(s.permits(name) for s in scopes)
 
-        def support(name):
+        def relevant(name):
             base = PurePosixPath(name).name.lower()
-            return any(mark in base for mark in _TRIM_SUPPORT_MARKS)
-        candidates = sorted(n for n in set(after) | set(before or {}) if permitted(n))
-        names = [n for n in candidates if is_test_path(n) or support(n)]
-        imported = []
-        present = set(after)
-        for name in [n for n in names if is_test_path(n)]:
-            raw = after.get(name)
-            if raw is None:
-                continue
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            base = PurePosixPath(name).parent
-            for m in _IMPORT_LINE.finditer(text):
-                module = (m.group(1) or m.group(2) or "").strip(".")
-                if not module:
-                    continue
-                rel = module.replace(".", "/")
-                for candidate in (f"{rel}.py", f"{rel}/__init__.py", str(base / f"{rel}.py"),
-                                  str(base / rel / "__init__.py")):
-                    candidate = candidate.removeprefix("./")
-                    if (candidate in present and candidate not in names and candidate not in imported
-                            and permitted(candidate)):
-                        imported.append(candidate)
-        if len(imported) > _TRIM_SUPPORT_MAX_FILES:
-            imported = imported[:_TRIM_SUPPORT_MAX_FILES]
+            return name.endswith(".py") or is_test_path(name) or any(mark in base for mark in _TRIM_SUPPORT_MARKS)
+        names = sorted(n for n in set(after) | set(before or {}) if permitted(n) and relevant(n))
+        problem = None
+        if len(names) > _TRIM_SUPPORT_MAX_FILES:
+            problem = (f"{len(names)} permitted source and support files, over the {_TRIM_SUPPORT_MAX_FILES}-file "
+                       "evidence bound")
+            names = names[:_TRIM_SUPPORT_MAX_FILES]
         files = {}
-        for name in names + sorted(imported):
+        size = 0
+        for name in names:
             raw = after.get(name)
             if raw is None:
                 continue
@@ -4150,7 +4139,10 @@ class Session:
                 files[name] = raw.decode("utf-8")
             except UnicodeDecodeError:
                 files[name] = None
-        return files
+            size += len(raw)
+        if problem is None and size > _TRIM_EVIDENCE_MAX_CHARS:
+            problem = f"{size:,} characters of permitted source and support text, over the evidence bound"
+        return files, problem
 
     def _trim_snapshot(self, spec: TaskSpec, site: str, before) -> dict:
         """Immutable evidence taken before a trim writes, under a stable id
@@ -4165,13 +4157,13 @@ class Session:
         assertions is then owed an independent disposition about exactly
         this evidence (``_trim_block``)."""
         policy = self._trim_policy(spec)
-        files = self._trim_files(policy, before)
+        files, problem = self._trim_files(policy, before)
         n = 1 + sum(1 for r in self.trim_records if r.get("task") == spec.task_id)
         tid = f"T-{spec.task_id}-{n}"
         state = "pre-trim evidence unavailable: the project could not be read before the trim"
         record = dict(tid=tid, task=spec.task_id, site=site, artifact=None, artifact_sha256=None, hashes={},
-                      complete=False, source=self._source_fingerprint(), after_check=len(self.checks),
-                      policy=policy, requirements=dict(self._requirement_revisions()),
+                      complete=False, inventory_problem=problem, source=self._source_fingerprint(),
+                      after_check=len(self.checks), policy=policy, requirements=dict(self._requirement_revisions()),
                       proofs=[dict(proof=r.get("proof_id") or r["oid"], cases=list(r.get("cases") or ()))
                               for r in self.evidence_obligations
                               if r.get("task") == spec.task_id and r.get("kind") == "acceptance"],
@@ -4180,11 +4172,19 @@ class Session:
         if files is not None:
             hashes = {n: hashlib.sha256((t or "").encode()).hexdigest() for n, t in files.items()}
             text = json.dumps({n: t for n, t in files.items() if t is not None}, sort_keys=True)
-            complete = len(text) <= _TRIM_EVIDENCE_MAX_CHARS and all(t is not None for t in files.values())
+            # Complete means the whole support graph within bounds, every
+            # file decodable and the contents under the evidence bound; a
+            # partial inventory is kept (hashes) and said to be partial.
+            complete = (problem is None and len(text) <= _TRIM_EVIDENCE_MAX_CHARS
+                        and all(t is not None for t in files.values()))
             body = text if complete else json.dumps(hashes, sort_keys=True)
             kept = self.store.put(body, kind="pre-trim-tests" if complete else "pre-trim-hashes", author="harness")
+            state = "pending" if complete else f"pre-trim evidence not on file: {problem or 'over the evidence bound'}"
             record.update(artifact=kept.id, artifact_sha256=hashlib.sha256(body.encode()).hexdigest(), hashes=hashes,
-                          complete=complete, state="pending", evidence_state="pending")
+                          complete=complete, state=state, evidence_state=state)
+        elif problem:
+            state = f"pre-trim evidence unavailable: {problem}"
+            record.update(state=state, evidence_state=state)
         self.trim_records.append(record)
         return record
 
@@ -4195,16 +4195,31 @@ class Session:
         never unchanged."""
         if record is None or record.get("source_after") is not None:
             return
-        files = self._trim_files(record.get("policy"), before)
+        files, problem = self._trim_files(record.get("policy"), before)
         record["source_after"] = self._source_fingerprint()
         if files is None:
-            state = "post-trim evidence unavailable: the project could not be read after the trim"
+            state = f"post-trim evidence unavailable: {problem}"
+            record.update(changed=None, state=state, evidence_state=state)
+            return
+        if problem:
+            # The support graph after the trim is not whole: what changed
+            # is unknown, and the trim stays owed.
+            record["post_hashes"] = {n: hashlib.sha256((t or "").encode()).hexdigest() for n, t in files.items()}
+            state = f"post-trim support inventory incomplete: {problem}"
             record.update(changed=None, state=state, evidence_state=state)
             return
         record["post_hashes"] = {n: hashlib.sha256((t or "").encode()).hexdigest() for n, t in files.items()}
         if not record["hashes"] and not record["complete"]:
             state = "pre-trim evidence unavailable; the trim's effect is unknown"
             record.update(changed=None, state=state, evidence_state=state)
+            return
+        if record.get("inventory_problem"):
+            # The pre-trim inventory was partial: an unchanged partial set
+            # shows nothing about what it omitted, so the trim stays owed
+            # whatever the hashes say.
+            record["changed"] = None
+            state = f"pre-trim support inventory incomplete ({record['inventory_problem']}); the trim's effect is unknown"
+            record.update(state=state, evidence_state=state)
             return
         record["changed"] = record["hashes"] != record["post_hashes"]
         state = ("tests unchanged by the trim" if not record["changed"] else
@@ -4230,10 +4245,11 @@ class Session:
             return None
         return pre if isinstance(pre, dict) else None
 
-    def _trim_current_files(self, record: dict) -> Optional[dict]:
+    def _trim_current_files(self, record: dict) -> Tuple[Optional[dict], Optional[str]]:
         """The test and support files as they are now under the record's
-        own policy (never widened for a late review); None when the policy
-        was not recorded or the project cannot be read."""
+        own policy (never widened for a late review), with the problem
+        that makes them less than the whole support graph; ``(None, why)``
+        when the policy was not recorded or the project cannot be read."""
         return self._trim_files(record.get("policy"), None)
 
     def _trim_evidence_id(self, record: dict) -> str:
@@ -4319,9 +4335,14 @@ class Session:
                 parts.append("The policy the trim was taken under was not recorded: the current files cannot be "
                              "read within it, and this trim cannot be judged PRESERVED.")
                 continue
-            now = self._trim_current_files(record)
+            now, problem = self._trim_current_files(record)
             if now is None:
-                parts.append("The current test files could not be read: this trim cannot be judged PRESERVED now.")
+                parts.append(f"The current test files could not be read ({problem}): this trim cannot be judged "
+                             "PRESERVED now.")
+                continue
+            if problem:
+                parts.append(f"The current support inventory is not whole ({problem}): this trim cannot be judged "
+                             "PRESERVED from what you see.")
                 continue
             diff = diff_contents({n: t.encode() for n, t in pre.items()},
                                  {n: (t or "").encode() for n, t in now.items()})
@@ -4376,8 +4397,9 @@ class Session:
             evidence = self._trim_evidence_id(record)
             shown = record.get("shown")
             base = record.get("evidence_state") or record.get("state") or "pending"
+            now, now_problem = self._trim_current_files(record)
             readable = (self._trim_pre_contents(record) is not None and bool(record.get("policy"))
-                        and self._trim_current_files(record) is not None)
+                        and now is not None and now_problem is None)
             if verdict == "PRESERVED" and (not readable or shown != evidence):
                 record["disposition"] = dict(verdict="REFUSED", by=by, evidence=evidence,
                                              detail="PRESERVED without the evidence on file, readable now and shown")
@@ -9413,6 +9435,30 @@ class Session:
                          f"{r['state']}): {r['claim']}" for r in standing)
         return "\n".join(lines)
 
+    @staticmethod
+    def _scenario_line(o: dict) -> str:
+        """The obligation's canonical scenario and location, whole, for the
+        seats that judge it (the audit and a reassessment): proof id,
+        operation, prior state, expectation, location, declared evidence,
+        bound cases. Bounded by ``_SCENARIO_RENDER_MAX_CHARS`` per row;
+        over it the line says the scenario is not shown and the row is to
+        be left unjudged, never a silent prefix (Astra's finding on
+        00cfc02: a long operation hid the expected result and location)."""
+        scenario = dict(o.get("scenario") or {})
+        if not scenario and not o.get("location") and not o.get("cases"):
+            return ""
+        fields = [(k, scenario[k]) for k in ("proof", "operation", "state", "expect", "location", "evidence")
+                  if k in scenario]
+        if "location" not in scenario and o.get("location"):
+            fields.append(("location", str(o["location"])))
+        if o.get("cases"):
+            fields.append(("bound cases", ", ".join(o["cases"])))
+        text = "; ".join(f"{k}: {v}" for k, v in fields)
+        if len(text) > _SCENARIO_RENDER_MAX_CHARS:
+            return (f"\n  scenario: {len(text):,} characters, over the {_SCENARIO_RENDER_MAX_CHARS:,}-character bound "
+                    "for this prompt and not shown; leave this row unjudged (an explicit INSUFFICIENT is allowed).")
+        return f"\n  scenario: {text}"
+
     def _obligations_block(self, rows: List[dict]) -> str:
         if not rows:
             return ""
@@ -9424,11 +9470,12 @@ class Session:
                 "none (reading claim: no runnable proof)" if modality == "reading" else
                 "none (legacy acceptance: no scenario declared, no case bound, mapping unknown)")
             lines.append(f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): "
-                         f"{o['behavior'][:200]}; evidence {modality}; runner {runner}; "
+                         f"{o['behavior']}; evidence {modality}; runner {runner}; "
                          f"execution {o['execution']}"
                          + (f" ({o['reason']})" if o.get("reason") else "")
                          + f"; sufficiency {o['sufficiency']}"
-                         + (f" by {o['judged_by']}" if o.get("judged_by") else ""))
+                         + (f" by {o['judged_by']}" if o.get("judged_by") else "")
+                         + self._scenario_line(o))
         if any(o.get("modality") == "legacy" for o in rows):
             lines.append("A legacy acceptance row is judged only by your own line, '<O-id>: SUFFICIENT <the "
                          "project evidence you read that shows it>' or '<O-id>: INSUFFICIENT <what it does not "

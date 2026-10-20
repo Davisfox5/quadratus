@@ -2066,14 +2066,17 @@ Key design decisions already settled:
   `_trim_block`, `_read_trim_disposition`). Every trim has a record id
   `T-<task>-<n>`, unique across the run and its parallel children (a merge
   remaps a collision once). Before a draft, capped-draft or revision trim
-  writes, the test files, the support files assertions lean on (by name:
-  `_TRIM_SUPPORT_MARKS`) and the project modules the test files import (an
-  explicit, validated dependency inventory, bounded by
-  `_TRIM_SUPPORT_MAX_FILES`), all filtered by the task's own scope and the
-  operator limits bound at that moment, are kept with their hashes, that
-  policy, the proof bindings and the source identity as an immutable
-  artifact whose sha256 the record carries (`pre-trim-tests`, bounded by
-  `_TRIM_EVIDENCE_MAX_CHARS`; past it only hashes). The artifact is read
+  writes, every permitted Python source file and every permitted test or
+  support file by name (`_TRIM_SUPPORT_MARKS`), whole, filtered by the
+  task's own scope and the operator limits bound at that moment, is kept
+  with its hash, that policy, the proof bindings and the source identity
+  as an immutable artifact whose sha256 the record carries
+  (`pre-trim-tests`). No import grammar decides what an assertion leans on
+  (root's ninth control on 00cfc02: a walk that follows some import forms
+  and slices in silence describes partial evidence as complete); the
+  capture is bounded by `_TRIM_SUPPORT_MAX_FILES` files and
+  `_TRIM_EVIDENCE_MAX_CHARS` characters, and past either bound the record
+  says so, keeps only hashes, and the trim stays owed. The artifact is read
   back and verified against that digest on every consumption; missing,
   unreadable or altered is "not on file". Unknown is owed, never clear: a
   project that could not be read before or after the trim leaves a record
