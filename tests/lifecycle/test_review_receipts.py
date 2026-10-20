@@ -18,7 +18,7 @@ import pytest
 
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_dependency_identity import _run
-from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
+from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script, judging
 
 BROKEN = "def add(a, b):\n    return a - b\n"
 HANDED = "THE HARNESS HAS ALREADY RUN THE PROJECT'S CHECK COMMANDS ON EXACTLY THIS SOURCE"
@@ -202,7 +202,9 @@ def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp
 
     monkeypatch.setattr(Session, "next_task", next_task)
     script = Script(lead=_writes(FIXED), orchestrator=lambda c, r: plan.pop(0) if plan else "DONE",
-                    auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md")
+                    auditor=judging(lambda c, r: "R1: MET - app.py\nR2: MET - README.md",
+                                    reading="SUFFICIENT README.md names add(a, b) and its result, which is all R2 asks",
+                                    legacy="SUFFICIENT README.md names add(a, b), checked against app.py"))
     replay = _run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4, forbid=forbid)
     requirements = H.result_json(replay)["requirements"]
     if gate_changes == "forbidden":

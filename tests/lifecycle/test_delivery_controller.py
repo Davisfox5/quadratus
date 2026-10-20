@@ -27,8 +27,8 @@ import pytest
 from quadratus import checkpoint, jobstore
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_finish_capacity import PLAN_1, PLAN_2, _budget, _script
-from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
+from tests.lifecycle.test_finish_capacity import DOCS_JUDGED, PLAN_1, PLAN_2, _budget, _script
+from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script, judging
 from tests.lifecycle.test_step2_recovery import _episode, _interrupt_after, _simple
 
 #: The gate names every test file whole, as an operator's check does when it
@@ -131,8 +131,9 @@ def test_a_basis_less_concern_is_carried_to_the_audit_by_id_and_judged_there(tmp
     requirement unmet."""
     review = "BLOCKING: the example might mislead users | impact: other\nR2: MET - README.md"
     script = _recheck_script(["RFT2-1: UNRESOLVED it still might"], t2_review=review)
-    script.overrides["auditor"] = lambda call, replay: (
-        "R1: MET - app.py\nR2: MET - README.md\nRFT2-1: INVALIDATED README.md shows add(1, 2) returning 3")
+    script.overrides["auditor"] = judging(lambda call, replay: (
+        "R1: MET - app.py\nR2: MET - README.md\nRFT2-1: INVALIDATED README.md shows add(1, 2) returning 3"),
+        reading=DOCS_JUDGED)
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     audit = replay.of("auditor")[-1].prompt
@@ -236,7 +237,9 @@ def _http_script(not_run_item):
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return f'Implemented add.\nNOT RUN: {not_run_item}\nCHANGED: ["app.py"]'
+        return (f'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\n'
+                f'PROVES: P2 - tests/test_http.py::test_real_http_server_answers_add\n'
+                f'NOT RUN: {not_run_item}\nCHANGED: ["app.py"]')
     return Script(orchestrator=orchestrator, lead=lead,
                   collaborator=lambda call, replay: "NO FINDINGS\nR1: MET - app.py\nR2: MET - tests/test_http.py",
                   auditor=lambda call, replay: "R1: MET - app.py\nR2: MET - tests/test_http.py",
@@ -292,13 +295,9 @@ def test_a_receipt_on_another_source_does_not_discharge_and_the_declared_accepta
     it (proof/1: a scenario is discharged only by its own named executed
     case, and a documentation scenario with no case stays honestly
     unexecuted)."""
+    # The shared lead already binds P1 to test_add; a second identical line
+    # would be an invalid (duplicate) declaration under the strict protocol.
     script = _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md")
-    plain = script.overrides["lead"]
-
-    def lead(call, replay):
-        reply = plain(call, replay)
-        return reply.replace("CHANGED:", "PROVES: P1 - tests/test_app.py::test_add\nCHANGED:") if call.task == "t1" else reply
-    script.overrides["lead"] = lead
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     final = H.result_json(replay)["source_fingerprint"]
@@ -307,9 +306,12 @@ def test_a_receipt_on_another_source_does_not_discharge_and_the_declared_accepta
     t1, t2 = rows["t1"], rows["t2"]
     assert t1["binding"] == "bound" and t1["cases"] == ["tests/test_app.py::test_add"]
     assert t1["execution"] == "ran" and t1["source_digest"] == final and t1["established"]
-    assert t2["binding"].startswith("reading claim") and t2["execution"] == "missing" and not t2["established"]
+    assert t2["binding"].startswith("reading claim") and t2["execution"] == "missing" and t2["cases"] == []
     assert t2["runner"] is None and not t2["executable_claim"]
-    assert t2["sufficiency"] == "sufficient" and t2["judged_source"] == final, "judged by the audit on the final source"
+    # Established only by the audit's own explicit per-obligation line on
+    # the final source (this file's scripted audit writes one); never by a
+    # check, and never by the MET on R2 alone.
+    assert t2["sufficiency"] == "sufficient" and t2["judged_source"] == final and t2["established"]
     assert H.result_json(replay)["requirements"]["audits"][-1]["acceptance"]["R2"]["met"] is True
     assert all(o["gate"] and o["environment"] and o["policy"] == "review/2" for o in rows.values())
 

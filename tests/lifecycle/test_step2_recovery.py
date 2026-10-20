@@ -18,7 +18,15 @@ from quadratus.project_run import run_project
 from quadratus.run_budget import RunBudget, RunLimits
 from quadratus.session import Session
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import DECL_T1, DECL_T2, FILES, FIXED, T1, Script
+from tests.lifecycle.test_lifecycle_matrix import (
+    DECL_T1,
+    DECL_T2,
+    FILES,
+    FIXED,
+    T1,
+    Script,
+    judging,
+)
 
 LIMITS = RunLimits(max_calls=120, max_reported_tokens=6_000_000, wall_seconds=600, max_concurrent_workers=2)
 
@@ -345,7 +353,8 @@ def test_the_planner_is_told_which_requirements_no_task_has_covered(tmp_path, mo
     reqs = "REQUIREMENTS:\nR1: add works\nR2: README documents add\n"
     first = reqs + DECL_T1 + "\nCOVERS: R1"
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(first, DECL_T2 + "\nCOVERS: R2"),
-                                                  auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md"),
+                                                  auditor=judging(lambda c, r: "R1: MET - app.py\nR2: MET - README.md",
+                                                                  reading=DOCS_JUDGED)),
                    files=FILES, max_tasks=3, record_complete=False)
     second = replay.of("orchestrator")[1].prompt
     assert "Requirements no task has covered yet: R2." in second
@@ -475,6 +484,10 @@ _TYPED = ("def add(a, b):\n"
           "        if not isinstance(value, (int, float)):\n"
           "            raise TypeError(name)\n"
           "    return a + b\n")
+
+
+#: This file's own explicit judgment of a README documentation scenario (a reading row).
+DOCS_JUDGED = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 
 
 def _simple(path, text, covers):
@@ -1816,7 +1829,7 @@ def test_the_cap_goal_question_lists_full_work_by_id_and_the_audit_still_decides
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
-        return 'Implemented add with the sum.\nCHANGED: ["app.py"]'
+        return 'Implemented add with the sum.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead,
@@ -2095,14 +2108,16 @@ def test_a_capped_draft_past_the_size_stop_gets_the_same_one_trim(tmp_path, monk
             return H.grok_ok("Trimming", stop="cancelled", num_turns=8)
         if n == 1:
             H.write(call, {"app.py": _BLOATED + "\n# kept\n" if case == "still-over" else _TYPED})
-            return 'Trimmed.\nCHANGED: ["app.py"]'
+            return 'Trimmed.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"app.py": _BLOATED})
-        return 'Revised.\nCHANGED: ["app.py"]'
+        return 'Revised.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def collaborator(call, replay):
         if case == "exhausted":
             return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
-        return "NO FINDINGS\nR1: MET - app.py:5"
+        # The size trim changed app.py: this reviewer judges the shown
+        # comparison and says so for the trim it was shown.
+        return "NO FINDINGS\nR1: MET - app.py:5\nTRIM T-t1-1: PRESERVED"
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=_plan(declared), lead=lead, revision=revision, collaborator=collaborator,

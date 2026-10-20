@@ -53,7 +53,7 @@ def _sandboxed() -> bool:
 
 #: T1's one declared acceptance behavior, the executed evidence obligation
 #: the add scenario registers at dispatch (tests.lifecycle.test_lifecycle_matrix.T1).
-_ADD_OBLIGATION = "add(1, 2) == 3"
+_ADD_OBLIGATION = "P1: add(1, 2); given nothing stored; expect 3 is returned; in tests/test_app.py"
 
 
 def _add_reassessment(prompt: str) -> str:
@@ -377,8 +377,8 @@ _SAFE = ("def safe_ratio(a, b):\n    try:\n        return a / b\n"
 _UNSAFE = _SAFE.replace("ArithmeticError", "ValueError")
 _RATIO_SCOPE = dict(permitted_paths=["ratio.py"], intended_result="safe_ratio is safe",
                     acceptance=["safe_ratio(1, 0) is None"], max_lines=40,
-                    proofs=H.proofs_for("R1", "ratio.py", operation="safe_ratio(1, 0)", state="no state",
-                                        expect="None is returned, nothing raised"))
+                    proofs=H.proofs_for("R1", "tests/test_ratio_evidence.py", operation="safe_ratio(1, 0)",
+                                        state="no state", expect="None is returned, nothing raised"))
 _RATIO_DECL = ("REQUIREMENTS:\nR1: " + _RATIO_REQ + "\nKIND: architect complex\nSCOPE: "
                + json.dumps(_RATIO_SCOPE) + "\nImplement safe_ratio in ratio.py.\nCOVERS: R1")
 _RATIO_TESTS = {
@@ -411,7 +411,8 @@ _STARVED_LIMITS = RunLimits(max_calls=20, max_reported_tokens=1_200_000, wall_se
 #: BLOCKING line with no basis is carried to the final audit by id instead.
 _HELD = "BLOCKING: negative sums are not shown; at app.py add; example: add(-1, -2) should be -3 | basis: R1 | impact: correctness"
 #: The ratio scenario's one declared acceptance behavior (_RATIO_SCOPE).
-_RATIO_OBLIGATION = "safe_ratio(1, 0) is None"
+_RATIO_OBLIGATION = ("P1: safe_ratio(1, 0); given no state; expect None is returned, nothing raised; "
+                     "in tests/test_ratio_evidence.py")
 
 
 def _ratio_reassessment(prompt: str) -> str:
@@ -420,7 +421,9 @@ def _ratio_reassessment(prompt: str) -> str:
     sufficient on that basis alone (the proof executed exactly its
     behavior on this source). Only that obligation; the irrelevant proof
     never reaches here (the auditor keeps its finding)."""
-    judged = {o["oid"]: "SUFFICIENT the shown proof executed safe_ratio(1, 0) is None on this source and passed"
+    judged = {o["oid"]: (f"SUFFICIENT {o['oid']} (P1) is shown executed: the evidence file "
+                         "tests/test_ratio_evidence.py::test_zero_divisor divided by zero on this source and passed, "
+                         "which is exactly the scenario's zero-divisor expectation")
               for o in requested_obligations(prompt)
               if o["behavior"] == _RATIO_OBLIGATION and o["execution"] == "ran"}
     # R1 is an error clause: its MET cites the delivered file and the exact
@@ -451,7 +454,9 @@ def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False,
 
     def lead(call, replay):
         H.write(call, {"ratio.py": source})
-        return 'Implemented safe_ratio.\nCHANGED: ["ratio.py"]'
+        # A binding is a claim of where the proof lives, never execution:
+        # the case is written by the challenge, run by the harness.
+        return 'Implemented safe_ratio.\nPROVES: P1 - tests/test_ratio_evidence.py::test_zero_divisor\nCHANGED: ["ratio.py"]'
 
     def auditor(call, replay):
         shown = "Result: passed" in call.prompt and "assert safe_ratio(1, 0) is None" in call.prompt

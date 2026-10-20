@@ -40,7 +40,9 @@ REQS = "REQUIREMENTS:\nR1: the toolbar fits a phone\nR2: the import page keeps i
 BUILD = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=CAPTURE), "Make the toolbar fit.", covers="R1")
 VERIFY = _decl("KIND: frontend standard", dict(AUDIT_SCOPE, capture=CAPTURE),
                "Verify the import page and run its tests.", covers="R2")
-DOCS = _decl("KIND: docs simple", T2, "Document add in README.md.", covers="R1")
+# The docs task covers R1 here, so its reading scenario names R1 (T2's names R2).
+DOCS = _decl("KIND: docs simple", dict(T2, proofs=H.proofs_for("R1", "README.md", evidence="reading")),
+             "Document add in README.md.", covers="R1")
 
 
 def _build(call, replay):

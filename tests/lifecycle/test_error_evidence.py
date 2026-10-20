@@ -23,7 +23,7 @@ import pytest
 
 from quadratus.session import _error_clause
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import Script
+from tests.lifecycle.test_lifecycle_matrix import Script, judging
 from tests.lifecycle.test_step2_recovery import _simple
 
 
@@ -35,6 +35,9 @@ def _scoped(paths, text, covers):
                                                expect="TypeError is raised")})
     return f"KIND: backend simple\nSCOPE: {scope}\n{text}\nCOVERS: {covers}"
 
+#: This file's own explicit judgment of t2's documentation scenario (a reading
+#: row): README.md names add(a, b) and its result, which is all R2 asks.
+DOCS_JUDGED = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 R1 = "add(a, b) raises TypeError when either argument is not a number"
 R2 = "README documents add"
 PLAN = ("REQUIREMENTS:\nR1: " + R1 + "\nR2: " + R2 + "\n"
@@ -67,7 +70,8 @@ def _run(tmp_path, monkeypatch, *, source, tests, audit, review="NO FINDINGS\nR1
         if call.task == "t1":
             H.write(call, {"app.py": source, "tests/test_app.py": tests})
             changed = ["app.py"] + (["tests/test_app.py"] if tests != HAPPY else [])
-            return "Implemented add with its refusal.\nCHANGED: " + json.dumps(changed)
+            proves = "PROVES: P1 - tests/test_app.py::test_add_refuses_text\n" if tests != HAPPY else ""
+            return "Implemented add with its refusal.\n" + proves + "CHANGED: " + json.dumps(changed)
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n", **(after or {})})
         return 'Documented add.\nCHANGED: ["README.md"' + "".join(f', "{p}"' for p in after or {}) + "]"
 
@@ -75,7 +79,7 @@ def _run(tmp_path, monkeypatch, *, source, tests, audit, review="NO FINDINGS\nR1
         return review if call.task == "t1" else "NO FINDINGS\nR2: MET - README.md"
 
     script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
-                    auditor=lambda call, replay: audit,
+                    auditor=judging(lambda call, replay: audit, reading=DOCS_JUDGED),
                     **{"requirements-review": lambda call, replay: "COMPLETE",
                        "revision": lambda call, replay: "Nothing to change.\nCHANGED: []"})
     return H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False, check=check)

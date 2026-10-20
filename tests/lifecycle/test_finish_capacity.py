@@ -23,7 +23,7 @@ import pytest
 
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
+from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script, judging
 from tests.lifecycle.test_step2_recovery import _episode, _interrupt_after, _simple
 
 PLAN_1 = ("REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: README documents add\n"
@@ -37,6 +37,11 @@ README = "# app\n\n`add(a, b)` returns the sum.\n"
 
 def _limits(calls):
     return RunLimits(max_calls=calls, max_reported_tokens=6_000_000, wall_seconds=600, max_concurrent_workers=2)
+
+
+#: This file's own explicit judgment of t2's documentation scenario (a
+#: reading row): README.md names add(a, b) and its result, which is all R2 asks.
+DOCS_JUDGED = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 
 
 def _script(plan, *, t2_review="BLOCKING: README lacks an example\nR2: MET - README.md",
@@ -58,7 +63,7 @@ def _script(plan, *, t2_review="BLOCKING: README lacks an example\nR2: MET - REA
     extra = {"closeout": closeout} if closeout else {}
     return Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
                   recheck=lambda call, replay: recheck,
-                  auditor=lambda call, replay: "R1: MET - app.py\nR2: MET - README.md",
+                  auditor=judging(lambda call, replay: "R1: MET - app.py\nR2: MET - README.md", reading=DOCS_JUDGED),
                   **{"requirements-review": lambda call, replay: "COMPLETE"}, **extra)
 
 

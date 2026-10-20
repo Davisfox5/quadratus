@@ -30,7 +30,7 @@ from quadratus.run_budget import FINISH_STAGES, FinishReserved, RunBudget, RunLi
 from quadratus.session import Session
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_finish_capacity import BATCH, PLAN_1, PLAN_2, _budget, _script
-from tests.lifecycle.test_lifecycle_matrix import FILES
+from tests.lifecycle.test_lifecycle_matrix import FILES, judging
 from tests.lifecycle.test_step2_recovery import _episode, _interrupt_after
 
 COMPLETION = "arrived without a valid verdict in the required form"
@@ -84,7 +84,8 @@ def test_a_contradictory_or_duplicate_audit_reply_never_approves(tmp_path, monke
     Now any NOT MET line, in either order, is NOT MET, and two MET lines are
     no verdict: the run is not complete."""
     script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
-    script.overrides["auditor"] = lambda call, replay: reply + "\nR2: MET - README.md"
+    script.overrides["auditor"] = judging(lambda call, replay: reply + "\nR2: MET - README.md",
+                                          reading="SUFFICIENT README.md names add(a, b) and its result, which is all R2 asks")
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False,
                    limits=_limits())
     audit = H.result_json(replay)["requirements"]["audits"][-1]

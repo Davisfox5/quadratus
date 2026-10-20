@@ -45,14 +45,17 @@ def _non_goal(monkeypatch):
 
 def _files():
     return {**FILES, "app.py": FIXED, "templates/index.html": "<html><head></head></html>\n",
-            "static/favicon.svg": ""}
+            "static/favicon.svg": "",
+            "tests/test_basic.py": ("from pathlib import Path\n\n\ndef test_favicon_file():\n"
+                                    "    assert Path('static/favicon.svg').read_text().strip()\n")}
 
 
 def _lead(call, replay):
     H.write(call, {"static/favicon.svg": "<svg/>\n",
                    "templates/index.html": '<html><head><link rel="icon" href="/favicon.ico"></head></html>\n'})
     H.evidence(replay.project if False else __import__("pathlib").Path(call.cwd), call.task, age=H.FRESH)
-    return 'Added the favicon.\nCHANGED: ["static/favicon.svg", "templates/index.html"]'
+    return ('Added the favicon.\nPROVES: P1 - tests/test_basic.py::test_favicon_file\n'
+            'CHANGED: ["static/favicon.svg", "templates/index.html"]')
 
 
 def _run(tmp_path, monkeypatch, decl, *, direct=True, lead=_lead, roles=None, **kw):

@@ -40,7 +40,8 @@ def _run(tmp_path, monkeypatch, writes, *, repair=("tests/test_reset.py",)):
 
     def lead(call, replay):
         H.write(call, writes)
-        return "Repaired the test.\nCHANGED: " + json.dumps(sorted(writes))
+        return ("Repaired the test.\nPROVES: P1 - tests/test_reset.py::test_reset_keeps_order\nCHANGED: "
+                + json.dumps(sorted(writes)))
     script = Script(orchestrator=lambda c, r: plan.pop(0) if plan else "DONE", lead=lead,
                     closeout=lambda c, r: CLOSEOUT,
                     **{"requirements-review": lambda c, r: "COMPLETE",

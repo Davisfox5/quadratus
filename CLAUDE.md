@@ -2052,6 +2052,35 @@ Key design decisions already settled:
   and scenario, and every trim record; judgment fields stay out. PROVES
   is a strict protocol: distinct cases bind a set, an exact duplicate line
   is an invalid declaration, never collapsed.
+  **The audit reads the whole scenario or accepts nothing** (Astra on
+  00cfc02 and b18ca98): the audit and a reassessment are shown each
+  obligation's behaviour whole and its full canonical scenario
+  (`_scenario_line`); over `_SCENARIO_RENDER_MAX_CHARS` the line says the
+  scenario is not shown, and the harness then counts no SUFFICIENT for
+  that row, explicit or implied (`_scenario_shown` in
+  `_judge_obligations`), drops an earlier approval on refresh, and keeps
+  INSUFFICIENT. Wording alone is not enforcement.
+  **A served evidence proof can be the receipt for an obligation it was
+  bound to at intent, and nothing else** (root and SAME Astra on b18ca98:
+  the final read-only challenge's execution lives in `evidence_requests`,
+  which `_obligation_receipt` never read). `_serve_evidence` captures
+  `bindings` before the proof runs: only existing explicitly bound
+  test-modality obligations on the audited requirement or the reviewed
+  task qualify, each with its ids, modality, location, whole scenario,
+  bound cases, requirement revisions, policy, environment, source,
+  effective and configured gate, and the proof's id, file and hash.
+  `_evidence_receipt` turns a passed, undrifted proof into a receipt only
+  when every captured field equals the obligation and the run as they are
+  now and every bound case is among the proof's passed cases; the receipt
+  keeps its scratch provenance (`E<n>:O<m>`, the evidence id and file) and
+  is never an integration pass of the whole project. It feeds
+  `delivery.discharge` through the ordinary refresh, so it is available
+  to the reassessment before `_lower_unexecuted`; sufficiency stays the
+  auditor's explicit full-scenario line. A rebinding, a moved source, a
+  changed gate or environment, a reworded requirement, or a record without
+  its bindings is no receipt. Nothing is synthesized from a requirement id
+  or a green case: the lead still binds the case (`PROVES`), which is a
+  claim of where the proof lives, never execution.
   Sufficiency stays the audit's judgment: a bound executed case proves only
   that it ran.
   The reviewer and the rechecker read the task's scenarios with their

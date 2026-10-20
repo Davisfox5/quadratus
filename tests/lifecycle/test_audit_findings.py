@@ -16,7 +16,7 @@ import pytest
 
 from quadratus.config import Settings
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import DESIGN, T2, Script, _design_files
+from tests.lifecycle.test_lifecycle_matrix import DESIGN, T2, Script, _design_files, judging
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -29,6 +29,9 @@ RECAPTURE = AUDIT.replace("Audit the import page.", "Re-check the import page.")
 DOCS = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, proofs=H.proofs_for("R1, R2", "README.md", evidence="reading")))
         + "\nDocument add in README.md.\nCOVERS: R1, R2")
 MET = "R1: MET - templates/index.html\nR2: MET - templates/index.html"
+#: This file's own explicit judgment of a review-only task's legacy acceptance
+#: row (mapping unknown): what the capture shows, said per obligation id.
+LEGACY_JUDGED = "SUFFICIENT the capture of templates/index.html shows the Import button at the measured width"
 WIDE = {"mobile": 450}
 NO_EDIT = "Nothing to change after review.\nCHANGED: []"
 
@@ -65,7 +68,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, review="APPROVED", fix=None, max
         "revision": lambda call, replay: NO_EDIT,
         "design-review": review if callable(review) else (lambda call, replay: review),
         "requirements-review": lambda call, replay: "COMPLETE",
-        "auditor": lambda call, replay: audits.pop(0) if audits else MET,
+        "auditor": judging(lambda call, replay: audits.pop(0) if audits else MET, legacy=LEGACY_JUDGED),
         "design-fix": fix or (lambda call, replay: "Captured again.\nCHANGED: []"),
         **(roles or {}),
     }

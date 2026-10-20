@@ -906,6 +906,77 @@ def test_a_capture_past_the_bound_is_never_called_complete_and_the_trim_stays_ow
     assert "over the evidence bound" in problem and "tests/test_x.py" in files
 
 
+def test_a_served_evidence_proof_is_the_receipt_only_for_the_obligation_it_was_bound_to_at_intent(tmp_path):
+    """Root and Astra on b18ca98: the final challenge's execution lives in
+    evidence_requests. A passed proof bound at intent to an explicitly
+    bound test obligation, with every captured field still equal, is a
+    harness receipt that discharges it through delivery.discharge, with
+    its scratch provenance kept. A rebinding after the capture, a case the
+    proof did not pass, a moved source, or a record without its bindings
+    (older metadata) is no receipt: fail closed."""
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    (project / "ratio.py").write_text("def safe_ratio(a, b):\n    try:\n        return a / b\n    except ArithmeticError:\n        return None\n")
+    session = _session(tmp_path, project)
+    session.config.requirements_ledger = True
+    session.memory.ledger.requirements["R1"] = "safe_ratio returns None on a zero divisor"
+    from quadratus.session import _gate_identity
+    case = "tests/test_ratio_evidence.py::test_zero_divisor"
+    gate = _gate_identity(session.config.integration_gate)
+    row = dict(oid="O1", task="t1", kind="acceptance", proof_id="P1", behavior="P1: safe_ratio(1, 0); given no state; expect None; in tests/test_ratio_evidence.py",
+               requirements=[["R1", 1]], gate=gate, base_gate=gate, environment=session._environment_id(), policy="review/2",
+               modality="test", location="tests/test_ratio_evidence.py", binding="bound", cases=[case], runner="gate",
+               execution="missing", sufficiency="unjudged", receipts=[], judged_by="", judged_binding="",
+               scenario=[["evidence", "test"], ["expect", "None"], ["location", "tests/test_ratio_evidence.py"],
+                         ["operation", "safe_ratio(1, 0)"], ["proof", "P1"], ["state", "no state"]],
+               entry=dict(item="P1", receipt=None, after_check=0))
+    session.evidence_obligations = [dict(row)]
+    entry = dict(kind="audit", reviewer="codex:gpt", task=None, finding="R1: NOT MET", disposition="x", identity="i")
+    bindings = session._evidence_bindings(entry, "R1", "tests/test_ratio_evidence.py", "abc", "E1")
+    assert [b["oid"] for b in bindings] == ["O1"] and bindings[0]["cases"] == [case]
+    assert bindings[0]["source"] == session._source_fingerprint() and bindings[0]["scenario"] == row["scenario"]
+    assert session._evidence_bindings(entry, "R2", "tests/test_ratio_evidence.py", "abc", "E1") == [], "only the audited requirement"
+    unbound = dict(row, binding="unbound", cases=[])
+    session.evidence_obligations = [unbound]
+    assert session._evidence_bindings(entry, "R1", "tests/test_ratio_evidence.py", "abc", "E1") == [], "no synthesized binding"
+    session.evidence_obligations = [dict(row)]
+
+    def request(**over):
+        base = dict(id="E1", target="R1", kind="audit", file="tests/test_ratio_evidence.py", file_sha256="abc",
+                    source=session._source_fingerprint(), identity=session._evidence_identity(), stage="done",
+                    disposition="MET on reassessment", bindings=bindings,
+                    receipt=dict(status="passed", reason="ok", cases=[f"{case}: passed"]))
+        base.update(over)
+        return base
+    session.evidence_requests = [request()]
+    receipt = session._obligation_receipt(session.evidence_obligations[0])
+    assert receipt and receipt["id"] == "E1:O1" and receipt["provenance"] == "scratch evidence proof"
+    assert receipt["passed_cases"] == [case] and receipt["evidence"] == "E1"
+    session._refresh_obligations()
+    settled = session.evidence_obligations[0]
+    assert settled["execution"] == "ran" and list(settled["receipts"]) == ["E1:O1"] and settled["discharged_cases"] == [case]
+    assert settled["sufficiency"] == "unjudged", "execution is not sufficiency"
+
+    for over, why in ((dict(receipt=dict(status="passed", reason="ok", cases=["tests/test_ratio_evidence.py::test_other: passed"])), "case not shown passed"),
+                      (dict(receipt=dict(status="failed", reason="x", cases=[f"{case}: failed"])), "a failed proof"),
+                      (dict(bindings=[]), "no binding at intent"),
+                      (dict(identity="drifted"), "source or checks drifted"),
+                      (dict(disposition="held: the source or checks changed after the evidence was bound"), "held drift")):
+        session.evidence_obligations = [dict(row)]
+        session.evidence_requests = [request(**over)]
+        assert session._obligation_receipt(session.evidence_obligations[0]) is None, why
+    session.evidence_obligations = [dict(row, cases=["tests/test_ratio_evidence.py::test_other"])]
+    session.evidence_requests = [request()]
+    assert session._obligation_receipt(session.evidence_obligations[0]) is None, "rebound after the capture"
+    old = {k: v for k, v in request().items() if k != "bindings"}
+    session.evidence_obligations = [dict(row)]
+    session.evidence_requests = [old]
+    assert session._obligation_receipt(session.evidence_obligations[0]) is None, "older record without its bindings"
+    session.evidence_requests = [request()]
+    (project / "ratio.py").write_text("def safe_ratio(a, b):\n    return None\n")
+    assert session._obligation_receipt(session.evidence_obligations[0]) is None, "the source moved"
+
+
 def test_the_audit_is_shown_the_whole_canonical_scenario_or_told_it_is_not_shown(tmp_path):
     """Astra's finding on 00cfc02: the audit and a reassessment read the
     full scenario and location, never a prefix that hides the expected
@@ -915,7 +986,7 @@ def test_the_audit_is_shown_the_whole_canonical_scenario_or_told_it_is_not_shown
     long_op = "x" * 260
     row = dict(oid="O1", task="t1", kind="acceptance", behavior=f"P1: {long_op}; given s; expect e; in README.md"[:300],
                requirements=[["R1", 1]], runner=None, execution="missing", sufficiency="unjudged", modality="reading",
-               location="README.md", cases=[],
+               location="README.md", cases=[], gate="g", environment="e", receipts=[], judged_by="", judged_binding="",
                scenario=[["evidence", "reading"], ["expect", "the README names add and its result"],
                          ["location", "README.md"], ["operation", long_op], ["proof", "P1"], ["state", "add exists"]])
     block = session._obligations_block([row])
@@ -925,6 +996,33 @@ def test_the_audit_is_shown_the_whole_canonical_scenario_or_told_it_is_not_shown
                                ["operation", "y" * (_SCENARIO_RENDER_MAX_CHARS + 1)], ["proof", "P1"], ["state", "s"]])
     block = session._obligations_block([huge])
     assert "not shown; leave this row unjudged" in block and "y" * 100 not in block
+
+    # Enforcement, not wording (Astra's control on b18ca98): a SUFFICIENT
+    # about a row whose whole scenario was not shown is not counted,
+    # explicit or implied; INSUFFICIENT still is; the complete scenario
+    # still accepts; and an approval the scenario can no longer be shown
+    # for is dropped on refresh.
+    session.evidence_obligations = [dict(huge)]
+    session._judge_obligations("auditor", "R1: MET - README.md\nO1: SUFFICIENT README.md shows it", {"R1": (True, "README.md")})
+    gated = session.evidence_obligations[0]
+    assert gated["sufficiency"] == "unjudged" and "not shown whole" in gated["sufficiency_note"]
+    session._judge_obligations("auditor", "O1: INSUFFICIENT the README does not say what add returns", {"R1": (True, "README.md")})
+    assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
+    session.evidence_obligations = [dict(row)]
+    session._judge_obligations("auditor", "R1: MET - README.md\nO1: SUFFICIENT README.md shows it", {"R1": (True, "README.md")})
+    assert session.evidence_obligations[0]["sufficiency"] == "sufficient" and session.evidence_obligations[0]["judged_by"]
+    executed = dict(row, modality="test", location="tests/test_app.py", runner="gate", execution="ran",
+                    cases=["tests/test_app.py::test_add"],
+                    scenario=[["expect", "e"], ["location", "tests/test_app.py"], ["operation", "y" * (_SCENARIO_RENDER_MAX_CHARS + 1)],
+                              ["proof", "P1"], ["state", "s"]])
+    session.evidence_obligations = [executed]
+    session._judge_obligations("auditor", "R1: MET - tests/test_app.py::test_add", {"R1": (True, "tests/test_app.py::test_add")})
+    assert session.evidence_obligations[0]["sufficiency"] == "unjudged", "an implied SUFFICIENT is gated the same way"
+    stale = dict(huge, sufficiency="sufficient", judged_by="auditor", judged_binding="x")
+    session.evidence_obligations = [stale]
+    session._refresh_obligations()
+    assert session.evidence_obligations[0]["sufficiency"] == "unjudged"
+    assert "approval dropped" in session.evidence_obligations[0]["sufficiency_note"]
 
 
 def test_trim_records_and_binding_problems_are_carried_by_the_checkpoint(tmp_path):

@@ -9064,8 +9064,9 @@ class Session:
             for record in self.review_findings:
                 if record["fid"] in reading.dispositions and record.get("closed"):
                     self._close_review_finding_by_id(record["fid"], f"{record['state']} by the final audit")
+        original = dict(found)
         lowered = self._lower_unexecuted(found)
-        lowered += self._lower_unexercised_errors(found, audited)
+        lowered += self._lower_unexercised_errors(found, audited, original=original, lowered=lowered)
         self._judge_obligations(auditor, reply or "", found, ids=list(audited))
         self._read_trim_disposition(None, auditor, reply or "")
         # The one acceptance predicate, after sufficiency is judged: what the
@@ -9436,17 +9437,15 @@ class Session:
         return "\n".join(lines)
 
     @staticmethod
-    def _scenario_line(o: dict) -> str:
-        """The obligation's canonical scenario and location, whole, for the
-        seats that judge it (the audit and a reassessment): proof id,
-        operation, prior state, expectation, location, declared evidence,
-        bound cases. Bounded by ``_SCENARIO_RENDER_MAX_CHARS`` per row;
-        over it the line says the scenario is not shown and the row is to
-        be left unjudged, never a silent prefix (Astra's finding on
-        00cfc02: a long operation hid the expected result and location)."""
+    def _scenario_text(o: dict) -> Tuple[str, bool]:
+        """The obligation's canonical scenario and location as one line
+        (proof id, operation, prior state, expectation, location, declared
+        evidence, bound cases), and whether it fits the render bound. A row
+        with no scenario (a legacy string) is wholly its behaviour, which
+        is always shown."""
         scenario = dict(o.get("scenario") or {})
         if not scenario and not o.get("location") and not o.get("cases"):
-            return ""
+            return "", True
         fields = [(k, scenario[k]) for k in ("proof", "operation", "state", "expect", "location", "evidence")
                   if k in scenario]
         if "location" not in scenario and o.get("location"):
@@ -9454,7 +9453,26 @@ class Session:
         if o.get("cases"):
             fields.append(("bound cases", ", ".join(o["cases"])))
         text = "; ".join(f"{k}: {v}" for k, v in fields)
-        if len(text) > _SCENARIO_RENDER_MAX_CHARS:
+        return text, len(text) <= _SCENARIO_RENDER_MAX_CHARS
+
+    @classmethod
+    def _scenario_shown(cls, o: dict) -> bool:
+        """Whether a judging seat can be shown this row's whole scenario:
+        the condition under which a SUFFICIENT about it is accepted at all
+        (Astra's control on b18ca98: wording alone is not enforcement)."""
+        return cls._scenario_text(o)[1]
+
+    @classmethod
+    def _scenario_line(cls, o: dict) -> str:
+        """The scenario line for the seats that judge it (the audit and a
+        reassessment); over ``_SCENARIO_RENDER_MAX_CHARS`` the line says the
+        scenario is not shown and the row is to be left unjudged, never a
+        silent prefix (Astra's finding on 00cfc02), and the harness then
+        accepts no SUFFICIENT for it (``_scenario_shown``)."""
+        text, shown = cls._scenario_text(o)
+        if not text:
+            return ""
+        if not shown:
             return (f"\n  scenario: {len(text):,} characters, over the {_SCENARIO_RENDER_MAX_CHARS:,}-character bound "
                     "for this prompt and not shown; leave this row unjudged (an explicit INSUFFICIENT is allowed).")
         return f"\n  scenario: {text}"
@@ -9814,6 +9832,9 @@ class Session:
         # in: only then does consuming it carry the acceptance forward
         # (_consume_evidence).
         record["audit_current"] = self._final_audit_current()
+        # The acceptance obligations this proof may serve as the receipt
+        # for, bound now, before anything runs (_evidence_bindings).
+        record["bindings"] = self._evidence_bindings(entry, target, path, digest, record["id"])
         # Durable intent: a job resumed after this point never runs it again.
         self.evidence_requests.append(record)
         self._quiescent()
@@ -9851,6 +9872,107 @@ class Session:
         return (f"EVIDENCE {record['id']} for {target}: the harness ran {path} in a disposable copy of the "
                 f"current source.\nResult: {receipt['status']} - {receipt['reason']}\nCases: {cases}\n"
                 f"Disposition: {record['disposition']}" + follow)
+
+    def _evidence_bindings(self, entry, target: str, path: str, digest: str, eid: str) -> List[dict]:
+        """The acceptance obligations an evidence proof may serve as the
+        receipt for, captured immutably at intent, before the proof runs
+        (root and Astra on b18ca98: the final challenge's execution lives in
+        ``evidence_requests``, which ``_obligation_receipt`` never read).
+        Only an existing, explicitly bound test obligation associated with
+        the target qualifies: a test-modality row with a PROVES binding and
+        bound cases, on the audited requirement (an audit finding) or the
+        reviewed task (a review finding). Nothing is synthesized from a
+        requirement id or a green case. Every field a later use must find
+        unchanged is written here: ids, modality, location, the whole
+        scenario, the bound cases, the requirement revisions, the policy,
+        the environment, the source, the effective and the configured gate,
+        and the proof's own id, file and hash."""
+        if entry is None:
+            return []
+        out = []
+        for row in self.evidence_obligations:
+            if (row.get("kind") != "acceptance" or row.get("modality", "test") != "test"
+                    or row.get("binding") != "bound" or not row.get("cases")):
+                continue
+            if entry["kind"] == "audit":
+                if not any(r[0] == target for r in row.get("requirements") or ()):
+                    continue
+            elif row.get("task") != entry.get("task"):
+                continue
+            out.append(dict(
+                oid=row["oid"], task=row.get("task"), proof_id=row.get("proof_id"), modality="test",
+                location=str(row.get("location") or ""), scenario=[list(s) for s in row.get("scenario") or []],
+                cases=list(row.get("cases") or ()), behavior=row.get("behavior"),
+                requirements=[list(r) for r in row.get("requirements") or ()], policy=row.get("policy"),
+                environment=row.get("environment"), source=self._source_fingerprint(),
+                gate=row.get("gate"), base_gate=row.get("base_gate"),
+                configured_gate=_gate_identity(self.config.integration_gate),
+                evidence=eid, file=path, file_sha256=digest))
+        return out
+
+    @staticmethod
+    def _proof_passed_cases(receipt: dict) -> set:
+        """The case identities a passed scratch proof shows executed and
+        passed, by file-qualified identity (instances collapsed to their
+        case; a case with any instance not passed is absent)."""
+        if not receipt or receipt.get("status") != "passed":
+            return set()
+        outcomes: Dict[str, set] = {}
+        for row in receipt.get("cases") or ():
+            key, sep, outcome = str(row).rpartition(": ")
+            if not sep:
+                continue
+            base = key.split("[", 1)[0]
+            outcomes.setdefault(base, set()).add(outcome.strip())
+        return {case for case, seen in outcomes.items() if seen == {"passed"}}
+
+    def _evidence_receipt(self, record: dict) -> Optional[dict]:
+        """A harness receipt for ``record`` from a served evidence proof:
+        the proof passed, its bound source and checks never drifted, it was
+        bound to this obligation at intent, every captured field equals the
+        obligation and the run as they are now, and every bound case is
+        among the proof's passed cases. Any missing or unequal field is no
+        receipt (fail closed). The receipt keeps its scratch provenance: it
+        names the evidence record and file, and is never an integration
+        pass of the whole project."""
+        if record.get("kind") != "acceptance" or record.get("modality", "test") != "test":
+            return None
+        cases = [str(c) for c in record.get("cases") or ()]
+        if not cases:
+            return None
+        current = self._source_fingerprint() if self.project else None
+        identity = self._evidence_identity() if self.project else None
+        environment = self._environment_id()
+        revisions = self._requirement_revisions()
+        for request in reversed(self.evidence_requests):
+            receipt = request.get("receipt") or {}
+            if receipt.get("status") != "passed" or request.get("identity") != identity:
+                continue
+            if str(request.get("disposition", "")).startswith("held: the source or checks changed"):
+                continue
+            binding = next((b for b in request.get("bindings") or () if b.get("oid") == record["oid"]), None)
+            if binding is None:
+                continue
+            wanted = dict(
+                task=record.get("task"), proof_id=record.get("proof_id"), modality="test",
+                location=str(record.get("location") or ""), scenario=[list(s) for s in record.get("scenario") or []],
+                cases=list(cases), behavior=record.get("behavior"),
+                requirements=[list(r) for r in record.get("requirements") or ()], policy=record.get("policy"),
+                environment=environment, source=current, gate=record.get("gate"), base_gate=record.get("base_gate"),
+                configured_gate=_gate_identity(self.config.integration_gate),
+                evidence=request.get("id"), file=request.get("file"), file_sha256=request.get("file_sha256"))
+            if any(binding.get(k) != v for k, v in wanted.items()) or binding.get("source") != request.get("source"):
+                continue
+            if any(revisions.get(rid) != rev for rid, rev in wanted["requirements"]):
+                continue
+            if not set(cases) <= self._proof_passed_cases(receipt):
+                continue
+            return dict(id=f"{request['id']}:{record['oid']}", source=current, gate=record.get("gate"), runner="gate",
+                        provenance="scratch evidence proof", evidence=request["id"], file=request.get("file"),
+                        file_sha256=request.get("file_sha256"), environment=environment,
+                        requirements=[list(r) for r in wanted["requirements"]], completed=True, passed=True,
+                        passed_cases=list(cases), skipped_cases=[])
+        return None
 
     def _reassess(self, target: str, entry: dict, record: dict, text: str) -> str:
         """The one reassessment of a finding on new executed evidence, by the
@@ -9964,8 +10086,9 @@ class Session:
         # obligations, the NOT RUN and error-clause rules, the auditor's
         # explicit sufficiency lines, then the one predicate.
         self._refresh_obligations()
+        original = dict(verdict)
         lowered = self._lower_unexecuted(verdict)
-        lowered += self._lower_unexercised_errors(verdict, [target])
+        lowered += self._lower_unexercised_errors(verdict, [target], original=original, lowered=lowered)
         self._judge_obligations(reviewer, reply or "", {}, ids=[target])
         lowered += self._apply_acceptance(verdict, [target])
         if lowered:
@@ -10446,14 +10569,17 @@ class Session:
                         executed.add(name.split("[", 1)[0])
         return [c for c in citations if c in executed]
 
-    def _lower_unexercised_errors(self, found: dict, audited) -> List[dict]:
+    def _lower_unexercised_errors(self, found: dict, audited, original=None, lowered=None) -> List[dict]:
         """Turn an error or refusal requirement's MET into NOT MET unless it
         cites a test case executed and passed on this source; never the other
         way. The auditor's reasons, applicability notes and readings do not
-        lift it: only a run does (Davis, 2026-10-16)."""
+        lift it: only a run does (Davis, 2026-10-16). ``original`` is the
+        auditor's verdict before any other lowering: a MET already lowered
+        for an unexecuted obligation still carries this rule's reason too,
+        so neither fact hides the other."""
         texts = self.memory.ledger.requirements
-        lowered = []
-        for rid, (met, why) in list(found.items()):
+        out = []
+        for rid, (met, why) in list((original if original is not None else found).items()):
             if not met or rid not in audited or not _error_clause(texts.get(rid, "")):
                 continue
             if self._executed_cases(_cited_cases(why), rid=rid):
@@ -10462,9 +10588,16 @@ class Session:
                       "passed on this source (a complete approved check's case record, or a passing scratch "
                       "demonstration of this requirement); negative-path behaviour must be shown by a run, "
                       "not read")
+            held_met, held_why = found.get(rid, (met, why))
+            earlier = next((e for e in (lowered or ()) if e.get("requirement") == rid), None)
+            if not held_met and held_why != why:
+                reason = f"{reason}; also {held_why}"[:600]
             found[rid] = (False, reason)
-            lowered.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
-        return lowered
+            if earlier is not None:
+                earlier["reason"] = reason
+            else:
+                out.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
+        return out
 
     # -- evidence obligations (blueprint section 5) ---------------------------
     def _register_obligation(self, entry: dict, *, kind: str) -> Optional[dict]:
@@ -10564,7 +10697,7 @@ class Session:
                 return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
                             runner="gate", **self._receipt_identity(check, record), completed=True, passed=True,
                             passed_cases=list(cases), skipped_cases=[])
-        return None
+        return self._evidence_receipt(record)
 
     def _check_passed_cases(self, check: dict) -> set:
         """The exact case identities one recorded check's complete runs
@@ -10633,6 +10766,11 @@ class Session:
                 # them (root's currency control on a1b1840).
                 record = dict(record, source_digest=current_source, gate=self._obligation_current_gate(record),
                               environment=environment)
+            if record.get("sufficiency") == "sufficient" and not self._scenario_shown(record):
+                # An approval of a row whose whole scenario can no longer be
+                # shown is stale: nothing shown, nothing approved.
+                record = dict(record, sufficiency="unjudged", judged_by="", judged_binding="",
+                              sufficiency_note=f"{record['oid']}: approval dropped; the scenario is not shown whole")
             if (record.get("kind") == "acceptance" and record.get("discharged_cases") is not None
                     and list(record.get("discharged_cases") or []) != list(record.get("cases") or [])):
                 # The scenario was rebound to other cases since it was
@@ -10708,6 +10846,15 @@ class Session:
                     self._note(f"{obligation.oid}: SUFFICIENT by {auditor} did not cite {location}; not counted")
             if verdict == "sufficient" and obligation.execution != "ran" and not (reading or legacy):
                 verdict = None
+            if verdict == "sufficient" and not self._scenario_shown(record):
+                # The seat could not be shown the whole scenario it would
+                # be judging sufficient: neither its explicit line nor a
+                # verdict on the requirement counts (an INSUFFICIENT still
+                # does).
+                verdict = None
+                extra = dict(sufficiency_note=f"{obligation.oid}: scenario not shown whole to {auditor}; "
+                                              "SUFFICIENT not counted")
+                self._note(f"{obligation.oid}: SUFFICIENT by {auditor} not counted; the scenario was not shown whole")
             if verdict is not None:
                 obligation = delivery.judge_sufficiency(obligation, verdict, judged_by=auditor,
                                                         reading=reading or legacy)

@@ -7,7 +7,10 @@ import pytest
 
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_check_debt import IMPLEMENT, MET, REQS, _looked, _plan
-from tests.lifecycle.test_lifecycle_matrix import FILES, Script
+from tests.lifecycle.test_lifecycle_matrix import FILES, Script, judging
+
+#: This file's own explicit judgment of the README documentation scenario (a reading row).
+DOCS_JUDGED = 'SUFFICIENT README.md describes add(a, b) and its result, which is all R1 asks of the docs'
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -39,7 +42,7 @@ def test_a_repair_without_the_failed_gate_cannot_settle_check_debt(tmp_path, mon
              '.quadratus/policy.json': json.dumps(policy)}
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(REQS + IMPLEMENT, repair), lead=_looked,
                                                  **{'requirements-review': lambda c, r: 'COMPLETE',
-                                                    'auditor': lambda c, r: MET}),
+                                                    'auditor': judging(lambda c, r: MET, reading=DOCS_JUDGED)}),
                    files=files, check=H.GATE + ' checks/test_smoke.py', max_tasks=4, record_complete=False)
     result = H.result_json(replay)
     assert result['findings'][0]['status'] == 'open', (replay.result.completed, result['findings'])

@@ -38,7 +38,7 @@ def _looked(call, replay):
 
 def _fixes(call, replay):
     H.write(call, {"app.py": FIXED})
-    return 'Fixed add.\nCHANGED: ["app.py"]'
+    return 'Fixed add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
 
 def _run(tmp_path, monkeypatch, orchestrator, leads, **kw):

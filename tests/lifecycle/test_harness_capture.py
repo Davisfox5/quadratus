@@ -27,6 +27,7 @@ from tests.lifecycle.test_audit_findings import (
     Script,
     _design_files,
 )
+from tests.lifecycle.test_lifecycle_matrix import judging
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -63,6 +64,11 @@ def _profile(tmp_path, preview=None):
     return path, port
 
 
+#: This file's own explicit judgment of a review-only task's legacy acceptance row:
+#: what the capture shows, said per obligation id.
+LEGACY_JUDGED = "SUFFICIENT the capture of templates/index.html shows the page at the measured width"
+
+
 def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True, max_tasks=6,
          files=None, roles=None, lead="claude:opus", settings_kw=None, record_complete=True,
          goal="Build the feature."):
@@ -77,7 +83,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True
         "revision": lambda call, replay: NO_EDIT,
         "design-review": lambda call, replay: "APPROVED",
         "requirements-review": lambda call, replay: "COMPLETE",
-        "auditor": lambda call, replay: MET,
+        "auditor": judging(lambda call, replay: MET, legacy=LEGACY_JUDGED),
         "design-fix": lambda call, replay: NO_EDIT,
         **(roles or {}),
     }

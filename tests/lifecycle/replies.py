@@ -15,8 +15,8 @@ import re
 from typing import Dict, List, Optional
 
 _OBLIGATION_ROW = re.compile(
-    r"^- (?P<oid>O\d+) \((?P<task>[^;]*); (?P<requirements>[^)]*)\): (?P<behavior>.*?); "
-    r"runner (?P<runner>.*?); execution (?P<execution>\w+)", re.MULTILINE)
+    r"^- (?P<oid>O\d+) \((?P<task>[^;]*); (?P<requirements>[^)]*)\): (?P<behavior>.*?)"
+    r"(?:; evidence (?P<modality>\w+))?; runner (?P<runner>.*?); execution (?P<execution>\w+)", re.MULTILINE)
 _EXPECTED_IDS = re.compile(r"Expected ids: (?P<ids>[^.\n]+)\.")
 _ID = re.compile(r"^[A-Z][A-Z0-9]*-?\d+$")
 
@@ -30,7 +30,7 @@ def requested_obligations(prompt: str) -> List[dict]:
         rows.append(dict(oid=hit.group("oid"), task=hit.group("task"),
                          requirements=[r.strip() for r in hit.group("requirements").split(",") if r.strip()],
                          behavior=hit.group("behavior"), runner=hit.group("runner"),
-                         execution=hit.group("execution")))
+                         execution=hit.group("execution"), modality=hit.group("modality") or "test"))
     return rows
 
 
