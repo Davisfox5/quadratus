@@ -1393,7 +1393,9 @@ _DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
 _PROVES_ANY = re.compile(r"^\s*PROVES:(.*)$", re.MULTILINE)
 _PROVES_BODY = re.compile(r"(P\d+)\s*-\s*(\S+)")
 _PROVES_PID = re.compile(r"\s*(P\d+)\b")
-_TRIM_LINE = re.compile(r"^\s*TRIM(?:\s+(T\d+))?:\s*(PRESERVED|LOST)(?:\s*-\s*(.*?))?\s*$", re.MULTILINE)
+_TRIM_LINE = re.compile(r"^\s*TRIM(?:\s+(T[\w.-]+))?:\s*(PRESERVED|LOST)(?:\s*-\s*(.*?))?\s*$", re.MULTILINE)
+_TRIM_SUPPORT_MAX_FILES = 50
+_IMPORT_LINE = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+))", re.MULTILINE)
 #: Name marks of the support files a trim's evidence keeps beside the tests.
 _TRIM_SUPPORT_MARKS = ("conftest", "fixture", "helper", "support", "factor", "stub", "fake", "mock")
 def _check_runs(check: dict, root=None) -> List[dict]:
@@ -4071,30 +4073,76 @@ class Session:
                                          "back", terminal=False).recovered = True
         return reply
 
-    def _trim_files(self, spec: TaskSpec, before) -> Optional[dict]:
+    def _trim_policy(self, spec) -> Optional[list]:
+        """The scopes over a task at the time a trim is taken (its own and
+        every operator limit), serialized so the same policy can be applied
+        when the evidence is consumed later: a late review never widens
+        what the trim could touch."""
+        if spec is None or getattr(spec, "scope", None) is None:
+            return None
+        return [s.to_dict() for s in [spec.scope] + list(self._outer_limits(spec))]
+
+    @staticmethod
+    def _scope_from_dict(data: dict) -> TaskScope:
+        return TaskScope(permitted_paths=tuple(data.get("permitted_paths") or ()),
+                         intended_result=str(data.get("intended_result") or ""),
+                         acceptance=tuple(data.get("acceptance") or ()), max_lines=data.get("max_lines"),
+                         forbidden_paths=tuple(data.get("forbidden_paths") or ()),
+                         review_only=data.get("edits") == "none", exact=bool(data.get("exact")))
+
+    def _trim_files(self, policy: Optional[list], before) -> Optional[dict]:
         """The task's test and support files as they are now, filtered by
-        every scope over the task on both sides exactly as the trim's own
-        evidence is, as ``{path: text}``: test files by convention and the
-        support files assertions lean on (conftest, fixtures, helpers,
-        support, factories, by name). None when the project cannot be read:
-        unknown, never empty."""
-        if spec is None or spec.scope is None or not self.project:
+        ``policy`` (serialized scopes: the task's own and the operator
+        limits bound when the trim was taken) and by the live operator
+        limit, as ``{path: text}``: test files by convention, the support
+        files assertions lean on by name (conftest, fixtures, helpers,
+        support, factories), and the project modules the test files import
+        (an explicit, validated dependency inventory, bounded by
+        ``_TRIM_SUPPORT_MAX_FILES``). None when there is no policy or the
+        project cannot be read: unknown, never empty or widened."""
+        if not policy or not self.project:
             return None
         after = self._capture_source()
         if after is None:
             return None
-        scopes = [spec.scope] + list(self._outer_limits(spec))
+        scopes = [self._scope_from_dict(s) for s in policy]
+        if self.config.default_scope is not None:
+            scopes.append(self.config.default_scope)
 
         def permitted(name):
-            return not spec.scope.review_only and all(s.permits(name) for s in scopes)
+            return not scopes[0].review_only and all(s.permits(name) for s in scopes)
 
         def support(name):
             base = PurePosixPath(name).name.lower()
             return any(mark in base for mark in _TRIM_SUPPORT_MARKS)
-        names = sorted(n for n in set(after) | set(before or {})
-                       if permitted(n) and (is_test_path(n) or support(n)))
+        candidates = sorted(n for n in set(after) | set(before or {}) if permitted(n))
+        names = [n for n in candidates if is_test_path(n) or support(n)]
+        imported = []
+        present = set(after)
+        for name in [n for n in names if is_test_path(n)]:
+            raw = after.get(name)
+            if raw is None:
+                continue
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            base = PurePosixPath(name).parent
+            for m in _IMPORT_LINE.finditer(text):
+                module = (m.group(1) or m.group(2) or "").strip(".")
+                if not module:
+                    continue
+                rel = module.replace(".", "/")
+                for candidate in (f"{rel}.py", f"{rel}/__init__.py", str(base / f"{rel}.py"),
+                                  str(base / rel / "__init__.py")):
+                    candidate = candidate.removeprefix("./")
+                    if (candidate in present and candidate not in names and candidate not in imported
+                            and permitted(candidate)):
+                        imported.append(candidate)
+        if len(imported) > _TRIM_SUPPORT_MAX_FILES:
+            imported = imported[:_TRIM_SUPPORT_MAX_FILES]
         files = {}
-        for name in names:
+        for name in names + sorted(imported):
             raw = after.get(name)
             if raw is None:
                 continue
@@ -4105,27 +4153,30 @@ class Session:
         return files
 
     def _trim_snapshot(self, spec: TaskSpec, site: str, before) -> dict:
-        """Immutable evidence taken before a trim writes, under a stable id:
+        """Immutable evidence taken before a trim writes, under a stable id
+        unique across the run and its parallel children (``T-<task>-<n>``):
         the full policy-filtered test and support files with their hashes,
-        the task's proof bindings and requirement revisions, and the source
-        identity, kept as an artifact whose digest the record carries
-        (bounded; past the bound only hashes are kept and the record says
-        the contents are not on file). When the project cannot be read the
-        record still exists and says so: unknown evidence is owed, never
-        absent. The trim's preservation of required assertions is then owed
-        an independent disposition about exactly this evidence
-        (``_trim_block``)."""
-        files = self._trim_files(spec, before)
-        tid = f"T{len(self.trim_records) + 1}"
+        the policy itself, the task's proof bindings and requirement
+        revisions, and the source identity, kept as an artifact whose
+        digest the record carries (bounded; past the bound only hashes are
+        kept and the record says the contents are not on file). When the
+        project cannot be read the record still exists and says so: unknown
+        evidence is owed, never absent. The trim's preservation of required
+        assertions is then owed an independent disposition about exactly
+        this evidence (``_trim_block``)."""
+        policy = self._trim_policy(spec)
+        files = self._trim_files(policy, before)
+        n = 1 + sum(1 for r in self.trim_records if r.get("task") == spec.task_id)
+        tid = f"T-{spec.task_id}-{n}"
+        state = "pre-trim evidence unavailable: the project could not be read before the trim"
         record = dict(tid=tid, task=spec.task_id, site=site, artifact=None, artifact_sha256=None, hashes={},
                       complete=False, source=self._source_fingerprint(), after_check=len(self.checks),
-                      requirements=dict(self._requirement_revisions()),
+                      policy=policy, requirements=dict(self._requirement_revisions()),
                       proofs=[dict(proof=r.get("proof_id") or r["oid"], cases=list(r.get("cases") or ()))
                               for r in self.evidence_obligations
                               if r.get("task") == spec.task_id and r.get("kind") == "acceptance"],
-                      post_hashes=None, changed=None, source_after=None, disposition=None,
-                      state="pre-trim evidence unavailable: the project could not be read before the trim",
-                      evidence_state="pre-trim evidence unavailable: the project could not be read before the trim")
+                      post_hashes=None, changed=None, source_after=None, disposition=None, shown=None,
+                      state=state, evidence_state=state)
         if files is not None:
             hashes = {n: hashlib.sha256((t or "").encode()).hexdigest() for n, t in files.items()}
             text = json.dumps({n: t for n, t in files.items() if t is not None}, sort_keys=True)
@@ -4139,12 +4190,12 @@ class Session:
 
     def _trim_settle(self, record: Optional[dict], before) -> None:
         """After the trim call: the test and support files as the trim left
-        them, their hashes, and whether anything changed. Unreadable after
-        the trim is unknown (owed), never unchanged."""
+        them under the record's own policy, their hashes, and whether
+        anything changed. Unreadable after the trim is unknown (owed),
+        never unchanged."""
         if record is None or record.get("source_after") is not None:
             return
-        spec = self._active_spec if getattr(self._active_spec, "task_id", None) == record["task"] else None
-        files = self._trim_files(spec, before) if spec is not None else None
+        files = self._trim_files(record.get("policy"), before)
         record["source_after"] = self._source_fingerprint()
         if files is None:
             state = "post-trim evidence unavailable: the project could not be read after the trim"
@@ -4179,21 +4230,42 @@ class Session:
             return None
         return pre if isinstance(pre, dict) else None
 
+    def _trim_current_files(self, record: dict) -> Optional[dict]:
+        """The test and support files as they are now under the record's
+        own policy (never widened for a late review); None when the policy
+        was not recorded or the project cannot be read."""
+        return self._trim_files(record.get("policy"), None)
+
     def _trim_evidence_id(self, record: dict) -> str:
         """What a disposition of this trim is about: the record's id, the
         verified pre-trim evidence (or its absence, which no verdict can
-        make present) and the current source."""
+        make present), the current source, and the current identity of the
+        task's requirements and proof scenarios (revisions, bindings,
+        modality, location): a requirement reworded or a scenario rebound
+        after an approval is a different question (root's control on
+        a1b1840)."""
         pre = self._trim_pre_contents(record)
+        revisions = self._requirement_revisions()
+        rows = sorted((r.get("proof_id") or r["oid"], list(r.get("cases") or ()), str(r.get("modality") or ""),
+                       str(r.get("location") or ""), str(r.get("behavior") or ""),
+                       [list(x) for x in r.get("requirements") or []])
+                      for r in self.evidence_obligations
+                      if r.get("task") == record.get("task") and r.get("kind") == "acceptance")
+        covered = sorted({x[0] for r in self.evidence_obligations if r.get("task") == record.get("task")
+                          for x in r.get("requirements") or []})
         return hashlib.sha256(json.dumps(dict(
             tid=record.get("tid"), pre=record.get("artifact_sha256") if pre is not None else "UNAVAILABLE",
-            source=self._source_fingerprint() if self.project else None), sort_keys=True).encode()).hexdigest()
+            source=self._source_fingerprint() if self.project else None,
+            requirements={rid: revisions.get(rid) for rid in covered}, proofs=rows,
+            policy=record.get("policy")), sort_keys=True, default=str).encode()).hexdigest()
 
     def _trim_owed(self) -> List[dict]:
         """Trims with no independent PRESERVED disposition about exactly the
-        current evidence: never judged, judged on other evidence (an edit
-        after an approval), judged LOST, judged without the evidence on
-        file, or whose effect is unknown because the project could not be
-        read before or after the trim."""
+        current evidence: never judged, judged on other evidence (an edit,
+        a requirement revision or a rebinding after an approval), judged
+        LOST, judged without the evidence on file, or whose effect is
+        unknown because the project could not be read before or after the
+        trim."""
         owed = []
         for record in self.trim_records:
             if record.get("changed") is False:
@@ -4210,57 +4282,64 @@ class Session:
         under its id, for one task (its reviewer or rechecker) or for every
         task (the final audit, ``spec`` None): the comparison of the
         immutable pre-trim test and support files against the files as they
-        are now (so a later edit is judged against the full pre-trim
-        assertions, not against the trim's own hunk), bounded and said to be
-        bounded; where the pre-trim evidence is not on file, that fact,
-        which no verdict can turn into PRESERVED. The seat decides whether
-        every assertion the covered requirements and declared scenarios need
-        is still present; an equivalent helper, loop or renaming is
-        preservation; names and counts decide nothing."""
+        are now under the record's own policy (so a later edit is judged
+        against the full pre-trim assertions, not against the trim's own
+        hunk, and a late review never sees beyond the task's scope), bounded
+        and said to be bounded; where the pre-trim evidence is not on file
+        or the current files cannot be read, that fact, which no verdict can
+        turn into PRESERVED. Every render first clears what an earlier
+        render showed: only what this prompt shows carries authority. The
+        seat decides whether every assertion the covered requirements and
+        declared scenarios need is still present; an equivalent helper, loop
+        or renaming is preservation; names and counts decide nothing."""
         from .project import diff_contents
         task = getattr(spec, "task_id", None)
         owed = [r for r in self._trim_owed() if task is None or r["task"] == task]
+        for record in owed:
+            record["shown"] = None
         if not owed:
             return ""
         parts = ["\n\n## Trim evidence (the harness's own record; judge assertion preservation per trim id)"]
         for record in owed:
             verdict = record.get("disposition") or {}
             head = (f"{record['tid']}: task {record['task']}, {record['site']} trim ({record['state']})"
-                    + ("; an earlier PRESERVED is stale: the source changed since" if verdict.get("verdict") == "PRESERVED" else "")
+                    + ("; an earlier PRESERVED is stale: the source, a requirement or a scenario changed since"
+                       if verdict.get("verdict") == "PRESERVED" else "")
                     + (f"; judged LOST before: {verdict.get('detail', '')[:160]}" if verdict.get("verdict") == "LOST" else "")
                     + ". Bound scenarios before the trim: "
                     + ("; ".join(f"{p['proof']} -> {', '.join(p['cases']) or 'no case'}" for p in record["proofs"])
                        or "none declared") + f". Pre-trim evidence artifact: {record.get('artifact') or 'none'}.")
             parts.append(head)
             pre = self._trim_pre_contents(record)
-            active = self._active_spec if getattr(self._active_spec, "task_id", None) == record["task"] else None
-            now = self._trim_files(active, None) if active is not None else None
-            if now is None:
-                now = self._trim_files(SimpleNamespace(task_id=record["task"], scope=TaskScope.unbounded()), None)
             if pre is None:
                 parts.append("The pre-trim contents are not on file (over the evidence bound, unreadable or altered): "
                              "this trim cannot be judged PRESERVED from what you see.")
                 continue
+            if not record.get("policy"):
+                parts.append("The policy the trim was taken under was not recorded: the current files cannot be "
+                             "read within it, and this trim cannot be judged PRESERVED.")
+                continue
+            now = self._trim_current_files(record)
             if now is None:
                 parts.append("The current test files could not be read: this trim cannot be judged PRESERVED now.")
                 continue
             diff = diff_contents({n: t.encode() for n, t in pre.items()},
                                  {n: (t or "").encode() for n, t in now.items()})
-            record["shown"] = self._trim_evidence_id(record)
             if not diff:
                 parts.append("The test and support files are byte-identical to the pre-trim evidence now.")
+                record["shown"] = self._trim_evidence_id(record)
             elif len(diff) <= _TRIM_DIFF_MAX_CHARS:
                 parts.append("Diff of the test and support files, immutable pre-trim evidence to the files as they are "
                              "now:\n```diff\n" + diff + "\n```")
+                record["shown"] = self._trim_evidence_id(record)
             else:
                 parts.append(f"The comparison is {len(diff):,} characters, over the {_TRIM_DIFF_MAX_CHARS:,}-character "
                              "bound for this prompt, and is not shown: this trim cannot be judged PRESERVED from what "
                              "you see.")
-                record["shown"] = None
         parts.append("For each trim id above, decide whether every assertion the covered requirements and the "
                      "declared scenarios require is still present (moved, merged into a helper or loop, or renamed "
                      "counts as preserved; a deleted mutation or state assertion does not). Reply with exactly one "
-                     "line per trim, 'TRIM T<n>: PRESERVED' or 'TRIM T<n>: LOST - <the assertion(s) lost>', in "
+                     "line per trim, 'TRIM <id>: PRESERVED' or 'TRIM <id>: LOST - <the assertion(s) lost>', in "
                      "addition to your other lines; with a single trim shown a bare 'TRIM: ...' line applies to it. "
                      "A missing, duplicated or contradictory line leaves that trim unjudged, and PRESERVED where the "
                      "evidence is not on file or not shown is not accepted.")
@@ -4271,9 +4350,10 @@ class Session:
         task's (a reviewer or rechecker) or every owed one (the audit),
         each bound to exactly the evidence shown for its id. Exactly one
         well-formed line per id counts (a bare line only when one trim was
-        shown); PRESERVED without the evidence on file and shown is refused
-        and recorded as such; LOST keeps the trim owed and names what was
-        lost."""
+        shown); PRESERVED is refused unless the pre-trim evidence is on file
+        now, the current files are readable under the record's policy now,
+        and what this seat was shown is exactly the current evidence; LOST
+        keeps the trim owed and names what was lost."""
         task = getattr(spec, "task_id", None)
         owed = [r for r in self._trim_owed() if task is None or r["task"] == task]
         if not owed:
@@ -4296,11 +4376,14 @@ class Session:
             evidence = self._trim_evidence_id(record)
             shown = record.get("shown")
             base = record.get("evidence_state") or record.get("state") or "pending"
-            if verdict == "PRESERVED" and (self._trim_pre_contents(record) is None or shown != evidence):
+            readable = (self._trim_pre_contents(record) is not None and bool(record.get("policy"))
+                        and self._trim_current_files(record) is not None)
+            if verdict == "PRESERVED" and (not readable or shown != evidence):
                 record["disposition"] = dict(verdict="REFUSED", by=by, evidence=evidence,
-                                             detail="PRESERVED without the evidence on file and shown")
-                record["state"] = f"{base}; preserved refused by {by}: evidence not on file or not shown"
-                self._note(f"{record['tid']}: PRESERVED by {by} refused; the trim evidence is not on file or not shown")
+                                             detail="PRESERVED without the evidence on file, readable now and shown")
+                record["state"] = f"{base}; preserved refused by {by}: evidence not on file, not readable or not shown"
+                self._note(f"{record['tid']}: PRESERVED by {by} refused; the trim evidence is not on file, not "
+                           "readable now or not what was shown")
                 continue
             record["disposition"] = dict(verdict=verdict, by=by, evidence=evidence, detail=detail[:400])
             record["state"] = f"{base}; {verdict.lower()} by {by}"
@@ -8137,7 +8220,14 @@ class Session:
                         receipts=[], source_digest=None, sufficiency="unjudged", judged_by="", judged_binding="",
                         entry=dict(obligation.get("entry") or {}, after_check=len(self.checks))))
                 self.plan_admissions.extend(child.plan_admissions)
-                self.trim_records.extend(child.trim_records)
+                taken = {r.get("tid") for r in self.trim_records}
+                for record in child.trim_records:
+                    tid, k = record.get("tid"), 1
+                    while record.get("tid") in taken:
+                        record["tid"] = f"{tid}-m{k}"
+                        k += 1
+                    taken.add(record["tid"])
+                    self.trim_records.append(record)
                 self.proof_binding_problems.extend(child.proof_binding_problems)
                 self.operations.extend(child.operations)
                 self.original_test_runs.extend(child.original_test_runs)
@@ -8894,6 +8984,10 @@ class Session:
                " You may add one line per executed evidence obligation, '<O-id>: SUFFICIENT <why>' or "
                "'<O-id>: INSUFFICIENT <what it does not establish>'; without one, your verdict on its "
                "requirements decides.")
+            + ("" if not any(o.get("modality") in ("legacy", "reading") for o in obligations_rows) else
+               " Each legacy acceptance or reading row listed above needs its own '<O-id>: SUFFICIENT "
+               "<evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; it is never judged by "
+               "your verdict on its requirement.")
         )
         saved = self._active_spec
         self._active_spec = None
@@ -9039,7 +9133,9 @@ class Session:
                                     h(json.dumps(dict(behavior=o.get("behavior"), cases=list(o.get("cases") or []),
                                                       requirements=[list(r) for r in o.get("requirements") or []],
                                                       gate=o.get("gate"), environment=o.get("environment"),
-                                                      modality=o.get("modality"), binding=o.get("binding")),
+                                                      modality=o.get("modality"), binding=o.get("binding"),
+                                                      location=o.get("location"),
+                                                      scenario=[list(s) for s in o.get("scenario") or []]),
                                                  sort_keys=True, default=str)),
                                     h(json.dumps(list(o.get("receipts") or []), sort_keys=True, default=str)))
                                    for o in self.evidence_obligations))
@@ -9323,12 +9419,30 @@ class Session:
         lines = ["\n\n## Evidence obligations (harness records: execution is what ran; sufficiency is "
                  "your judgment, never the harness's)"]
         for o in rows:
+            modality = o.get("modality") or "test"
+            runner = (o['runner'] or 'NONE (prerequisite missing)') if modality == "test" else (
+                "none (reading claim: no runnable proof)" if modality == "reading" else
+                "none (legacy acceptance: no scenario declared, no case bound, mapping unknown)")
             lines.append(f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): "
-                         f"{o['behavior'][:200]}; runner {o['runner'] or 'NONE (prerequisite missing)'}; "
+                         f"{o['behavior'][:200]}; evidence {modality}; runner {runner}; "
                          f"execution {o['execution']}"
                          + (f" ({o['reason']})" if o.get("reason") else "")
                          + f"; sufficiency {o['sufficiency']}"
                          + (f" by {o['judged_by']}" if o.get("judged_by") else ""))
+        if any(o.get("modality") == "legacy" for o in rows):
+            lines.append("A legacy acceptance row is judged only by your own line, '<O-id>: SUFFICIENT <the "
+                         "project evidence you read that shows it>' or '<O-id>: INSUFFICIENT <what it does not "
+                         "establish>'; your MET on its requirement does not judge it, and unjudged it keeps that "
+                         "requirement not met.")
+        if any(o.get("modality") == "reading" for o in rows):
+            lines.append("A reading row (evidence reading, a documentation scenario) is judged only by your own "
+                         "line, '<O-id>: SUFFICIENT <why reading can demonstrate this exact requirement and "
+                         "scenario, and what the cited file shows>' or '<O-id>: INSUFFICIENT <what reading cannot "
+                         "establish, or what the file does not show>'. A SUFFICIENT line must cite the file the "
+                         "scenario names; one that does not is not counted. A requirement about runtime "
+                         "behaviour is not demonstrated by a document that describes it: say INSUFFICIENT. Your "
+                         "MET on its requirement does not judge the row, and unjudged it keeps that requirement "
+                         "not met.")
         return "\n".join(lines)
 
     def _close_review_finding_by_id(self, fid: str, why: str) -> None:
@@ -9734,7 +9848,11 @@ class Session:
                           + ("" if not any(o.get("execution") == "ran" for o in bound) else
                              " You may add one line per executed evidence obligation listed above, "
                              "'<O-id>: SUFFICIENT <why>' or '<O-id>: INSUFFICIENT <what it does not establish>'; "
-                             "an obligation left unjudged or judged insufficient keeps the requirement not met."))
+                             "an obligation left unjudged or judged insufficient keeps the requirement not met.")
+                          + ("" if not any(o.get("modality") in ("legacy", "reading") for o in bound) else
+                             " Each legacy acceptance or reading row listed above needs its own '<O-id>: "
+                             "SUFFICIENT <evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; "
+                             "it is never judged by your verdict on its requirement."))
                 self._active_spec = None
                 with invocation("audit", "auditor"):
                     reply = self._invoke_model(reviewer, prompt)
@@ -9905,8 +10023,13 @@ class Session:
             if cited is None or not is_test_path(cited.group(1)):
                 invalid[pid] = f"'{case[:80]}' is not a file::[Class::]test_case identity in a test file"
                 continue
-            if case not in bound.setdefault(pid, []):
-                bound[pid].append(case)
+            if case in bound.setdefault(pid, []):
+                # The strict protocol: distinct cases bind a set; the same
+                # case declared twice is an invalid declaration, never
+                # collapsed in silence (root's finding on a1b1840).
+                invalid[pid] = f"duplicate PROVES line for {case[:80]}"
+                continue
+            bound[pid].append(case)
         problems = [f"{pid}: {why}" for pid, why in invalid.items()] + whole_invalid
         reset = set(mine) if whole_invalid else set(invalid)
         for pid in sorted(reset):
@@ -10321,6 +10444,9 @@ class Session:
             runner, cases = ("gate" if self._gate_can_run(_item_paths(behavior)) else None), ()
         else:
             runner, cases = ("gate" if self._current_gate() is not None else None), ()
+        modality = str(entry.get("modality") or "test")
+        if modality != "test":
+            runner = None
         oid = f"O{len(self.evidence_obligations) + 1}"
         key = (entry.get("task"), kind, behavior, requirements)
         for existing in self.evidence_obligations:
@@ -10330,7 +10456,8 @@ class Session:
         obligation = delivery.EvidenceObligation(
             oid=oid, behavior=behavior, requirements=requirements, gate=_gate_identity(self._current_gate()),
             runner=runner, cases=cases, environment=self._environment_id(), policy="review/2",
-            task=str(entry.get("task") or "run"))
+            task=str(entry.get("task") or "run"), modality=modality, location=str(entry.get("location") or ""),
+            scenario=tuple(sorted((str(k), str(v)) for k, v in (entry.get("scenario") or {}).items())))
         record = dict(obligation.to_dict(), kind=kind, entry=dict(item=entry.get("item"), receipt=entry.get("receipt"),
                                                                   after_check=entry.get("after_check")),
                       # The configured gate the task gate derives from, so a
@@ -10342,6 +10469,11 @@ class Session:
             self._note(f"{record['task']}: evidence obligation {oid} has no authorized runner "
                        f"(prerequisite): {behavior[:100]}")
         return record
+
+    def _sync_obligation(self, record: dict) -> None:
+        """Re-derive the typed fields (binding digest, established,
+        executable) after the session marked a record's modality."""
+        record.update(delivery.EvidenceObligation.from_dict(record).to_dict())
 
     def _obligation_receipt(self, record: dict) -> Optional[dict]:
         """The harness receipt that would discharge ``record`` now, from the
@@ -10447,10 +10579,13 @@ class Session:
         refreshed = []
         environment = self._environment_id()
         for record in self.evidence_obligations:
-            if record.get("modality") == "reading":
-                # What a reading claim is about is the current source: its
-                # binding (and so any judgment's currency) moves with it.
-                record = dict(record, source_digest=current_source)
+            if record.get("modality") in ("reading", "legacy"):
+                # What a reading claim or a legacy string is about is the
+                # current source under the effective gate and environment:
+                # its binding (and so any judgment's currency) moves with
+                # them (root's currency control on a1b1840).
+                record = dict(record, source_digest=current_source, gate=self._obligation_current_gate(record),
+                              environment=environment)
             if (record.get("kind") == "acceptance" and record.get("discharged_cases") is not None
                     and list(record.get("discharged_cases") or []) != list(record.get("cases") or [])):
                 # The scenario was rebound to other cases since it was
@@ -10501,33 +10636,35 @@ class Session:
                 obligation = replace(obligation, sufficiency="unjudged", judged_by="", judged_binding="")
                 refreshed.append(dict(record, **obligation.to_dict(), sufficiency_note=conflicts[obligation.oid]))
                 continue
-            verdict = explicit.get(obligation.oid, (None, ""))[0]
+            verdict, why = explicit.get(obligation.oid, (None, ""))
             reading = record.get("modality") == "reading"
+            legacy = record.get("modality") == "legacy"
             extra = {}
-            if verdict is None and obligation.execution == "ran":
+            # A reading claim or a legacy string (mapping unknown) is judged
+            # only by its own explicit line: a verdict on its requirement
+            # implies nothing about it (root's controls on d515d51 and
+            # a1b1840: never silently sufficient, and the planner's choice
+            # of modality or file authorizes no exemption). A reading
+            # SUFFICIENT must cite the file the scenario names on the
+            # current source; one that does not is not a judgment of it.
+            if verdict is None and obligation.execution == "ran" and not (reading or legacy):
                 # Executed evidence is judged by implication from the
                 # verdicts on the requirements it binds.
                 judged = [found.get(rid) for rid, _ in obligation.requirements]
                 if all(v is not None for v in judged) and judged:
                     verdict = "sufficient" if all(v[0] for v in judged) else "insufficient"
-            elif verdict is None and reading:
-                # A reading claim is judged by the audit's own verdict on
-                # its requirements only when that verdict cites the file the
-                # scenario names; a MET that read something else judges
-                # nothing about it.
-                judged = [found.get(rid) for rid, _ in obligation.requirements]
-                if all(v is not None for v in judged) and judged:
-                    cited = all(not v[0] or str(record.get("location")) in self._resolve_citations(v[1])
-                                for v in judged)
-                    if cited:
-                        verdict = "sufficient" if all(v[0] for v in judged) else "insufficient"
-                    else:
-                        extra = dict(sufficiency_note=f"the verdict did not cite {record.get('location')}")
-            if verdict == "sufficient" and obligation.execution != "ran" and not reading:
+            elif reading and verdict == "sufficient":
+                location = str(record.get("location") or "")
+                if location not in self._resolve_citations(why):
+                    verdict = None
+                    extra = dict(sufficiency_note=f"{obligation.oid}: SUFFICIENT did not cite {location}")
+                    self._note(f"{obligation.oid}: SUFFICIENT by {auditor} did not cite {location}; not counted")
+            if verdict == "sufficient" and obligation.execution != "ran" and not (reading or legacy):
                 verdict = None
             if verdict is not None:
-                obligation = delivery.judge_sufficiency(obligation, verdict, judged_by=auditor, reading=reading)
-                if reading:
+                obligation = delivery.judge_sufficiency(obligation, verdict, judged_by=auditor,
+                                                        reading=reading or legacy)
+                if reading or legacy:
                     extra = dict(judged_source=self._source_fingerprint() if self.project else None)
             refreshed.append(dict(record, **obligation.to_dict(), **extra))
         self.evidence_obligations = refreshed
@@ -10539,10 +10676,14 @@ class Session:
         proofs = getattr(scope, "proofs", None)
         if proofs:
             for proof in proofs:
+                modality = proof.get("evidence", "test")
                 record = self._register_obligation(
                     dict(task=spec.task_id, requirements=[r for r in proof["requirements"] if r in (covers or [])],
                          item=f"{proof['id']}: {proof['operation']}; given {proof['state']}; expect {proof['expect']}; "
-                              f"in {proof['location']}", after_check=len(self.checks)),
+                              f"in {proof['location']}", after_check=len(self.checks), modality=modality,
+                         location=proof["location"],
+                         scenario=dict(proof=proof["id"], operation=proof["operation"], state=proof["state"],
+                                       expect=proof["expect"], location=proof["location"], evidence=modality)),
                     kind="acceptance")
                 if record is not None:
                     # The modality is what the scenario declared and the
@@ -10554,12 +10695,11 @@ class Session:
                     # never discharged by a check, and counts only on the
                     # audit's own judgment of it citing the file on the
                     # current source (``_judge_obligations``).
-                    modality = proof.get("evidence", "test")
                     record.update(proof_id=proof["id"], location=proof["location"], modality=modality,
                                   executable_claim=modality == "test",
                                   binding="unbound" if modality == "test" else (
-                                      "reading claim (documentation): accepted only on the audit's judgment "
-                                      "citing the file on the current source"),
+                                      "reading claim (documentation): accepted only on the audit's explicit "
+                                      "per-obligation judgment citing the file on the current source"),
                                   runner=record.get("runner") if modality == "test" else None)
             return
         for item in (getattr(scope, "acceptance", None) or ()):
@@ -10568,14 +10708,17 @@ class Session:
                                                kind="acceptance")
             if record is not None and "binding" not in record:
                 # A legacy acceptance string names no scenario and no case:
-                # its mapping is unknown and stays so on the record, no
-                # generic passing check discharges it, and it is unproved
-                # until a named case bound to it ran (a lead may bind one
-                # with PROVES only to a declared scenario, so a legacy row
-                # stays unproved and lowers its requirement as any
-                # unexecuted executable claim does).
-                record.update(binding="unknown (legacy acceptance): no scenario declared, no case bound; unproved",
-                              modality="test", executable_claim=True, legacy=True)
+                # its mapping is unknown and stays so on the record. No
+                # check discharges it (no case can bind to it: PROVES binds
+                # only declared scenarios) and no verdict on its requirement
+                # is read as its sufficiency. It counts only when the audit
+                # judges it by an explicit per-id line about the current
+                # source, and unjudged it keeps its requirement unmet. It
+                # claims no execution, so it is not lowered as unexecuted.
+                record.update(binding="unknown (legacy acceptance): no scenario declared, no case bound; judged "
+                                      "only by an explicit O-line from the audit",
+                              modality="legacy", executable_claim=False, legacy=True, runner=None)
+                self._sync_obligation(record)
 
     def _lower_unexecuted(self, found: dict) -> List[dict]:
         """Turn a MET into NOT MET where the record shows its acceptance did
@@ -10610,7 +10753,7 @@ class Session:
             # cannot be executed is not shown (root's finding on f4fe5b7).
             unmet = [o for o in self.evidence_obligations
                      if any(r[0] == rid for r in o["requirements"]) and o["execution"] != "ran"
-                     and o.get("modality") != "reading"]
+                     and o.get("modality") not in ("reading", "legacy")]
             if unmet:
                 typed = ("evidence obligation not executed: "
                          + "; ".join(f"{o['oid']} ({'no runner' if o.get('runner') is None else o['execution']}"
@@ -12790,7 +12933,8 @@ class Session:
         legacy = all(r.get("binding", "").startswith("unknown") for r in rows)
         return ("\n\n## Proof scenarios this task declared, as the harness holds them\n" + "\n".join(lines)
                 + ("\nThis task declared no scenario mapping (legacy acceptance): treat the mapping as unknown, "
-                   "not complete." if legacy else "")
+                   "not complete; no check discharges these rows and only the final audit's explicit per-id "
+                   "line judges them." if legacy else "")
                 + "\nJudge three things and report each gap as a BLOCKING finding with its basis: whether the "
                 "scenarios cover every condition of the covered requirements (operations, negative cases, "
                 "preconditions) and name any missing scenario; whether each expected state is right for its "

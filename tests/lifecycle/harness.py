@@ -218,6 +218,27 @@ def proofs_for(covers, location: str, *, operation=None, state="the project as d
             for i, rid in enumerate(rids, 1)]
 
 
+_OBLIGATION_ROW = re.compile(r"^- (O\d+) \((\S+); ([^)]*)\): .*?; evidence (\w+);", re.MULTILINE)
+
+
+def obligation_ids(prompt: str, *, task=None, modality=None, requirement=None) -> list:
+    """The evidence obligation ids a judging prompt lists, filtered by task,
+    declared modality and requirement. A scripted auditor uses this to
+    address its own explicit per-obligation line to the right id; the
+    verdict text and the decision to judge stay in the fixture, and nothing
+    here approves anything."""
+    out = []
+    for oid, t, rids, mod in _OBLIGATION_ROW.findall(prompt or ""):
+        if task is not None and t != task:
+            continue
+        if modality is not None and mod != modality:
+            continue
+        if requirement is not None and requirement not in [r.strip() for r in rids.split(",")]:
+            continue
+        out.append(oid)
+    return out
+
+
 def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None, extra_checks=(), lead_runs_commands=True,
         capture_profile=None, readiness=None, record_complete=True, survey=None,

@@ -380,6 +380,8 @@ def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, autho
 
 EXECUTION_STATES = ("missing", "pending", "ran", "failed", "skipped", "invalid", "stale")
 SUFFICIENCY_STATES = ("unjudged", "sufficient", "insufficient")
+#: Declared evidence modalities an obligation may carry (proof/1).
+MODALITIES = ("test", "reading", "legacy")
 
 
 @dataclass(frozen=True)
@@ -407,15 +409,24 @@ class EvidenceObligation:
     judged_binding: str = ""
     reason: str = ""
     #: The declared evidence modality (proof/1): ``test``, an executable
-    #: claim a named executed case discharges, or ``reading``, a
-    #: documentation scenario that no check discharges and that counts
-    #: only on an independent judgment about the current evidence.
+    #: claim a named executed case discharges; ``reading``, a documentation
+    #: scenario that no check discharges and that counts only on an
+    #: independent judgment about the current evidence; or ``legacy``, an
+    #: acceptance string with no declared scenario and no case, whose
+    #: mapping is unknown and which counts only on an explicit per-id
+    #: judgment (never implied from a verdict on its requirement).
     modality: str = "test"
+    #: The declared location of the proof (a test file for a test scenario,
+    #: a documentation file for a reading claim) and the scenario the
+    #: obligation consumed (proof id, operation, prior state, expectation),
+    #: as ``(key, value)`` pairs: part of what a judgment is about.
+    location: str = ""
+    scenario: Tuple[Tuple[str, str], ...] = ()
 
     def __post_init__(self):
         _check_id(self.oid, "obligation id")
-        if self.modality not in ("test", "reading"):
-            raise ValueError("modality must be test or reading")
+        if self.modality not in MODALITIES:
+            raise ValueError(f"modality must be one of {MODALITIES}")
         _text(self.behavior, f"{self.oid} behavior")
         if not self.requirements:
             raise ValueError(f"{self.oid} binds no requirement revision")
@@ -443,7 +454,8 @@ class EvidenceObligation:
         return _digest(dict(receipts=list(self.receipts), source=self.source_digest,
                             requirements=[list(r) for r in self.requirements], gate=self.gate,
                             environment=self.environment, policy=self.policy, execution=self.execution,
-                            cases=list(self.cases), behavior=self.behavior))
+                            cases=list(self.cases), behavior=self.behavior, modality=self.modality,
+                            location=self.location, scenario=[list(s) for s in self.scenario]))
 
     @property
     def sufficiency_current(self) -> bool:
@@ -452,10 +464,11 @@ class EvidenceObligation:
     @property
     def established(self) -> bool:
         """Both fields, never one standing in for the other, and the
-        judgment about exactly this evidence. A reading claim has no
-        execution to show: it is established only by the judgment, about
-        the current evidence (its binding carries the current source)."""
-        if self.modality == "reading":
+        judgment about exactly this evidence. A reading claim or a legacy
+        string has no execution to show: it is established only by the
+        judgment, about the current evidence (its binding carries the
+        current source)."""
+        if self.modality in ("reading", "legacy"):
             return self.sufficiency == "sufficient" and self.sufficiency_current
         return self.execution == "ran" and self.sufficiency == "sufficient" and self.sufficiency_current
 
@@ -469,6 +482,11 @@ class EvidenceObligation:
         kept["requirements"] = tuple((r[0], int(r[1])) for r in kept.get("requirements") or ())
         kept["cases"] = tuple(kept.get("cases") or ())
         kept["receipts"] = tuple(kept.get("receipts") or ())
+        scenario = kept.get("scenario") or ()
+        if isinstance(scenario, Mapping):
+            scenario = sorted(scenario.items())
+        kept["scenario"] = tuple((str(k), str(v)) for k, v in scenario)
+        kept["location"] = str(kept.get("location") or "")
         return cls(**kept)
 
 
@@ -632,8 +650,11 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
     runnable proof: it is never discharged by a check, and it counts only
     when an independent seat judged it sufficient about exactly the current
     evidence (``sufficiency_current``: its binding carries the current
-    source). Nothing else is exempt: a scenario with no bound case, a legacy
-    acceptance string, or a behavioural scenario wherever it is located is
+    source). A legacy acceptance string (modality ``legacy``: no scenario,
+    no case, mapping unknown) is the same way counted only on an explicit
+    judgment of it, which the session takes from a per-id line and never
+    from a verdict on its requirement. Nothing else is exempt: a scenario
+    with no bound case or a behavioural scenario wherever it is located is
     unproved until its named case ran. With ``current_requirements``, an
     obligation bound to a requirement revision that is no longer current
     keeps the requirement unmet whatever its judgment says."""
@@ -649,11 +670,12 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
                     current_requirements.get(r[0]) != r[1] for r in o.get("requirements") or ()):
                 reasons.append(f"{o['oid']}: bound requirement revision changed")
                 continue
-            if o.get("modality") == "reading":
+            if o.get("modality") in ("reading", "legacy"):
+                what = "reading claim" if o.get("modality") == "reading" else "legacy acceptance (mapping unknown)"
                 if o.get("sufficiency") != "sufficient":
-                    reasons.append(f"{o['oid']}: reading claim judged {o.get('sufficiency')}")
+                    reasons.append(f"{o['oid']}: {what} judged {o.get('sufficiency')}")
                 elif not o.get("sufficiency_current", False):
-                    reasons.append(f"{o['oid']}: reading claim judged on other evidence")
+                    reasons.append(f"{o['oid']}: {what} judged on other evidence")
                 continue
             if o.get("runner") is None:
                 reasons.append(f"{o['oid']}: no authorized runner (prerequisite)")

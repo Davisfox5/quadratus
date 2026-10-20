@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from quadratus import checkpoint
+from quadratus import checkpoint, delivery
 from quadratus.scope import TaskScope
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import FILES, FILES_OK, FIXED, Script
@@ -142,7 +142,11 @@ def test_a_parallel_batch_block_without_proof_scenarios_is_sent_back_the_same_wa
             return 'Documented add.\nCHANGED: ["README.md"]'
         H.write(call, {"app.py": FIXED})
         return f'Implemented add.\nPROVES: P1 - {CASE}\nCHANGED: ["app.py"]'
-    script = _script(None, lead, auditor=lambda c, r: f"R1: MET - {CASE}\nR2: MET - README.md",
+    def auditor(call, replay):
+        docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
+        return (f"R1: MET - {CASE}\nR2: MET - README.md"
+                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result, which is all R2 asks" for o in docs))
+    script = _script(None, lead, auditor=auditor,
                      collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py\nR2: MET - README.md")
     script.overrides["orchestrator"] = orchestrator
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4, record_complete=False)
@@ -183,25 +187,40 @@ def test_a_bound_case_the_checks_name_discharges_and_an_unrelated_green_check_di
 @pytest.mark.requirements_ledger
 def test_a_legacy_acceptance_string_on_an_explicit_task_stays_unknown_and_is_never_discharged_by_a_green_check(
         tmp_path, monkeypatch):
+    """A1 (root's control on d515d51): the mapping stays visibly unknown
+    on the record, the green check discharges nothing, and the audit's
+    MET on R1 is not read as the row's sufficiency. The row counts only
+    on the audit's own explicit line about it; it claims no execution, so
+    it is not lowered as unexecuted either."""
     task = ("KIND: backend simple\nSCOPE: " + json.dumps(_scope()) + "\nImplement add in app.py.\nCOVERS: R1")
+    plan = "REQUIREMENTS:\nR1: add(a, b) returns the sum\n" + task
     script = _script(None, _lead(proves=()))
-    script.overrides["orchestrator"] = lambda c, r: "REQUIREMENTS:\nR1: add(a, b) returns the sum\n" + task
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False,
-                   tasks=["REQUIREMENTS:\nR1: add(a, b) returns the sum\n" + task])
-    rows = _acceptance(replay)
+    script.overrides["orchestrator"] = lambda c, r: plan
+    implied = H.run(_at(tmp_path, "implied"), monkeypatch, script, files=FILES, max_tasks=1, record_complete=False,
+                    tasks=[plan])
+    rows = _acceptance(implied)
     assert rows and all(r["binding"].startswith("unknown (legacy acceptance)") and r["execution"] == "missing"
-                        and not r["established"] and r["executable_claim"] and r["legacy"]
-                        and r["modality"] == "test" for r in rows), rows
-    assert H.result_json(replay)["checks"] and H.result_json(replay)["checks"][-1]["passed"]
-    # A1: unknown stays visibly unknown and unproved. The green check
-    # discharged nothing, the audit's MET is lowered as any unexecuted
-    # executable claim is, and no judgment of sufficiency is inferred from
-    # a verdict that cited the source.
-    assert rows[0]["sufficiency"] == "unjudged" and not rows[0]["judged_by"]
-    assert "unknown (legacy acceptance)" in replay.of("auditor")[-1].prompt
-    assert not replay.result.completed and "not executed" in replay.result.error, replay.result.error
-    audit = H.result_json(replay)["requirements"]["audits"][-1]
+                        and not r["established"] and not r["executable_claim"] and r["legacy"]
+                        and r["modality"] == "legacy" and r["runner"] is None for r in rows), rows
+    assert H.result_json(implied)["checks"] and H.result_json(implied)["checks"][-1]["passed"]
+    assert rows[0]["sufficiency"] == "unjudged" and not rows[0]["judged_by"], "a MET on R1 judges nothing about O1"
+    prompt = implied.of("auditor")[-1].prompt
+    assert "unknown (legacy acceptance)" in prompt and "evidence legacy" in prompt
+    assert "needs its own '<O-id>: SUFFICIENT" in prompt
+    assert not implied.result.completed and "not executed" not in (implied.result.error or "")
+    audit = H.result_json(implied)["requirements"]["audits"][-1]
     assert audit["acceptance"]["R1"]["met"] is False
+    assert "legacy acceptance (mapping unknown) judged unjudged" in " ".join(audit["acceptance"]["R1"]["reasons"])
+
+    script = _script(None, _lead(proves=()), auditor=lambda c, r: f"R1: MET - {CASE}\nO1: SUFFICIENT app.py returns a + b and test_add passed")
+    script.overrides["orchestrator"] = lambda c, r: plan
+    judged = H.run(_at(tmp_path, "judged"), monkeypatch, script, files=FILES, max_tasks=1, record_complete=False,
+                   tasks=[plan])
+    row = _acceptance(judged)[0]
+    assert row["sufficiency"] == "sufficient" and row["judged_by"] and row["established"]
+    assert row["binding"].startswith("unknown (legacy acceptance)") and row["execution"] == "missing"
+    assert row["source_digest"] == H.result_json(judged)["source_fingerprint"]
+    assert judged.result.completed, judged.result.error
 
 
 @pytest.mark.requirements_ledger
@@ -239,6 +258,18 @@ def test_every_proves_line_is_read_and_a_malformed_one_invalidates_the_binding_i
                      files=FILES, max_tasks=1, record_complete=False)
     row = _acceptance(non_test)[0]
     assert row["binding"].startswith("invalid declaration") and "not a file::[Class::]test_case" in row["binding"]
+
+
+@pytest.mark.requirements_ledger
+def test_an_exact_duplicate_proves_line_is_an_invalid_declaration_not_a_collapsed_one(tmp_path, monkeypatch):
+    replay = H.run(tmp_path, monkeypatch,
+                   _script(_plan(_scope(proofs=_proofs("R1"))), _lead(lines=[f"PROVES: P1 - {CASE}", f"PROVES: P1 - {CASE}"])),
+                   files=FILES, max_tasks=1, record_complete=False)
+    row = _acceptance(replay)[0]
+    assert row["binding"].startswith("invalid declaration") and "duplicate PROVES line" in row["binding"]
+    assert row["cases"] == [] and not row["established"] and not replay.result.completed
+    problems = H.result_json(replay)["proof_binding_problems"]
+    assert len(problems) == 1 and "duplicate" in problems[0]["problem"]
 
 
 @pytest.mark.requirements_ledger
@@ -313,34 +344,98 @@ def test_reading_evidence_is_refused_outside_documentation_and_for_error_require
     assert [c.task for c in replay.of("lead")] == ["t1"], "the corrected declaration ran, the refused one never did"
 
 
+def _docs_auditor(line):
+    """A scripted audit that addresses its own explicit line to the reading
+    row the prompt lists (the judgment text is this fixture's)."""
+    def auditor(call, replay):
+        ids = H.obligation_ids(call.prompt, modality="reading")
+        return "R1: MET - README.md" + "".join(f"\n{o}: {line}" for o in ids)
+    return auditor
+
+
 @pytest.mark.requirements_ledger
-def test_a_reading_claim_counts_only_on_an_audit_verdict_citing_its_file_on_the_current_source(tmp_path, monkeypatch):
-    """A1: a documentation scenario declared as reading evidence is never
-    discharged by the green check and never lowered as unexecuted; it is
-    accepted only when the audit's own MET cites the file it names. A MET
-    citing something else judges nothing about it, and R1 stays unmet."""
-    cited = H.run(_at(tmp_path, "cited"), monkeypatch,
-                  _script(_docs_plan(), _docs_lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
-                          auditor=lambda c, r: "R1: MET - README.md"),
-                  files=FILES_OK, max_tasks=1, record_complete=False)
-    assert cited.result.completed, cited.result.error
-    row = _acceptance(cited)[0]
+def test_a_reading_claim_counts_only_on_an_explicit_per_obligation_judgment_citing_its_file(tmp_path, monkeypatch):
+    """Root's paired control on a1b1840: a reading scenario is never
+    discharged by the green check and never lowered as unexecuted, and the
+    audit's MET on its requirement, however it cites, judges nothing about
+    it. It counts only on the audit's own explicit per-obligation line, on
+    the current source, citing the file the scenario names. The same
+    declaration for a runtime requirement, with app.py returning 0 and no
+    check run, stays unproved on a bare MET."""
+    judged = H.run(_at(tmp_path, "judged"), monkeypatch,
+                   _script(_docs_plan(), _docs_lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
+                           auditor=_docs_auditor("SUFFICIENT reading README.md shows the one sentence R1 asks for: "
+                                                 "add(a, b) returns the sum")),
+                   files=FILES_OK, max_tasks=1, record_complete=False)
+    assert judged.result.completed, judged.result.error
+    row = _acceptance(judged)[0]
     assert row["modality"] == "reading" and not row["executable_claim"] and row["runner"] is None
     assert row["binding"].startswith("reading claim") and row["execution"] == "missing" and row["cases"] == []
     assert row["sufficiency"] == "sufficient" and row["judged_by"] and row["established"]
-    assert row["source_digest"] == H.result_json(cited)["source_fingerprint"]
-    assert "declared evidence: reading" in cited.of("auditor")[-1].prompt or "reading" in cited.of("auditor")[-1].prompt
+    assert row["source_digest"] == H.result_json(judged)["source_fingerprint"]
+    assert row["location"] == "README.md" and dict(row["scenario"])["evidence"] == "reading"
+    prompt = judged.of("auditor")[-1].prompt
+    assert "evidence reading" in prompt and "judged only by your own line" in prompt
 
-    elsewhere = H.run(_at(tmp_path, "elsewhere"), monkeypatch,
-                      _script(_docs_plan(), _docs_lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
-                              auditor=lambda c, r: "R1: MET - app.py"),
-                      files=FILES_OK, max_tasks=1, record_complete=False)
-    row = _acceptance(elsewhere)[0]
-    assert row["sufficiency"] == "unjudged" and "did not cite README.md" in row.get("sufficiency_note", "")
-    assert not row["established"] and not elsewhere.result.completed
-    audit = H.result_json(elsewhere)["requirements"]["audits"][-1]
+    bare = H.run(_at(tmp_path, "bare"), monkeypatch,
+                 _script(_docs_plan(), _docs_lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
+                         auditor=lambda c, r: "R1: MET - README.md"),
+                 files=FILES_OK, max_tasks=1, record_complete=False)
+    row = _acceptance(bare)[0]
+    assert row["sufficiency"] == "unjudged" and not row["established"] and not bare.result.completed
+    audit = H.result_json(bare)["requirements"]["audits"][-1]
     assert audit["acceptance"]["R1"]["met"] is False and "reading claim judged unjudged" in " ".join(
         audit["acceptance"]["R1"]["reasons"])
+
+    uncited = H.run(_at(tmp_path, "uncited"), monkeypatch,
+                    _script(_docs_plan(), _docs_lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
+                            auditor=_docs_auditor("SUFFICIENT the documentation covers it")),
+                    files=FILES_OK, max_tasks=1, record_complete=False)
+    row = _acceptance(uncited)[0]
+    assert row["sufficiency"] == "unjudged" and "did not cite README.md" in row.get("sufficiency_note", "")
+    assert not uncited.result.completed
+
+    runtime = "R1: add(a, b) returns the sum"
+    broken = H.run(_at(tmp_path, "runtime"), monkeypatch,
+                   _script(_docs_plan(requirement=runtime), _docs_lead,
+                           collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
+                           auditor=lambda c, r: "R1: MET - README.md"),
+                   files=FILES, max_tasks=1, record_complete=False)
+    row = _acceptance(broken)[0]
+    assert row["modality"] == "reading" and row["sufficiency"] == "unjudged" and not row["established"]
+    assert not broken.result.completed, "a runtime requirement mapped to README with a bare MET stays unproved"
+    audits = H.result_json(broken)["requirements"]["audits"]
+    assert not audits or audits[-1]["acceptance"]["R1"]["met"] is False
+
+
+@pytest.mark.requirements_ledger
+def test_a_reading_judgment_is_stale_when_the_scenario_or_the_effective_identity_moves(tmp_path):
+    """Root's currency control on a1b1840: the binding a reading judgment
+    is about carries the scenario's location and metadata, modality, and
+    the effective gate and environment; a change to any of them after the
+    judgment makes it stale and moves the packet."""
+    session = _session(tmp_path)
+    base = dict(oid="O1", task="t1", kind="acceptance", behavior="P1: README read", requirements=[["R1", 1]],
+                gate="g", environment="e", modality="reading", location="README.md",
+                scenario=[["evidence", "reading"], ["expect", "names add"], ["location", "README.md"],
+                          ["operation", "read"], ["proof", "P1"], ["state", "add exists"]],
+                binding="reading claim", cases=[], execution="missing", receipts=[], runner=None,
+                sufficiency="unjudged", judged_by="", judged_binding="")
+    judged = delivery.judge_sufficiency(delivery.EvidenceObligation.from_dict(base), "sufficient", judged_by="auditor",
+                                        reading=True)
+    assert judged.established and judged.sufficiency_current
+    session.evidence_obligations = [dict(base, **judged.to_dict())]
+    first = session._packet().digest
+    for change in (dict(location="OTHER.md"), dict(modality="legacy"), dict(gate="g2"), dict(environment="e2"),
+                   dict(scenario=[["evidence", "reading"], ["expect", "names subtract"], ["location", "README.md"],
+                                  ["operation", "read"], ["proof", "P1"], ["state", "add exists"]])):
+        moved = delivery.EvidenceObligation.from_dict({**base, **judged.to_dict(), **change})
+        assert not moved.sufficiency_current and not moved.established, change
+        session.evidence_obligations = [{**base, **moved.to_dict()}]
+        assert session._packet().digest != first, change
+        accepted = delivery.acceptance({"R1": (True, "README.md")}, session.evidence_obligations, [], {"t1": ["R1"]},
+                                       current_requirements={"R1": 1})
+        assert not accepted["R1"].met and "judged on other evidence" in " ".join(accepted["R1"].reasons), change
 
 
 @pytest.mark.requirements_ledger
@@ -469,7 +564,7 @@ def test_a_trim_that_deletes_an_assertion_inside_an_unchanged_case_is_shown_whol
                        "R1: MET - app.py\nTRIM: LOST - add(2, 2) assertion deleted\nREVIEW: COMPLETE")
     records = _trim(replay)
     assert len(records) == 1 and records[0]["site"] == "draft" and records[0]["changed"] and records[0]["complete"]
-    assert records[0]["tid"] == "T1" and records[0]["state"] == "preservation owed; lost by claude:opus"
+    assert records[0]["tid"] == "T-t1-1" and records[0]["state"] == "preservation owed; lost by claude:opus"
     # The overrun draft never delivered (its PROVES line is not read past
     # the stop), so the snapshot holds the scenario unbound; the trim's own
     # delivery binds it afterwards.
@@ -478,24 +573,24 @@ def test_a_trim_that_deletes_an_assertion_inside_an_unchanged_case_is_shown_whol
     pre = json.loads(replay.artifact_texts("pre-trim-tests")[0])
     assert pre["tests/test_app.py"] == BIG_TESTS, "the full pre-trim contents are on file, not a case-name list"
     review = replay.of("collaborator")[-1].prompt
-    assert "## Trim evidence" in review and "T1: task t1, draft trim" in review
-    assert "-    assert add(2, 2) == 4" in review and "'TRIM T<n>: PRESERVED'" in review
+    assert "## Trim evidence" in review and "T-t1-1: task t1, draft trim" in review
+    assert "-    assert add(2, 2) == 4" in review and "'TRIM <id>: PRESERVED'" in review
     assert records[0]["disposition"]["verdict"] == "LOST" and "add(2, 2)" in records[0]["disposition"]["detail"]
     assert records[0]["disposition"]["evidence"] and records[0]["disposition"]["by"] == "claude:opus"
     assert not replay.result.completed
-    assert "T1 (t1, draft trim: preservation owed; lost by claude:opus)" in replay.result.error
+    assert "T-t1-1 (t1, draft trim: preservation owed; lost by claude:opus)" in replay.result.error
 
 
 @pytest.mark.requirements_ledger
 def test_an_equivalent_refactor_the_reviewer_judges_preserved_completes_and_names_decide_nothing(tmp_path,
                                                                                                    monkeypatch):
-    replay = _trim_job(tmp_path, monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM T1: PRESERVED")
+    replay = _trim_job(tmp_path, monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM T-t1-1: PRESERVED")
     record = _trim(replay)[0]
     assert record["changed"] and record["disposition"]["verdict"] == "PRESERVED"
     assert record["disposition"]["evidence"] == record["shown"]
     assert replay.result.completed, replay.result.error
 
-    other = _trim_job(_at(tmp_path, "other"), monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM T2: PRESERVED")
+    other = _trim_job(_at(tmp_path, "other"), monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM T-t1-2: PRESERVED")
     assert _trim(other)[0]["disposition"] is None, "a verdict on another trim id judges nothing here"
     assert not other.result.completed
 
@@ -538,20 +633,20 @@ def test_a_trim_whose_pre_trim_evidence_could_not_be_captured_is_owed_and_never_
     real = Session._trim_files
     calls = []
 
-    def flaky(self, spec, before):
+    def flaky(self, policy, before):
         calls.append(1)
-        return None if len(calls) == 1 else real(self, spec, before)
+        return None if len(calls) == 1 else real(self, policy, before)
     monkeypatch.setattr(Session, "_trim_files", flaky)
-    replay = _trim_job(tmp_path, monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM T1: PRESERVED",
-                       auditor=lambda c, r: "TRIM T1: PRESERVED\nR1: MET - tests/test_app.py::test_add")
+    replay = _trim_job(tmp_path, monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py\nTRIM T-t1-1: PRESERVED",
+                       auditor=lambda c, r: "TRIM T-t1-1: PRESERVED\nR1: MET - tests/test_app.py::test_add")
     record = _trim(replay)[0]
     assert record["artifact"] is None and record["changed"] is None and "pre-trim evidence unavailable" in record["state"]
     assert record["evidence_state"].startswith("pre-trim evidence unavailable")
     assert "cannot be judged PRESERVED" in replay.of("collaborator")[-1].prompt
     assert record["disposition"]["verdict"] == "REFUSED"
-    assert "T1" in replay.of("auditor")[-1].prompt and not replay.result.completed
+    assert "T-t1-1" in replay.of("auditor")[-1].prompt and not replay.result.completed
     assert "no independent judgment bound to the current source" in replay.result.error
-    assert "T1 (t1, draft trim: pre-trim evidence unavailable" in replay.result.error
+    assert "T-t1-1 (t1, draft trim: pre-trim evidence unavailable" in replay.result.error
 
 
 @pytest.mark.requirements_ledger
@@ -560,9 +655,9 @@ def test_a_trim_whose_post_trim_files_could_not_be_read_is_owed_not_unchanged(tm
     real = Session._trim_files
     calls = []
 
-    def flaky(self, spec, before):
+    def flaky(self, policy, before):
         calls.append(1)
-        return None if len(calls) == 2 else real(self, spec, before)
+        return None if len(calls) == 2 else real(self, policy, before)
     monkeypatch.setattr(Session, "_trim_files", flaky)
     replay = _trim_job(tmp_path, monkeypatch, TRIMMED_KEPT, "NO FINDINGS\nR1: MET - app.py")
     record = _trim(replay)[0]
@@ -585,10 +680,10 @@ def test_pre_trim_evidence_is_read_back_through_its_digest_and_preserved_is_refu
     record = session._trim_snapshot(spec, "draft", None)
     (project / "tests" / "test_app.py").write_text("def test_add():\n    pass\n")
     session._trim_settle(record, None)
-    assert record["tid"] == "T1" and record["complete"] and record["changed"] and record["state"] == "preservation owed"
+    assert record["tid"] == "T-t1-1" and record["complete"] and record["changed"] and record["state"] == "preservation owed"
     assert session._trim_pre_contents(record) == {"tests/test_app.py": "def test_add():\n    assert 1 + 2 == 3\n"}
     assert session._trim_block(spec) and record["shown"] == session._trim_evidence_id(record)
-    session._read_trim_disposition(spec, "reviewer", "TRIM T1: PRESERVED")
+    session._read_trim_disposition(spec, "reviewer", "TRIM T-t1-1: PRESERVED")
     assert record["disposition"]["verdict"] == "PRESERVED" and not session._trim_owed()
 
     record["disposition"] = None
@@ -597,14 +692,107 @@ def test_pre_trim_evidence_is_read_back_through_its_digest_and_preserved_is_refu
     assert session._trim_pre_contents(record) is None and session._trim_owed() == [record]
     block = session._trim_block(spec)
     assert "not on file" in block and "cannot be judged PRESERVED" in block
-    session._read_trim_disposition(spec, "reviewer", "TRIM T1: PRESERVED")
+    session._read_trim_disposition(spec, "reviewer", "TRIM T-t1-1: PRESERVED")
     assert record["disposition"]["verdict"] == "REFUSED" and session._trim_owed() == [record]
-    session._read_trim_disposition(spec, "auditor", "TRIM T1: LOST - the assertion is gone")
+    session._read_trim_disposition(spec, "auditor", "TRIM T-t1-1: LOST - the assertion is gone")
     assert record["disposition"]["verdict"] == "LOST" and session._trim_owed() == [record]
 
     record["artifact_sha256"] = good_sha
     record["artifact"] = "no-such-artifact"
     assert session._trim_pre_contents(record) is None
+
+
+def test_a_trim_shown_once_is_not_judged_on_that_display_after_the_files_become_unreadable(tmp_path, monkeypatch):
+    """Root 4a on a1b1840: a render clears what an earlier render showed,
+    and a PRESERVED is consumed only against the current readability and
+    identity, never against a display authority that has since lapsed."""
+    from quadratus.session import Session
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    (project / "tests" / "test_app.py").write_text("def test_add():\n    assert 1 + 2 == 3\n")
+    session = _session(tmp_path, project)
+    spec = SimpleNamespace(task_id="t1", scope=TaskScope.unbounded())
+    session._active_spec = spec
+    record = session._trim_snapshot(spec, "draft", None)
+    (project / "tests" / "test_app.py").write_text("def test_add():\n    pass\n")
+    session._trim_settle(record, None)
+    assert "```diff" in session._trim_block(spec) and record["shown"]
+    real = Session._trim_files
+    monkeypatch.setattr(Session, "_trim_files", lambda self, policy, before: None)
+    block = session._trim_block(spec)
+    assert "could not be read" in block and record["shown"] is None
+    session._read_trim_disposition(spec, "auditor", "TRIM T-t1-1: PRESERVED")
+    assert record["disposition"]["verdict"] == "REFUSED" and session._trim_owed() == [record]
+    monkeypatch.setattr(Session, "_trim_files", real)
+    record["disposition"] = None
+    assert "```diff" in session._trim_block(spec)
+    monkeypatch.setattr(Session, "_trim_files", lambda self, policy, before: None)
+    session._read_trim_disposition(spec, "auditor", "TRIM T-t1-1: PRESERVED")
+    assert record["disposition"]["verdict"] == "REFUSED", "readability is re-checked when the verdict is consumed"
+
+
+def test_a_late_review_of_a_trim_stays_within_the_policy_the_trim_was_taken_under(tmp_path):
+    """Root 4b on a1b1840: the final audit (no active task) reads the
+    current files under the record's own persisted scope and operator
+    limits, never an unbounded fallback; a file outside the task's scope
+    is not in the comparison, and a record without its policy is not
+    judged."""
+    from quadratus.scope import TaskScope as TS
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    (project / "private").mkdir()
+    (project / "tests" / "test_app.py").write_text("def test_add():\n    assert 1 + 2 == 3\n")
+    (project / "private" / "test_secret.py").write_text("SENTINEL = 1\n")
+    session = _session(tmp_path, project)
+    scope = TS(permitted_paths=["tests/**", "app.py"], intended_result="x", acceptance=["y"], max_lines=10)
+    spec = SimpleNamespace(task_id="t1", scope=scope)
+    session._active_spec = spec
+    record = session._trim_snapshot(spec, "draft", None)
+    assert record["policy"] == [scope.to_dict()] and "private/test_secret.py" not in record["hashes"]
+    (project / "tests" / "test_app.py").write_text("def test_add():\n    pass\n")
+    (project / "private" / "test_secret.py").write_text("SENTINEL = 2\n")
+    session._trim_settle(record, None)
+    session._active_spec = None
+    block = session._trim_block(None)
+    assert "-    assert 1 + 2 == 3" in block and "SENTINEL" not in block and "test_secret" not in block
+    record["policy"] = None
+    block = session._trim_block(None)
+    assert "policy the trim was taken under was not recorded" in block
+    session._read_trim_disposition(None, "auditor", "TRIM T-t1-1: PRESERVED")
+    assert record["disposition"]["verdict"] == "REFUSED"
+
+
+def test_a_preserved_verdict_lapses_when_a_covered_requirement_or_scenario_changes_without_a_source_edit(tmp_path):
+    """Root 4c on a1b1840: preservation is judged against what the covered
+    requirements and declared scenarios need, so their current identity is
+    part of what the verdict binds; a reworded requirement or a rebound
+    scenario after the approval owes the trim again."""
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    (project / "tests" / "test_app.py").write_text("def test_add():\n    assert 1 + 2 == 3\n")
+    session = _session(tmp_path, project)
+    session.config.requirements_ledger = True
+    session.memory.ledger.requirements["R1"] = "add returns the sum"
+    session.evidence_obligations = [dict(oid="O1", task="t1", kind="acceptance", proof_id="P1", behavior="P1: add",
+                                         requirements=[["R1", 1]], cases=["tests/test_app.py::test_add"],
+                                         modality="test", location="tests/test_app.py", execution="missing",
+                                         sufficiency="unjudged")]
+    spec = SimpleNamespace(task_id="t1", scope=TaskScope.unbounded())
+    session._active_spec = spec
+    record = session._trim_snapshot(spec, "draft", None)
+    (project / "tests" / "test_app.py").write_text("def test_add():\n    pass\n")
+    session._trim_settle(record, None)
+    session._trim_block(spec)
+    session._read_trim_disposition(spec, "reviewer", "TRIM T-t1-1: PRESERVED")
+    assert session._trim_owed() == []
+    session.memory.ledger.requirements["R1"] = "add returns the sum and refuses strings"
+    assert session._requirement_revisions()["R1"] == 2
+    assert session._trim_owed() == [record], "a reworded covered requirement owes the trim again"
+    session._trim_block(spec)
+    session._read_trim_disposition(spec, "reviewer", "TRIM T-t1-1: PRESERVED")
+    assert session._trim_owed() == []
+    session.evidence_obligations[0]["cases"] = ["tests/test_app.py::test_other"]
+    assert session._trim_owed() == [record], "a rebound scenario owes the trim again"
 
 
 @pytest.mark.requirements_ledger
@@ -617,7 +805,7 @@ def test_an_edit_after_a_preserved_verdict_renews_the_review_against_the_full_pr
     named stale, and silence does not approve it: the run does not
     complete until a judgment bound to the current source says PRESERVED."""
     review = ("BLOCKING: the docstring is wrong | basis: R1 | impact: correctness\nR1: MET - app.py\n"
-              "TRIM T1: PRESERVED")
+              "TRIM T-t1-1: PRESERVED")
     silent = _trim_job(_at(tmp_path, "silent"), monkeypatch, TRIMMED_KEPT, review, later=TRIMMED_LOSS,
                        recheck=lambda c, r: "RFT1-1: RESOLVED docstring fixed")
     record = _trim(silent)[0]
@@ -625,12 +813,12 @@ def test_an_edit_after_a_preserved_verdict_renews_the_review_against_the_full_pr
     assert "## Trim evidence" in recheck and "an earlier PRESERVED is stale" in recheck
     assert "-    assert add(2, 2) == 4" in recheck, "the renewed review shows the full pre-trim comparison"
     audit = silent.of("auditor")[-1].prompt
-    assert "## Trim evidence" in audit and "-    assert add(2, 2) == 4" in audit and "T1:" in audit
+    assert "## Trim evidence" in audit and "-    assert add(2, 2) == 4" in audit and "T-t1-1:" in audit
     assert record["disposition"]["verdict"] == "PRESERVED" and record["disposition"]["evidence"] != silent_evidence(silent, record)
     assert not silent.result.completed and "preserved" in silent.result.error.lower()
 
     renewed = _trim_job(_at(tmp_path, "renewed"), monkeypatch, TRIMMED_KEPT, review, later=TRIMMED_LOSS,
-                        recheck=lambda c, r: "RFT1-1: RESOLVED docstring fixed\nTRIM T1: LOST - add(2, 2) deleted by the fix")
+                        recheck=lambda c, r: "RFT1-1: RESOLVED docstring fixed\nTRIM T-t1-1: LOST - add(2, 2) deleted by the fix")
     record = _trim(renewed)[0]
     assert record["disposition"]["verdict"] == "LOST" and record["disposition"]["by"] and not renewed.result.completed
 
@@ -650,10 +838,21 @@ def test_trim_evidence_covers_the_support_files_assertions_lean_on(tmp_path):
                        "fixtures_data.py": "w", "app.py": "code", "README.md": "doc"}.items():
         (project / name).write_text(text)
     session = _session(tmp_path, project)
-    files = session._trim_files(SimpleNamespace(task_id="t1", scope=TaskScope.unbounded()), None)
+    files = session._trim_files([TaskScope.unbounded().to_dict()], None)
     assert files == {"tests/test_app.py": "x", "tests/conftest.py": "y", "tests/helpers.py": "z", "fixtures_data.py": "w"}
     bounded = TaskScope(permitted_paths=["tests/test_app.py"], intended_result="x", acceptance=["y"], max_lines=10)
-    assert session._trim_files(SimpleNamespace(task_id="t1", scope=bounded), None) == {"tests/test_app.py": "x"}
+    assert session._trim_files([bounded.to_dict()], None) == {"tests/test_app.py": "x"}
+    assert session._trim_files(None, None) is None, "no policy is unknown, never unbounded"
+    # An explicit, validated dependency inventory: the project modules the
+    # test files import, under the same policy, whatever their names.
+    (project / "tests" / "test_app.py").write_text("from app import add\nimport checks.asserts\n")
+    (project / "checks").mkdir()
+    (project / "checks" / "asserts.py").write_text("def check(x): assert x\n")
+    files = session._trim_files([TaskScope.unbounded().to_dict()], None)
+    assert "app.py" in files and "checks/asserts.py" in files and "README.md" not in files
+    narrow = TaskScope(permitted_paths=["tests/**", "app.py"], intended_result="x", acceptance=["y"], max_lines=10)
+    files = session._trim_files([narrow.to_dict()], None)
+    assert "app.py" in files and "checks/asserts.py" not in files, "the inventory never reaches past the policy"
 
 
 def test_trim_records_and_binding_problems_are_carried_by_the_checkpoint(tmp_path):

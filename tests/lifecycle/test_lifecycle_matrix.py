@@ -72,6 +72,23 @@ def covered_met(prompt: str) -> str:
     return "".join(f"{rid}: MET - scripted reviewer\n" for rid in rids)
 
 
+def judging(base=None, *, reading=None, legacy=None):
+    """An opt-in scripted audit that adds this fixture's own explicit
+    per-obligation line for the reading and legacy rows the prompt lists
+    (``reading`` / ``legacy``: the verdict text after the id, written by
+    the case, citing what it read). ``base`` is the audit reply it extends
+    (default: one MET per covered requirement). Nothing is added for a
+    modality the case does not name, and nothing here decides anything:
+    the text is the case's judgment, addressed to the right id."""
+    def auditor(call, replay):
+        reply = base(call, replay) if base is not None else covered_met(call.prompt).rstrip("\n")
+        for modality, line in (("reading", reading), ("legacy", legacy)):
+            if line:
+                reply += "".join(f"\n{oid}: {line}" for oid in H.obligation_ids(call.prompt, modality=modality))
+        return reply
+    return auditor
+
+
 class Script:
     """Default replies by role; a case overrides the parts it is about."""
 
