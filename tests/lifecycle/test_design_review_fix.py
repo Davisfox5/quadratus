@@ -15,7 +15,6 @@ from tests.lifecycle import harness as H
 from tests.lifecycle.test_audit_findings import REPAIR_SCOPE, REQS, _design_files
 from tests.lifecycle.test_harness_capture import (
     CAPTURE,
-    FITTING_PAGE,
     ICON,
     _decl,
     _no_edit,
@@ -27,23 +26,34 @@ from tests.lifecycle.test_harness_capture import (
 
 pytestmark = pytest.mark.requirements_ledger
 
-#: This task's own scenarios: the hint beside the search field, as its
-#: fixture page shows it; the shared REPAIR_SCOPE proof names an Import
-#: button this page never has.
+#: The import page with the toolbar hint (r01): the labelled Import button
+#: (REQS R2), a search field and the shortcut hint beside it. The draft
+#: squeezes the field to 46 px; the fix gives it room.
+def _hint_page(search_style):
+    return (f"<html>{ICON}<body><div class=toolbar style='max-width:100%;display:flex'>"
+            "<button id=import>Import</button> tools"
+            f"<input id=search aria-label=Search style='{search_style}'><span class=hint>Ctrl+K</span>"
+            "</div></body></html>\n")
+
+
+SQUEEZED = _hint_page("width:46px")
+WIDER = _hint_page("flex:1;min-width:200px")
+#: This task's own scenarios: the search field and the hint, and the Import
+#: button, as its fixture page shows them.
 HINT_PROOFS = [
     dict(id="P1", requirements=["R1"], operation="the import page with the toolbar hint is rendered at 390 px and desktop",
          state="the hint squeezed the search field", expect="the search field keeps its room inside the viewport",
          location="templates/index.html", evidence="capture"),
-    dict(id="P2", requirements=["R2"], operation="the toolbar text is read in both renders", state="the hint is shown",
-         expect="the toolbar text is visible beside the hint", location="templates/index.html", evidence="capture"),
+    dict(id="P2", requirements=["R2"], operation="the Import button is read in both renders", state="the hint is shown",
+         expect="the Import button is labelled Import beside the search field", location="templates/index.html",
+         evidence="capture"),
 ]
 BUILD = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, proofs=HINT_PROOFS, capture=CAPTURE), "Add the toolbar hint.")
-WIDER = f"<html>{ICON}<body><div class=toolbar style='max-width:100%'>tools, wider search</div></body></html>\n"
 #: The scripted reviewer's observations of the fixed page (WIDER), one per
 #: covered requirement; a BLOCKING verdict judges no row.
 HINT_OBSERVED = {
-    "R1": "SUFFICIENT both renders show the search field with room beside the hint inside the viewport",
-    "R2": "SUFFICIENT both renders show the toolbar text 'tools, wider search' visible",
+    "R1": "SUFFICIENT both renders show the search field with room beside the Ctrl+K hint inside the viewport",
+    "R2": "SUFFICIENT both renders show the Import button labelled 'Import' beside the search field and the hint",
 }
 
 
@@ -59,7 +69,7 @@ def _run_review(tmp_path, monkeypatch, review, fixes):
         return 'Gave the search field room.\nCHANGED: ["templates/index.html"]'
     profile, _ = _profile(tmp_path)
     return _run(tmp_path, monkeypatch, [REQS + BUILD], {"t1": _no_edit}, profile=profile,
-                files={**_design_files(), "templates/index.html": FITTING_PAGE},
+                files={**_design_files(), "templates/index.html": SQUEEZED},
                 roles={"design-review": review, "design-fix": fix})
 
 

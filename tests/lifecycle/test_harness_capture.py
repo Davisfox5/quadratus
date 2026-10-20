@@ -32,8 +32,13 @@ from tests.lifecycle.test_lifecycle_matrix import judging
 pytestmark = pytest.mark.requirements_ledger
 
 ICON = "<head><link rel=icon href='data:,'></head>"
-WIDE_PAGE = f"<html>{ICON}<body><div class=toolbar style='width:450px'>tools</div></body></html>\n"
-FITTING_PAGE = f"<html>{ICON}<body><div class=toolbar style='max-width:100%'>tools</div></body></html>\n"
+#: The import page the fixtures render: a toolbar whose Import button is
+#: labelled (REQS R2, the legacy acceptance row and the P2 scenarios below
+#: are about that button) beside the "tools" text; wide, it overflows a
+#: phone, fitting it does not.
+TOOLBAR = "<button id=import>Import</button> tools"
+WIDE_PAGE = f"<html>{ICON}<body><div class=toolbar style='width:450px'>{TOOLBAR}</div></body></html>\n"
+FITTING_PAGE = f"<html>{ICON}<body><div class=toolbar style='max-width:100%'>{TOOLBAR}</div></body></html>\n"
 CAPTURE = {"path": "/index.html", "steps": []}
 browser = pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
 
@@ -51,15 +56,14 @@ def _decl(kind_line, scope, text, covers="R1, R2"):
 
 
 #: This file's own capture scenarios for its repairs: what its fixture page
-#: (a toolbar reading "tools") can show at both viewports, one per covered
-#: requirement. The shared REPAIR_SCOPE proof expects an Import button this
-#: page never has, and a verdict about one would describe nothing here.
+#: (the labelled Import button and the "tools" text in the toolbar) shows
+#: at both viewports, one per covered requirement.
 FIT_PROOFS = [
     dict(id="P1", requirements=["R1"], operation="the import page is rendered at 390 px and desktop",
          state="the toolbar overflowed the 390 px viewport", expect="the toolbar fits inside the viewport at both widths",
          location="templates/index.html", evidence="capture"),
-    dict(id="P2", requirements=["R2"], operation="the toolbar text is read in both renders", state="the toolbar fits",
-         expect="the toolbar text is visible and legible", location="templates/index.html", evidence="capture"),
+    dict(id="P2", requirements=["R2"], operation="the Import button is read in both renders", state="the toolbar fits",
+         expect="the Import button is labelled Import", location="templates/index.html", evidence="capture"),
 ]
 FIT_SCOPE = dict(REPAIR_SCOPE, proofs=FIT_PROOFS)
 #: This file's own explicit per-row verdicts, written by the scripted design
@@ -67,7 +71,7 @@ FIT_SCOPE = dict(REPAIR_SCOPE, proofs=FIT_PROOFS)
 #: requirement, addressed to the capture rows the prompt lists and no other.
 FIT_OBSERVED = {
     "R1": "SUFFICIENT the 390 px and desktop renders show the toolbar inside the viewport with no horizontal overflow",
-    "R2": "SUFFICIENT both renders show the toolbar text 'tools' visible and legible",
+    "R2": "SUFFICIENT both renders show the toolbar's Import button labelled 'Import' beside the tools text",
 }
 AUDIT = _decl("KIND: frontend standard", dict(AUDIT_SCOPE, capture=CAPTURE), "Audit the import page.")
 REPAIR = _decl("KIND: frontend standard", dict(FIT_SCOPE, capture=CAPTURE), "Fix the mobile overflow.")
@@ -342,7 +346,7 @@ def _listening(port):
 
 # -- across preview restarts, with an interaction and task-owned fixtures -------------------
 
-UPLOAD_PAGE = ("<html>" + ICON + "<body><input type=file id=csv>"
+UPLOAD_PAGE = ("<html>" + ICON + "<body><button id=import>Import</button><input type=file id=csv>"
                "<table id=rows></table><style>#rows td{{{style}}}</style><script>"
                "csv.onchange = async () => {{ const text = await csv.files[0].text();"
                " rows.innerHTML = '<tr id=done><td>' + text.trim() + '</td></tr>'; }};"
@@ -365,12 +369,13 @@ TABLE_PROOFS = [
     dict(id="P1", requirements=["R1"], operation="the CSV is uploaded and the preview table is rendered at 390 px and desktop",
          state="the uploaded row overflowed the 390 px viewport", expect="the preview table fits inside the viewport",
          location="templates/index.html", evidence="capture"),
-    dict(id="P2", requirements=["R2"], operation="the uploaded row is read in both renders", state="the table fits",
-         expect="the uploaded values are shown in the table", location="templates/index.html", evidence="capture"),
+    dict(id="P2", requirements=["R2"], operation="the Import button and the uploaded row are read in both renders",
+         state="the table fits", expect="the Import button is labelled Import and the uploaded values are shown",
+         location="templates/index.html", evidence="capture"),
 ]
 TABLE_OBSERVED = {
     "R1": "SUFFICIENT after the upload both renders show the preview table inside the viewport with no overflow",
-    "R2": "SUFFICIENT both renders show the uploaded row 'a,b 1,2' in the table",
+    "R2": "SUFFICIENT both renders show the Import button labelled 'Import' and the uploaded row 'a,b 1,2' in the table",
 }
 
 
