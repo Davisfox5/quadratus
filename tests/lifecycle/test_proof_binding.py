@@ -1123,9 +1123,13 @@ def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_
     delivered = dict(reviewer="codex:gpt", verdict="APPROVED\nO1: SUFFICIENT shows it", approved=True, blocking=[])
     hashes = {"templates/index.html": hashlib.sha256((project / "templates" / "index.html").read_bytes()).hexdigest()}
 
+    context = dict(goal=session.memory.goal.strip(), requirements={"R1": [1, "the import page works on a phone"]},
+                   rows={"O1": dict(scenario=[["proof", "P1"]], requirements=[["R1", 1]], behavior="P1: the page is rendered")})
+
     def record(**over):
         base = dict(task="t1", verified=True, problem="", snapshot=snapshot, source=source, final_review=delivered,
-                    delivered_hashes=dict(hashes), review_rows=["O1"], authority_ok=True, review_stale="")
+                    delivered_hashes=dict(hashes), review_rows=["O1"], authority_ok=True, review_stale="",
+                    review_context=context)
         base.update(over)
         return base
     for over, why in ((dict(verified=False, problem="stale"), "not verified"),
@@ -1138,7 +1142,14 @@ def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_
                       (dict(review_stale="the renders changed after they were reviewed"), "changed after they were reviewed"),
                       (dict(snapshot=[snapshot[0], [["click", "#x", None]], snapshot[2]]), "changed after they were reviewed"),
                       (dict(delivered_hashes={"templates/index.html": "0" * 64}), "replaced"),
-                      (dict(delivered_hashes={"templates/missing.html": "0" * 64}), "missing")):
+                      (dict(delivered_hashes={"templates/missing.html": "0" * 64}), "missing"),
+                      (dict(review_context=None), "no bound requirement and scenario context"),
+                      (dict(review_context=dict(context, goal="another goal")), "the goal changed"),
+                      (dict(review_context=dict(context, requirements={"R1": [1, "other wording"]})), "text or revision changed"),
+                      (dict(review_context=dict(context, requirements={"R2": [1, "x"]})), "lacked R2"),
+                      (dict(review_context=dict(context, rows={"O1": dict(scenario=[["proof", "P2"]], requirements=[["R1", 1]], behavior="P1: the page is rendered")})), "scenario or requirement revisions changed"),
+                      (dict(review_context=dict(context, rows={"O9": dict(scenario=[], requirements=[], behavior="")})), "no longer on the record"),
+                      (dict(review_rows=["O7"]), "not among those delivered")):
         session.design_checks = [record(**over)]
         measured, reason = session._capture_measurement(row)
         assert measured is None and why in reason, (why, reason)
@@ -1234,13 +1245,38 @@ def test_a_capture_scenario_with_another_declared_state_is_a_different_proof(tmp
     def scope(path, steps=()):
         return NS(proofs=tuple(dict(p) for p in proofs), capture=dict(path=path, steps=list(steps)), acceptance=(),
                   review_only=False)
-    for tid, sc in (("t2", scope("/one")), ("t3", scope("/two")), ("t4", scope("/two", [dict(action="click", selector="#x")])),
-                    ("t5", scope("/two", [dict(action="click", selector="#x")]))):
+    upload_a = [dict(action="file", selector="#f", path="tests/fixtures/a.csv")]
+    upload_b = [dict(action="file", selector="#f", path="tests/fixtures/b.csv")]
+    confirm_a = [dict(action="confirm", selector="#ok", message="Delete 3 rows?")]
+    confirm_b = [dict(action="confirm", selector="#ok", message="Delete 4 rows?")]
+    declared = (("t2", scope("/one")), ("t3", scope("/two")), ("t4", scope("/two", [dict(action="click", selector="#x")])),
+                ("t5", scope("/two", [dict(action="click", selector="#x")])),
+                ("t6", scope("/up", upload_a)), ("t7", scope("/up", upload_b)), ("t8", scope("/up", upload_b)),
+                ("t9", scope("/c", confirm_a)), ("t10", scope("/c", confirm_b)), ("t11", scope("/c", confirm_b)))
+    for tid, sc in declared:
         session._register_acceptance_obligations(NS(task_id=tid, scope=sc, kind=None), ["R1"])
     rows = {o["task"]: o for o in session.evidence_obligations}
     assert "/one" in dict(rows["t2"]["scenario"])["capture"] and not rows["t2"].get("superseded_by")
     assert not rows["t3"].get("superseded_by"), "other steps are another state"
     assert rows["t4"]["superseded_by"] == "t5", "the exact same declared state is the same proof"
+    # Every supported field of the validated declaration is identity: the
+    # file step's path and the confirm step's message (root on a18f2ae).
+    assert "tests/fixtures/a.csv" in dict(rows["t6"]["scenario"])["capture"]
+    assert not rows["t6"].get("superseded_by"), "another uploaded fixture is another state"
+    assert rows["t7"]["superseded_by"] == "t8"
+    assert "Delete 3 rows?" in dict(rows["t9"]["scenario"])["capture"]
+    assert not rows["t9"].get("superseded_by"), "another confirmation text is another state"
+    assert rows["t10"]["superseded_by"] == "t11"
+    # The serialization is the validator's normalized form, ordered steps
+    # with every field; an invalid declaration never collapses onto a valid one.
+    from quadratus.session import Session
+    two = Session._capture_context(NS(capture=dict(path="/x", steps=[dict(action="click", selector="#a"), dict(action="wait", selector="#b")])))
+    swapped = Session._capture_context(NS(capture=dict(path="/x", steps=[dict(action="wait", selector="#b"), dict(action="click", selector="#a")])))
+    assert two != swapped and '"path": "/x"' in two
+    assert Session._capture_context(NS(capture=dict(path="/x", steps=[dict(action="click", selector="#a")]))) \
+        == Session._capture_context(NS(capture=dict(path="/x", steps=[dict(selector="#a", action="click")])))
+    bad = Session._capture_context(NS(capture=dict(path="/x", steps=[dict(action="jump", selector="#a")])))
+    assert '"invalid"' in bad and bad != two
 
 
 @pytest.mark.requirements_ledger

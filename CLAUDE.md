@@ -2125,10 +2125,20 @@ Key design decisions already settled:
   file hashes) and revalidated after it (`_design_review_drift`); a render
   replaced, removed or re-taken in another state, or a source that moved,
   makes the verdict usable for nothing, and the final replacement stop
-  stays as it was. A capture scenario's canonical identity carries the
-  declared visual state (`_capture_context`: SCOPE capture route, steps
-  and fixture, or the lead's undeclared self-capture), so two scenarios
-  that read the same but show different states are different proofs.
+  stays as it was. The record also keeps, immutably, the exact context
+  the reviewer was shown before its call (`review_context`: the goal,
+  each covered requirement's text and revision, each row's scenario and
+  bound revisions); a per-row judgment is applied and a measurement
+  counts only while the authoritative context still equals it
+  (`_design_context_drift` names what changed), and a prior reply is
+  never relabelled with live row contents. A capture scenario's
+  canonical identity carries the declared visual state
+  (`_capture_context`: the SCOPE capture declaration normalized by
+  `preview.validate_capture`, route and ordered steps with every
+  supported field, the file step's path and the confirm step's message
+  included, or the lead's undeclared self-capture), so two scenarios that
+  read the same but show different states, fixtures or confirmations are
+  different proofs.
   **A later task that declares the exact same scenario on the same
   requirement revisions and modality takes the proof over**
   (`_supersede_obligation`; root, SAME Astra and SAME Sol on 4fac862):

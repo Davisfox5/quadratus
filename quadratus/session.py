@@ -7570,7 +7570,7 @@ class Session:
         self._stage("design")
         from .design_evidence import check_records
         record = dict(task=spec.task_id)
-        self._review_snapshot = self._review_source = None
+        self._review_snapshot = self._review_source = self._review_context = None
         self._review_evidence_hashes, self._review_rows, self._review_authority_ok = {}, [], False
         if evidence == "disabled":
             record.update(verified=None, problem="design self-verification disabled by the operator")
@@ -7794,8 +7794,10 @@ class Session:
         record["delivered_hashes"] = dict(getattr(self, "_review_evidence_hashes", None) or {}) if delivered else {}
         record["review_rows"] = list(getattr(self, "_review_rows", None) or []) if delivered else []
         record["authority_ok"] = bool(getattr(self, "_review_authority_ok", False)) if delivered else False
+        record["review_context"] = dict(getattr(self, "_review_context", None) or {}) if delivered else None
         record["capture"] = dict(spec.scope.capture) if getattr(spec.scope, "capture", None) else None
-        record["review_stale"] = self._design_review_drift(record) if delivered else "no delivered review"
+        record["review_stale"] = (self._design_review_drift(record) or self._design_context_drift(record)
+                                  if delivered else "no delivered review")
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
         if delivered and not record["review_stale"] and record["authority_ok"]:
@@ -8062,6 +8064,17 @@ class Session:
         needed = sorted({r[0] for o in capture_rows for r in o.get("requirements") or ()})
         self._review_rows = [o["oid"] for o in capture_rows]
         self._review_authority_ok = all(rid in texts and str(texts[rid]).strip() for rid in needed)
+        # Exactly what this reviewer is shown, kept immutably on the record:
+        # the goal, each covered requirement's text and revision, and each
+        # row's scenario. A later judgment or measurement is applied only
+        # while the authoritative context still equals it; a prior reply is
+        # never relabelled with live row contents (root on a18f2ae).
+        self._review_context = dict(
+            goal=self.memory.goal.strip(),
+            requirements={rid: [int(revisions.get(rid, 1)), str(texts.get(rid, ""))] for rid in needed},
+            rows={o["oid"]: dict(scenario=[list(s) for s in o.get("scenario") or []],
+                                 requirements=[list(r) for r in o.get("requirements") or ()],
+                                 behavior=o.get("behavior")) for o in capture_rows})
         authority = ("\n\n## Goal (verbatim)\n\n" + self.memory.goal.strip()
                      + "\n\n## Covered requirements (authoritative text, revision)\n"
                      + "\n".join(f"{rid} (revision {revisions.get(rid, 1)}): {texts.get(rid, '<text not on the ledger>')}"
@@ -11004,6 +11017,35 @@ class Session:
                 return f"a delivered render was replaced: {rel}"
         return ""
 
+    def _design_context_drift(self, record: dict) -> str:
+        """Why the context a design reviewer was shown is no longer the
+        authoritative one: the goal, a covered requirement's text or
+        revision, or a shown row's scenario, requirement revisions or
+        behaviour differ now from what the record keeps from before the
+        call; or the record keeps no such context. "" when it all holds."""
+        shown = record.get("review_context")
+        if not isinstance(shown, dict) or "requirements" not in shown or "rows" not in shown:
+            return "the review carries no bound requirement and scenario context"
+        if str(shown.get("goal", "")) != self.memory.goal.strip():
+            return "the goal changed since the review"
+        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+        revisions = self._requirement_revisions()
+        for rid, (revision, text) in sorted(shown["requirements"].items()):
+            if rid not in texts or not str(text).strip():
+                return f"the review lacked {rid}'s authoritative text"
+            if int(revisions.get(rid, 1)) != int(revision) or str(texts[rid]) != str(text):
+                return f"{rid}'s text or revision changed since the review"
+        rows = {o["oid"]: o for o in self.evidence_obligations}
+        for oid, kept in sorted(shown["rows"].items()):
+            now = rows.get(oid)
+            if now is None:
+                return f"{oid} is no longer on the record"
+            if ([list(s) for s in now.get("scenario") or []] != kept.get("scenario")
+                    or [list(r) for r in now.get("requirements") or ()] != kept.get("requirements")
+                    or now.get("behavior") != kept.get("behavior")):
+                return f"{oid}'s scenario or requirement revisions changed since the review"
+        return ""
+
     def _capture_measurement(self, record: dict) -> Tuple[Optional[str], str]:
         """``(receipt id, "")`` when the task's design evidence measures the
         declared state on the current source now: its latest design record
@@ -11036,9 +11078,11 @@ class Session:
             return None, "the review's delivered renders were not recorded"
         if not latest.get("authority_ok"):
             return None, "the review lacked the covered requirements' authoritative text"
-        drift = latest.get("review_stale") or self._design_review_drift(latest)
+        drift = latest.get("review_stale") or self._design_review_drift(latest) or self._design_context_drift(latest)
         if drift:
             return None, drift
+        if record.get("oid") not in (latest.get("review_rows") or ()):
+            return None, "this row was not among those delivered to the design reviewer"
         target, steps, evidence = snapshot
         problem, _observed = self._identity_check(task, target, steps, evidence)
         if problem:
@@ -11128,15 +11172,26 @@ class Session:
 
     @staticmethod
     def _capture_context(scope) -> str:
-        """The declared visual state a capture scenario is about, normalized
-        as one string: the SCOPE capture's route and steps (action, selector,
-        fixture) when declared, else the lead's own undeclared capture."""
+        """The declared visual state a capture scenario is about, as one
+        string: the SCOPE capture declaration normalized by the same
+        validation dispatch applies (``preview.validate_capture``: the
+        route and the ordered steps with every supported field, action,
+        selector, the file step's path and the confirm step's message),
+        else the lead's own undeclared capture. Nothing is dropped and no
+        other schema is invented: a declaration the validator refuses is
+        serialized verbatim and marked, so it never collapses onto a valid
+        one (root and SAME Astra on a18f2ae)."""
         capture = getattr(scope, "capture", None)
         if not capture:
             return "self-capture (no SCOPE capture declared)"
-        steps = [[str(s.get("action")), str(s.get("selector")), str(s.get("fixture") or s.get("sha256") or "")]
-                 if isinstance(s, dict) else [str(s)] for s in (capture.get("steps") or [])]
-        return json.dumps(dict(path=str(capture.get("path") or "/"), steps=steps), sort_keys=True)
+        from .preview import validate_capture
+        try:
+            normalized = validate_capture(capture)
+        except ValueError as exc:
+            return json.dumps(dict(invalid=str(exc)[:200], declared=capture), sort_keys=True, default=str)
+        return json.dumps(dict(path=normalized["path"],
+                               steps=[dict(sorted((k, v) for k, v in step.items())) for step in normalized["steps"]]),
+                          sort_keys=True, default=str)
 
     def _supersede_obligation(self, record: dict) -> None:
         """A later task that declares the exact same scenario (operation,
