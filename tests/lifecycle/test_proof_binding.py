@@ -944,7 +944,8 @@ def test_a_served_evidence_proof_is_the_receipt_only_for_the_obligation_it_was_b
     def request(**over):
         base = dict(id="E1", target="R1", kind="audit", file="tests/test_ratio_evidence.py", file_sha256="abc",
                     source=session._source_fingerprint(), identity=session._evidence_identity(), stage="done",
-                    disposition="MET on reassessment", bindings=bindings,
+                    disposition="MET on reassessment", bindings=bindings, producer_gate=gate,
+                    producer_gate_executed=gate,
                     receipt=dict(status="passed", reason="ok", cases=[f"{case}: passed"]))
         base.update(over)
         return base
@@ -961,10 +962,23 @@ def test_a_served_evidence_proof_is_the_receipt_only_for_the_obligation_it_was_b
                       (dict(receipt=dict(status="failed", reason="x", cases=[f"{case}: failed"])), "a failed proof"),
                       (dict(bindings=[]), "no binding at intent"),
                       (dict(identity="drifted"), "source or checks drifted"),
-                      (dict(disposition="held: the source or checks changed after the evidence was bound"), "held drift")):
+                      (dict(disposition="held: the source or checks changed after the evidence was bound"), "held drift"),
+                      (dict(producer_gate=None, producer_gate_executed=None), "no producer gate recorded (older record)"),
+                      (dict(producer_gate_executed="changed"), "the gate changed between intent and execution")):
         session.evidence_obligations = [dict(row)]
         session.evidence_requests = [request(**over)]
         assert session._obligation_receipt(session.evidence_obligations[0]) is None, why
+    # F1: a proof that ran under another gate yields a truthful receipt
+    # naming that gate, and the typed predicate refuses it.
+    session.evidence_obligations = [dict(row)]
+    session.evidence_requests = [request(producer_gate="other-gate", producer_gate_executed="other-gate")]
+    other = session._obligation_receipt(session.evidence_obligations[0])
+    assert other and other["gate"] == "other-gate"
+    out = delivery.discharge(delivery.EvidenceObligation.from_dict(row), other,
+                             current_source=session._source_fingerprint(), current_requirements={"R1": 1})
+    assert not out.accepted and "another gate" in out.reason
+    session._refresh_obligations()
+    assert session.evidence_obligations[0]["execution"] != "ran"
     session.evidence_obligations = [dict(row, cases=["tests/test_ratio_evidence.py::test_other"])]
     session.evidence_requests = [request()]
     assert session._obligation_receipt(session.evidence_obligations[0]) is None, "rebound after the capture"
@@ -975,6 +989,237 @@ def test_a_served_evidence_proof_is_the_receipt_only_for_the_obligation_it_was_b
     session.evidence_requests = [request()]
     (project / "ratio.py").write_text("def safe_ratio(a, b):\n    return None\n")
     assert session._obligation_receipt(session.evidence_obligations[0]) is None, "the source moved"
+
+
+def test_a_receipt_carries_the_producer_gate_and_exact_parametrized_cases(tmp_path):
+    """Root's F1 and F2 on 9bedde0. A proof that ran under a gate other
+    than the obligation's authorized one (a task gate with another timeout
+    or minimum) is refused by the typed predicate, with the receipt's gate
+    the producer's, never copied from the obligation. Exact parametrized
+    names survive, and a base name counts only when every recorded
+    instance passed."""
+    from quadratus import delivery
+    from quadratus.session import Session, _gate_identity
+    passed = Session._proof_passed_cases(dict(status="passed", cases=[
+        "tests/t.py::test_a[1]: passed", "tests/t.py::test_a[2]: passed",
+        "tests/t.py::test_b[x]: passed", "tests/t.py::test_b[y]: not executed", "tests/t.py::test_c: passed"]))
+    assert "tests/t.py::test_a[1]" in passed and "tests/t.py::test_a[2]" in passed and "tests/t.py::test_a" in passed
+    assert "tests/t.py::test_b[x]" in passed and "tests/t.py::test_b[y]" not in passed and "tests/t.py::test_b" not in passed
+    assert "tests/t.py::test_c" in passed
+    assert Session._proof_passed_cases(dict(status="not run", cases=["tests/t.py::test_c: passed"])) == set()
+
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    (project / "ratio.py").write_text("x = 1\n")
+    session = _session(tmp_path, project)
+    session.config.requirements_ledger = True
+    session.memory.ledger.requirements["R1"] = "x"
+    configured = _gate_identity(session.config.integration_gate)
+    case = "tests/test_e.py::test_zero[0]"
+    row = dict(oid="O1", task="t1", kind="acceptance", proof_id="P1", behavior="P1: x", requirements=[["R1", 1]],
+               gate="task-gate-with-other-timeout", base_gate=configured, environment=session._environment_id(),
+               policy="review/2", modality="test", location="tests/test_e.py", binding="bound", cases=[case],
+               runner="gate", execution="missing", sufficiency="unjudged", receipts=[], judged_by="",
+               judged_binding="", scenario=[["proof", "P1"]], entry=dict(item="P1", receipt=None, after_check=0))
+    session.evidence_obligations = [dict(row)]
+    entry = dict(kind="audit", reviewer="codex:gpt", task=None, finding="R1: NOT MET", disposition="x", identity="i")
+    bindings = session._evidence_bindings(entry, "R1", "tests/test_e.py", "abc", "E1")
+    session.evidence_requests = [dict(id="E1", target="R1", kind="audit", file="tests/test_e.py", file_sha256="abc",
+                                      source=session._source_fingerprint(), identity=session._evidence_identity(),
+                                      stage="done", disposition="MET on reassessment", bindings=bindings,
+                                      producer_gate=configured, producer_gate_executed=configured,
+                                      receipt=dict(status="passed", reason="ok", cases=[f"{case}: passed"]))]
+    receipt = session._obligation_receipt(session.evidence_obligations[0])
+    assert receipt and receipt["gate"] == configured and receipt["gate"] != row["gate"], "the producer's gate, as it ran"
+    out = delivery.discharge(delivery.EvidenceObligation.from_dict(row), receipt,
+                             current_source=session._source_fingerprint(), current_requirements={"R1": 1})
+    assert not out.accepted and "another gate" in out.reason
+    session._refresh_obligations()
+    assert session.evidence_obligations[0]["execution"] != "ran", "never discharged by a run under another gate"
+
+
+def test_a_reviewer_scratch_proof_is_the_receipt_only_with_its_snapshot_measured_hashes_and_producer_gate(tmp_path):
+    """Root on 9bedde0: the review's scratch demonstration lives in
+    scratch_proofs. It discharges a task obligation only when the task's
+    bound obligations were snapshotted before the reviewer ran, the copy's
+    handed source and checks are the current ones, the scratch files'
+    hashes were measured in the copy, the producer gate was recorded, and
+    every bound case is among the passed cases; a proof without its
+    snapshot, hashes or producer gate, or one the reviewer's copy was
+    handed another source for, is no receipt."""
+    from quadratus.session import _gate_identity
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    (project / "switches.py").write_text("def parse_switch(t):\n    return {'error': 'invalid'}\n")
+    session = _session(tmp_path, project)
+    session.config.requirements_ledger = True
+    session.memory.ledger.requirements["R1"] = "parse_switch returns an error record on invalid input"
+    gate = _gate_identity(session.config.integration_gate)
+    cases = ["tests/test_error_contract.py::test_invalid_string_error", "tests/test_error_contract.py::test_nonstring_error"]
+    row = dict(oid="O1", task="t1", kind="acceptance", proof_id="P1", behavior="P1: parse_switch('bad')",
+               requirements=[["R1", 1]], gate=gate, base_gate=gate, environment=session._environment_id(),
+               policy="review/2", modality="test", location="tests/test_error_contract.py", binding="bound",
+               cases=list(cases), runner="gate", execution="missing", sufficiency="unjudged", receipts=[],
+               judged_by="", judged_binding="", scenario=[["proof", "P1"]], entry=dict(item="P1", receipt=None, after_check=0))
+    session.evidence_obligations = [dict(row)]
+    spec = SimpleNamespace(task_id="t1", scope=TaskScope.unbounded())
+    session._snapshot_scratch_bindings(spec)
+    pending = session._pending_scratch
+    assert pending["id"] == "S1" and [b["oid"] for b in pending["bindings"]] == ["O1"] and pending["producer_gate"] == gate
+    source, checks = session._source_fingerprint(), session._current_checks_digest()
+
+    def proof(**over):
+        base = dict(id="S1", task="t1", peer="claude:opus", files=["tests/test_error_contract.py"],
+                    identity=session._scratch_identity(source, checks), eligible=True, requirements=["R1"],
+                    bindings=pending["bindings"], producer_gate=gate, handed_source=source, handed_checks=checks,
+                    file_hashes={"tests/test_error_contract.py": "f" * 64}, status="passed", reason="ok",
+                    cases=[f"{c}: passed" for c in cases], receipts=[])
+        base.update(over)
+        return base
+    session.scratch_proofs = [proof()]
+    receipt = session._obligation_receipt(session.evidence_obligations[0])
+    assert receipt and receipt["id"] == "S1:O1" and receipt["provenance"] == "reviewer scratch proof"
+    assert receipt["gate"] == gate and receipt["passed_cases"] == cases and receipt["file_hashes"]
+    session._refresh_obligations()
+    settled = session.evidence_obligations[0]
+    assert settled["execution"] == "ran" and list(settled["receipts"]) == ["S1:O1"] and settled["sufficiency"] == "unjudged"
+    for over, why in ((dict(bindings=[]), "no snapshot before the call"),
+                      (dict(file_hashes={}), "no measured scratch hashes"),
+                      (dict(producer_gate=None), "no producer gate"),
+                      (dict(handed_source="other"), "the copy was handed another source"),
+                      (dict(eligible=False), "handed identity drifted"),
+                      (dict(status="failed"), "a failed proof"),
+                      (dict(cases=[f"{cases[0]}: passed"]), "one bound case not passed"),
+                      (dict(task="t2"), "another task's review")):
+        session.evidence_obligations = [dict(row)]
+        session.scratch_proofs = [proof(**over)]
+        assert session._obligation_receipt(session.evidence_obligations[0]) is None, why
+
+
+def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_on_this_source(tmp_path):
+    """Root on 9bedde0: a capture row's execution is the harness's own
+    measurement. Unverified, undelivered, capped, other-source, changed or
+    missing evidence measures nothing; the requirements audit may reject a
+    capture row and never approve it; the typed predicate holds an
+    unmeasured or unjudged row."""
+    from quadratus import delivery
+    project = tmp_path / "project"
+    (project / "templates").mkdir(parents=True)
+    (project / "templates" / "index.html").write_text("<p>Import</p>\n")
+    session = _session(tmp_path, project)
+    session.config.requirements_ledger = True
+    session.memory.ledger.requirements["R1"] = "the import page works on a phone"
+    row = dict(oid="O1", task="t1", kind="acceptance", proof_id="P1", behavior="P1: the page is rendered",
+               requirements=[["R1", 1]], gate="", base_gate="", environment=session._environment_id(), policy="review/2",
+               modality="capture", location="templates/index.html", binding="capture claim (visual)", cases=[],
+               runner=None, execution="missing", sufficiency="unjudged", receipts=[], judged_by="", judged_binding="",
+               scenario=[["proof", "P1"]], entry=dict(item="P1", receipt=None, after_check=0))
+    session.evidence_obligations = [dict(row)]
+    assert session._capture_measurement(row) == (None, "no design evidence recorded for the task")
+    snapshot = list(session._capture_state("t1"))
+    source = session._source_fingerprint()
+    delivered = dict(reviewer="codex:gpt", verdict="APPROVED\nO1: SUFFICIENT shows it", approved=True, blocking=[])
+
+    def record(**over):
+        base = dict(task="t1", verified=True, problem="", snapshot=snapshot, source=source, final_review=delivered)
+        base.update(over)
+        return base
+    for over, why in ((dict(verified=False, problem="stale"), "not verified"),
+                      (dict(source="other"), "another source"),
+                      (dict(final_review=None), "not delivered"),
+                      (dict(final_review=dict(delivered, verdict="UNFINISHED: capped")), "no verdict"),
+                      (dict(snapshot=None), "no measured snapshot"),
+                      (dict(snapshot=[snapshot[0], [["click", "#x", None]], snapshot[2]]), "a different state")):
+        session.design_checks = [record(**over)]
+        measured, reason = session._capture_measurement(row)
+        assert measured is None and why in reason, (why, reason)
+        session._refresh_obligations()
+        assert session.evidence_obligations[0]["execution"] == "missing"
+    session.design_checks = [record()]
+    measured, reason = session._capture_measurement(row)
+    # Whether the identity check verifies these fixture renders is the
+    # design evidence module's business; what this control pins is that
+    # nothing short of a verified, delivered, current record measures, and
+    # that measurement, when it holds, is execution bound to this source.
+    if measured:
+        session._refresh_obligations()
+        settled = session.evidence_obligations[0]
+        assert settled["execution"] == "ran" and settled["source_digest"] == source and list(settled["receipts"]) == [measured]
+        session._judge_obligations("codex:gpt", "O1: SUFFICIENT the render shows the toolbar", {},
+                                   modalities=("capture",))
+        assert session.evidence_obligations[0]["sufficiency"] == "sufficient"
+        session._judge_obligations("auditor", "R1: MET - templates/index.html\nO1: INSUFFICIENT the page overflows", {"R1": (True, "x")})
+        assert session.evidence_obligations[0]["sufficiency"] == "insufficient", "the audit may reject"
+        session._judge_obligations("auditor", "O1: SUFFICIENT fine", {"R1": (True, "x")})
+        assert session.evidence_obligations[0]["sufficiency"] == "insufficient", "the audit never approves a capture row"
+        (project / "templates" / "index.html").write_text("<p>Import!</p>\n")
+        session._refresh_obligations()
+        assert session.evidence_obligations[0]["execution"] == "missing", "a changed source measures nothing"
+    unmeasured = delivery.acceptance({"R1": (True, "x")}, [dict(row)], [], {"t1": ["R1"]}, current_requirements={"R1": 1})
+    assert not unmeasured["R1"].met and "capture claim not measured" in " ".join(unmeasured["R1"].reasons)
+
+
+@pytest.mark.requirements_ledger
+def test_capture_evidence_is_admitted_only_for_design_work(tmp_path, monkeypatch):
+    plans = [_plan(_scope(proofs=_proofs("R1", location="app.py", evidence="capture"))),
+             _plan(_scope(proofs=_proofs("R1")))]
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        return plans[n - 1] if n <= 2 else "DONE"
+    script = _script(None, _lead())
+    script.overrides["orchestrator"] = orchestrator
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, record_complete=False)
+    assert len(replay.of("orchestrator")) > 1, replay.result.error
+    second = replay.of("orchestrator")[1].prompt
+    assert "declares capture evidence, but this task is not design work" in second
+    assert [c.task for c in replay.of("lead")] == ["t1"]
+
+
+def test_a_later_declaration_of_the_same_scenario_takes_an_unrun_row_over_and_nothing_else_does(tmp_path):
+    """Root on 9bedde0 (capped repair continued, repair redone): a later
+    task's row for the same scenario on the same requirements supersedes
+    an earlier task's row, run or not (an earlier measurement was of an
+    earlier source); the earlier row stays on the record and no longer
+    holds the requirement. A scenario that differs in any field, another
+    requirement set or another modality is never superseded."""
+    from quadratus import delivery
+    session = _session(tmp_path)
+    session.config.requirements_ledger = True
+    scenario = [["evidence", "capture"], ["expect", "fits"], ["location", "templates/index.html"],
+                ["operation", "render"], ["proof", "P1"], ["state", "wraps"]]
+
+    def row(oid, task, **over):
+        base = dict(oid=oid, task=task, kind="acceptance", proof_id="P1", behavior="P1: render", requirements=[["R1", 1]],
+                    gate="g", base_gate="g", environment="e", policy="review/2", modality="capture",
+                    location="templates/index.html", binding="capture claim", cases=[], runner=None,
+                    execution="missing", sufficiency="unjudged", receipts=[], judged_by="", judged_binding="",
+                    scenario=[list(s) for s in scenario])
+        base.update(over)
+        return base
+    earlier, later = row("O1", "t2"), row("O2", "t3")
+    session.evidence_obligations = [earlier, later]
+    session._supersede_obligation(later)
+    assert earlier["superseded_by"] == "t3" and "superseded" in earlier["reason"] and not later.get("superseded_by")
+    accepted = delivery.acceptance({"R1": (True, "x")}, session.evidence_obligations, [], {"t3": ["R1"]},
+                                   current_requirements={"R1": 1})
+    assert [r for r in accepted["R1"].reasons if r.startswith("O1")] == [], "the superseded row holds nothing"
+    assert any(r.startswith("O2") for r in accepted["R1"].reasons), "the later row is judged in its place"
+    ran = row("O1", "t2", execution="ran", source_digest="s")
+    session.evidence_obligations = [ran, row("O2", "t3")]
+    session._supersede_obligation(session.evidence_obligations[1])
+    assert ran["superseded_by"] == "t3", "an earlier measurement is superseded too"
+    for over, why in ((dict(scenario=[list(s) for s in scenario[:-1]] + [["state", "other"]]), "a different scenario"),
+                      (dict(requirements=[["R2", 1]]), "another requirement set"),
+                      (dict(modality="test", scenario=[list(s) for s in scenario]), "another modality")):
+        earlier = row("O1", "t2", **over)
+        session.evidence_obligations = [earlier, row("O2", "t3")]
+        session._supersede_obligation(session.evidence_obligations[1])
+        assert not earlier.get("superseded_by"), why
+    same_task = row("O1", "t3")
+    session.evidence_obligations = [same_task, row("O2", "t3")]
+    session._supersede_obligation(session.evidence_obligations[1])
+    assert not same_task.get("superseded_by"), "a task never supersedes its own row"
 
 
 def test_the_audit_is_shown_the_whole_canonical_scenario_or_told_it_is_not_shown(tmp_path):

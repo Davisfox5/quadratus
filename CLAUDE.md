@@ -2080,7 +2080,49 @@ Key design decisions already settled:
   changed gate or environment, a reworded requirement, or a record without
   its bindings is no receipt. Nothing is synthesized from a requirement id
   or a green case: the lead still binds the case (`PROVES`), which is a
-  claim of where the proof lives, never execution.
+  claim of where the proof lives, never execution. The receipt carries the
+  gate that actually produced the run (`producer_gate`, persisted at intent
+  and confirmed after execution), never the obligation's; the typed
+  predicate refuses a producer gate that is not the authorized one (root's
+  F1 on 9bedde0). Exact parametrized case names survive, and a base name
+  counts only when every recorded instance passed (F2).
+  **A reviewer's scratch demonstration is the receipt the same way**
+  (`_snapshot_scratch_bindings`, `_scratch_receipt`; root on 9bedde0): the
+  task's bound obligations are snapshotted before the collaborator runs,
+  the runtime measures the scratch files' hashes and the handed source and
+  checks while the copy exists, and the `scratch_proofs` record carries
+  them with the producer gate; the receipt holds only for the current
+  handed identity, a passed proof, measured hashes and every bound case
+  passed. Nothing is reconstructed from current state for an old record.
+  **A capped lead's structured PROVES lines are read at the accepted
+  capped-work handoff** (`_close_turn_limited` before the turn-limited
+  check), since `_record_proves` ran only after a finished edit; the cap
+  stays recorded, a declaration is neither execution nor a verdict, and
+  no extra call is made.
+  **`evidence: capture` is the modality for visual proof** (root on
+  9bedde0): admitted only for design work with design evidence in force
+  and never for an error or refusal requirement; a UI file is never routed
+  through test, reading or legacy. Execution is the harness's own
+  measurement (`_capture_measurement`): the task's latest design record
+  verified, taken on this exact source, delivered to a reviewer from
+  another vendor who returned a verdict, with target, steps, fixture,
+  viewports and digests still those on disk and still passing the
+  identity check. Sufficiency is only the design reviewer's explicit
+  per-obligation line, given alongside APPROVED or BLOCKING
+  (`_design_approved` admits APPROVED followed by nothing but those lines)
+  and judged once the measurement is on record; the requirements audit
+  may add INSUFFICIENT and never SUFFICIENT for a capture row. Missing,
+  wrong or stale state or viewport, a changed source, fixture or image, a
+  disabled or unavailable capture, an undelivered or capped review, or a
+  missing per-row judgment all hold the requirement.
+  **A later task that declares the same scenario on the same requirements
+  takes the proof over** (`_supersede_obligation`): an earlier task's row
+  that never ran (a capped repair continued by a later one, a repair redone
+  by a later repair) is marked `superseded_by` and kept on the record, and
+  no longer holds the requirement; the later row is judged in its place.
+  A row that ran is never superseded, a scenario differing in any field is
+  not the same proof, and the debt moves to the declaration that owns it,
+  never disappears.
   Sufficiency stays the audit's judgment: a bound executed case proves only
   that it ran.
   The reviewer and the rechecker read the task's scenarios with their

@@ -381,7 +381,7 @@ def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, autho
 EXECUTION_STATES = ("missing", "pending", "ran", "failed", "skipped", "invalid", "stale")
 SUFFICIENCY_STATES = ("unjudged", "sufficient", "insufficient")
 #: Declared evidence modalities an obligation may carry (proof/1).
-MODALITIES = ("test", "reading", "legacy")
+MODALITIES = ("test", "reading", "legacy", "capture")
 
 
 @dataclass(frozen=True)
@@ -666,6 +666,10 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
         for o in obligations:
             if not any(r[0] == rid for r in o.get("requirements") or ()):
                 continue
+            if o.get("superseded_by"):
+                # The same scenario is owned by a later task's row, which is
+                # judged in its place; the earlier row stays on the record.
+                continue
             if current_requirements is not None and any(
                     current_requirements.get(r[0]) != r[1] for r in o.get("requirements") or ()):
                 reasons.append(f"{o['oid']}: bound requirement revision changed")
@@ -676,6 +680,19 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
                     reasons.append(f"{o['oid']}: {what} judged {o.get('sufficiency')}")
                 elif not o.get("sufficiency_current", False):
                     reasons.append(f"{o['oid']}: {what} judged on other evidence")
+                continue
+            if o.get("modality") == "capture":
+                # A visual claim: measured only by the harness's verified
+                # render of the declared state on the current source
+                # (execution), judged only by the design reviewer's explicit
+                # line about exactly that evidence.
+                if o.get("execution") != "ran":
+                    reasons.append(f"{o['oid']}: capture claim not measured on the current source"
+                                   + (f" ({o['reason']})" if o.get("reason") else ""))
+                elif o.get("sufficiency") != "sufficient":
+                    reasons.append(f"{o['oid']}: capture claim judged {o.get('sufficiency')}")
+                elif not o.get("sufficiency_current", False):
+                    reasons.append(f"{o['oid']}: capture claim judged on other evidence")
                 continue
             if o.get("runner") is None:
                 reasons.append(f"{o['oid']}: no authorized runner (prerequisite)")

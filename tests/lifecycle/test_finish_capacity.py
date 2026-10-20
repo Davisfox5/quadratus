@@ -336,7 +336,7 @@ def test_a_route_the_finish_cannot_afford_whole_runs_on_its_terminal_route_and_t
             H.write(call, {"app.py": FIXED})
             return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"app.py": FIXED.replace("def add(a, b):", 'def add(a, b):\n    """Return a + b."""')})
-        return 'Added the docstring.\nCHANGED: ["app.py"]'
+        return 'Added the docstring.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = lead
     script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
@@ -417,7 +417,8 @@ def test_a_terminal_tasks_capped_checked_source_meets_the_same_bounded_review_as
 
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
-        return H.grok_ok("Wrote add; no final answer.", stop="cancelled", num_turns=14)
+        return H.grok_ok("Wrote add; no final answer.\nPROVES: P1 - tests/test_app.py::test_add",
+                         stop="cancelled", num_turns=14)
     script = _script([ONE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = lead
     script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
@@ -439,7 +440,8 @@ def test_a_terminal_tasks_capped_checked_source_meets_the_same_bounded_review_as
 
     def broken(call, replay):
         H.write(call, {"app.py": "def add(a, b):\n    return a - b\n"})
-        return H.grok_ok("Wrote add; no final answer.", stop="cancelled", num_turns=14)
+        return H.grok_ok("Wrote add; no final answer.\nPROVES: P1 - tests/test_app.py::test_add",
+                         stop="cancelled", num_turns=14)
     script = _script([ONE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = broken
     held = H.run(tmp_path / "broken", monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_000),

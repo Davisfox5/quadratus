@@ -318,8 +318,8 @@ def test_proof_scenarios_are_read_strictly_rendered_and_serialized():
     ([dict(GOOD_PROOF, expect=" ")], "non-empty expect"),
     ([dict(GOOD_PROOF, location="/abs/test.py")], "narrow project-relative path"),
     ([dict(GOOD_PROOF, location="../tests/test_x.py")], "narrow project-relative path"),
-    ([dict(GOOD_PROOF, evidence="docs")], "evidence must be one of test, reading"),
-    ([dict(GOOD_PROOF, evidence=None)], "evidence must be one of test, reading"),
+    ([dict(GOOD_PROOF, evidence="docs")], "evidence must be one of test, reading, capture"),
+    ([dict(GOOD_PROOF, evidence=None)], "evidence must be one of test, reading, capture"),
 ])
 def test_a_malformed_proof_list_is_refused_whole(proofs, reason):
     with pytest.raises(ValueError, match=reason):
@@ -338,6 +338,9 @@ def test_a_declared_reading_modality_is_kept_verbatim_and_never_inferred_from_th
     scope, _body = read_scope(_declaration(FINAL, proofs=[reading]), max_lines=100)
     assert scope.proofs[0]["evidence"] == "reading" and scope.to_dict()["proofs"] == [reading]
     assert "reading" in scope.render()
+    visual = dict(GOOD_PROOF, location="templates/index.html", evidence="capture")
+    scope, _body = read_scope(_declaration(FINAL, proofs=[visual]), max_lines=100)
+    assert scope.proofs[0]["evidence"] == "capture" and "evidence: capture" in scope.render()
 
 
 def test_a_declaration_without_proofs_is_unknown_not_complete():

@@ -130,9 +130,17 @@ def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_pat
     # Put skip markers on both actual functions without changing the good case.
     if case == 'good-skipped':
         scratch = 'import pytest\n'+NEGATIVE.replace('def test_', '@pytest.mark.skip(reason="unavailable")\ndef test_')
+    # The planner declares the proof at the file the review's scratch
+    # demonstration will write; the lead binds both cases (a binding is a
+    # claim of where the proof lives, never execution).
+    bound_scope = dict(SCOPE, proofs=H.proofs_for('R1', 'tests/test_error_contract.py', operation='parse_switch("bad")',
+                                                  state='no state', expect='{"error": "invalid"} is returned'))
+    bound_plan = ('REQUIREMENTS:\nR1: '+REQ+'\nKIND: architect complex\nSCOPE: '+json.dumps(bound_scope)
+                  +'\nImplement switch decoding.\nCOVERS: R1')
     def lead(call, replay):
         H.write(call, {'switches.py':source})
-        return 'Implemented switch decoding.\nCHANGED: ["switches.py"]'
+        return ('Implemented switch decoding.\nPROVES: P1 - tests/test_error_contract.py::test_invalid_string_error\n'
+                'PROVES: P1 - tests/test_error_contract.py::test_nonstring_error\nCHANGED: ["switches.py"]')
     def peer(call, replay):
         H.write(call, {'tests/test_error_contract.py':scratch})
         return ('R1: MET - switches.py and tests/test_error_contract.py::test_invalid_string_error '
@@ -141,7 +149,7 @@ def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_pat
         return ('R1: MET - switches.py; tests/test_error_contract.py::test_invalid_string_error '
                 'and tests/test_error_contract.py::test_nonstring_error demonstrate explicit error paths.')
     replay = H.run(tmp_path, monkeypatch,
-        Script(orchestrator=lambda c,r:PLAN if not r.of('lead') else 'DONE', lead=lead,
+        Script(orchestrator=lambda c,r:bound_plan if not r.of('lead') else 'DONE', lead=lead,
                collaborator=peer, auditor=auditor, **{'requirements-review':lambda c,r:'COMPLETE'}),
         files={'switches.py':GOOD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},
         goal=GOAL,max_tasks=1,

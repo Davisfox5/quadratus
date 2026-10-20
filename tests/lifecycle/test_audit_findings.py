@@ -21,7 +21,15 @@ from tests.lifecycle.test_lifecycle_matrix import DESIGN, T2, Script, _design_fi
 pytestmark = pytest.mark.requirements_ledger
 
 AUDIT_SCOPE = dict(DESIGN, max_lines=1, edits="none")
-REPAIR_SCOPE = dict(DESIGN, max_lines=40, proofs=H.proofs_for("R1, R2", "templates/index.html"))
+#: The repair's proof is visual: the harness renders the page and the design
+#: reviewer judges the declared scenarios (evidence capture); no test case,
+#: no reading exemption for a UI file.
+REPAIR_SCOPE = dict(DESIGN, max_lines=40, proofs=H.proofs_for("R1, R2", "templates/index.html", evidence="capture",
+                                                                 operation="the import page is rendered at both viewports",
+                                                                 state="the toolbar wraps", expect="the page fits and the Import button is labelled"))
+#: This file's own explicit judgment of a capture scenario, written per
+#: obligation id by the scripted design reviewer that was shown the renders.
+CAPTURE_JUDGED = "SUFFICIENT the mobile and desktop renders show the import toolbar inside the viewport with the Import button labelled"
 REQS = "REQUIREMENTS:\nR1: the import page works on a phone\nR2: the import button is labelled\n"
 AUDIT = "KIND: frontend standard\nSCOPE: " + json.dumps(AUDIT_SCOPE) + "\nAudit the import page.\nCOVERS: R1, R2"
 REPAIR = "KIND: frontend standard\nSCOPE: " + json.dumps(REPAIR_SCOPE) + "\nFix the mobile overflow.\nCOVERS: R1, R2"
@@ -66,7 +74,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, review="APPROVED", fix=None, max
     overrides = {
         "orchestrator": orchestrator, "lead": lead,
         "revision": lambda call, replay: NO_EDIT,
-        "design-review": review if callable(review) else (lambda call, replay: review),
+        "design-review": judging(review if callable(review) else (lambda call, replay: review), capture=CAPTURE_JUDGED),
         "requirements-review": lambda call, replay: "COMPLETE",
         "auditor": judging(lambda call, replay: audits.pop(0) if audits else MET, legacy=LEGACY_JUDGED),
         "design-fix": fix or (lambda call, replay: "Captured again.\nCHANGED: []"),
@@ -312,7 +320,11 @@ def test_an_invalid_resolves_is_sent_back_before_any_lead_call(tmp_path, monkeyp
 
 
 def test_a_resolves_without_its_requirements_in_covers_is_sent_back(tmp_path, monkeypatch):
-    partial = REPAIR.replace("COVERS: R1, R2", "COVERS: R1") + "\nRESOLVES: F1"
+    # The declared scenarios match the narrowed COVERS, so the send-back
+    # under test is the RESOLVES one (F1 touches R2), not the mapping's.
+    partial = ("KIND: frontend standard\nSCOPE: " + json.dumps(dict(REPAIR_SCOPE, proofs=H.proofs_for(
+        "R1", "templates/index.html", evidence="capture", operation="the import page is rendered at both viewports",
+        state="the toolbar wraps", expect="the page fits"))) + "\nFix the mobile overflow.\nCOVERS: R1\nRESOLVES: F1")
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, partial, REPAIR + "\nRESOLVES: F1"],
                   {"t1": _capture(measured=WIDE), "t2": _repair()})
     assert "missing: R2" in _orchestrator_prompts(replay)[2]

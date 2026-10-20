@@ -730,6 +730,17 @@ _NEEDS_REQUEST = (
 _UI_PATH = re.compile(r"(?i)(^|/)(templates|static|components|pages|views|styles?)/|\.(html?|css|scss|sass|less|jsx|tsx|vue|svelte)$")
 
 
+_ROW_LINE = re.compile(r"^\s*O\d+\s*:\s*(?:SUFFICIENT|INSUFFICIENT)\b", re.IGNORECASE)
+
+
+def _design_approved(verdict: str) -> bool:
+    """APPROVED as the only verdict line: alone, or followed by nothing but
+    per-obligation sufficiency lines (a design review judging the capture
+    rows it was shown). Any other text is no approval."""
+    lines = [line.strip() for line in (verdict or "").splitlines() if line.strip()]
+    return bool(lines) and lines[0] == "APPROVED" and all(_ROW_LINE.match(line) for line in lines[1:])
+
+
 def is_design_task(spec) -> bool:
     """Work that changes what a user sees: the frontend kind, or a declared
     scope that reaches UI files."""
@@ -2061,7 +2072,7 @@ def _review_reading(review) -> str:
     blocking = review.get("blocking")
     if blocking is None:
         blocking = [line.strip() for line in verdict.splitlines() if line.strip().startswith("BLOCKING:")]
-        if verdict.strip() != "APPROVED" and not blocking:
+        if not _design_approved(verdict) and not blocking:
             blocking = [f"BLOCKING: the final design review gave no verdict ({verdict[:120]})"]
     if not blocking:
         return "APPROVED"
@@ -2991,6 +3002,7 @@ class Session:
                 self._last_tool_failures = (invocation_context.get() or {}).get("tool_failures") or []
                 self._last_scratch_tests = (invocation_context.get() or {}).get("scratch_tests")
                 self._last_scratch_proof = (invocation_context.get() or {}).get("scratch_proof")
+                self._last_scratch_hashes = (invocation_context.get() or {}).get("scratch_hashes")
                 if allow_writes and spec is not None and self._task_memory is not None:
                     report = self._assess_scope(spec, self._task_memory, self._task_before)
                     if spec.scope is not None and report is None:
@@ -5291,6 +5303,7 @@ class Session:
             self._stage("review")
         capped: set = set()
         for peer in collaborators:
+            self._snapshot_scratch_bindings(spec)
             try:
                 with invocation(spec.task_id, "collaborator"):
                     note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
@@ -5570,6 +5583,10 @@ class Session:
         report = self._measure_scope(spec, before)
         if report is None or report.blocking or report.oversized:
             return None, collaborators
+        if (exc.partial_text or "").strip():
+            # The accepted capped work's structured PROVES lines (root on
+            # 9bedde0); a declaration, never execution or a verdict.
+            self._record_proves(lead, "lead", (exc.partial_text or "").strip())
         self._observe_checks(spec, "turn-limited")
         current = self._source_fingerprint()
         identity = _gate_identity(self._current_gate()) if self._current_gate() is not None else None
@@ -5628,6 +5645,10 @@ class Session:
             return None
         if is_design_task(spec) and self.project and self.config.allow_writes:
             return None
+        if (exc.partial_text or "").strip():
+            # The accepted capped revision's structured PROVES lines (root
+            # on 9bedde0); a declaration, never execution or a verdict.
+            self._record_proves(lead, "lead", (exc.partial_text or "").strip())
         bound = self._checked_final_source(spec, before)
         if bound is None:
             return None
@@ -5716,12 +5737,19 @@ class Session:
                 if report and (report.blocking or report.oversized):
                     raise TaskFailed("scope", "Turn-limited edits exceed the declared scope; work "
                                      "preserved. " + report.render(), partial=state) from exc
+        said = (exc.partial_text or "").strip()
+        if state["changed"] and said:
+            # The accepted capped work's own partial output, read only for
+            # its structured PROVES lines (root on 9bedde0: _record_proves
+            # ran only after a finished edit). A declaration is neither
+            # execution nor a verdict; the cap stays recorded, malformed
+            # lines fail closed, and no extra call is made.
+            self._record_proves(lead, "lead", said)
         if state["changed"]:
             # What the capped lead left meets the gate once, as evidence only:
             # r08's t1 stopped at its cap and its source never met a check
             # before a verification-only task was named for it.
             self._observe_checks(spec, "turn-limited")
-        said = (exc.partial_text or "").strip()
         record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
                       changed=state["changed"], changed_lines=state["changed_lines"],
                       note=state["note"], partial_text=said[:4000] or None,
@@ -7730,7 +7758,7 @@ class Session:
                             verdict = ("BLOCKING: the renders do not show the changed interface, and the "
                                        f"recapture did not produce clean evidence ({problem})")
                 blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
-                if (verdict or "").strip() != "APPROVED" and not blocking:
+                if not _design_approved(verdict) and not blocking:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
                 if blocking and harness and not is_review_only(spec) and _design_judgement(blocking):
                     verdict, blocking = self._fix_reviewed_design(spec, lead, task, record, reviewer,
@@ -7742,6 +7770,7 @@ class Session:
                 record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600],
                                               approved=not blocking,
                                               blocking=[line.strip()[:300] for line in blocking])
+                record["review_text"] = verdict
                 for line in blocking:
                     self._open_finding("unverified", f"Task {spec.task_id} design: {line.strip()}")
                 self._edge("reviewer", not blocking)
@@ -7750,8 +7779,20 @@ class Session:
                     # for the renders snapshotted before the review and
                     # delivered to it byte for byte; see _settle_resolution.
                     self._resolution_candidate = self._review_snapshot
+        # The measured snapshot and source the record is about (what a
+        # capture obligation's execution is bound to).
+        record["snapshot"] = list(self._capture_state(spec.task_id)) if self.project else None
+        record["source"] = self._source_fingerprint() if self.project else None
+        record["capture"] = dict(spec.scope.capture) if getattr(spec.scope, "capture", None) else None
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
+        review = record.get("final_review") or {}
+        if review.get("reviewer") and record.get("review_text") is not None:
+            # The design reviewer's explicit per-obligation lines, judged
+            # once the measurement is on record: sufficiency about exactly
+            # the verified render it was shown.
+            self._refresh_obligations()
+            self._judge_obligations(review["reviewer"], record["review_text"], {}, modalities=("capture",))
 
     def _recapture_declared(self, spec, lead, task, record, verdict, *, source="the design reviewer from another vendor"):
         """Ask the lead for the page and steps that reach the changed state,
@@ -7915,7 +7956,7 @@ class Session:
         record.update(verified=True, problem="", screenshots=shots)
         verdict = self._final_design_review(spec, reviewer, shots)
         blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
-        if (verdict or "").strip() != "APPROVED" and not blocking:
+        if not _design_approved(verdict) and not blocking:
             blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
         fix["after"] = "approved" if not blocking else "still blocking"
         return verdict, blocking
@@ -7994,16 +8035,24 @@ class Session:
             self._edge("delivered", False)
             return "BLOCKING: the renders changed while they were being prepared for review"
         self._review_evidence, self._review_evidence_hashes, self._review_snapshot = files, hashes, snapshot
+        capture_rows = [o for o in self.evidence_obligations
+                        if o.get("task") == spec.task_id and o.get("modality") == "capture"]
         prompt = (
             f"Task: {spec.description}\n\nThese are the final renders of this design work, taken "
             "after its last source change, copied read-only into your working copy at these paths: "
             + ", ".join(self._shown(shots)) + _DESIGN_REVIEW_LENS
+            + (("\n\n## Declared visual scenarios (evidence capture)" + self._obligations_block(capture_rows)
+                + "\n\nFor each capture row above, add exactly one line '<O-id>: SUFFICIENT <what these renders "
+                "show for that requirement and scenario>' or '<O-id>: INSUFFICIENT <what they do not show>'. "
+                "APPROVED alone judges no row; a row left unjudged keeps its requirement not met.")
+               if capture_rows else "")
             + "\n\nFirst check that the renders show the interface this task added or changed. "
             "If they show a page where that interface does not appear, reply exactly "
             "'BLOCKING: the renders do not show the changed interface' and judge nothing else: "
             "a clean render of an unrelated page is not evidence for this task."
-            + "\n\nReply exactly APPROVED if the delivered interface is acceptable, or one line "
-            "per blocking problem starting 'BLOCKING:'. Nothing else."
+            + "\n\nReply APPROVED on its own line if the delivered interface is acceptable, or one line "
+            "per blocking problem starting 'BLOCKING:'; then only the per-row lines asked for above, "
+            "if any. Nothing else."
         )
         from .runtime import EvidenceNotDelivered, ReviewCopyAltered
         try:
@@ -8517,6 +8566,7 @@ class Session:
                        "source as it is now. Nothing here says the work is finished: read the source against "
                        "the whole task, the original goal and the covered requirements.")
             self._record_selection(spec, peer, "collaborator")
+            self._snapshot_scratch_bindings(spec)
             try:
                 with invocation(spec.task_id, "collaborator"):
                     note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
@@ -8627,6 +8677,19 @@ class Session:
             return f"Proof scenarios name requirements the task does not COVER: {', '.join(extra)}."
         texts = self.memory.ledger.requirements
         for proof in scope.proofs:
+            if proof.get("evidence", "test") == "capture":
+                # A visual claim is admitted only where the harness will
+                # measure it: design work with design evidence in force
+                # (never a test or reading exemption for a UI file).
+                legacy = ("none" if not is_design_task(spec) else "disabled" if not self.config.design_self_verify
+                          else "on")
+                if legacy != "on":
+                    return (f"Proof scenario {proof['id']} declares capture evidence, but this task is not design "
+                            "work with design evidence in force; declare a test case instead.")
+                if any(_error_clause(str(texts.get(r, ""))) for r in proof["requirements"]):
+                    return (f"Proof scenario {proof['id']} declares capture evidence for an error or refusal "
+                            "requirement; that needs an executed case.")
+                continue
             if proof.get("evidence", "test") != "reading":
                 continue
             # Reading evidence is a supported modality only for a
@@ -9486,6 +9549,8 @@ class Session:
             modality = o.get("modality") or "test"
             runner = (o['runner'] or 'NONE (prerequisite missing)') if modality == "test" else (
                 "none (reading claim: no runnable proof)" if modality == "reading" else
+                "none (capture claim: measured by the harness's verified render, judged by the design reviewer)"
+                if modality == "capture" else
                 "none (legacy acceptance: no scenario declared, no case bound, mapping unknown)")
             lines.append(f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): "
                          f"{o['behavior']}; evidence {modality}; runner {runner}; "
@@ -9499,6 +9564,11 @@ class Session:
                          "project evidence you read that shows it>' or '<O-id>: INSUFFICIENT <what it does not "
                          "establish>'; your MET on its requirement does not judge it, and unjudged it keeps that "
                          "requirement not met.")
+        if any(o.get("modality") == "capture" for o in rows):
+            lines.append("A capture row (evidence capture, a visual scenario) is measured by the harness's verified "
+                         "render and judged sufficient only by the design reviewer's own explicit line; you may "
+                         "add '<O-id>: INSUFFICIENT <what the render does not show>', and your MET on its "
+                         "requirement does not judge it.")
         if any(o.get("modality") == "reading" for o in rows):
             lines.append("A reading row (evidence reading, a documentation scenario) is judged only by your own "
                          "line, '<O-id>: SUFFICIENT <why reading can demonstrate this exact requirement and "
@@ -9835,12 +9905,17 @@ class Session:
         # The acceptance obligations this proof may serve as the receipt
         # for, bound now, before anything runs (_evidence_bindings).
         record["bindings"] = self._evidence_bindings(entry, target, path, digest, record["id"])
+        # The gate the proof will actually run under (the configured gate's
+        # discovering commands, _run_evidence), persisted now and confirmed
+        # after the run: a receipt carries this, never an obligation's gate.
+        record["producer_gate"] = _gate_identity(self.config.integration_gate)
         # Durable intent: a job resumed after this point never runs it again.
         self.evidence_requests.append(record)
         self._quiescent()
         receipt = self._run_evidence(path, text)
         record["execution"] = receipt.pop("execution", None)
         record["receipt"] = receipt
+        record["producer_gate_executed"] = _gate_identity(self.config.integration_gate)
         drifted = self._evidence_identity() != identity
         if drifted:
             record["disposition"] = "held: the source or checks changed after the evidence was bound"
@@ -9872,6 +9947,67 @@ class Session:
         return (f"EVIDENCE {record['id']} for {target}: the harness ran {path} in a disposable copy of the "
                 f"current source.\nResult: {receipt['status']} - {receipt['reason']}\nCases: {cases}\n"
                 f"Disposition: {record['disposition']}" + follow)
+
+    def _binding_matches(self, binding: dict, record: dict, **extra) -> bool:
+        """Whether a binding captured at intent still equals the obligation
+        and the run as they are now, field for field (ids, modality,
+        location, whole scenario, bound cases, behaviour, requirement
+        revisions and their currency, policy, environment, source, the
+        obligation's authorized gate, the configured gate) plus ``extra``
+        (the proof's own identity). A missing field is a mismatch."""
+        current = self._source_fingerprint() if self.project else None
+        revisions = self._requirement_revisions()
+        wanted = dict(
+            task=record.get("task"), proof_id=record.get("proof_id"), modality="test",
+            location=str(record.get("location") or ""), scenario=[list(s) for s in record.get("scenario") or []],
+            cases=[str(c) for c in record.get("cases") or ()], behavior=record.get("behavior"),
+            requirements=[list(r) for r in record.get("requirements") or ()], policy=record.get("policy"),
+            environment=self._environment_id(), source=current, gate=record.get("gate"),
+            base_gate=record.get("base_gate"), configured_gate=_gate_identity(self.config.integration_gate), **extra)
+        if any(binding.get(k) != v for k, v in wanted.items()):
+            return False
+        return not any(revisions.get(rid) != rev for rid, rev in wanted["requirements"])
+
+    def _scratch_receipt(self, record: dict) -> Optional[dict]:
+        """A harness receipt for ``record`` from a reviewer's scratch
+        demonstration (``scratch_proofs``, root on 9bedde0): the proof
+        passed in full, its handed source and checks are the current ones,
+        it was bound to this obligation before the reviewer ran (a snapshot
+        taken at the collaborator call), every captured field still equals
+        the obligation and the run, its scratch files' hashes were measured
+        in the copy, and every bound case is among its passed cases. Its
+        gate is the producer gate that actually ran, recorded at the call,
+        never the obligation's. Missing bindings, hashes or producer
+        identity is no receipt."""
+        if record.get("kind") != "acceptance" or record.get("modality", "test") != "test":
+            return None
+        cases = [str(c) for c in record.get("cases") or ()]
+        if not cases or not self.project:
+            return None
+        identity = self._scratch_identity(self._source_fingerprint(), self._current_checks_digest())
+        for proof in reversed(self.scratch_proofs):
+            if (proof.get("task") != record.get("task") or proof.get("status") != "passed"
+                    or proof.get("eligible") is not True or proof.get("identity") != identity):
+                continue
+            if (proof.get("producer_gate") is None or not isinstance(proof.get("file_hashes"), dict)
+                    or not proof["file_hashes"]):
+                continue
+            binding = next((b for b in proof.get("bindings") or () if b.get("oid") == record["oid"]), None)
+            if binding is None or not self._binding_matches(binding, record, evidence=proof.get("id")):
+                continue
+            if binding.get("source") != proof.get("handed_source"):
+                continue
+            if not set(cases) <= self._proof_passed_cases(proof):
+                continue
+            if not all(c.partition("::")[0] in proof["file_hashes"] for c in cases):
+                continue
+            return dict(id=f"{proof['id']}:{record['oid']}", source=self._source_fingerprint(),
+                        gate=proof["producer_gate"], runner="gate", provenance="reviewer scratch proof",
+                        evidence=proof["id"], peer=proof.get("peer"), files=list(proof.get("files") or ()),
+                        file_hashes=dict(proof["file_hashes"]), environment=self._environment_id(),
+                        requirements=[list(r) for r in binding.get("requirements") or ()], completed=True,
+                        passed=True, passed_cases=list(cases), skipped_cases=[])
+        return None
 
     def _evidence_bindings(self, entry, target: str, path: str, digest: str, eid: str) -> List[dict]:
         """The acceptance obligations an evidence proof may serve as the
@@ -9913,18 +10049,24 @@ class Session:
     @staticmethod
     def _proof_passed_cases(receipt: dict) -> set:
         """The case identities a passed scratch proof shows executed and
-        passed, by file-qualified identity (instances collapsed to their
-        case; a case with any instance not passed is absent)."""
+        passed, by file-qualified identity: every exact (parametrized)
+        instance whose own outcomes are all passed, and a case's base name
+        only when every recorded instance of it passed (root's F2 on
+        9bedde0: exact names were dropped by the collapse)."""
         if not receipt or receipt.get("status") != "passed":
             return set()
-        outcomes: Dict[str, set] = {}
+        exact: Dict[str, set] = {}
         for row in receipt.get("cases") or ():
             key, sep, outcome = str(row).rpartition(": ")
-            if not sep:
+            if not sep or "::" not in key:
                 continue
-            base = key.split("[", 1)[0]
-            outcomes.setdefault(base, set()).add(outcome.strip())
-        return {case for case, seen in outcomes.items() if seen == {"passed"}}
+            exact.setdefault(key, set()).add(outcome.strip())
+        passed = {case for case, seen in exact.items() if seen == {"passed"}}
+        bases: Dict[str, set] = {}
+        for case, seen in exact.items():
+            bases.setdefault(case.split("[", 1)[0], set()).update(seen)
+        passed |= {base for base, seen in bases.items() if seen == {"passed"}}
+        return passed
 
     def _evidence_receipt(self, record: dict) -> Optional[dict]:
         """A harness receipt for ``record`` from a served evidence proof:
@@ -9942,36 +10084,32 @@ class Session:
             return None
         current = self._source_fingerprint() if self.project else None
         identity = self._evidence_identity() if self.project else None
-        environment = self._environment_id()
-        revisions = self._requirement_revisions()
         for request in reversed(self.evidence_requests):
             receipt = request.get("receipt") or {}
             if receipt.get("status") != "passed" or request.get("identity") != identity:
                 continue
             if str(request.get("disposition", "")).startswith("held: the source or checks changed"):
                 continue
+            # The gate that actually produced the run, persisted at intent
+            # and confirmed after execution (root's F1 on 9bedde0): a
+            # receipt never carries the obligation's gate as its own.
+            producer = request.get("producer_gate")
+            if producer is None or request.get("producer_gate_executed") != producer:
+                continue
             binding = next((b for b in request.get("bindings") or () if b.get("oid") == record["oid"]), None)
-            if binding is None:
+            if binding is None or not self._binding_matches(
+                    binding, record, evidence=request.get("id"), file=request.get("file"),
+                    file_sha256=request.get("file_sha256")):
                 continue
-            wanted = dict(
-                task=record.get("task"), proof_id=record.get("proof_id"), modality="test",
-                location=str(record.get("location") or ""), scenario=[list(s) for s in record.get("scenario") or []],
-                cases=list(cases), behavior=record.get("behavior"),
-                requirements=[list(r) for r in record.get("requirements") or ()], policy=record.get("policy"),
-                environment=environment, source=current, gate=record.get("gate"), base_gate=record.get("base_gate"),
-                configured_gate=_gate_identity(self.config.integration_gate),
-                evidence=request.get("id"), file=request.get("file"), file_sha256=request.get("file_sha256"))
-            if any(binding.get(k) != v for k, v in wanted.items()) or binding.get("source") != request.get("source"):
-                continue
-            if any(revisions.get(rid) != rev for rid, rev in wanted["requirements"]):
+            if binding.get("source") != request.get("source"):
                 continue
             if not set(cases) <= self._proof_passed_cases(receipt):
                 continue
-            return dict(id=f"{request['id']}:{record['oid']}", source=current, gate=record.get("gate"), runner="gate",
+            return dict(id=f"{request['id']}:{record['oid']}", source=current, gate=producer, runner="gate",
                         provenance="scratch evidence proof", evidence=request["id"], file=request.get("file"),
-                        file_sha256=request.get("file_sha256"), environment=environment,
-                        requirements=[list(r) for r in wanted["requirements"]], completed=True, passed=True,
-                        passed_cases=list(cases), skipped_cases=[])
+                        file_sha256=request.get("file_sha256"), environment=self._environment_id(),
+                        requirements=[list(r) for r in binding.get("requirements") or ()], completed=True,
+                        passed=True, passed_cases=list(cases), skipped_cases=[])
         return None
 
     def _reassess(self, target: str, entry: dict, record: dict, text: str) -> str:
@@ -10697,7 +10835,7 @@ class Session:
                 return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
                             runner="gate", **self._receipt_identity(check, record), completed=True, passed=True,
                             passed_cases=list(cases), skipped_cases=[])
-        return self._evidence_receipt(record)
+        return self._evidence_receipt(record) or self._scratch_receipt(record)
 
     def _check_passed_cases(self, check: dict) -> set:
         """The exact case identities one recorded check's complete runs
@@ -10766,6 +10904,20 @@ class Session:
                 # them (root's currency control on a1b1840).
                 record = dict(record, source_digest=current_source, gate=self._obligation_current_gate(record),
                               environment=environment)
+            if record.get("modality") == "capture":
+                # Measured or not: the task's verified design evidence on
+                # exactly this source, in the declared state, delivered to
+                # its reviewer (execution only; sufficiency is the design
+                # reviewer's explicit line). Any drift is not measured.
+                measured, why = self._capture_measurement(record)
+                if measured is not None:
+                    record = dict(record, execution="ran", source_digest=current_source, receipts=[measured],
+                                  gate=self._obligation_current_gate(record), environment=environment, reason="")
+                else:
+                    record = dict(record, execution="missing", source_digest=None, receipts=[],
+                                  gate=self._obligation_current_gate(record), environment=environment, reason=why)
+                refreshed.append(dict(record, **delivery.EvidenceObligation.from_dict(record).to_dict()))
+                continue
             if record.get("sufficiency") == "sufficient" and not self._scenario_shown(record):
                 # An approval of a row whose whole scenario can no longer be
                 # shown is stale: nothing shown, nothing approved.
@@ -10801,7 +10953,47 @@ class Session:
             refreshed.append(dict(record, **obligation.to_dict()))
         self.evidence_obligations = refreshed
 
-    def _judge_obligations(self, auditor: str, reply: str, found: dict, *, ids=None) -> None:
+    def _capture_measurement(self, record: dict) -> Tuple[Optional[str], str]:
+        """``(receipt id, "")`` when the task's design evidence measures the
+        declared state on the current source now: its latest design record
+        is verified, was delivered to a reviewer from another vendor whose
+        review returned a verdict, was taken on this exact source, and its
+        renders (target, steps, fixture, viewports and digests) are still
+        the ones on disk and still pass the identity check. Else
+        ``(None, why)``: missing, wrong or stale state or viewport, a
+        changed source, fixture or image, a disabled or unavailable
+        capture, or an undelivered review all measure nothing. Nothing a
+        lead claimed is read here."""
+        task = record.get("task")
+        checks = [c for c in self.design_checks if c.get("task") == task]
+        if not checks:
+            return None, "no design evidence recorded for the task"
+        latest = checks[-1]
+        if latest.get("verified") is not True:
+            return None, f"the design evidence is not verified ({str(latest.get('problem') or '')[:120]})"
+        snapshot = latest.get("snapshot")
+        if not snapshot or latest.get("source") is None:
+            return None, "the design record carries no measured snapshot"
+        if latest.get("source") != (self._source_fingerprint() if self.project else None):
+            return None, "the design evidence was taken on another source"
+        review = latest.get("final_review") or {}
+        if not review.get("reviewer") or not str(review.get("verdict") or "").strip():
+            return None, "the design review was not delivered"
+        if str(review.get("verdict", "")).startswith("UNFINISHED"):
+            return None, "the design review gave no verdict"
+        target, steps, evidence = snapshot
+        now_target, now_steps, now_evidence = self._capture_state(task)
+        if (now_target, now_steps) != (target, steps):
+            return None, "the renders now show a different state"
+        if now_evidence != evidence:
+            return None, "the renders changed after they were reviewed"
+        problem, _observed = self._identity_check(task, target, steps, evidence)
+        if problem:
+            return None, problem
+        digest = hashlib.sha256(json.dumps(evidence, sort_keys=True, default=str).encode()).hexdigest()[:16]
+        return f"capture:{task}:{digest}", ""
+
+    def _judge_obligations(self, auditor: str, reply: str, found: dict, *, ids=None, modalities=None) -> None:
         """Sufficiency from the audit: an explicit '<O-id>: SUFFICIENT|INSUFFICIENT'
         line decides; otherwise the auditor's verdict on every requirement an
         executed obligation binds does (all MET after lowering: sufficient;
@@ -10817,6 +11009,9 @@ class Session:
             if ids is not None and not any(r[0] in ids for r in obligation.requirements):
                 refreshed.append(record)
                 continue
+            if modalities is not None and record.get("modality", "test") not in modalities:
+                refreshed.append(record)
+                continue
             if obligation.oid in conflicts:
                 obligation = replace(obligation, sufficiency="unjudged", judged_by="", judged_binding="")
                 refreshed.append(dict(record, **obligation.to_dict(), sufficiency_note=conflicts[obligation.oid]))
@@ -10824,7 +11019,15 @@ class Session:
             verdict, why = explicit.get(obligation.oid, (None, ""))
             reading = record.get("modality") == "reading"
             legacy = record.get("modality") == "legacy"
+            capture = record.get("modality") == "capture"
             extra = {}
+            if capture and verdict == "sufficient" and modalities is None:
+                # A capture row is judged sufficient only by the design
+                # reviewer that was shown the renders; the requirements
+                # audit may reject it, never approve it.
+                verdict = None
+                extra = dict(sufficiency_note=f"{obligation.oid}: SUFFICIENT by {auditor} not counted; a capture "
+                                              "row is judged by the design reviewer")
             # A reading claim or a legacy string (mapping unknown) is judged
             # only by its own explicit line: a verdict on its requirement
             # implies nothing about it (root's controls on d515d51 and
@@ -10832,7 +11035,7 @@ class Session:
             # of modality or file authorizes no exemption). A reading
             # SUFFICIENT must cite the file the scenario names on the
             # current source; one that does not is not a judgment of it.
-            if verdict is None and obligation.execution == "ran" and not (reading or legacy):
+            if verdict is None and obligation.execution == "ran" and not (reading or legacy or capture):
                 # Executed evidence is judged by implication from the
                 # verdicts on the requirements it binds.
                 judged = [found.get(rid) for rid, _ in obligation.requirements]
@@ -10862,6 +11065,33 @@ class Session:
                     extra = dict(judged_source=self._source_fingerprint() if self.project else None)
             refreshed.append(dict(record, **obligation.to_dict(), **extra))
         self.evidence_obligations = refreshed
+
+    def _supersede_obligation(self, record: dict) -> None:
+        """A later task that declares the same scenario (operation, prior
+        state, expectation, location, evidence) on the same requirements
+        takes that proof over from an earlier task's row that never ran:
+        the earlier row is marked ``superseded_by`` and kept on the record,
+        and no longer holds the requirement (a capped repair continued by a
+        later repair, or a repair redone by a later one: the debt moves to
+        the declaration that now owns it, never disappears). A row that ran
+        is never superseded, and a scenario that differs in any field is not
+        the same proof."""
+        scenario = [list(s) for s in record.get("scenario") or []]
+        if not scenario:
+            return
+        wanted = [list(r) for r in record.get("requirements") or ()]
+        for earlier in self.evidence_obligations:
+            if (earlier is record or earlier.get("task") == record.get("task") or earlier.get("kind") != "acceptance"
+                    or earlier.get("superseded_by")):
+                continue
+            same = [list(s) for s in earlier.get("scenario") or []]
+            if (same and [s for s in same if s[0] != "proof"] == [s for s in scenario if s[0] != "proof"]
+                    and [list(r) for r in earlier.get("requirements") or ()] == wanted
+                    and earlier.get("modality") == record.get("modality")):
+                earlier["superseded_by"] = record.get("task")
+                earlier["reason"] = f"superseded by task {record.get('task')}'s declaration of the same scenario"
+                self._note(f"{earlier['oid']} ({earlier.get('task')}): superseded by {record.get('task')}'s "
+                           f"declaration of the same scenario")
 
     def _register_acceptance_obligations(self, spec, covers) -> None:
         """At dispatch: each acceptance behavior the task's scope declares,
@@ -10893,8 +11123,13 @@ class Session:
                                   executable_claim=modality == "test",
                                   binding="unbound" if modality == "test" else (
                                       "reading claim (documentation): accepted only on the audit's explicit "
-                                      "per-obligation judgment citing the file on the current source"),
+                                      "per-obligation judgment citing the file on the current source"
+                                      if modality == "reading" else
+                                      "capture claim (visual): measured only by the harness's verified render of "
+                                      "the declared state on the current source; sufficient only by the design "
+                                      "reviewer's explicit per-obligation judgment"),
                                   runner=record.get("runner") if modality == "test" else None)
+                    self._supersede_obligation(record)
             return
         for item in (getattr(scope, "acceptance", None) or ()):
             record = self._register_obligation(dict(task=spec.task_id, item=str(item), requirements=list(covers or []),
@@ -10947,7 +11182,7 @@ class Session:
             # cannot be executed is not shown (root's finding on f4fe5b7).
             unmet = [o for o in self.evidence_obligations
                      if any(r[0] == rid for r in o["requirements"]) and o["execution"] != "ran"
-                     and o.get("modality") not in ("reading", "legacy")]
+                     and o.get("modality") not in ("reading", "legacy") and not o.get("superseded_by")]
             if unmet:
                 typed = ("evidence obligation not executed: "
                          + "; ".join(f"{o['oid']} ({'no runner' if o.get('runner') is None else o['execution']}"
@@ -13392,6 +13627,17 @@ class Session:
                                                 text=text, deferred=sibling,
                                                 finding_id=registered[0]["fid"] if registered else None))
 
+    def _snapshot_scratch_bindings(self, spec) -> None:
+        """Before a reviewer runs: the task's explicitly bound test
+        obligations as they are now, with the producer gate the runtime will
+        run the approved commands under, kept for the scratch receipt this
+        call may leave (root on 9bedde0). Nothing here is read from a reply
+        and nothing is reconstructed later."""
+        sid = f"S{len(self.scratch_proofs) + 1}"
+        self._pending_scratch = dict(
+            id=sid, bindings=self._evidence_bindings(dict(kind="review", task=spec.task_id), "", "", "", sid),
+            producer_gate=_gate_identity(self.config.integration_gate))
+
     def _record_scratch_evidence(self, spec, peer: str) -> None:
         """What a review asked for a scratch demonstration actually left in
         its copy, measured by the runtime, never read from the reply (r09 on
@@ -13400,7 +13646,10 @@ class Session:
         decides nothing by itself."""
         found = getattr(self, "_last_scratch_tests", None)
         proof = getattr(self, "_last_scratch_proof", None)
-        self._last_scratch_tests = self._last_scratch_proof = None
+        hashes = getattr(self, "_last_scratch_hashes", None)
+        pending = getattr(self, "_pending_scratch", None) or {}
+        self._last_scratch_tests = self._last_scratch_proof = self._last_scratch_hashes = None
+        self._pending_scratch = None
         if found is None or self._outcome is None:
             return
         if not found:
@@ -13415,11 +13664,19 @@ class Session:
         # requirements this review covered. Never shown to a model.
         handed = (proof or {}).get("handed_source"), (proof or {}).get("handed_checks")
         drift = self._handed_drift(proof)
-        self.scratch_proofs.append(dict(task=spec.task_id, peer=peer, files=list(found),
+        self.scratch_proofs.append(dict(id=pending.get("id") or f"S{len(self.scratch_proofs) + 1}",
+                                        task=spec.task_id, peer=peer, files=list(found),
                                         identity=self._scratch_identity(*handed) if self.project and all(handed)
                                         else None, eligible=bool(proof) and all(handed) and not drift,
                                         **({"stale": drift} if drift else {}),
                                         requirements=[rid for rid, _ in self._covered_texts()],
+                                        # Bound before the call, measured in the copy: the
+                                        # obligations this proof may serve, the producer gate,
+                                        # the handed source and the scratch files' hashes.
+                                        bindings=list(pending.get("bindings") or []),
+                                        producer_gate=pending.get("producer_gate"),
+                                        handed_source=handed[0], handed_checks=handed[1],
+                                        file_hashes=dict(hashes or {}),
                                         **({k: proof[k] for k in ("status", "reason", "cases", "receipts")}
                                            if proof else dict(status="not run"))))
         fact = self._outcome.note("unverified", f"scratch demonstration by {peer}, as the harness measured "
@@ -14551,7 +14808,7 @@ class Session:
                   and self.design_checks[-1].get("task") == spec.task_id else None)
         evidence = ("no design evidence required" if record is None else
                     "design evidence verified and reviewed" if record.get("verified")
-                    and (record.get("final_review") or {}).get("verdict") == "APPROVED"
+                    and (record.get("final_review") or {}).get("approved") is True
                     else f"design evidence not verified: {str(record.get('problem') or '')[:160]}")
         summary_text = (
             f"Direct tier, recorded by the harness. Changed: {', '.join(changed) or 'no files'}"

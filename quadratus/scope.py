@@ -246,10 +246,11 @@ class TaskScope:
             parts.append("Proof scenarios (a test scenario is shown only by a named test case that runs and passes; "
                          "deliver one line per test scenario 'PROVES: P<n> - path/test_x.py::Class::test_case'. "
                          "A scenario marked 'evidence: reading' is a documentation claim the audit reads and cites; "
-                         "it takes no PROVES line):\n"
+                         "one marked 'evidence: capture' is a visual state the harness renders and the design "
+                         "reviewer judges; neither takes a PROVES line):\n"
                          + "\n".join(f"  - {p['id']} [{', '.join(p['requirements'])}] {p['operation']}; given "
                                       f"{p['state']}; expect {p['expect']}; in {p['location']}"
-                                      + ("; evidence: reading" if p.get("evidence") == "reading" else "")
+                                      + (f"; evidence: {p['evidence']}" if p.get("evidence") in ("reading", "capture") else "")
                                       for p in self.proofs))
         if self.estimate:
             parts.append("The planner's split of that size: "
@@ -480,10 +481,12 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
 
 PROOF_KEYS = ("id", "requirements", "operation", "state", "expect", "location")
 #: Supported evidence modalities a scenario may declare: ``test`` (the
-#: default: a named test case that runs and passes) or ``reading`` (a
+#: default: a named test case that runs and passes), ``reading`` (a
 #: documentation file the audit reads and cites; refused at dispatch for a
-#: behavioural location or an error or refusal requirement).
-PROOF_EVIDENCE = ("test", "reading")
+#: behavioural location or an error or refusal requirement) or ``capture``
+#: (a visual state the harness renders and the design reviewer judges;
+#: admitted only for design work with design evidence in force).
+PROOF_EVIDENCE = ("test", "reading", "capture")
 _PROOF_ID = re.compile(r"^P[1-9]\d*$")
 _REQUIREMENT_ID = re.compile(r"^R[1-9]\d*$")
 

@@ -631,8 +631,11 @@ class Fleet:
                 # Measured, not read from the reply: the new test files the
                 # call left in its copy (r09 on ded0095).
                 from .integration import _test_family
-                context["scratch_tests"] = sorted(p for p in _copy_digests(directory)
-                                                  if p not in handed and _test_family(p))
+                digests = _copy_digests(directory)
+                context["scratch_tests"] = sorted(p for p in digests if p not in handed and _test_family(p))
+                # Their bytes, measured here while the copy exists: a later
+                # receipt names them, never a reconstruction (root on 9bedde0).
+                context["scratch_hashes"] = {p: digests[p] for p in context["scratch_tests"]}
             if altered:
                 raise ReviewCopyAltered(
                     f"{model_key} changed or removed files it was handed to read in its source copy "
