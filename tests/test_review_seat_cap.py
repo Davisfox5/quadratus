@@ -316,13 +316,14 @@ def test_a_capped_design_review_still_records_the_delivery(tmp_path, monkeypatch
 # -- the lead is told what the harness measures ---------------------------------
 
 
-def test_the_scope_block_states_the_measured_rule_and_the_stop_line():
+def test_the_scope_block_states_the_measured_rule_as_advisory():
     from quadratus.scope import TaskScope
     text = TaskScope(permitted_paths=["app.py", "tests/test_app.py"], max_lines=100).render()
-    assert "tests in full" in text
-    assert "stops the task past 150 changed lines" in text
-    assert "compact named cases" in text
-    assert "Expected size: about 100 changed lines" in text
+    assert "tests in full" in text and "Expected size: about 100 changed lines" in text
+    # Advisory since 2026-10-20: measured and reported, never a stop; tests never squeezed to fit.
+    assert "This is the planner's estimate, not a limit" in text and "stops nothing for size alone" in text
+    assert "leave a test out to fit a number" in text and "length alone is not a finding" in text
+    assert "stops the task past" not in text and "say so and stop" not in text
     assert "Expected size" not in TaskScope(permitted_paths=["app.py"]).render()
 
 

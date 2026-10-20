@@ -426,7 +426,8 @@ def test_the_view_shows_held_work_repeated_continuation_and_test_size():
              obligations.TaskRow("t3", "closed", ("R1",), continues="t1"))
     text = obligations.render(obligations.View((), tasks, (), ("t1 review by a:b: no verdict",)))
     assert "t1 turn_limited; covers R1; HELD: its work is still owed; continued 2 times (t2, t3)" in text
-    assert "1 code / 2 test file(s), 182 line(s) of 150; 2 open item(s)" in text
+    # The planner reads the measured size against the estimate (advisory, 2026-10-20).
+    assert "1 code / 2 test file(s), 182 line(s) against an estimate of ~150; 2 open item(s)" in text
     assert "Mandatory judgments without a valid verdict: t1 review by a:b: no verdict." in text
 
 

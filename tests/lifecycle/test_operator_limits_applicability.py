@@ -47,9 +47,9 @@ def _prompt(session):
     return prompt
 
 
-def _dispatch(session):
+def _dispatch(session, max_lines=40):
     spec = TaskSpec("t1", "Implement add in app.py.", kind="refactor",
-                    scope=TaskScope(permitted_paths=["app.py", "README.md"], max_lines=40))
+                    scope=TaskScope(permitted_paths=["app.py", "README.md"], max_lines=max_lines))
     outcome = TaskOutcome("t1", "implementation")
     session._outcome = outcome
     session._task_outer = session._snapshot_outer(spec)
@@ -104,14 +104,17 @@ def _narrow():
 
 
 def test_a_limit_widened_in_place_does_not_loosen(tmp_path):
-    """Sol, 5865637806: the ceiling is a snapshot, not the live object."""
+    """Sol, 5865637806: the path ceiling is a snapshot, not the live object.
+    The size figure is advisory (2026-10-20): the task's own estimate is
+    kept as declared, and the operator's figure, narrow or widened in
+    place, neither clamps nor widens it."""
     session = _session(tmp_path, _narrow())
     spec = _dispatch(session)
     _edit_app(session)
     session.config.default_scope.permitted_paths = ["app.py", "README.md"]
     session.config.default_scope.max_lines = 200
     after = session._measure_scope(spec, session._task_before)
-    assert after.out_of_scope == ["app.py"] and after.max_lines == 1
+    assert after.out_of_scope == ["app.py"] and after.max_lines == 40
     assert any(m.startswith("operator_limits: contract 'sha256:") for m in session._outcome.mismatches)
 
 
@@ -124,11 +127,27 @@ def test_a_limit_tightened_in_place_still_restricts(tmp_path):
     assert session._measure_scope(spec, session._task_before).out_of_scope == ["app.py"]
 
 
-def test_a_widened_limit_keeps_the_ceiling_in_the_line_budget(tmp_path):
+def test_an_operator_line_figure_is_a_dispatch_bound_estimate_never_a_stop(tmp_path):
+    """The operator's line figure (advisory, 2026-10-20) is the estimate for
+    a task that declares none, bound at dispatch like the paths: a figure
+    widened in place after dispatch does not replace it. A task's own
+    estimate is kept as declared. Neither stops a genuinely large allowed
+    edit: 160 changed lines inside the permitted paths against a figure of
+    1 is measured, reported as well past the estimate, and never blocking."""
     session = _session(tmp_path, TaskScope(permitted_paths=["app.py", "README.md"], max_lines=1))
-    spec = _dispatch(session)
+    spec = _dispatch(session, max_lines=None)
+    before = session._task_before
+    (session.project / "app.py").write_text("def add(a, b):\n    return a + b\n"
+                                           + "".join(f"\n\ndef helper_{i}(x):\n    return x + {i}\n" for i in range(40)))
+    report = session._measure_scope(spec, session._task_before)
+    assert report.max_lines == 1 and report.changed_lines > 150, "the operator figure is the undeclared estimate"
+    assert report.oversized and report.within_scope and not report.blocking, "measured, never a stop"
     _drift(session, WIDE)
-    assert session._measure_scope(spec, session._task_before).max_lines == 1
+    report = session._measure_scope(spec, session._task_before)
+    assert report.max_lines == 1 and not report.blocking, "the figure bound at dispatch, not the widened one"
+    declared = _dispatch(session, max_lines=40)
+    report = session._measure_scope(declared, before)
+    assert report.max_lines == 40 and report.oversized and not report.blocking, "a declared estimate is kept"
 
 
 def test_the_prompt_names_the_dispatch_limit_and_a_tighter_live_one(tmp_path):
