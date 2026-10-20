@@ -270,9 +270,11 @@ Key design decisions already settled:
   documentation.
 - **Task size beats model choice.** Review quality falls by roughly an order
   of magnitude between a small diff and a large one — a wider gap than any
-  gap between reviewers. The decomposition prompt therefore carries a hard
-  size ceiling (`task_kinds.MAX_TASK_LINES`), and that is the single
-  highest-value instruction in the loop.
+  gap between reviewers. The decomposition prompt therefore carries a size
+  guide (`task_kinds.TASK_SIZE_GUIDE`, ~100 lines), and that is the single
+  highest-value instruction in the loop. **Since 2026-10-20 the guide is
+  advisory** (operator directive, Davis): see the note on advisory sizing
+  below. The harness measures and reports; it stops nothing for size.
 - **Routing opinions live apart from the roster.** `registry.py` says what
   shape a model is; `task_kinds.py` says what to do with that. The second
   ages far faster than the first and every entry carries its evidence.
@@ -833,14 +835,43 @@ Key design decisions already settled:
   open. The writer is never called again (no fix cycle, gate fix zero). A
   note with no blocking finding, failing checks or a scope breach keep the
   capped close. Whole-goal confirmation and the final audit still decide.
-- **A revision past the size stop spends the remaining fix allowance
-  coming back under it** (r11 on 136a3ec). t2's in-bound draft was revised
-  past the hard stop by one line, though its prompt stated the exact room,
-  and the task failed with a fix cycle unused and no slot left.
-  `_edit_within_stop` gives a size-only overrun (no path outside scope),
-  while the call leaves a cycle of `max_fix_cycles`, one trim call. The
-  work is never reverted, the stop is measured again, and still over it
-  fails the task as before. The fix prompt now states the same room.
+- **Size is advisory; nothing stops, trims, forces or rejects on length
+  alone** (operator directive 2026-10-20, Davis, after the r11, r13, R15
+  and R16 trim rules and the proof-planning diagnostic). The hard stop at
+  1.5 x `max_lines`, the one trim call it bought (`_edit_within_stop`,
+  `_trim_overrun`, `_trim_capped_draft`), the trim evidence and
+  preservation-debt subsystem (`_trim_snapshot` and the rest, `TRIM`
+  dispositions, `trim_records` on the checkpoint and the packet), the
+  revision's room figure with its BLOCKER channel, and the plan refusal
+  above 100 lines are gone. What remains: `max_lines` is the planner's
+  estimate, any positive integer, declared at the task's real size; the
+  harness measures every change (`ScopeReport`, `oversized` is telemetry
+  for well past the estimate), records it, and tells the lead, every
+  editing call and every reviewer the measured size against the estimate
+  (`_scope_size_note`), and the planner sees it on the task row. Priority
+  is correctness and complete requirements, the tests that prove them,
+  then conciseness: no unrelated edits, no duplication, no padding, and
+  never a test squeezed or left out to fit a number. The reviewer judges
+  whether the size was necessary; length alone is not a finding. Paths,
+  original tests, budgets, roles, the independent review, goal
+  confirmation, the final audit and the stale, missing, failed and NOT RUN
+  evidence rules are unchanged; the direct tier's own bound stays
+  conservative, and a task past it runs on the normal tier with its full
+  review rather than being refused. A task's declared estimate is kept as
+  declared; the policy's `scope_max_lines` is the default for a task that
+  declares none and never clamps it (the pinned library schema bounds
+  only that default). Controls: `tests/lifecycle/test_advisory_sizing.py`
+  (a ~190-line draft against ~40 reviewed, audited and completed; a plan
+  at 400 dispatched; a revision that grows rechecked; a capped large
+  draft on the capped route; a path breach, a reviewer's finding on
+  unrelated bulk, an edited original test and the direct bound all still
+  holding), harness pack case 02, `test_joint_scope_telemetry`.
+- **Historical: a revision past the size stop spent the remaining fix
+  allowance coming back under it** (r11 on 136a3ec; retired 2026-10-20).
+  t2's in-bound draft was revised past the hard stop by one line, though
+  its prompt stated the exact room, and the task failed with a fix cycle
+  unused and no slot left; the trim call that answered it is gone with
+  the stop.
 - **Every editing call carries the original goal** (r11). Only the draft
   had it, through the memory render; revision, fix and gate-fix prompts
   held the generated task text, which in r11 prescribed the defective
@@ -865,7 +896,8 @@ Key design decisions already settled:
   reviewers and the final audit still decide; no status promise. Codex,
   security-fix and uncapped runs are told no cap. The cap itself is
   unchanged.
-- **A finished draft past the size stop gets the same one trim** (r13 on
+- **Historical (retired 2026-10-20): a finished draft past the size stop
+  got the same one trim** (r13 on
   5e8926b). Two finished parallel drafts crossed the hard stop inside their
   paths and failed before any check or peer. `_trim_overrun` (shared with
   the r11 revision trim) now also serves a normally finished draft: one
@@ -899,7 +931,8 @@ Key design decisions already settled:
   its own cap takes the capped paths. Whether it helps is unproven.
   A cap raised inside a size trim is tagged and never read as a no-edit
   revision (root review of b5ea0ef: it bought a third writer call).
-- **A capped draft past the size stop gets the same one trim** (R16 on
+- **Historical (retired 2026-10-20): a capped draft past the size stop got
+  the same one trim** (R16 on
   78f76bb). t2's draft stopped at its cap with 153 in-path lines against a
   stated 85 and failed on scope with both cycles unused.
   `_trim_capped_draft` gives its kept edits the r13 trim (charged as the
@@ -2182,7 +2215,8 @@ Key design decisions already settled:
   (`test_harness_capture._observed`), and a fixture whose page is not the
   shared REPAIR_SCOPE's Import toolbar declares its own scenarios: a
   verdict about an Import button the page never has describes nothing.
-- **A trim is evidence, and its assertion preservation is owed a verdict**
+- **Historical (retired 2026-10-20 with the size trim it served): a trim
+  is evidence, and its assertion preservation is owed a verdict**
   (`_trim_snapshot`, `_trim_settle`, `_trim_pre_contents`, `_trim_owed`,
   `_trim_block`, `_read_trim_disposition`). Every trim has a record id
   `T-<task>-<n>`, unique across the run and its parallel children (a merge

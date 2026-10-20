@@ -16,7 +16,7 @@ from quadratus.artifacts import ArtifactStore
 from quadratus.design_evidence import MAX_SELECTOR_CHARS, MAX_STEPS
 from quadratus.scope import TaskScope
 from quadratus.session import Session, SessionConfig, TaskSpec
-from quadratus.task_kinds import MAX_TASK_LINES
+from quadratus.task_kinds import TASK_SIZE_GUIDE
 from quadratus.taskmeta import MAX_PREFACE_LINES, MAX_REQUEST_PREFACE_LINES
 
 
@@ -49,7 +49,8 @@ def test_the_scope_line_form_and_path_rules_are_stated():
     assert "no description after its labels is refused" in text
     for rule in ("backslashes", "leading ~", ".quadratus path", "surrounding whitespace"):
         assert rule in text
-    assert f"no greater than {MAX_TASK_LINES}" in text and '"max_lines": ' + str(MAX_TASK_LINES) in text
+    assert '"max_lines": ' + str(TASK_SIZE_GUIDE) in text and "never squeezed" in text
+    assert "no greater than" not in text and "an overrun stops the task" not in text
     assert "one correction" in text and "not DONE, ASK or FETCH" in text
     assert "20,000 bytes" in text
 

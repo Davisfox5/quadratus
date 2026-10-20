@@ -614,9 +614,7 @@ class EvidencePacket:
     #: the evidence requests (receipts, reassessments). Added on packet/2;
     #: a packet built without them is a different packet.
     design_checks: Tuple[str, ...] = ()
-    #: packet/3: the trim evidence on record (each record's identity without
-    #: its disposition, which is a judgment of it).
-    trims: Tuple[str, ...] = ()
+    #: packet/3: the reviewer scratch proofs and the evidence requests.
     scratch_proofs: Tuple[str, ...] = ()
     evidence_requests: Tuple[str, ...] = ()
 

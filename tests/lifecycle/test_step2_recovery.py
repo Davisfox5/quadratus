@@ -1361,67 +1361,6 @@ def test_a_capped_fix_in_the_last_slot_meets_the_reviewer_whose_finding_stayed_o
     assert H.result_json(replay)["turn_limited_tasks"] == [] and replay.result.completed
 
 
-# -- r11 on 136a3ec: a revision that crosses the size stop -------------------------------
-
-_BLOATED = _TYPED + "".join(f"\n\ndef _unused_{i}():\n    return {i}\n" for i in range(20))
-
-
-@pytest.mark.parametrize("case", ["trimmed", "still-over", "out-of-scope", "fix-overrun"])
-def test_a_revision_past_the_size_stop_spends_the_remaining_fix_allowance_bringing_it_back(
-        tmp_path, monkeypatch, case):
-    """r11: t2's in-bound draft was revised past the hard stop by one line
-    and the task failed with a fix cycle unused and no slot left. A size-only
-    overrun with a cycle left now spends that cycle on one call to bring the
-    change back under the stop; nothing is reverted and the stop is measured
-    again. Still over, a path outside scope, or no cycle left fails the task
-    as before. The fix prompt now carries the same room as the revision."""
-    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
-    declared = DECL_SIMPLE.replace("backend simple", "backend standard")
-
-    def lead(call, replay):
-        H.write(call, {"app.py": fixed})
-        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
-
-    def revision(call, replay):
-        n = len(replay.of("revision"))
-        if case == "fix-overrun":
-            H.write(call, {"app.py": _TYPED if n == 1 else _BLOATED})
-        elif n == 1:
-            H.write(call, {"app.py": _BLOATED})
-            if case == "out-of-scope":
-                H.write(call, {"README.md": "# app\n\nadd raises TypeError.\n"})
-        else:
-            H.write(call, {"app.py": _TYPED if case == "trimmed" else _BLOATED + "\n# still here\n"})
-        return 'Revised add.\nCHANGED: ["app.py"]'
-
-    def recheck(call, replay):
-        if case == "fix-overrun" and len(replay.of("recheck")) == 1:
-            return "UNRESOLVED: the TypeError message does not name the argument."
-        return "RESOLVED"
-
-    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, revision=revision,
-                                                 collaborator=lambda c, r: _FINDING + "\nREVIEW: COMPLETE",
-                                                 recheck=recheck),
-                   files=FILES, max_tasks=1, record_complete=False)
-    result = H.result_json(replay)
-    writers = [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
-    if case == "trimmed":
-        assert [c.role for c in writers] == ["lead", "revision", "revision"], "one call from the allowance"
-        assert "past the run's stop at 60" in writers[2].prompt and "nothing was reverted" in writers[2].prompt
-        assert result["failed_tasks"] == [] and replay.of("recheck"), "the trimmed source meets the recheck"
-        assert replay.result.completed
-        return
-    assert result["failed_tasks"] == ["t1"], "the stop still fails the task"
-    assert not replay.result.completed
-    if case == "still-over":
-        assert [c.role for c in writers] == ["lead", "revision", "revision"]
-    elif case == "out-of-scope":
-        assert [c.role for c in writers] == ["lead", "revision"], "a path breach buys no trim"
-    else:
-        assert [c.role for c in writers] == ["lead", "revision", "revision"], "no cycle left, no trim"
-        assert "lines of room for this revision" in writers[2].prompt, "the fix is told its room"
-
-
 # -- r11: every editing call carries the original goal, not only the generated task --------
 
 _CONTRACT = "A non-number argument must raise TypeError naming the argument."
@@ -1671,131 +1610,6 @@ def test_the_writer_budget_note_follows_the_cap_the_fleet_applies(tmp_path, role
             "a priority, not a narrower read authority"
 
 
-# -- r13 on 5e8926b: a finished draft past the size stop ----------------------------------
-
-@pytest.mark.requirements_ledger
-@pytest.mark.parametrize("case", ["trimmed", "still-over", "path-breach", "capped-draft", "exhausted", "unresolved"])
-def test_a_finished_draft_past_the_size_stop_spends_one_fix_cycle_coming_back_under_it(
-        tmp_path, monkeypatch, case):
-    """r13: two finished parallel drafts crossed the hard stop inside their
-    paths and failed before any check or peer read them. A size-only overrun
-    of a finished draft now spends one cycle of the task's own fix allowance
-    on one call to come back under the stop; that cycle is charged against
-    the later revision and fixes. The trimmed source still meets the checks,
-    the peer and the final audit. Still over, a path breach, a capped draft,
-    an exhausted allowance or an unresolved finding all hold as before."""
-    tier = "standard" if case != "capped-draft" else "simple"
-    declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n"
-                + DECL_SIMPLE.replace("backend simple", "backend " + tier) + "\nCOVERS: R1")
-
-    def lead(call, replay):
-        H.write(call, {"app.py": _BLOATED})
-        if case == "path-breach":
-            H.write(call, {"README.md": "# app\n\nadd.\n"})
-        if case == "capped-draft":
-            return H.grok_ok("I'll trim it next", stop="cancelled", num_turns=8)
-        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
-
-    def revision(call, replay):
-        n = len(replay.of("revision"))
-        if n == 1:
-            H.write(call, {"app.py": _BLOATED + "\n# kept\n" if case == "still-over" else _TYPED})
-        else:
-            H.write(call, {"app.py": _BLOATED if case == "exhausted" else _TYPED + "\n# revised\n"})
-        return 'Revised add.\nCHANGED: ["app.py"]'
-
-    def collaborator(call, replay):
-        if case in ("exhausted", "unresolved"):
-            return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
-        return "NO FINDINGS\nR1: MET - app.py:5"
-
-    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, revision=revision,
-                                                 collaborator=collaborator,
-                                                 recheck=lambda c, r: "UNRESOLVED: add('x', 1) still returns.",
-                                                 auditor=lambda c, r: "R1: MET - app.py:5",
-                                                 **{"requirements-review": lambda c, r: "COMPLETE"}),
-                   files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8),
-                   record_complete=False)
-    result = H.result_json(replay)
-    writers = [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
-    roles = [c.role for c in writers]
-    if case == "trimmed":
-        assert roles == ["lead", "revision"] and "Your draft made this task's change" in writers[1].prompt
-        assert "Do not remove behaviour the task or the goal requires" in writers[1].prompt
-        # R15: the trim aims at the stated bound; the stop stays the failure line.
-        assert "Aim for about 40 lines, the task's stated bound; the run stops at 60" in writers[1].prompt
-        assert "at most 60 lines" not in writers[1].prompt
-        assert result["failed_tasks"] == [] and replay.of("collaborator"), "the trimmed draft meets its peer"
-        assert replay.of("auditor"), "and the final audit"
-        assert (replay.project / "app.py").read_text() == _TYPED
-        return
-    if case == "exhausted":
-        assert roles == ["lead", "revision", "revision"], "trim, then a revision that overruns: no second trim"
-        assert result["failed_tasks"] == ["t1"] and not replay.result.completed
-        return
-    if case == "unresolved":
-        assert roles == ["lead", "revision", "revision"], "trim, then the one revision the allowance leaves"
-        # The reviewer's finding names no basis and claims no immediate
-        # risk, so it is carried to the final audit by id (blueprint stage
-        # A): the audit finds the requirement not met over it.
-        assert len(replay.of("recheck")) == 1
-        assert "RequirementsUnmet" in (replay.result.error or "") and "RFT1-1" in replay.result.error
-        return
-    if case == "capped-draft":
-        # R16 on 78f76bb: a capped draft's in-path overrun now gets the same
-        # one trim, stating the cap (test_a_capped_draft_past_the_size_stop...),
-        # and the trimmed source meets the last-slot capped review.
-        assert roles == ["lead", "revision"] and "stopped at its 8-round limit" in writers[1].prompt
-        assert result["failed_tasks"] == [] and replay.of("collaborator")
-        return
-    assert not replay.result.completed and result["failed_tasks"] == ["t1"]
-    assert not replay.of("collaborator"), "no peer reads source past the stop"
-    if case == "still-over":
-        assert roles == ["lead", "revision"]
-    elif case == "path-breach":
-        assert roles == ["lead"], "no trim"
-    else:
-        raise AssertionError(case)
-
-
-@pytest.mark.requirements_ledger
-@pytest.mark.parametrize("fits", [True, False], ids=["trimmed", "still-over"])
-def test_a_parallel_childs_finished_draft_past_the_stop_is_trimmed_inside_the_child(tmp_path, monkeypatch, fits):
-    """r13's actual shape: the overrun drafts were parallel children. The
-    child spends its own task's cycle; trimmed, it merges and its review
-    still runs; still over, it fails exactly as before."""
-    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
-             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
-             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
-    bloated = _TYPED + "".join(f"\n\ndef _unused_{i}():\n    return {i}\n" for i in range(8))
-
-    def lead(call, replay):
-        if call.task == "t1":
-            H.write(call, {"app.py": bloated})
-            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
-        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
-        return 'Documented add.\nCHANGED: ["README.md"]'
-
-    def revision(call, replay):
-        H.write(call, {"app.py": _TYPED if fits else bloated + "\n# kept\n"})
-        return 'Trimmed add.\nCHANGED: ["app.py"]'
-
-    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead, revision=revision,
-                                                 collaborator=lambda c, r: "NO FINDINGS\n" + (
-                                                     "R1: MET - app.py:5" if c.task == "t1" else
-                                                     "R2: MET - README.md:3")),
-                   files=FILES, max_tasks=2, record_complete=False)
-    result = H.result_json(replay)
-    trims = [c for c in replay.calls if c.role == "revision" and c.task == "t1"]
-    assert len(trims) == 1 and "Your draft made this task's change" in trims[0].prompt
-    reviewed = {c.task for c in replay.of("collaborator")}
-    if fits:
-        assert "t1" not in result["failed_tasks"] and "t1" in reviewed, "merged and reviewed"
-        assert (replay.project / "app.py").read_text() == _TYPED
-    else:
-        assert "t1" in result["failed_tasks"] and "t1" not in reviewed
-
-
 # -- R14 on 164859f: the cap goal question is the goal decision, not a second audit -------
 
 _CAP = "task cap for this run has been reached"
@@ -1911,7 +1725,7 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
 # -- R15 on 7f628ae: a capped revision that changed nothing --------------------------------
 
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("case", ["retried-fixed", "edited-capped", "capped-again", "no-cycle", "non-blocking"])
+@pytest.mark.parametrize("case", ["retried-fixed", "edited-capped", "capped-again", "non-blocking"])
 def test_a_capped_revision_that_changed_nothing_gets_one_measured_retry_from_the_allowance(
         tmp_path, monkeypatch, case):
     """R15: t3's capped revision had a concrete blocking finding, read for all
@@ -1920,20 +1734,17 @@ def test_a_capped_revision_that_changed_nothing_gets_one_measured_retry_from_the
     blocking finding open and a cycle left, now gets one more revision from
     that cycle carrying what the harness measured. The recheck reads the
     source (RESOLVED only if the fix is there), and the audit still decides.
-    An edit made before the cap, a second no-edit cap, no cycle left, or no
-    blocking finding keep the existing capped paths."""
+    An edit made before the cap, a second no-edit cap, or no blocking
+    finding keep the existing capped paths."""
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1")
 
     def lead(call, replay):
-        H.write(call, {"app.py": _BLOATED if case == "no-cycle" else fixed})
+        H.write(call, {"app.py": fixed})
         return H.claude_ok('Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]')
 
     def revision(call, replay):
         n = len(replay.of("revision"))
-        if case == "no-cycle" and n == 1:
-            H.write(call, {"app.py": fixed})                      # the draft trim
-            return H.claude_ok('Trimmed.\nCHANGED: ["app.py"]')
         if case == "edited-capped":
             H.write(call, {"app.py": _TYPED})
             return H.claude_cap("Checking the TypeError path", num_turns=8)
@@ -1971,8 +1782,7 @@ def test_a_capped_revision_that_changed_nothing_gets_one_measured_retry_from_the
     assert all(measured not in c.prompt for c in writers), "no measured retry"
     if case != "edited-capped":
         assert not replay.result.completed
-    expected = {"edited-capped": ["lead", "revision"], "no-cycle": ["lead", "revision", "revision"],
-                "non-blocking": ["lead", "revision"]}[case]
+    expected = {"edited-capped": ["lead", "revision"], "non-blocking": ["lead", "revision"]}[case]
     assert roles == expected, roles
 
 
@@ -2015,213 +1825,6 @@ def test_a_parallel_childs_capped_no_edit_revision_gets_the_same_measured_retry(
     assert len(t1) == 2 and "changed no file" in t1[1].prompt
     assert "t1" not in H.result_json(replay)["turn_limited_tasks"]
     assert (replay.project / "app.py").read_text() == _TYPED, "the fix merged"
-
-
-@pytest.mark.requirements_ledger
-@pytest.mark.parametrize("shape", ["serial", "parallel"])
-def test_a_capped_trim_is_never_taken_for_a_no_edit_revision(tmp_path, monkeypatch, shape):
-    """Root review of b5ea0ef: the first revision overran the stop and its
-    trim, the task's second cycle, restored the pre-revision source and then
-    stopped at its cap. The cap escaped before the trim was counted, the
-    source matched the mark taken before the revision, and the no-edit retry
-    bought a third writer call with the default two cycles. A cap raised
-    inside a trim now keeps the existing capped paths: two writer calls."""
-    from quadratus.session import SessionConfig
-    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
-    assert SessionConfig().max_fix_cycles == 2, "the default allowance this guards"
-    revisions = []
-
-    def revision(call, replay):
-        n = len([c for c in replay.of("revision") if c.task == "t1"])
-        revisions.append(call)
-        if n == 1:
-            H.write(call, {"app.py": fixed + "".join(f"# note {i}\n" for i in range(80))})
-            return 'Revised add.\nCHANGED: ["app.py"]'
-        if n == 2:
-            H.write(call, {"app.py": fixed})
-            if call.vendor == "claude":
-                return H.claude_cap("Trimming the comments", num_turns=8)
-            return H.grok_ok("Trimming the comments", stop="cancelled", num_turns=8)
-        H.write(call, {"app.py": _TYPED})
-        return 'Added the TypeError.\nCHANGED: ["app.py"]'
-
-    def lead(call, replay):
-        if call.task == "t1":
-            H.write(call, {"app.py": fixed})
-            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
-        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
-        return 'Documented add.\nCHANGED: ["README.md"]'
-
-    def collaborator(call, replay):
-        if call.task == "t1":
-            return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
-        return "NO FINDINGS\nR2: MET - README.md:3"
-
-    def recheck(call, replay):
-        return "RESOLVED" if "TypeError" in (Path(call.cwd) / "app.py").read_text() else "UNRESOLVED: no TypeError"
-
-    if shape == "serial":
-        plan = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_SIMPLE + "\nCOVERS: R1"
-        plan = plan.replace("backend simple", "backend complex")
-        max_tasks = 1
-    else:
-        plan = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
-                "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
-                + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
-        max_tasks = 2
-    replay = H.run(tmp_path, monkeypatch, Script(
-        orchestrator=_plan(plan), lead=lead, revision=revision, collaborator=collaborator, recheck=recheck,
-        auditor=lambda c, r: "R1: MET - app.py:2\nR2: MET - README.md:3",
-        **{"requirements-review": lambda c, r: "COMPLETE"}),
-        files=FILES, max_tasks=max_tasks, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
-    assert revisions[1].vendor in ("claude", "grok"), "the trim ran on a CLI that takes the round cap"
-    assert len(revisions) == 2, f"revision and its trim only, got {len(revisions)}"
-    assert all("changed no file" not in c.prompt for c in revisions)
-    assert "TypeError" not in (replay.project / "app.py").read_text()
-    assert not replay.result.completed
-
-
-# -- R16 on 78f76bb: a capped initial draft past the size stop -----------------------------
-
-@pytest.mark.requirements_ledger
-@pytest.mark.parametrize("case", ["trimmed", "still-over", "path-breach", "capped-trim", "exhausted"])
-def test_a_capped_draft_past_the_size_stop_gets_the_same_one_trim(tmp_path, monkeypatch, case):
-    """R16: t2's draft stopped at its 8-round cap with 153 changed lines
-    inside its paths against a stated 85, and the capped close failed it on
-    scope with both fix cycles unused. Its kept edits now get the one trim a
-    finished draft gets, charged as the first cycle; under the stop, the
-    existing capped paths decide (here the last-slot review), with the cap
-    still recorded. Still over, a path breach, a capped trim (no further
-    writer) or an exhausted allowance hold as before."""
-    declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_SIMPLE + "\nCOVERS: R1"
-
-    def lead(call, replay):
-        H.write(call, {"app.py": _BLOATED})
-        if case == "path-breach":
-            H.write(call, {"README.md": "# app\n\nadd.\n"})
-        return H.grok_ok("Still adding helpers", stop="cancelled", num_turns=8)
-
-    def revision(call, replay):
-        n = len(replay.of("revision"))
-        if n == 1 and case == "capped-trim":
-            H.write(call, {"app.py": _BLOATED + "\n# trimming\n"})
-            return H.grok_ok("Trimming", stop="cancelled", num_turns=8)
-        if n == 1:
-            H.write(call, {"app.py": _BLOATED + "\n# kept\n" if case == "still-over" else _TYPED})
-            return 'Trimmed.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
-        H.write(call, {"app.py": _BLOATED})
-        return 'Revised.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
-
-    def collaborator(call, replay):
-        if case == "exhausted":
-            return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
-        # The size trim changed app.py: this reviewer judges the shown
-        # comparison and says so for the trim it was shown.
-        return "NO FINDINGS\nR1: MET - app.py:5\nTRIM T-t1-1: PRESERVED"
-
-    replay = H.run(tmp_path, monkeypatch, Script(
-        orchestrator=_plan(declared), lead=lead, revision=revision, collaborator=collaborator,
-        recheck=lambda c, r: "UNRESOLVED: no", auditor=lambda c, r: "R1: MET - app.py:5",
-        **{"requirements-review": lambda c, r: "COMPLETE"}),
-        files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
-    result = H.result_json(replay)
-    roles = [c.role for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
-    trims = [c for c in replay.calls if c.role == "revision" and "stopped at its 8-round limit" in c.prompt]
-    if case == "trimmed":
-        assert roles == ["lead", "revision"] and len(trims) == 1
-        assert "Aim for about 40 lines" in trims[0].prompt
-        assert replay.of("collaborator") and replay.of("auditor") and replay.result.completed
-        assert (replay.project / "app.py").read_text() == _TYPED
-        assert any(f.get("kind") == "cap" for t in replay.workflow["tasks"] for f in t["facts"]), "cap kept"
-        return
-    assert not replay.result.completed
-    if case == "path-breach":
-        assert roles == ["lead"] and result["failed_tasks"] == ["t1"], "no trim for a path breach"
-    elif case == "still-over":
-        assert roles == ["lead", "revision"] and result["failed_tasks"] == ["t1"]
-    elif case == "capped-trim":
-        assert roles == ["lead", "revision"], "a capped trim buys no further writer"
-        assert result["failed_tasks"] == ["t1"] and not replay.of("collaborator")
-    else:
-        assert roles == ["lead", "revision", "revision"] and result["failed_tasks"] == ["t1"], \
-            "trim, then a revision that overruns: no second trim"
-
-
-@pytest.mark.requirements_ledger
-def test_a_parallel_childs_capped_draft_past_the_stop_is_trimmed_and_reviewed_after_the_merge(
-        tmp_path, monkeypatch):
-    """R16's actual shape: t2 was a capped parallel child in the final batch.
-    Trimmed under the stop it closes capped, merges, and meets the existing
-    final-batch capped-child review instead of failing on scope."""
-    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
-    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
-             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
-             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
-    bloated = fixed + "".join(f"\n\ndef _unused_{i}():\n    return {i}\n" for i in range(8))
-
-    def lead(call, replay):
-        if call.task == "t1":
-            H.write(call, {"app.py": bloated})
-            return H.grok_ok("Adding helpers", stop="cancelled", num_turns=8)
-        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
-        return 'Documented add.\nCHANGED: ["README.md"]'
-
-    def revision(call, replay):
-        H.write(call, {"app.py": fixed})
-        return 'Trimmed.\nCHANGED: ["app.py"]'
-
-    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead, revision=revision,
-                                                 collaborator=lambda c, r: "NO FINDINGS\n" + (
-                                                     "R1: MET - app.py:2" if c.task == "t1" else
-                                                     "R2: MET - README.md:3")),
-                   files=FILES, max_tasks=2, settings=Settings(backend="cli", lead_max_turns=8),
-                   record_complete=False)
-    result = H.result_json(replay)
-    assert "t1" not in result["failed_tasks"], "trimmed, not failed on scope"
-    assert (replay.project / "app.py").read_text() == fixed, "the trimmed source merged"
-    reviews = (result.get("parallel_batches") or [{}])[0].get("capped_final_reviews") or []
-    assert reviews and reviews[0]["task"] == "t1", "the existing capped final-child review ran"
-
-
-@pytest.mark.requirements_ledger
-def test_a_parallel_childs_capped_trim_that_lands_in_bounds_is_held_not_reviewed(tmp_path, monkeypatch):
-    """Root review of 860769e: the trim of a capped parallel draft wrote an
-    in-bounds source and then stopped at its own cap; the child closed on the
-    draft's cap, and the final-batch capped-child review completed the run.
-    Two caps in one task are now held: no review, not completed, and no
-    third writer call."""
-    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
-    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
-             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
-             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
-    bloated = fixed + "".join(f"\n\ndef _unused_{i}():\n    return {i}\n" for i in range(8))
-
-    def lead(call, replay):
-        if call.task == "t1":
-            H.write(call, {"app.py": bloated})
-            return H.grok_ok("Adding helpers", stop="cancelled", num_turns=8)
-        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
-        return 'Documented add.\nCHANGED: ["README.md"]'
-
-    def revision(call, replay):
-        H.write(call, {"app.py": _TYPED})
-        return H.grok_ok("Trimmed; checking once more", stop="cancelled", num_turns=8)
-
-    replay = H.run(tmp_path, monkeypatch, Script(
-        orchestrator=_plan(batch), lead=lead, revision=revision,
-        collaborator=lambda c, r: "NO FINDINGS\n" + ("R1: MET - app.py:5" if c.task == "t1" else
-                                                     "R2: MET - README.md:3"),
-        auditor=lambda c, r: "R1: MET - app.py:5\nR2: MET - README.md:3",
-        **{"requirements-review": lambda c, r: "COMPLETE"}),
-        files=FILES, max_tasks=2, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
-    result = H.result_json(replay)
-    writers = [c for c in replay.calls if c.task == "t1" and c.role in ("lead", "revision")]
-    assert [c.role for c in writers] == ["lead", "revision"], "draft and its trim, nothing more"
-    assert "t1" in result["turn_limited_tasks"]
-    reviews = (result.get("parallel_batches") or [{}])[0].get("capped_final_reviews") or []
-    t1 = [r for r in reviews if r["task"] == "t1"]
-    assert t1 and not t1[0]["reviewed"] and t1[0]["verdict"].startswith("held"), t1
-    assert not replay.result.completed
 
 
 # -- R17 on a3cf7e4: the planner's view of settled and owed unfinished work ----------------

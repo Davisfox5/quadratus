@@ -167,10 +167,15 @@ def test_forbid_sensitive_alias_and_bounds(tmp_path):
     assert policy.resolve(['keep.py'], writing=True)['blocked']
     assert not policy.resolve(['keep.py'], writing=False)['blocked']
     scope = policy.scope(TaskScope(['*'], max_lines=80))
-    assert scope.max_lines == 50 and scope.overrun_ratio == 1.1
+    # The task's declared estimate is kept as declared (advisory); the
+    # policy figure is the default for a task that declares none, and
+    # the stricter overrun ratio still marks the telemetry.
+    assert scope.max_lines == 80 and scope.overrun_ratio == 1.1
+    assert policy.scope(TaskScope(['*'])).max_lines == 50
     assert not scope.permits('keep.py')
     assert not scope.permits('auth/new.py')
-    assert scope.assess('--- a/a.py\n+++ b/a.py\n' + '+x\n' * 56).oversized
+    assert scope.assess('--- a/a.py\n+++ b/a.py\n' + '+x\n' * 90).oversized
+    assert not scope.assess('--- a/a.py\n+++ b/a.py\n' + '+x\n' * 56).oversized
 
 
 def test_gate_runner_never_silently_uses_legacy_for_policy(tmp_path):

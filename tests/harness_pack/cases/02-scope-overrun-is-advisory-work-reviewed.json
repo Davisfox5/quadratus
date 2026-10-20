@@ -1,0 +1,91 @@
+{
+ "id": "scope-overrun-is-advisory-work-reviewed",
+ "shape": "scope-trap",
+ "family": "pure-logic",
+ "grader": false,
+ "source": "Report, Quadratus, GameTape finding 2: a two-line fixture task implemented the rest of the feature. Until 2026-10-20 a 50 percent overrun stopped the task (contract change 2026-09-28) and from Step 2 r13 spent one trim call first. Operator directive 2026-10-20: size is advisory. The overrun is measured and reported (scope_reports.oversized), no trim call is spent, the work is kept, the task meets its reviewer with the measured size and its close-out, and only a path outside the scope (case 03) stops it.",
+ "session": {
+  "project": true,
+  "allow_writes": true
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Tiny fix",
+   "complexity": "standard",
+   "scope": {
+    "permitted_paths": [
+     "app.py"
+    ],
+    "max_lines": 5,
+    "intended_result": "one tiny fix",
+    "acceptance": [
+     "file compiles"
+    ]
+   }
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Implemented.\nCHANGED: [\"app.py\"]",
+   "writes": {
+    "app.py": "print(0)\nprint(1)\nprint(2)\nprint(3)\nprint(4)\nprint(5)\nprint(6)\nprint(7)\nprint(8)\nprint(9)\nprint(10)\nprint(11)\nprint(12)\nprint(13)\nprint(14)\nprint(15)\nprint(16)\nprint(17)\nprint(18)\nprint(19)\nprint(20)\nprint(21)\nprint(22)\nprint(23)\nprint(24)\nprint(25)\nprint(26)\nprint(27)\nprint(28)\nprint(29)\nprint(30)\nprint(31)\nprint(32)\nprint(33)\nprint(34)\nprint(35)\nprint(36)\nprint(37)\nprint(38)\nprint(39)\n"
+   }
+  },
+  {
+   "role": "collaborator",
+   "reply": "NO FINDINGS"
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "failed_tasks": [],
+  "files": {
+   "app.py": {
+    "exists": true,
+    "contains": "print(39)"
+   }
+  },
+  "scope_reports": {
+   "count": {
+    "min": 1
+   },
+   "oversized": true,
+   "blocking": false
+  },
+  "open_findings": {
+   "empty": true
+  },
+  "calls": {
+   "role:collaborator": 1,
+   "role:closeout": 1,
+   "role:revision": 0
+  },
+  "prompts": [
+   {
+    "role": "collaborator",
+    "contains": "against the planner's estimate of ~5",
+    "count": 1
+   },
+   {
+    "role": "collaborator",
+    "contains": "stops nothing for size",
+    "count": 1
+   },
+   {
+    "role": "revision",
+    "contains": "Bring the change down",
+    "count": 0
+   }
+  ]
+ }
+}

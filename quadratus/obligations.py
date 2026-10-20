@@ -132,7 +132,7 @@ def _task_line(row: TaskRow) -> str:
         parts.append(f"continued by {row.continued_by[0]}")
     size = f"{row.code_files} code / {row.test_files} test file(s), {row.changed_lines} line(s)"
     if row.max_lines:
-        size += f" of {row.max_lines}"
+        size += f" against an estimate of ~{row.max_lines}"
     parts.append(size)
     if row.open_items:
         parts.append(f"{row.open_items} open item(s)")

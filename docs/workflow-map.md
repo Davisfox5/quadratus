@@ -83,7 +83,7 @@ from `6382cf2`.
 | --- | --- | --- | --- |
 | Provider refusal | `ProviderRefusal` | preserved and stops; close-out refusal gets a harness record | never retried or rerouted (Fleet disables the fallback) |
 | Relevant permission denial | `CapabilityUnavailable` from runtime | stop after the one call, even at the cap | above the cap |
-| Scope overrun | `TaskFailed("scope")` | the task fails, work preserved, the orchestrator re-plans with CONTINUES (2026-09-28: two live runs ended on the first such fault) | `failed`, below cap |
+| Scope path breach | `TaskFailed("scope")` | the task fails, work preserved, the orchestrator re-plans with CONTINUES (2026-09-28: two live runs ended on the first such fault). A size overrun is advisory since 2026-10-20: measured, reported to the reviewers and the planner, never a stop | `failed`, below cap |
 | Unmeasurable scope (tree not inspectable) | `PartialWorkStopped` | stop, work preserved | integrity |
 | Lead channel did not converge (fetch or consult budget, malformed WORKER, request after the channel closed, unresolved request as a draft) | `TaskFailed("channel")` | the task fails, the run continues | `failed` |
 | Task scope invalid twice (orchestrator) | `RunStalled` after one correction | stop; the correction now carries the scope and capture rules in full (a6c9576 rerun stalled on a rule it was never shown). Since the 2026-09-28 parity batch every reply rule the harness enforces is stated in the eliciting prompt, with the bounds quoted from the parser constants (`tests/test_prompt_rule_parity.py`) | operator |
@@ -286,7 +286,7 @@ review.
 | J12 | Audit finds overflow, becomes debt `F<n>` | debt recorded | same, typed | P1 |
 | J13 | Repair resolves `F<n>` with verified, approved renders | resolved | same, typed | P1 |
 | J14 | Repair fails to resolve | FindingsUnresolved | same | P1 |
-| J15 | Scope overrun | PartialWorkStopped | `failed`, preserved, the run continues; two in a row trip the breaker | P1, revised 2026-09-28 |
+| J15 | Scope path breach | PartialWorkStopped | `failed`, preserved, the run continues; two in a row trip the breaker. Size past the estimate is telemetry, not a stop (2026-10-20) | P1, revised 2026-09-28 and 2026-10-20 |
 | J16 | Dependency tree changed or unavailable | DependencyTreeChanged | `integrity`, above cap and product | P1 |
 | J17 | Provider refusal (lead, fix, close-out) | stop or harness record | `refusal`, never rerouted | P1 |
 | J18 | Relevant denial at the cap | CapabilityUnavailable | `denial`, above cap | P1 |

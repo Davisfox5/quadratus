@@ -595,16 +595,18 @@ def test_a_continuation_sized_for_its_tests_and_setup_proceeds(tmp_path, monkeyp
     assert "test_case_5" in _read(replay, "tests/test_clock.py")
 
 
-def test_a_continuation_whose_tests_overrun_fails_the_task_with_work_preserved(tmp_path, monkeypatch):
-    """The ceiling is unchanged: 1.5 x 60 = 90 lines, and the tests are not trimmed to fit."""
+def test_a_continuation_whose_tests_run_past_the_estimate_keeps_every_test_and_closes(tmp_path, monkeypatch):
+    """Operator directive 2026-10-20: ~103 lines of tests against an
+    estimate of ~60 are measured and reported, never stopped or trimmed;
+    the task closes on its checks and reviews with every case kept."""
     replay = _continuation_run(tmp_path, monkeypatch, cases=14)      # ~103 lines
     t2 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t2")
-    assert t2["closed_as"] == "failed"
-    fact = next(f for f in t2["facts"] if f["kind"] == "failed")
-    assert fact["detail"].startswith("scope: Task exceeded its declared scope")
-    assert "stopped past 90" in (fact.get("full") or fact["detail"]) and "in tests" in (fact.get("full") or fact["detail"])
-    assert not replay.result.completed
-    assert "test_case_13" in _read(replay, "tests/test_clock.py"), "the work is preserved"
+    assert t2["closed_as"] == "closed" and not any(f["kind"] == "failed" for f in t2["facts"])
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
+    report = H.result_json(replay)["scope_reports"][-1]
+    assert report["oversized"] and report["within_scope"] and report["test_lines"] > 90
+    assert not any("Bring the change down" in c.prompt for c in replay.calls), "no trim call"
+    assert "test_case_13" in _read(replay, "tests/test_clock.py"), "every test is kept"
 
 
 # -- 8. an interactive capture whose step failed (Codex review, Run 13) ---------------

@@ -146,9 +146,11 @@ architecture, briefly:
   review to the reviewer pair, scope and decomposition to the orchestrator)
   are the exception and each carries its evidence. The roster is a seed —
   `quadratus --probe` replaces the guesses with what your CLIs accept.
-- **Task size beats model choice**: decomposition carries a hard size
-  ceiling, because review quality collapses on large diffs faster than any
-  gap between reviewers.
+- **Task size beats model choice**: decomposition carries a size guide
+  (~100 lines), because review quality collapses on large diffs faster than
+  any gap between reviewers. The guide is advisory: the harness measures
+  every change and shows the size to the reviewers, who judge whether it
+  was necessary; it stops nothing for size alone.
 - **Review discipline** (`routing.py`, `session.py`): never one reviewer
   (the two pinned reviewers fail in opposite directions), reviewers are
   anonymous to the lead but named in the record, verification crosses
@@ -345,10 +347,13 @@ scope if it selects unrelated rules. A model tier or detected fact grants no
 write permission. Sensitive paths remain blocked for writes pending an operator
 ruling; read-only proposals can still be previewed.
 
-`--path` and `--forbid` are repeatable. Operator and policy bounds combine with
-per-task scopes; stricter line and overrun limits win. Conflicting declarations
-stop before the lead is invoked. Post-call scope checks preserve and report any
-unexpected edits. These controls do not constitute an OS filesystem sandbox.
+`--path` and `--forbid` are repeatable. Operator and policy path bounds combine
+with per-task scopes. Line figures are size estimates: a task's own is kept as
+declared, the policy's is the default for a task that declares none, and the
+measured size is reported to the reviewers rather than enforced. Conflicting
+declarations stop before the lead is invoked. Post-call scope checks preserve
+and report any unexpected edits. These controls do not constitute an OS
+filesystem sandbox.
 
 Run records include `policy-plan.json` and each resolved task plan plus its hash
 in `result.json`. Role-specific checklist packets are the separate Q6 item.

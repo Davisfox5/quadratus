@@ -11,8 +11,8 @@ from __future__ import annotations
 from quadratus.registry import MODE_ROSTERS, resolve
 from quadratus.task_kinds import (
     DIFFICULTY_LADDER,
-    MAX_TASK_LINES,
     ROUTING,
+    TASK_SIZE_GUIDE,
     Confidence,
     KindPolicy,
     TaskKind,
@@ -229,8 +229,10 @@ def test_a_kind_with_no_hazards_carries_no_guidance():
     assert guidance_for(TaskKind.GENERAL) == []
 
 
-def test_decomposition_carries_the_size_ceiling():
-    assert str(MAX_TASK_LINES) in policy_for(TaskKind.DECOMPOSE).gate
+def test_decomposition_carries_the_size_guide_as_a_guide():
+    gate = policy_for(TaskKind.DECOMPOSE).gate
+    assert str(TASK_SIZE_GUIDE) in gate and "not a limit" in gate
+    assert "never split a requirement from the tests" in gate and "No task may" not in gate
 
 
 # -- the findings that outrank the per-model preferences ---------------------

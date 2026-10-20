@@ -46,9 +46,12 @@ __all__ = ["TaskScope", "ScopeReport", "changed_paths", "count_change_lines",
            "count_change_lines_by_path", "is_test_path", "declared_signatures",
            "lint_declaration"]
 
-#: How far past ``max_lines`` a change may drift before it is called expansion
-#: rather than an estimate that ran long. A task sized at 100 lines landing at
-#: 130 is normal; landing at 400 is a different task wearing the same name.
+#: How far past the planner's estimate (``max_lines``) a change may run
+#: before the report says so. A measurement threshold for the record, the
+#: reviewer and the planner's next estimate, never a stop: a task sized at
+#: 100 lines landing at 130 is normal, and one landing at 400 is either an
+#: estimate that missed or a task that grew, which only a reader of the
+#: change can tell (operator directive 2026-10-20: size is advisory).
 _OVERRUN_TOLERANCE = 1.5
 
 
@@ -58,9 +61,13 @@ class ScopeReport:
 
     ``blocking`` is deliberately narrow. Out-of-scope *paths* block: the
     operator named where edits may land, and a write elsewhere is the grant
-    being exceeded. ``oversized`` is a separate size-budget result. The normal
-    editing dispatcher stops on either result and preserves the partial work.
-    Acceptance criteria are still checked by the task's reviews and gates.
+    being exceeded; the editing dispatcher stops on it and preserves the
+    partial work. ``oversized`` is size telemetry: the change ran well past
+    the planner's estimate. It stops nothing, buys no call and rejects no
+    work; it is recorded, shown to the lead, the reviewers and the planner,
+    and the reviewer judges whether the size is what correctness and the
+    task's proofs need. Acceptance criteria are still checked by the task's
+    reviews and gates.
     """
 
     within_scope: bool
@@ -69,10 +76,10 @@ class ScopeReport:
     changed_lines: int = 0
     max_lines: Optional[int] = None
     notes: List[str] = field(default_factory=list)
-    #: ``changed_lines`` split by whether the path is a test file. The bound is
-    #: a single figure and tests count in full against it; the split is
-    #: reported so the next estimate can be calibrated against what actually
-    #: happened, not so that either half is excused.
+    #: ``changed_lines`` split by whether the path is a test file. The
+    #: estimate is a single figure and tests count in full against it; the
+    #: split is reported so the next estimate can be calibrated against what
+    #: actually happened, and so a reviewer sees where the size went.
     code_lines: int = 0
     test_lines: int = 0
     overrun_ratio: float = _OVERRUN_TOLERANCE
@@ -105,13 +112,14 @@ class ScopeReport:
             # that missed (attempt 2 of the blind acceptance: a validator plus
             # ten named test scenarios sized at 100 lines landed at 223, all
             # inside the slice) or a task growing into the whole feature; the
-            # harness cannot tell which, so it reports the split and asks.
-            allowed = int(self.max_lines * self.overrun_ratio)
+            # harness cannot tell which, so it reports the split for the
+            # reviewer and the planner and stops nothing.
             lines.append(
                 f"  {self.changed_lines} changed lines ({self.code_lines} in "
-                f"code, {self.test_lines} in tests) against a stated bound of "
-                f"~{self.max_lines}, stopped past {allowed}. Tests count in "
-                f"full. Say what the estimate missed, or what grew."
+                f"code, {self.test_lines} in tests) against the planner's estimate of "
+                f"~{self.max_lines}. Tests count in full. This is a measurement for the "
+                f"reviewer and the planner, not a stop: say what the estimate missed, "
+                f"or what grew."
             )
         for note in self.notes:
             lines.append(f"  {note}")
@@ -131,7 +139,8 @@ class TaskScope:
         intended_result: One sentence describing the finished state.
         acceptance: How the task knows it is done. Rendered into the prompt
             and carried into the close-out.
-        max_lines: Rough ceiling on changed lines.
+        max_lines: The planner's estimate of changed lines (advisory: measured
+            and reported, never a stop).
         forbidden_paths: Globs that are never editable regardless of
             ``permitted_paths`` -- the operator's explicit exclusions.
     """
@@ -160,10 +169,10 @@ class TaskScope:
     #: ``{"implementation", "proof", "setup"}``, exact non-negative integers
     #: summing to ``max_lines``, so a task is sized for its implementation
     #: and the executed proof its COVERS promise together. Rendered to the
-    #: lead and kept on the record for calibration; it widens nothing (the
-    #: bound and the stop are ``max_lines``, every line counts in full) and
-    #: proves nothing about what the proof covers. None when not declared
-    #: (legacy declarations): unknown, not zero.
+    #: lead and kept on the record for calibration; every line counts in
+    #: full against the one estimate, and the split proves nothing about
+    #: what the proof covers. None when not declared (legacy declarations):
+    #: unknown, not zero.
     estimate: Optional[Dict[str, int]] = None
     #: The planner's proof scenarios (SCOPE ``"proofs"``, ``read_proofs``):
     #: each a stable id, the requirement ids it shows, the operation, the
@@ -255,22 +264,27 @@ class TaskScope:
         if self.estimate:
             parts.append("The planner's split of that size: "
                          + ", ".join(f"{k} {v}" for k, v in self.estimate.items())
-                         + " lines. The bound below is the sum; every line counts the same.")
+                         + " lines. The estimate below is the sum; every line counts the same.")
         if self.max_lines:
-            # The lead is told what the harness measures, not only the
-            # estimate (series rule-2ffa7f6 f3, f4 and f7: first tasks of 85
+            # The lead is told what the harness measures and what it does
+            # with it (series rule-2ffa7f6 f3, f4 and f7: first tasks of 85
             # to 100 lines landed at 135 to 236, with 112 to 171 of them in
-            # tests the lead wrote against a bound it read as code).
-            stop = int(self.max_lines * _OVERRUN_TOLERANCE)
+            # tests the lead wrote against a bound it read as code). The
+            # size is advisory (operator directive 2026-10-20): correctness
+            # and complete requirements first, the tests that prove them,
+            # then conciseness; the measured size reaches the reviewer, who
+            # judges whether it was necessary.
             parts.append(
                 f"Expected size: about {self.max_lines} changed lines, counting added and removed "
-                f"lines in every file, tests in full. The harness measures the diff after each "
-                f"editing call and stops the task past {stop} changed lines with the work kept "
-                f"but unfinished. Write tests as compact named cases, not one fixture per case. "
-                f"If the work genuinely needs substantially more, say so and stop "
-                f"rather than delivering the larger change -- an undersized "
-                f"task quietly growing into a whole feature is the specific "
-                f"failure this bound exists to catch."
+                f"lines in every file, tests in full. This is the planner's estimate, not a limit: "
+                f"the harness measures the diff after each editing call and reports the size to "
+                f"you, to the reviewers and to the planner, and it stops nothing for size alone. Do "
+                f"what this task and its proof scenarios need, completely and correctly, with the "
+                f"tests that show it; if that needs substantially more than the estimate, deliver it "
+                f"and say what the estimate missed. Keep the change focused on this task: no "
+                f"unrelated edits, no duplication, no padding. Never compress formatting, squeeze "
+                f"tests onto one line or leave a test out to fit a number; a reviewer judges "
+                f"whether the size was necessary, and length alone is not a finding."
             )
         return "\n".join(parts)
 
@@ -551,8 +565,10 @@ def read_estimate(data, max_lines: int) -> Dict[str, int]:
     return {key: int(data[key]) for key in ESTIMATE_KEYS}
 
 
-def read_scope(description: str, *, max_lines: int):
-    """Require a structured declaration before normal project dispatch."""
+def read_scope(description: str):
+    """Require a structured declaration before normal project dispatch.
+    ``max_lines`` is the planner's size estimate, any positive integer: a
+    plan is never refused for its size (operator directive 2026-10-20)."""
     matches = list(re.finditer(r"^SCOPE:\s*(.+)$", description, re.MULTILINE))
     if len(matches) != 1:
         raise ValueError("Declare exactly one SCOPE JSON line")
@@ -579,8 +595,8 @@ def read_scope(description: str, *, max_lines: int):
     if (not isinstance(acceptance, list) or not acceptance
             or any(not isinstance(x, str) or not x.strip() for x in acceptance)):
         raise ValueError("SCOPE needs verifiable acceptance conditions")
-    if type(bound) is not int or not 0 < bound <= max_lines:
-        raise ValueError(f"SCOPE max_lines must be between 1 and {max_lines}")
+    if type(bound) is not int or bound <= 0:
+        raise ValueError("SCOPE max_lines must be a positive integer (the planner's size estimate)")
     edits = data.get("edits", "allowed")
     if edits not in ("allowed", "none"):
         raise ValueError('SCOPE edits must be "none" (review only) or omitted')

@@ -32,11 +32,17 @@ DECLARATION = 'KIND: backend standard\nSCOPE: ' + json.dumps(SCOPE) + '\nImpleme
 @pytest.mark.parametrize('invalid', [{}, dict(SCOPE, permitted_paths=['../other']),
                                     dict(SCOPE, permitted_paths=['/**']),
                                     dict(SCOPE, permitted_paths=['**']),
-                                    dict(SCOPE, max_lines=True), dict(SCOPE, max_lines=101),
+                                    dict(SCOPE, max_lines=True), dict(SCOPE, max_lines=0),
                                     dict(SCOPE, acceptance=[])])
-def test_scope_declarations_reject_missing_or_unbounded_values(invalid):
+def test_scope_declarations_reject_missing_or_invalid_values(invalid):
     with pytest.raises(ValueError):
-        read_scope('SCOPE: ' + json.dumps(invalid), max_lines=100)
+        read_scope('SCOPE: ' + json.dumps(invalid))
+
+
+def test_a_scope_sized_past_the_guide_is_read_as_declared():
+    # Operator directive 2026-10-20: the size is the planner's estimate, never a ceiling.
+    scope, _ = read_scope('SCOPE: ' + json.dumps(dict(SCOPE, max_lines=101)) + '\nImplement a.')
+    assert scope.max_lines == 101
 
 
 def test_normal_project_decision_repairs_scope_before_any_editor_runs(tmp_path):

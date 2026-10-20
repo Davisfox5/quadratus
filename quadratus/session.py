@@ -93,8 +93,8 @@ from .scope import ScopeReport, TaskScope, changed_paths, count_change_lines, is
 from .structured import StructuredError, parse_security_verdict
 from .task_kinds import (
     KNOWN_NEEDS,
-    MAX_TASK_LINES,
     ROUTING,
+    TASK_SIZE_GUIDE,
     NoCapableSeat,
     TaskKind,
     escalate_from,
@@ -287,12 +287,14 @@ class RunStalled(RuntimeError):
 #: between. A task scoped too large has therefore already lost most of the
 #: review that was supposed to catch its defects, and no downstream choice
 #: recovers it. Splitting is the only intervention that works.
-_SIZE_CEILING = (
-    f"Size the task so it produces at most ~{MAX_TASK_LINES} lines of diff. If "
-    f"the obvious next step is bigger than that, name the first slice of it "
-    f"instead and leave the rest for the next round. Review quality falls by "
-    f"roughly an order of magnitude across this threshold, so a task scoped "
-    f"too large is one whose defects will not be found."
+_SIZE_GUIDE = (
+    f"Aim for tasks of about ~{TASK_SIZE_GUIDE} lines of diff: review quality falls by roughly an "
+    "order of magnitude across that size, so where the obvious next step is much bigger, name the "
+    "first slice that is complete and reviewable on its own and leave the rest for the next round. "
+    "The figure is a guide, not a limit: never split a requirement from the tests that prove it, "
+    "never size a task below what its correctness needs, and a task that must be larger is "
+    "declared at its real size with the reason. The harness measures every change and shows the "
+    "size to the reviewers; it stops nothing for size alone."
 )
 
 #: The one question asked after the task cap is spent. It can only confirm:
@@ -584,19 +586,20 @@ class SessionConfig:
 _SCOPE_REQUEST = (
     'After KIND, include exactly one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
     '"intended_result": "one concrete result", "acceptance": ["verifiable condition"], '
-    '"max_lines": ' + str(MAX_TASK_LINES) + '}. The line starts at the left margin with '
+    '"max_lines": ' + str(TASK_SIZE_GUIDE) + '}. The line starts at the left margin with '
     'SCOPE: in capitals and holds the whole JSON object; an indented, bulleted or fenced '
     'SCOPE line is not read, and a second one is refused. Then describe the task in plain '
     'text on the following lines: a reply with no description after its labels is refused. '
     'Name narrow project-relative files or directories; no absolute paths, parent '
     'traversal, backslashes, a leading ~, a .quadratus path, surrounding whitespace or a '
     'project-wide wildcard. '
-    'max_lines must be a positive integer no greater than ' + str(MAX_TASK_LINES) + '. '
-    'Decompose larger work. '
+    'max_lines is your size estimate for the whole change, a positive integer; a task that needs more '
+    'than the ~' + str(TASK_SIZE_GUIDE) + '-line guide is declared at its real size, never squeezed. '
     'For a task that only reviews or audits and must not change source, add '
     '"edits": "none" to SCOPE; its findings then go to separately scoped tasks. '
-    'These bounds are measured after every editing call; an overrun stops the task '
-    'with its work preserved. The line estimate has 50 percent tolerance. '
+    'The paths are enforced: an edit outside them stops the task with its work preserved. The size is '
+    'measured after every editing call and reported to the lead, the reviewers and you; it stops '
+    'nothing, and the reviewers judge whether the size was necessary. '
     'Size the implementation and its executed proof together: every requirement the '
     'task COVERS is delivered in this task only with the executed tests that prove it '
     '(for an error or refusal requirement, a passing case per rejecting path), so '
@@ -606,10 +609,10 @@ _SCOPE_REQUEST = (
     'max_lines to their sum. You may state that split as '
     '"estimate": {"implementation": 45, "proof": 45, "setup": 10} inside SCOPE: exactly '
     'those three keys, exact non-negative integers, summing to max_lines; it is kept on '
-    'the record and widens nothing. If the implementation and its proof do not fit '
-    'together, narrow what the task COVERS to what it proves and leave the rest '
-    'uncovered for a later task; never describe a delivery whose tests are only '
-    'deferred. Declare the proof scenarios in SCOPE as "proofs": [{"id": "P1", '
+    'the record for calibration. A delivery is always sized with its executed proof: never '
+    'describe a delivery whose tests are only deferred, and never shrink the proof to fit a '
+    'number; where a slice is genuinely separable, narrow what the task COVERS to what it '
+    'proves and leave the rest for a later task. Declare the proof scenarios in SCOPE as "proofs": [{"id": "P1", '
     '"requirements": ["R2"], "operation": "<the call or request made>", "state": "<the '
     'starting state it needs>", "expect": "<the exact behaviour and resulting state>", '
     '"location": "tests/test_x.py"}, ...]: every requirement the task COVERS must appear in '
@@ -1404,11 +1407,7 @@ _DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
 _PROVES_ANY = re.compile(r"^\s*PROVES:(.*)$", re.MULTILINE)
 _PROVES_BODY = re.compile(r"(P\d+)\s*-\s*(\S+)")
 _PROVES_PID = re.compile(r"\s*(P\d+)\b")
-_TRIM_LINE = re.compile(r"^\s*TRIM(?:\s+(T[\w.-]+))?:\s*(PRESERVED|LOST)(?:\s*-\s*(.*?))?\s*$", re.MULTILINE)
-_TRIM_SUPPORT_MAX_FILES = 400
 _SCENARIO_RENDER_MAX_CHARS = 4_000
-#: Name marks of the support files a trim's evidence keeps beside the tests.
-_TRIM_SUPPORT_MARKS = ("conftest", "fixture", "helper", "support", "factor", "stub", "fake", "mock")
 def _check_runs(check: dict, root=None) -> List[dict]:
     """Each command of a recorded check as execution evidence: whether it
     passed and was required, whether it ran only part of what it names, how
@@ -1714,13 +1713,6 @@ _AUTHORITY_ORDER = (
     "meet is NOT MET however minor it seems; never mark a requirement MET beside a note that one of its "
     "conditions is not met. Behaviour the goal does not address, and old behaviour outside the work it "
     "asks for, is judged on its own merits as before.")
-
-#: The largest task diff a trim prompt carries whole (R20 on c7e9449); a
-#: larger one is stated as omitted, never cut.
-_TRIM_DIFF_MAX_CHARS = 32_000
-#: The largest pre-trim test evidence kept whole as an artifact; past it only
-#: hashes are kept and the trim stays unjudgeable from the record.
-_TRIM_EVIDENCE_MAX_CHARS = 200_000
 
 #: What a test cannot do in a reassessment, whoever wrote it.
 _EVIDENCE_AUTHORITY = (
@@ -2337,7 +2329,7 @@ def _clean_goal_review(text: str, rids) -> bool:
     if not rids or any(verdicts.get(rid) is not True for rid in rids):
         return False
     return all(_REQUIREMENT_VERDICT.match(line) or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE
-               or _TRIM_LINE.match(line) for line in lines[1:])
+               for line in lines[1:])
 
 
 def _approving_review(text: str, rids) -> bool:
@@ -2657,9 +2649,6 @@ class Session:
         self._terminal_route: Optional[dict] = None
         #: PROVES lines that bound nothing (unknown scenario, malformed case).
         self.proof_binding_problems: List[dict] = []
-        #: Immutable pre-trim test evidence and the independent preservation
-        #: disposition each trim owes (``_trim_snapshot``, ``_trim_block``).
-        self.trim_records: List[dict] = []
         self._calibrated: set = set()
         #: While the merge gate runs: the post-merge rechecks and capped
         #: final reviews that follow it, for its repair route.
@@ -3007,7 +2996,10 @@ class Session:
                     report = self._assess_scope(spec, self._task_memory, self._task_before)
                     if spec.scope is not None and report is None:
                         raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
-                    if report and (report.blocking or report.oversized):
+                    if report and report.blocking:
+                        # Paths are the grant; size is advisory (operator
+                        # directive 2026-10-20): a change past the estimate
+                        # is measured and shown, never stopped here.
                         raise TaskFailed("scope", "Task exceeded its declared scope; work preserved. "
                                          + report.render(), partial=self._inspect_partial_edits(self._task_before))
         except BaseException as exc:
@@ -3161,7 +3153,7 @@ class Session:
                 raise PartialWorkStopped(f"A capped {role} could not be measured against the task "
                                          "scope; work preserved.",
                                          partial=self._inspect_partial_edits(self._task_before)) from exc
-            if report and (report.blocking or report.oversized):
+            if report and report.blocking:
                 raise TaskFailed("scope", f"A capped {role} exceeded the declared scope; work preserved. "
                                  + report.render(),
                                  partial=self._inspect_partial_edits(self._task_before)) from exc
@@ -3871,9 +3863,11 @@ class Session:
         for limit in self._outer_limits(spec):
             outer = limit.assess(diff)
             out = sorted(set(report.out_of_scope + outer.out_of_scope))
-            limits = [v for v in (report.max_lines, outer.max_lines) if v is not None]
+            # Paths intersect; the size estimate is the task's own when it
+            # declared one (advisory, operator directive 2026-10-20), else
+            # the operator's default figure.
             report = replace(report, out_of_scope=out, within_scope=not out,
-                             max_lines=min(limits) if limits else None,
+                             max_lines=report.max_lines if report.max_lines is not None else outer.max_lines,
                              overrun_ratio=min(report.overrun_ratio, outer.overrun_ratio))
         return report
 
@@ -3917,33 +3911,6 @@ class Session:
                 limits.append(limit)
         return limits
 
-    def _edit_within_stop(self, lead, spec, task, prompt, *, spent: int, then=None):
-        """A revision or fix, and if it crossed the size stop, one call from the
-        remaining fix allowance to bring the change back under it. Returns
-        ``(reply, trims)``.
-
-        Step 2 r11 on 136a3ec: t2's 130-line draft was within its ~100-line
-        bound; the uncapped revision, told it had 20 lines of room, made 21
-        and the task failed at 151 with a fix cycle unused and no slot left.
-        The stop stays hard: the change is never reverted and never waived.
-        Only a size overrun with no path outside scope, and only while this
-        call (``spent``, counting revisions and fixes) leaves a cycle of
-        ``max_fix_cycles``, buys the trim; it is measured like any edit, and
-        still past the stop it fails the task exactly as before. A capped
-        trim takes the capped paths. ``then`` is what follows the call on
-        its admitted route (its rechecks and the task's known remainder),
-        which the trim's own admission carries."""
-        try:
-            return self._edit(lead, prompt), 0
-        except TaskFailed as failure:
-            try:
-                return self._trim_overrun(lead, spec, task, failure, spent=spent, what="revision", then=then), 1
-            except TurnLimitReached as exc:
-                # The trim was a cycle of its own and it is spent: a cap here
-                # is never a no-edit revision (root review of b5ea0ef).
-                exc.in_trim = True
-                raise
-
     def _no_edit_cap_note(self, spec, task, exc, mark, blocking, *, spent: int) -> str:
         """The measured outcome of a capped revision that changed nothing, for
         one more revision from the task's fix allowance; "" when it does not
@@ -3959,7 +3926,7 @@ class Session:
         write grant, and ``spent`` leaves a cycle of ``max_fix_cycles``. The
         retry is charged as that cycle, measured like any edit, and its own
         cap takes the capped paths. Whether it helps is unproven."""
-        if (getattr(exc, "in_trim", False) or not blocking or not self._writes()
+        if (not blocking or not self._writes()
                 or spent >= self.config.max_fix_cycles or not mark or self._source_fingerprint() != mark):
             return ""
         # The retry is an editor like the revision it repeats: its route
@@ -3984,559 +3951,37 @@ class Session:
                 "changed no file: the source is byte-identical to before it. The findings above are "
                 "unchanged and still open. This attempt is charged to the task's fix allowance.")
 
-    def _trim_capped_draft(self, lead, spec, task, exc, before):
-        """A capped initial draft whose kept edits crossed the size stop inside
-        their paths: one trim from the fix allowance, as a finished draft gets
-        (r13). Returns None when it does not apply, True when the trim landed
-        under the stop, False when the trim itself stopped at its cap; still
-        past the stop it raises the trim's TaskFailed, as before.
-
-        Step 2 R16 on 78f76bb: t2's Grok draft stopped at its 8-round cap
-        with 153 changed lines inside its paths against a stated 85, and
-        _close_turn_limited failed it on scope with both fix cycles unused.
-        Brought under the stop, the work is a capped draft like any other:
-        the native cap stays recorded, and the existing capped paths decide
-        (the last-slot review, the final-batch child review after the merge
-        gate, or the capped close). The trim is charged as the task's first
-        cycle and offered only while a cycle is left after it. A capped trim
-        goes straight to the capped close, never to another writer call.
-        The trim's route (the trim, the reviews ahead, the task's known
-        remainder) is admitted whole first; refused, it does not apply."""
-        if not self._writes() or spec.scope is None or self.config.max_fix_cycles <= 1:
-            return None
-        state = self._inspect_partial_edits(before)
-        if not state["inspected"] or not state["changed"]:
-            return None
-        report = self._measure_scope(spec, before)
-        if report is None or report.blocking or not report.oversized or report.max_lines is None:
-            return None
-        stop = int(report.max_lines * report.overrun_ratio)
-        if not self._admit_trim(spec, what="capped draft", then=self._known_remainder(spec, after="draft")):
-            return None
-        self._count("revision")
-        self._note(f"task {spec.task_id}: capped draft crossed the size stop ({report.changed_lines} > {stop}); "
-                   "one trim from the remaining fix allowance")
-        task.keep(json.dumps(dict(task=spec.task_id, changed_lines=report.changed_lines, stop=stop,
-                                  max_lines=report.max_lines, spent=1, after="capped draft", turns=exc.turns,
-                                  allowance=self.config.max_fix_cycles)),
-                  kind="scope-trim", author=lead)
-        record = self._trim_snapshot(spec, "capped draft", before)
-        try:
-            self._edit(lead, self._trim_prompt(spec, report, stop, what="capped draft", turns=exc.turns,
-                                               before=before))
-        except TurnLimitReached:
-            self._trim_settle(record, before)
-            return False
-        finally:
-            self._trim_settle(record, before)
-        if self._outcome is not None:
-            self._outcome.note("failed", f"the capped draft made the change {report.changed_lines} lines, past "
-                                         f"the stop at {stop}; one call from the fix allowance brought it "
-                                         "back", terminal=False).recovered = True
-        return True
-
-    def _admit_trim(self, spec, *, what: str, then) -> bool:
-        """A trim is an editor holding the write grant: its route (the trim,
-        then ``then``, what follows it on the admitted route) is admitted
-        whole before it is called (``_admit_repair``); refused, the
-        failure it would have mended stands as found."""
-        rows = [delivery.PlanStage("trim", "editing", editing=True)] + list(then or [])
-        wall_extra, wall_known = self._route_wall(spec)
-        return self._admit_repair(spec, "trim", "trim", rows, after=f"size stop on the {what}",
-                                  wall_extra=wall_extra, wall_known=wall_known)
-
-    def _trim_overrun(self, lead, spec, task, failure, *, spent: int, what: str, then=None) -> str:
-        """One call, charged as a fix cycle, to bring a size-only overrun back
-        under the stop; re-raises ``failure`` when it does not qualify: another
-        cause, a path outside scope, no write grant, or ``spent`` (the cycles
-        already charged in this task, the overrunning call included) leaving
-        no cycle of ``max_fix_cycles``. The trim is measured like any edit;
-        still past the stop it fails the task as before. Its route (the
-        trim, then ``then``: what followed the overrunning call on its
-        admitted route, else the task's known remainder after a draft) is
-        admitted whole first; refused, ``failure`` stands."""
-        if failure.cause != "scope" or spent >= self.config.max_fix_cycles or not self._writes():
-            raise failure
-        report = self._measure_scope(spec, self._task_before)
-        if report is None or report.blocking or not report.oversized or report.max_lines is None:
-            raise failure
-        stop = int(report.max_lines * report.overrun_ratio)
-        if then is None:
-            then = self._known_remainder(spec, after="draft" if what == "draft" else "review")
-        if not self._admit_trim(spec, what=what, then=then):
-            raise failure
-        self._count("revision")
-        self._note(f"task {spec.task_id}: {what} crossed the size stop ({report.changed_lines} > {stop}); "
-                   "one trim from the remaining fix allowance")
-        task.keep(json.dumps(dict(task=spec.task_id, changed_lines=report.changed_lines, stop=stop,
-                                  max_lines=report.max_lines, spent=spent, after=what,
-                                  allowance=self.config.max_fix_cycles)),
-                  kind="scope-trim", author=lead)
-        record = self._trim_snapshot(spec, what, self._task_before)
-        try:
-            reply = self._edit(lead, self._trim_prompt(spec, report, stop, what=what))
-        finally:
-            self._trim_settle(record, self._task_before)
-        # Recorded only once the trim landed under the stop: a trim that does
-        # not fit leaves the task's failure record exactly as it was.
-        if self._outcome is not None:
-            self._outcome.note("failed", f"the {what} made the change {report.changed_lines} lines, past "
-                                         f"the stop at {stop}; one call from the fix allowance brought it "
-                                         "back", terminal=False).recovered = True
-        return reply
-
-    def _trim_policy(self, spec) -> Optional[list]:
-        """The scopes over a task at the time a trim is taken (its own and
-        every operator limit), serialized so the same policy can be applied
-        when the evidence is consumed later: a late review never widens
-        what the trim could touch."""
-        if spec is None or getattr(spec, "scope", None) is None:
-            return None
-        return [s.to_dict() for s in [spec.scope] + list(self._outer_limits(spec))]
-
-    @staticmethod
-    def _scope_from_dict(data: dict) -> TaskScope:
-        return TaskScope(permitted_paths=tuple(data.get("permitted_paths") or ()),
-                         intended_result=str(data.get("intended_result") or ""),
-                         acceptance=tuple(data.get("acceptance") or ()), max_lines=data.get("max_lines"),
-                         forbidden_paths=tuple(data.get("forbidden_paths") or ()),
-                         review_only=data.get("edits") == "none", exact=bool(data.get("exact")))
-
-    def _trim_files(self, policy: Optional[list], before) -> Tuple[Optional[dict], Optional[str]]:
-        """The evidence a trim is judged against, as it is now, filtered by
-        ``policy`` (serialized scopes: the task's own and the operator
-        limits bound when the trim was taken) and by the live operator
-        limit, as ``({path: text}, problem)``: every permitted Python
-        source file and every permitted test or support file by name
-        (conftest, fixtures, helpers, support, factories), whole. No import
-        grammar decides what an assertion leans on (root's ninth control on
-        00cfc02: a walk that follows some import forms and slices in
-        silence describes partial evidence as complete); the capture is
-        the permitted Python and support text itself, bounded by
-        ``_TRIM_SUPPORT_MAX_FILES`` files and ``_TRIM_EVIDENCE_MAX_CHARS``
-        characters, and past either bound ``problem`` says so and nothing
-        built on the capture is judged preserved. ``(None, problem)`` when
-        there is no policy or the project cannot be read: unknown, never
-        empty or widened."""
-        if not policy:
-            return None, "the policy the trim was taken under was not recorded"
-        if not self.project:
-            return None, "no project"
-        after = self._capture_source()
-        if after is None:
-            return None, "the project could not be read"
-        scopes = [self._scope_from_dict(s) for s in policy]
-        if self.config.default_scope is not None:
-            scopes.append(self.config.default_scope)
-
-        def permitted(name):
-            return not scopes[0].review_only and all(s.permits(name) for s in scopes)
-
-        def relevant(name):
-            base = PurePosixPath(name).name.lower()
-            return name.endswith(".py") or is_test_path(name) or any(mark in base for mark in _TRIM_SUPPORT_MARKS)
-        names = sorted(n for n in set(after) | set(before or {}) if permitted(n) and relevant(n))
-        problem = None
-        if len(names) > _TRIM_SUPPORT_MAX_FILES:
-            problem = (f"{len(names)} permitted source and support files, over the {_TRIM_SUPPORT_MAX_FILES}-file "
-                       "evidence bound")
-            names = names[:_TRIM_SUPPORT_MAX_FILES]
-        files = {}
-        size = 0
-        for name in names:
-            raw = after.get(name)
-            if raw is None:
-                continue
-            try:
-                files[name] = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                files[name] = None
-            size += len(raw)
-        if problem is None and size > _TRIM_EVIDENCE_MAX_CHARS:
-            problem = f"{size:,} characters of permitted source and support text, over the evidence bound"
-        return files, problem
-
-    def _trim_snapshot(self, spec: TaskSpec, site: str, before) -> dict:
-        """Immutable evidence taken before a trim writes, under a stable id
-        unique across the run and its parallel children (``T-<task>-<n>``):
-        the full policy-filtered test and support files with their hashes,
-        the policy itself, the task's proof bindings and requirement
-        revisions, and the source identity, kept as an artifact whose
-        digest the record carries (bounded; past the bound only hashes are
-        kept and the record says the contents are not on file). When the
-        project cannot be read the record still exists and says so: unknown
-        evidence is owed, never absent. The trim's preservation of required
-        assertions is then owed an independent disposition about exactly
-        this evidence (``_trim_block``)."""
-        policy = self._trim_policy(spec)
-        files, problem = self._trim_files(policy, before)
-        n = 1 + sum(1 for r in self.trim_records if r.get("task") == spec.task_id)
-        tid = f"T-{spec.task_id}-{n}"
-        state = "pre-trim evidence unavailable: the project could not be read before the trim"
-        record = dict(tid=tid, task=spec.task_id, site=site, artifact=None, artifact_sha256=None, hashes={},
-                      complete=False, inventory_problem=problem, source=self._source_fingerprint(),
-                      after_check=len(self.checks), policy=policy, requirements=dict(self._requirement_revisions()),
-                      proofs=[dict(proof=r.get("proof_id") or r["oid"], cases=list(r.get("cases") or ()))
-                              for r in self.evidence_obligations
-                              if r.get("task") == spec.task_id and r.get("kind") == "acceptance"],
-                      post_hashes=None, changed=None, source_after=None, disposition=None, shown=None,
-                      state=state, evidence_state=state)
-        if files is not None:
-            hashes = {n: hashlib.sha256((t or "").encode()).hexdigest() for n, t in files.items()}
-            text = json.dumps({n: t for n, t in files.items() if t is not None}, sort_keys=True)
-            # Complete means the whole support graph within bounds, every
-            # file decodable and the contents under the evidence bound; a
-            # partial inventory is kept (hashes) and said to be partial.
-            complete = (problem is None and len(text) <= _TRIM_EVIDENCE_MAX_CHARS
-                        and all(t is not None for t in files.values()))
-            body = text if complete else json.dumps(hashes, sort_keys=True)
-            kept = self.store.put(body, kind="pre-trim-tests" if complete else "pre-trim-hashes", author="harness")
-            state = "pending" if complete else f"pre-trim evidence not on file: {problem or 'over the evidence bound'}"
-            record.update(artifact=kept.id, artifact_sha256=hashlib.sha256(body.encode()).hexdigest(), hashes=hashes,
-                          complete=complete, state=state, evidence_state=state)
-        elif problem:
-            state = f"pre-trim evidence unavailable: {problem}"
-            record.update(state=state, evidence_state=state)
-        self.trim_records.append(record)
-        return record
-
-    def _trim_settle(self, record: Optional[dict], before) -> None:
-        """After the trim call: the test and support files as the trim left
-        them under the record's own policy, their hashes, and whether
-        anything changed. Unreadable after the trim is unknown (owed),
-        never unchanged."""
-        if record is None or record.get("source_after") is not None:
-            return
-        files, problem = self._trim_files(record.get("policy"), before)
-        record["source_after"] = self._source_fingerprint()
-        if files is None:
-            state = f"post-trim evidence unavailable: {problem}"
-            record.update(changed=None, state=state, evidence_state=state)
-            return
-        if problem:
-            # The support graph after the trim is not whole: what changed
-            # is unknown, and the trim stays owed.
-            record["post_hashes"] = {n: hashlib.sha256((t or "").encode()).hexdigest() for n, t in files.items()}
-            state = f"post-trim support inventory incomplete: {problem}"
-            record.update(changed=None, state=state, evidence_state=state)
-            return
-        record["post_hashes"] = {n: hashlib.sha256((t or "").encode()).hexdigest() for n, t in files.items()}
-        if not record["hashes"] and not record["complete"]:
-            state = "pre-trim evidence unavailable; the trim's effect is unknown"
-            record.update(changed=None, state=state, evidence_state=state)
-            return
-        if record.get("inventory_problem"):
-            # The pre-trim inventory was partial: an unchanged partial set
-            # shows nothing about what it omitted, so the trim stays owed
-            # whatever the hashes say.
-            record["changed"] = None
-            state = f"pre-trim support inventory incomplete ({record['inventory_problem']}); the trim's effect is unknown"
-            record.update(state=state, evidence_state=state)
-            return
-        record["changed"] = record["hashes"] != record["post_hashes"]
-        state = ("tests unchanged by the trim" if not record["changed"] else
-                 "preservation owed" if record["complete"] else "preservation owed; evidence not on file")
-        record.update(state=state, evidence_state=state)
-
-    def _trim_pre_contents(self, record: dict) -> Optional[dict]:
-        """The immutable pre-trim contents, read from the artifact and
-        verified against the digest the record carries; None when they are
-        not on file, unreadable or altered (then nothing about the trim can
-        be judged preserved)."""
-        if not record.get("complete") or not record.get("artifact"):
-            return None
-        try:
-            body = self.store.get(record["artifact"])
-        except Exception:  # noqa: BLE001 -- evidence that cannot be read is not evidence
-            return None
-        if hashlib.sha256(body.encode()).hexdigest() != record.get("artifact_sha256"):
-            return None
-        try:
-            pre = json.loads(body)
-        except ValueError:
-            return None
-        return pre if isinstance(pre, dict) else None
-
-    def _trim_current_files(self, record: dict) -> Tuple[Optional[dict], Optional[str]]:
-        """The test and support files as they are now under the record's
-        own policy (never widened for a late review), with the problem
-        that makes them less than the whole support graph; ``(None, why)``
-        when the policy was not recorded or the project cannot be read."""
-        return self._trim_files(record.get("policy"), None)
-
-    def _trim_evidence_id(self, record: dict) -> str:
-        """What a disposition of this trim is about: the record's id, the
-        verified pre-trim evidence (or its absence, which no verdict can
-        make present), the current source, and the current identity of the
-        task's requirements and proof scenarios (revisions, bindings,
-        modality, location): a requirement reworded or a scenario rebound
-        after an approval is a different question (root's control on
-        a1b1840)."""
-        pre = self._trim_pre_contents(record)
-        revisions = self._requirement_revisions()
-        rows = sorted((r.get("proof_id") or r["oid"], list(r.get("cases") or ()), str(r.get("modality") or ""),
-                       str(r.get("location") or ""), str(r.get("behavior") or ""),
-                       [list(x) for x in r.get("requirements") or []])
-                      for r in self.evidence_obligations
-                      if r.get("task") == record.get("task") and r.get("kind") == "acceptance")
-        covered = sorted({x[0] for r in self.evidence_obligations if r.get("task") == record.get("task")
-                          for x in r.get("requirements") or []})
-        return hashlib.sha256(json.dumps(dict(
-            tid=record.get("tid"), pre=record.get("artifact_sha256") if pre is not None else "UNAVAILABLE",
-            source=self._source_fingerprint() if self.project else None,
-            requirements={rid: revisions.get(rid) for rid in covered}, proofs=rows,
-            policy=record.get("policy")), sort_keys=True, default=str).encode()).hexdigest()
-
-    def _trim_owed(self) -> List[dict]:
-        """Trims with no independent PRESERVED disposition about exactly the
-        current evidence: never judged, judged on other evidence (an edit,
-        a requirement revision or a rebinding after an approval), judged
-        LOST, judged without the evidence on file, or whose effect is
-        unknown because the project could not be read before or after the
-        trim."""
-        owed = []
-        for record in self.trim_records:
-            if record.get("changed") is False:
-                continue
-            verdict = record.get("disposition") or {}
-            if (verdict.get("verdict") == "PRESERVED" and verdict.get("evidence") == self._trim_evidence_id(record)
-                    and self._trim_pre_contents(record) is not None):
-                continue
-            owed.append(record)
-        return owed
-
-    def _trim_block(self, spec) -> str:
-        """The trim evidence a judging seat reads, one entry per owed trim
-        under its id, for one task (its reviewer or rechecker) or for every
-        task (the final audit, ``spec`` None): the comparison of the
-        immutable pre-trim test and support files against the files as they
-        are now under the record's own policy (so a later edit is judged
-        against the full pre-trim assertions, not against the trim's own
-        hunk, and a late review never sees beyond the task's scope), bounded
-        and said to be bounded; where the pre-trim evidence is not on file
-        or the current files cannot be read, that fact, which no verdict can
-        turn into PRESERVED. Every render first clears what an earlier
-        render showed: only what this prompt shows carries authority. The
-        seat decides whether every assertion the covered requirements and
-        declared scenarios need is still present; an equivalent helper, loop
-        or renaming is preservation; names and counts decide nothing."""
-        from .project import diff_contents
-        task = getattr(spec, "task_id", None)
-        owed = [r for r in self._trim_owed() if task is None or r["task"] == task]
-        for record in owed:
-            record["shown"] = None
-        if not owed:
-            return ""
-        parts = ["\n\n## Trim evidence (the harness's own record; judge assertion preservation per trim id)"]
-        for record in owed:
-            verdict = record.get("disposition") or {}
-            head = (f"{record['tid']}: task {record['task']}, {record['site']} trim ({record['state']})"
-                    + ("; an earlier PRESERVED is stale: the source, a requirement or a scenario changed since"
-                       if verdict.get("verdict") == "PRESERVED" else "")
-                    + (f"; judged LOST before: {verdict.get('detail', '')[:160]}" if verdict.get("verdict") == "LOST" else "")
-                    + ". Bound scenarios before the trim: "
-                    + ("; ".join(f"{p['proof']} -> {', '.join(p['cases']) or 'no case'}" for p in record["proofs"])
-                       or "none declared") + f". Pre-trim evidence artifact: {record.get('artifact') or 'none'}.")
-            parts.append(head)
-            pre = self._trim_pre_contents(record)
-            if pre is None:
-                parts.append("The pre-trim contents are not on file (over the evidence bound, unreadable or altered): "
-                             "this trim cannot be judged PRESERVED from what you see.")
-                continue
-            if not record.get("policy"):
-                parts.append("The policy the trim was taken under was not recorded: the current files cannot be "
-                             "read within it, and this trim cannot be judged PRESERVED.")
-                continue
-            now, problem = self._trim_current_files(record)
-            if now is None:
-                parts.append(f"The current test files could not be read ({problem}): this trim cannot be judged "
-                             "PRESERVED now.")
-                continue
-            if problem:
-                parts.append(f"The current support inventory is not whole ({problem}): this trim cannot be judged "
-                             "PRESERVED from what you see.")
-                continue
-            diff = diff_contents({n: t.encode() for n, t in pre.items()},
-                                 {n: (t or "").encode() for n, t in now.items()})
-            if not diff:
-                parts.append("The test and support files are byte-identical to the pre-trim evidence now.")
-                record["shown"] = self._trim_evidence_id(record)
-            elif len(diff) <= _TRIM_DIFF_MAX_CHARS:
-                parts.append("Diff of the test and support files, immutable pre-trim evidence to the files as they are "
-                             "now:\n```diff\n" + diff + "\n```")
-                record["shown"] = self._trim_evidence_id(record)
-            else:
-                parts.append(f"The comparison is {len(diff):,} characters, over the {_TRIM_DIFF_MAX_CHARS:,}-character "
-                             "bound for this prompt, and is not shown: this trim cannot be judged PRESERVED from what "
-                             "you see.")
-        parts.append("For each trim id above, decide whether every assertion the covered requirements and the "
-                     "declared scenarios require is still present (moved, merged into a helper or loop, or renamed "
-                     "counts as preserved; a deleted mutation or state assertion does not). Reply with exactly one "
-                     "line per trim, 'TRIM <id>: PRESERVED' or 'TRIM <id>: LOST - <the assertion(s) lost>', in "
-                     "addition to your other lines; with a single trim shown a bare 'TRIM: ...' line applies to it. "
-                     "A missing, duplicated or contradictory line leaves that trim unjudged, and PRESERVED where the "
-                     "evidence is not on file or not shown is not accepted.")
-        return "\n".join(parts)
-
-    def _read_trim_disposition(self, spec, by: str, reply: str) -> None:
-        """Record one seat's TRIM lines for the trims it was shown: the
-        task's (a reviewer or rechecker) or every owed one (the audit),
-        each bound to exactly the evidence shown for its id. Exactly one
-        well-formed line per id counts (a bare line only when one trim was
-        shown); PRESERVED is refused unless the pre-trim evidence is on file
-        now, the current files are readable under the record's policy now,
-        and what this seat was shown is exactly the current evidence; LOST
-        keeps the trim owed and names what was lost."""
-        task = getattr(spec, "task_id", None)
-        owed = [r for r in self._trim_owed() if task is None or r["task"] == task]
-        if not owed:
-            return
-        lines: Dict[str, List[tuple]] = {}
-        for m in _TRIM_LINE.finditer(reply or ""):
-            tid = m.group(1)
-            if tid is None:
-                if len(owed) != 1:
-                    continue
-                tid = owed[0]["tid"]
-            lines.setdefault(tid, []).append((m.group(2), (m.group(3) or "").strip()))
-        for record in owed:
-            given = lines.get(record["tid"]) or []
-            if len(given) != 1:
-                if given:
-                    self._note(f"{record['tid']}: {len(given)} TRIM lines by {by}; none counted")
-                continue
-            verdict, detail = given[0]
-            evidence = self._trim_evidence_id(record)
-            shown = record.get("shown")
-            base = record.get("evidence_state") or record.get("state") or "pending"
-            now, now_problem = self._trim_current_files(record)
-            readable = (self._trim_pre_contents(record) is not None and bool(record.get("policy"))
-                        and now is not None and now_problem is None)
-            if verdict == "PRESERVED" and (not readable or shown != evidence):
-                record["disposition"] = dict(verdict="REFUSED", by=by, evidence=evidence,
-                                             detail="PRESERVED without the evidence on file, readable now and shown")
-                record["state"] = f"{base}; preserved refused by {by}: evidence not on file, not readable or not shown"
-                self._note(f"{record['tid']}: PRESERVED by {by} refused; the trim evidence is not on file, not "
-                           "readable now or not what was shown")
-                continue
-            record["disposition"] = dict(verdict=verdict, by=by, evidence=evidence, detail=detail[:400])
-            record["state"] = f"{base}; {verdict.lower()} by {by}"
-            self._note(f"{record['tid']}: trim preservation {verdict} by {by}")
-
-    def _settle_trim_debt(self, spec) -> None:
-        """At a task's close: a trim still owed its disposition is an open
-        finding (carried to the final audit, which may still judge it);
-        nothing silently approves it."""
-        owed = [r for r in self._trim_owed() if r["task"] == spec.task_id]
-        if not owed:
-            return
-        detail = "; ".join(f"{r['tid']} ({r['site']} trim): {r['state']}" for r in owed)
-        if self._outcome is not None:
-            self._outcome.note("unverified", f"Task {spec.task_id}: a trim changed its tests and no independent "
-                                             f"preservation verdict on the current source stands ({detail}); "
-                                             "carried to the final audit", terminal=False)
-        self._note(f"task {spec.task_id}: trim preservation unjudged at close ({detail}); carried to the audit")
-
-    def _trim_evidence(self, spec: TaskSpec, before) -> str:
-        """What the harness measured of this task's change, for its trim (R20
-        on c7e9449: a trim given only the total spent its 8 rounds and 373k
-        reported tokens on one task, more than the draft it trimmed, with the
-        per-file counts and the diff already held here). Measured fresh, on
-        the files every scope over this task permits, filtered by file
-        identity on both sides before anything is rendered, so no other path,
-        excluded file or private name reaches the prompt. Per-file counts
-        always; the diff whole, or stated as omitted when over the bound,
-        never a prefix. Whether it saves rounds is a hypothesis."""
-        from .project import Project, diff_contents
-        from .scope import count_change_lines, is_test_path
-        if before is None or spec.scope is None or not self.project:
-            return ""
-        try:
-            after = Project(self.project, exclude=self.config.project_excludes).contents()
-        except Exception:  # noqa: BLE001 -- observation never fails a run
-            return ""
-        scopes = [spec.scope] + list(self._outer_limits(spec))
-
-        def permitted(name):
-            return not spec.scope.review_only and all(s.permits(name) for s in scopes)
-        names = sorted(n for n in set(before) | set(after) if permitted(n)
-                       and (before.get(n) != after.get(n) or (n in before) != (n in after)))
-        if not names:
-            return ""
-        old = {n: before[n] for n in names if n in before}
-        new = {n: after[n] for n in names if n in after}
-        rows, code, tests = [], 0, 0
-        for name in names:
-            count = count_change_lines(diff_contents({name: old[name]} if name in old else {},
-                                                     {name: new[name]} if name in new else {}))
-            test = is_test_path(name)
-            code, tests = (code, tests + count) if test else (code + count, tests)
-            state = "deleted" if name not in new else "added" if name not in old else "changed"
-            rows.append(f"- {name}: {count} line(s), {'test' if test else 'code'}, {state}")
-        diff = diff_contents(old, new)
-        shown = (f"\n\nThe task's current diff, from the harness (against the source before this task):\n"
-                 f"```diff\n{diff}```" if len(diff) <= _TRIM_DIFF_MAX_CHARS else
-                 f"\n\nThe task's current diff is {len(diff):,} characters, over the {_TRIM_DIFF_MAX_CHARS:,}-"
-                 "character bound for this prompt, so it is not shown here; the files above hold it.")
-        return ("\n\n## What the harness measured of this change\n" + "\n".join(rows)
-                + f"\nCode lines: {code}; test lines: {tests} (tests count in full)." + shown)
-
-    def _trim_prompt(self, spec: TaskSpec, report, stop: int, *, what: str = "revision", turns=None,
-                     before=None) -> str:
-        # R15: asked for "at most {stop}", the draft trim landed at 152 against
-        # 150, as r11's revision had at 151: the model aims at the number it
-        # is given. The target is the task's own stated bound; the stop is
-        # still the only line that fails the task.
-        target = ("Aim for about {bound} lines, the task's stated bound; the run stops at {stop}, and a "
-                  "change even one line past {stop} fails the task. ")
-        if what in ("draft", "capped draft"):
-            ask = (("Your draft stopped at its {turns}-round limit; the edits it made are kept. "
-                    if what == "capped draft" else "")
-                   + "Your draft made this task's change {n} lines (tests count in full), past the run's "
-                   "stop at {stop} for a stated bound of ~{bound}. The work is kept exactly as it is now; "
-                   "nothing was reverted. Bring the change down by removing what neither the task nor the "
-                   "goal asked for. " + target + "Do not remove behaviour the task or the goal "
-                   "requires, or a test that shows it. If it cannot fit, change ")
-        else:
-            ask = ("Your last revision made this task's change {n} lines (tests count in full), past the "
-                   "run's stop at {stop} for a stated bound of ~{bound}. The work is kept exactly as it is "
-                   "now; nothing was reverted. Bring the change down by removing what neither the task nor "
-                   "a review finding asked for. " + target + "Do not remove a fix for a review "
-                   "finding or a test that shows one. If it cannot fit, change ")
-        return (
-            f"Task: {spec.description}\n\n"
-            + ask.format(n=report.changed_lines, stop=stop, bound=report.max_lines, turns=turns or "?")
-            + "nothing more and write a line 'BLOCKER: <what> needs about N more lines'; the task then "
-            "stops at the size limit as before."
-            + self._trim_evidence(spec, self._task_before if before is None else before)
-            + _revision_changed_delivery(self._interim_edits_note())
-            + _NO_REQUESTS_IN_FIX
-        )
-
-    def _scope_headroom(self, spec: TaskSpec) -> str:
-        """What a revision may still add before the task's hard stop.
+    def _scope_size_note(self, spec: TaskSpec, *, audience: str) -> str:
+        """The measured size of the task's change against the planner's
+        estimate, for an editing call (``audience`` "editor") or a review
+        (``audience`` "reviewer"); "" when nothing is measured.
 
         GameTape, 2026-09-25: a 91-line draft inside its ~100-line bound was
-        revised to 189 lines to answer a review, crossing the 150-line stop and
-        ending the run. The stop stays hard (Codex review of #25): the revision
-        is told its remaining room, and a fix that cannot fit is reported as
-        a blocker for the record instead of being made.
+        revised to 189 lines to answer a review and the hard stop ended the
+        run; r11 on 136a3ec repeated it by one line. Size is advisory now
+        (operator directive 2026-10-20): the editor is told the measurement
+        and asked for complete, focused work, never for a fix left unmade
+        or a test left out to fit; the reviewer is told the same figures
+        and asked to judge whether the size was necessary.
         """
         report = self._measure_scope(spec, self._task_before)
         if report is None or report.max_lines is None:
             return ""
-        stop = int(report.max_lines * report.overrun_ratio)
-        room = max(0, stop - report.changed_lines)
-        return (
-            f"\n\nSize: this task's change is {report.changed_lines} lines now (tests count in "
-            f"full) against a stated bound of ~{report.max_lines}, and the run stops at {stop}. "
-            f"You have {room} lines of room for this revision. Make the fixes that fit. For a "
-            "finding whose fix does not fit, do not make it: write a line 'BLOCKER: <finding> "
-            "needs about N more lines' so it goes to the record as an open question. A test a "
-            "review asks for that does not fit is reported the same way, with 'NOT RUN: <case> - "
-            "<why>' for each case not added; it is recorded as owed, the finding stays open, and "
-            "no such line resolves anything. Never compress tests onto one line to fit."
-        )
+        measured = (f"this task's change is {report.changed_lines} lines now ({report.code_lines} in code, "
+                    f"{report.test_lines} in tests, every line counted) against the planner's estimate of "
+                    f"~{report.max_lines}")
+        if audience == "reviewer":
+            return (f"\n\nSize: {measured}. The estimate is advisory and the harness stops nothing for "
+                    "size: judge whether the change is what the task, the goal and its proof scenarios "
+                    "need. Unrelated work, duplication or padding is a finding; length that correctness "
+                    "and complete tests require is not, and a change under the estimate that leaves a "
+                    "requirement or its test out is.")
+        return (f"\n\nSize: {measured}. The estimate is advisory, not a limit: make every fix the "
+                "findings need and add every test a review asks for, completely, and if that takes the "
+                "change well past the estimate say what grew. Keep the change focused on this task, "
+                "with no unrelated edits or duplication. Never compress formatting, squeeze tests onto "
+                "one line or leave a test out to fit a number: the reviewers see the measured size and "
+                "judge whether it was necessary.")
 
     def _assess_scope(self, spec: TaskSpec, task: TaskMemory, before) -> Optional[ScopeReport]:
         """Compare what the task actually changed against what it declared.
@@ -4545,8 +3990,8 @@ class Session:
         over-wide change was also the only work that existed, and discarding it
         to satisfy a bookkeeping rule would have destroyed real output; user
         edits and partial work stay exactly where they are. An out-of-scope
-        path is marked blocking. The normal editing dispatcher also stops on
-        a size overrun, retaining this report and the unfinished task.
+        path is marked blocking. A change past the planner's size estimate
+        is measured and reported (advisory), never stopped.
         """
         if spec.scope is None or before is None or not self.project:
             return None
@@ -4573,6 +4018,9 @@ class Session:
             except Exception:  # noqa: BLE001 -- calibration is evidence, never a failure
                 log.debug("could not record the sizing calibration", exc_info=True)
         if report.blocking or report.oversized:
+            # Both reach the task record; only the path breach stops
+            # anything. The size measurement travels to the reviewers
+            # (_scope_size_note) and the planner (the task row).
             task.record("user", report.render())
             if report.blocking:
                 # Recorded as an open finding so the run cannot close clean
@@ -4585,7 +4033,8 @@ class Session:
                 )
             self._note(
                 f"task {spec.task_id} scope check: "
-                + ("out of scope" if report.blocking else "oversized")
+                + ("out of scope" if report.blocking else
+                   f"{report.changed_lines} lines against an estimate of ~{report.max_lines} (advisory)")
             )
         return report
 
@@ -5180,29 +4629,12 @@ class Session:
         # The lead drafts with full working memory, and with the fetch and
         # consult channels live: a reply that is a request gets served.
         self._stage("draft")
-        # Fix cycles this task has spent before its review revision (r13).
-        charged = 0
         try:
             draft = self._draft_with_channels(lead, spec, task)
         except TurnLimitReached as exc:
-            trimmed = self._trim_capped_draft(lead, spec, task, exc, before)
-            if trimmed is False:
-                return self._close_turn_limited(lead, spec, task, exc, before, trim_capped=True)
-            charged = 1 if trimmed else 0
             draft, collaborators = self._capped_final_draft(lead, spec, task, exc, before, collaborators)
             if draft is None:
                 return self._close_turn_limited(lead, spec, task, exc, before)
-        except TaskFailed as failure:
-            # r13 on 5e8926b: two finished parallel drafts crossed the size
-            # stop inside their paths and failed before any check or peer.
-            # One cycle of the task's own fix allowance, charged against its
-            # later revision and fixes, brings a size-only overrun back; the
-            # stop, the checks, the review and the final audit stand.
-            try:
-                draft = self._trim_overrun(lead, spec, task, failure, spent=1, what="draft")
-            except TurnLimitReached as exc:
-                return self._close_turn_limited(lead, spec, task, exc, before)
-            charged = 1
         except ProviderError as exc:
             # Only a failed lead, not a consultant/worker or policy refusal,
             # may be replaced. Never replay partial or uninspectable edits.
@@ -5328,7 +4760,6 @@ class Session:
                         note = completed
                 note = self._judge_goal_review(spec, peer, note)
                 self._record_deferred(spec, peer, note)
-                self._read_trim_disposition(spec, peer, note)
                 self._record_scratch_evidence(spec, peer)
                 if not _review_complete(note) and not _clean_goal_review(note, [r for r, _ in self._covered_texts()]):
                     # A reply arrived; a review did not finish. Recorded as
@@ -5386,7 +4817,7 @@ class Session:
             blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
             for peer, note in blocking:
                 self._register_review_findings(spec, peer, note)
-            trims = retried = 0
+            retried = 0
             revision_prompt = self._revision_prompt(spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes])
             mark = self._source_fingerprint()
             admitted = True
@@ -5409,20 +4840,17 @@ class Session:
                     refused.recorded = True
                     raise refused
                 try:
-                    revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt, spent=1 + charged,
-                                                             then=self._fix_cycle_stages(spec, blocking)[1:])
+                    revision = self._edit(lead, revision_prompt)
                 except TurnLimitReached as exc:
                     # R15: a capped revision that changed nothing, with a
                     # blocking finding open and a cycle left, is told what was
                     # measured and asked once more from that cycle.
-                    note = self._no_edit_cap_note(spec, task, exc, mark, blocking, spent=1 + charged)
+                    note = self._no_edit_cap_note(spec, task, exc, mark, blocking, spent=1)
                     if not note:
                         raise
                     retried = 1
                     self._count("revision")
-                    revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt + note,
-                                                             spent=2 + charged,
-                                                             then=self._fix_cycle_stages(spec, blocking)[1:])
+                    revision = self._edit(lead, revision_prompt + note)
             except TurnLimitReached as exc:
                 # A capped revision takes the capped-task path: kept,
                 # measured, unreviewed and ungated, re-planned by name --
@@ -5446,7 +4874,7 @@ class Session:
                 unresolved = self._recheck_blocking(
                     spec, blocking, revision, task, labels=labels
                 )
-            cycles = 1 + trims + charged + retried
+            cycles = 1 + retried
             while unresolved and cycles < self.config.max_fix_cycles and not capped_writer:
                 if self._budget() is not None:
                     # Beyond the admitted route: one more cycle only when
@@ -5462,15 +4890,8 @@ class Session:
                 self._count("revision")
                 pending = [(p, n) for p, n in blocking if any(p == up for up, _ in unresolved)]
                 try:
-                    revision, trims = self._edit_within_stop(
-                        lead, spec, task,
-                        self._fix_prompt(
-                            spec, revision,
-                            [(labels[p], v) for p, v in unresolved],
-                        ),
-                        spent=cycles + 1,
-                        then=self._fix_cycle_stages(spec, unresolved)[1:],
-                    )
+                    revision = self._edit(lead, self._fix_prompt(spec, revision,
+                                                                 [(labels[p], v) for p, v in unresolved]))
                 except TurnLimitReached as exc:
                     handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
                     if handoff is None:
@@ -5484,7 +4905,7 @@ class Session:
                     break
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
-                cycles += 1 + trims
+                cycles += 1
                 unresolved = self._recheck_blocking(
                     spec, pending, revision, task, labels=labels,
                 )
@@ -5537,7 +4958,6 @@ class Session:
             self._outcome.edge("evidence", self.design_checks[-1].get("verified"))
 
         self._assess_scope(spec, task, before)
-        self._settle_trim_debt(spec)
         self._stage("closeout")
         summary_text, reasoning, dead_ends = self._task_close_out(lead, spec, task)
         summary = task.close(
@@ -5581,7 +5001,7 @@ class Session:
         if not state["inspected"] or not state["changed"]:
             return None, collaborators
         report = self._measure_scope(spec, before)
-        if report is None or report.blocking or report.oversized:
+        if report is None or report.blocking:
             return None, collaborators
         if (exc.partial_text or "").strip():
             # The accepted capped work's structured PROVES lines (root on
@@ -5696,7 +5116,7 @@ class Session:
         if not state["inspected"] or not state["changed"]:
             return None
         report = self._measure_scope(spec, before)
-        if report is None or report.blocking or report.oversized:
+        if report is None or report.blocking:
             return None
         self._observe_checks(spec, "turn-limited")
         current = self._source_fingerprint()
@@ -5707,7 +5127,7 @@ class Session:
             return None
         return state, current, identity
 
-    def _close_turn_limited(self, lead, spec, task, exc, before, *, trim_capped: bool = False) -> TaskSummary:
+    def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
         """A lead stopped at its turn limit: keep the work, record it, re-plan.
 
         The call ran and its usage is already on the ledger. Its edits stay
@@ -5720,7 +5140,6 @@ class Session:
         final text, if any, is narration of work in progress and is labelled
         as such, never folded in as a result.
         """
-        self._settle_trim_debt(spec)
         state = self._inspect_partial_edits(before)
         if self._outcome is not None:
             self._outcome.note("cap", f"stopped at the lead turn limit ({exc.turns or '?'} turns)")
@@ -5734,7 +5153,7 @@ class Session:
                 if spec.scope is not None and report is None:
                     raise PartialWorkStopped("Turn-limited edits could not be measured against the "
                                              "task scope; work preserved.", partial=state) from exc
-                if report and (report.blocking or report.oversized):
+                if report and report.blocking:
                     raise TaskFailed("scope", "Turn-limited edits exceed the declared scope; work "
                                      "preserved. " + report.render(), partial=state) from exc
         said = (exc.partial_text or "").strip()
@@ -5755,10 +5174,6 @@ class Session:
                       note=state["note"], partial_text=said[:4000] or None,
                       content=self._content_fingerprint(state["changed"]),
                       **self._attempt_identity(spec))
-        if trim_capped:
-            # The draft and its size trim both stopped at their caps: no
-            # capped-work review lifts this (root review of 860769e).
-            record["trim_capped"] = True
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
         from .project_files import MAX_INSPECT_BYTES
@@ -5865,7 +5280,7 @@ class Session:
             + ". This task is not done: name the remaining work as a new, smaller task "
               f"whose description includes the line 'CONTINUES: {spec.task_id}', and do not "
               "assume any of it is finished. Size max_lines for the remaining work only"
-            + (", and split it if the declared scope was too small for it" if exc.cause == "scope" else "")
+            + (", and name every path it needs" if exc.cause == "scope" else "")
             + ". If the failure shows the plan was wrong, name a different task instead."
         )
         summary = task.close(
@@ -6198,7 +5613,7 @@ class Session:
         if self.project and self.config.allow_writes:
             from .scope import read_scope
             try:
-                scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+                scope, description = read_scope(meta.description)
             except ValueError as exc:
                 refuse(f"invalid scope: {exc}")
         else:
@@ -6242,7 +5657,7 @@ class Session:
             if editing:
                 from .scope import read_scope
                 try:
-                    _, description = read_scope(description, max_lines=MAX_TASK_LINES)
+                    _, description = read_scope(description)
                 except ValueError as exc:
                     problems.append((index, f"invalid scope: {exc}"))
                     continue
@@ -6370,7 +5785,7 @@ class Session:
                     "goal is met. To read a full artifact behind a summary "
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
                     "nothing else. " + _ASK_SPARINGLY
-                    + f"\n\n{_SIZE_CEILING}\n\n{self._kind_request()}\n\n{_NEEDS_REQUEST}"
+                    + f"\n\n{_SIZE_GUIDE}\n\n{self._kind_request()}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
                                   else _REQUIREMENTS_REQUEST + " " + _COVERS_REQUEST)
                        if self.config.requirements_ledger else "")
@@ -6510,7 +5925,7 @@ class Session:
             from .scope import read_scope
             for attempt in range(2):
                 try:
-                    scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+                    scope, description = read_scope(meta.description)
                     break
                 except ValueError as exc:
                     if attempt:
@@ -6561,7 +5976,7 @@ class Session:
                 "Do not start work. List every task you currently expect "
                 "this goal to need, in order, one per line, each as "
                 "'KIND: <kind> -- <description>'. Mark anything you are "
-                f"unsure about with '?'.\n\n{_SIZE_CEILING}"
+                f"unsure about with '?'.\n\n{_SIZE_GUIDE}"
             ),
             recent=self.config.recent_entries,
             extra=self._map_block(),
@@ -8145,7 +7560,7 @@ class Session:
         for i, block in enumerate(blocks):
             try:
                 meta = self._absorb_orientation(_read_metadata(block), seat)
-                scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+                scope, description = read_scope(meta.description)
                 parsed.append((meta, scope, description))
             except (AmbiguousMetadata, ValueError) as exc:
                 self._note(f"parallel batch not run: block {i + 1} is not a valid task ({str(exc)[:120]})")
@@ -8340,14 +7755,6 @@ class Session:
                         receipts=[], source_digest=None, sufficiency="unjudged", judged_by="", judged_binding="",
                         entry=dict(obligation.get("entry") or {}, after_check=len(self.checks))))
                 self.plan_admissions.extend(child.plan_admissions)
-                taken = {r.get("tid") for r in self.trim_records}
-                for record in child.trim_records:
-                    tid, k = record.get("tid"), 1
-                    while record.get("tid") in taken:
-                        record["tid"] = f"{tid}-m{k}"
-                        k += 1
-                    taken.add(record["tid"])
-                    self.trim_records.append(record)
                 self.proof_binding_problems.extend(child.proof_binding_problems)
                 self.operations.extend(child.operations)
                 self.original_test_runs.extend(child.original_test_runs)
@@ -8584,15 +7991,6 @@ class Session:
             result["verdict"] = "not eligible"
             return result
         capped = self.turn_limited_records.get(spec.task_id) or {}
-        if capped.get("trim_capped"):
-            # Root review of 860769e: a capped draft whose size trim also
-            # stopped at its cap landed in bounds and this review completed
-            # the run. Two caps in one task are held, never reviewed past.
-            self._open_finding("unverified", f"Task {spec.task_id}: its draft and the draft's size trim both "
-                                             "stopped at their turn limits in the final parallel batch; held "
-                                             "unverified, not reviewed.")
-            result["verdict"] = "held: draft and trim both capped"
-            return result
         lead = capped.get("lead") or spec.lead or ""
         vendor = lead.partition(":")[0]
         peer = next((p for p in self.brain_trust
@@ -8969,19 +8367,6 @@ class Session:
                 + "\nName a task that fixes them (with COVERS).")
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
-        owed = self._trim_owed()
-        if owed:
-            # The audit was shown the trim evidence and gave no PRESERVED
-            # verdict bound to this source (or judged LOST): the trim's
-            # assertion preservation stands unjudged, and nothing approves
-            # it by default.
-            self._done_refusal = (
-                "\n\n--- DONE SENT BACK ---\nA size trim changed test files and no independent judgment bound to "
-                "the current source says the required assertions were preserved: "
-                + "; ".join(f"{t['tid']} ({t['task']}, {t['site']} trim: {t['state']})" for t in owed)
-                + ". The trim evidence is on the record; a review or audit of the current source must judge it.")
-            self._note("DONE sent back: trim assertion preservation unjudged")
-            return False
         return True
 
     def _auditor(self) -> Optional[str]:
@@ -9060,8 +8445,7 @@ class Session:
                if self.design_checks else "")
             + self._not_run_block()
             + self._review_notes_block(audited)
-            + self._obligation_view(ids=list(audited))
-            + self._trim_block(None))
+            + self._obligation_view(ids=list(audited)))
 
     def _audit_requirements(self, ids: Optional[List[str]] = None, final: bool = False) -> dict:
         """One read-only call: each requirement met or not, with evidence.
@@ -9180,7 +8564,6 @@ class Session:
         lowered = self._lower_unexecuted(found)
         lowered += self._lower_unexercised_errors(found, audited, original=original, lowered=lowered)
         self._judge_obligations(auditor, reply or "", found, ids=list(audited))
-        self._read_trim_disposition(None, auditor, reply or "")
         # The one acceptance predicate, after sufficiency is judged: what the
         # auditor wrote stands only where the record agrees.
         lowered += self._apply_acceptance(found, audited)
@@ -9274,8 +8657,6 @@ class Session:
                                                  sort_keys=True, default=str)),
                                     h(json.dumps(list(o.get("receipts") or []), sort_keys=True, default=str)))
                                    for o in self.evidence_obligations))
-        trims = tuple(whole({k: v for k, v in t.items() if k not in ("disposition", "state", "shown")})
-                      for t in getattr(self, "trim_records", []) or [])
         # An evidence request's judgment fields are the judgment of the
         # evidence, not the evidence: a reassessment writes them between a
         # binding and its reading, and a packet that moved on its own
@@ -9297,7 +8678,6 @@ class Session:
                                    sort_keys=True, default=str)),
             authority=self._authority_record()["digest"],
             design_checks=tuple(whole(c) for c in getattr(self, "design_checks", []) or []),
-            trims=trims,
             scratch_proofs=tuple(whole(p) for p in getattr(self, "scratch_proofs", []) or []),
             evidence_requests=tuple(whole({k: v for k, v in r.items() if k not in judged})
                                     for r in getattr(self, "evidence_requests", []) or []))
@@ -12171,10 +11551,6 @@ class Session:
                             if o.get("kind") == "acceptance" else "")
                          + f"execution {o['execution']}; sufficiency {o['sufficiency']}"
                          for o in self.evidence_obligations)
-        owed = self._trim_owed()
-        if owed:
-            notes.append("Trims whose assertion preservation is not yet judged on the current evidence: "
-                         + "; ".join(f"{t['tid']} ({t['task']}, {t['site']}, {t['state']})" for t in owed))
         notes.extend(self._admission_notes())
         open_findings = [r for r in self.review_findings if not r.get("closed")]
         if open_findings:
@@ -13552,7 +12928,7 @@ class Session:
             + self._changed_originals_note()
             + self._goal_authority(peer)
             + self._proof_rows(spec)
-            + self._trim_block(spec)
+            + (self._scope_size_note(spec, audience="reviewer") if self._writes() else "")
             + self._sibling_note()
             + self._review_turn_budget_note(peer)
         )
@@ -13933,7 +13309,7 @@ class Session:
             "you cannot decide goes to the record as an open question, not "
             "into the void. "
             + self._revision_delivery()
-            + (self._scope_headroom(spec) if self._writes() else "")
+            + (self._scope_size_note(spec, audience="editor") if self._writes() else "")
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
             + _NO_REQUESTS_IN_FIX
         )
@@ -14067,7 +13443,7 @@ class Session:
 
     def _recheck_instructions(self, ids: List[str]) -> str:
         spec = getattr(self, "_active_spec", None)
-        return (self._proof_rows(spec) + self._trim_block(spec) + "\n\n" if spec is not None else "") + (
+        return (self._proof_rows(spec) + "\n\n" if spec is not None else "") + (
                 "Check only your BLOCKING findings against the revision, one line per finding and nothing "
                 "else about them: '<id>: RESOLVED <how the revision addresses it>', '<id>: UNRESOLVED "
                 "<what specifically remains>', or '<id>: INVALIDATED <the test, file, receipt or "
@@ -14152,7 +13528,6 @@ class Session:
                                     f"summary as an open question:\n[{shown}] {standing}")
                 continue
             task.record("assistant", f"[{shown} recheck] {verdict}")
-            self._read_trim_disposition(spec, peer, verdict)
             reading = judgment.recheck_verdicts(verdict, ids)
             if not reading.judged_any:
                 # Arrived, but no judgment on any finding: the same seat may
@@ -14229,7 +13604,7 @@ class Session:
             f"These blocking findings remain unresolved:\n{remaining}\n\n"
             "Fix them, or state precisely why the reviewer is wrong. Produce "
             "the complete revised work."
-            + (self._scope_headroom(spec) if self._writes() else "")
+            + (self._scope_size_note(spec, audience="editor") if self._writes() else "")
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
             + _NO_REQUESTS_IN_FIX
         )

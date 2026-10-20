@@ -251,11 +251,11 @@ def test_an_approved_plan_runs_normally(store):
     assert len(s.run(max_tasks=5)) == 1
 
 
-def test_the_plan_request_carries_the_size_ceiling(store, rec):
+def test_the_plan_request_carries_the_size_guide(store, rec):
     s = _session(store, rec)
     s.plan()
-    from quadratus.task_kinds import MAX_TASK_LINES
-    assert str(MAX_TASK_LINES) in rec.calls[0]["prompt"]
+    from quadratus.task_kinds import TASK_SIZE_GUIDE
+    assert str(TASK_SIZE_GUIDE) in rec.calls[0]["prompt"]
 
 
 def test_no_gate_means_no_extra_invocation(store):

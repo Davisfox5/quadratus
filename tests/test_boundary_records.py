@@ -892,11 +892,6 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     assert s._admit_repair(spec, "security fix", "security-repair", [], after="security verification") is False
     assert s.finish_refusals[-1]["what"] == "security fix"
     assert "after the failed security verification" in s.finish_refusals[-1]["detail"]
-    # A refused trim: recorded, and the overrun it would have mended stands.
-    monkeypatch.setattr(s, "_writes", lambda: True)
-    assert s._admit_trim(spec, what="draft", then=s._known_remainder(spec, after="draft")) is False
-    assert s.finish_refusals[-1]["what"] == "trim"
-    assert "after the failed size stop on the draft" in s.finish_refusals[-1]["detail"]
 
 
 def test_readers_say_when_the_committed_state_cannot_be_read(tmp_path):

@@ -53,7 +53,7 @@ def _declaration(body, **overrides):
 
 def test_the_attempt_two_shape_is_rejected_naming_both_signatures():
     with pytest.raises(ValueError) as info:
-        read_scope(_declaration(CONTRADICTORY), max_lines=100)
+        read_scope(_declaration(CONTRADICTORY))
     message = str(info.value)
     assert "_validate_clip_row(project, cols, row)" in message
     assert "_validate_clip_row(project, cols, width, row)" in message
@@ -63,11 +63,11 @@ def test_the_attempt_two_shape_is_rejected_naming_both_signatures():
 def test_acceptance_that_disagrees_with_the_description_is_rejected():
     acceptance = ["app.py defines `_validate_clip_row(project, cols, width, row)`"]
     with pytest.raises(ValueError, match="more than one signature"):
-        read_scope(_declaration(FINAL, acceptance=acceptance), max_lines=100)
+        read_scope(_declaration(FINAL, acceptance=acceptance))
 
 
 def test_a_final_description_with_one_signature_passes():
-    scope, body = read_scope(_declaration(FINAL), max_lines=100)
+    scope, body = read_scope(_declaration(FINAL))
     assert scope.max_lines == 100 and "SCOPE:" not in body
     assert declared_signatures(body, [scope.intended_result], scope.acceptance) == {
         "_validate_clip_row": ["project, cols, row"],
@@ -77,7 +77,7 @@ def test_a_final_description_with_one_signature_passes():
 def test_incidental_calls_are_not_declared_functions():
     body = "Use `float(x)` here and `float()` there; `len(row)` and `len(cols)` differ."
     assert declared_signatures(body, ["Do it"], ["`python -m pytest -q` passes"]) == {}
-    scope, _ = read_scope(_declaration(body), max_lines=100)
+    scope, _ = read_scope(_declaration(body))
     assert scope.intended_result.startswith("A row validator")
 
 
@@ -133,14 +133,30 @@ def test_assess_splits_changed_lines_between_code_and_tests():
     assert report.oversized and report.within_scope
 
 
-def test_the_oversized_message_reports_the_measurement_without_a_cause():
+def test_the_oversized_message_reports_the_measurement_as_advisory_without_a_cause():
     report = ScopeReport(within_scope=True, changed=["app.py", "tests/test_import_preview.py"],
                          changed_lines=223, max_lines=100, code_lines=85, test_lines=138)
     text = report.render()
     assert "223 changed lines (85 in code, 138 in tests)" in text
-    assert "~100" in text and "150" in text and "Tests count in full" in text
+    assert "~100" in text and "Tests count in full" in text and "not a stop" in text
+    assert "stopped past" not in text and "150" not in text
     assert "expanding" not in text and "whole feature" not in text
     assert "passed" not in text.lower()
+
+
+def test_a_plan_sized_past_the_guide_is_read_as_declared_and_only_a_non_positive_size_is_refused():
+    """Operator directive 2026-10-20: max_lines is the planner's estimate,
+    any positive integer; a plan is never refused for its size, and the
+    lead's prompt says the size is advisory."""
+    scope, _ = read_scope(_declaration(FINAL, max_lines=400))
+    assert scope.max_lines == 400
+    rendered = scope.render()
+    assert "about 400 changed lines" in rendered and "not a limit" in rendered
+    assert "stops nothing for size alone" in rendered and "leave a test out to fit" in rendered
+    assert "stops the task past" not in rendered
+    for bad in (0, -5, True, "100", 1.5):
+        with pytest.raises(ValueError, match="positive integer"):
+            read_scope(_declaration(FINAL, max_lines=bad))
 
 
 @pytest.mark.parametrize("path, expected", [
@@ -190,8 +206,7 @@ def test_quoted_column_headings_are_not_declared_functions():
     found = declared_signatures(ATTEMPT_3_BODY, ["A helper `_import_preview_rows(project, text)`"],
                                 ATTEMPT_3_ACCEPTANCE)
     assert found == {"_import_preview_rows": ["project, text"]}
-    scope, _ = read_scope(_declaration(ATTEMPT_3_BODY, acceptance=ATTEMPT_3_ACCEPTANCE),
-                          max_lines=100)
+    scope, _ = read_scope(_declaration(ATTEMPT_3_BODY, acceptance=ATTEMPT_3_ACCEPTANCE))
     assert scope.max_lines == 100
 
 
@@ -216,7 +231,7 @@ def test_an_elided_call_is_not_a_second_signature(mention):
 def test_the_f6_shape_passes_the_lint():
     acceptance = ["app.py defines `_serve_guarded(directory, name)`",
                   "`python -m pytest -q` passes"]
-    scope, body = read_scope(_declaration(F6_BODY, acceptance=acceptance), max_lines=100)
+    scope, body = read_scope(_declaration(F6_BODY, acceptance=acceptance))
     assert declared_signatures(body, [scope.intended_result], scope.acceptance) == {
         "_serve_guarded": ["directory, name"],
     }
@@ -226,7 +241,7 @@ def test_a_real_second_signature_next_to_an_elision_is_still_rejected():
     body = ("```python\ndef _serve_guarded(directory, name):\n```\nRoutes call "
             "`_serve_guarded(...)`; actually make it `_serve_guarded(directory, name, root)`.")
     with pytest.raises(ValueError) as info:
-        read_scope(_declaration(body), max_lines=100)
+        read_scope(_declaration(body))
     assert "(...)" not in str(info.value)
     assert "_serve_guarded(directory, name, root)" in str(info.value)
 
@@ -241,28 +256,28 @@ def test_a_signature_quoted_only_in_acceptance_needs_a_def_to_be_checked():
 
 def test_review_only_is_declared_not_inferred_from_a_small_ceiling():
     from quadratus.scope import read_scope
-    audit, _ = read_scope(_declaration(FINAL, max_lines=1, edits="none"), max_lines=100)
+    audit, _ = read_scope(_declaration(FINAL, max_lines=1, edits="none"))
     assert audit.review_only is True and audit.to_dict()["edits"] == "none"
     assert "Declared review-only" in audit.render()
-    one_line_fix, _ = read_scope(_declaration(FINAL, max_lines=1), max_lines=100)
+    one_line_fix, _ = read_scope(_declaration(FINAL, max_lines=1))
     assert one_line_fix.review_only is False and "edits" not in one_line_fix.to_dict()
-    explicit, _ = read_scope(_declaration(FINAL, edits="allowed"), max_lines=100)
+    explicit, _ = read_scope(_declaration(FINAL, edits="allowed"))
     assert explicit.review_only is False
     for bad in ("some", True, None, ""):
         with pytest.raises(ValueError, match='edits must be "none"'):
-            read_scope(_declaration(FINAL, edits=bad), max_lines=100)
+            read_scope(_declaration(FINAL, edits=bad))
 
 
 # -- the optional SCOPE estimate: strict when given, unknown when not ------------------------
 
 def test_an_estimate_is_read_strictly_rendered_and_kept_but_widens_nothing():
     estimate = {"implementation": 45, "proof": 45, "setup": 10}
-    scope, _body = read_scope(_declaration(FINAL, max_lines=100, estimate=estimate), max_lines=100)
+    scope, _body = read_scope(_declaration(FINAL, max_lines=100, estimate=estimate))
     assert scope.estimate == estimate and scope.max_lines == 100
     assert scope.to_dict()["estimate"] == estimate
     rendered = scope.render()
     assert "implementation 45, proof 45, setup 10" in rendered and "every line counts the same" in rendered
-    # The measured bound is max_lines and its 1.5 stop, whatever the split says.
+    # The measurement is against max_lines whatever the split says; it is advisory.
     diff = "+++ b/app.py\n" + "+x\n" * 93 + "+++ b/tests/test_app.py\n" + "+y\n" * 60
     report = scope.assess(diff)
     assert (report.changed_lines, report.code_lines, report.test_lines) == (153, 93, 60)
@@ -280,11 +295,11 @@ def test_an_estimate_is_read_strictly_rendered_and_kept_but_widens_nothing():
 ])
 def test_a_malformed_estimate_is_refused_not_read_as_a_lower_figure(estimate, reason):
     with pytest.raises(ValueError, match=reason):
-        read_scope(_declaration(FINAL, max_lines=100, estimate=estimate), max_lines=100)
+        read_scope(_declaration(FINAL, max_lines=100, estimate=estimate))
 
 
 def test_a_declaration_without_an_estimate_is_unknown_and_unchanged():
-    scope, _body = read_scope(_declaration(FINAL), max_lines=100)
+    scope, _body = read_scope(_declaration(FINAL))
     assert scope.estimate is None and "estimate" not in scope.to_dict()
     assert "planner's split" not in scope.render()
     assert TaskScope(max_lines=50).estimate is None
@@ -297,7 +312,7 @@ GOOD_PROOF = dict(id="P1", requirements=["R1"], operation="add(1, 2)", state="no
 
 
 def test_proof_scenarios_are_read_strictly_rendered_and_serialized():
-    scope, _body = read_scope(_declaration(FINAL, proofs=[GOOD_PROOF]), max_lines=100)
+    scope, _body = read_scope(_declaration(FINAL, proofs=[GOOD_PROOF]))
     kept = dict(GOOD_PROOF, evidence="test")
     assert scope.proofs == (kept,) and scope.to_dict()["proofs"] == [kept], "the default modality is made explicit"
     rendered = scope.render()
@@ -323,7 +338,7 @@ def test_proof_scenarios_are_read_strictly_rendered_and_serialized():
 ])
 def test_a_malformed_proof_list_is_refused_whole(proofs, reason):
     with pytest.raises(ValueError, match=reason):
-        read_scope(_declaration(FINAL, proofs=proofs), max_lines=100)
+        read_scope(_declaration(FINAL, proofs=proofs))
 
 
 def test_a_declared_reading_modality_is_kept_verbatim_and_never_inferred_from_the_location():
@@ -332,17 +347,17 @@ def test_a_declared_reading_modality_is_kept_verbatim_and_never_inferred_from_th
     written out, never inferred from the .md location); one declaring
     reading keeps it."""
     docs = dict(GOOD_PROOF, location="README.md")
-    scope, _body = read_scope(_declaration(FINAL, proofs=[docs]), max_lines=100)
+    scope, _body = read_scope(_declaration(FINAL, proofs=[docs]))
     assert scope.proofs == (dict(docs, evidence="test"),)
     reading = dict(docs, evidence="reading")
-    scope, _body = read_scope(_declaration(FINAL, proofs=[reading]), max_lines=100)
+    scope, _body = read_scope(_declaration(FINAL, proofs=[reading]))
     assert scope.proofs[0]["evidence"] == "reading" and scope.to_dict()["proofs"] == [reading]
     assert "reading" in scope.render()
     visual = dict(GOOD_PROOF, location="templates/index.html", evidence="capture")
-    scope, _body = read_scope(_declaration(FINAL, proofs=[visual]), max_lines=100)
+    scope, _body = read_scope(_declaration(FINAL, proofs=[visual]))
     assert scope.proofs[0]["evidence"] == "capture" and "evidence: capture" in scope.render()
 
 
 def test_a_declaration_without_proofs_is_unknown_not_complete():
-    scope, _body = read_scope(_declaration(FINAL), max_lines=100)
+    scope, _body = read_scope(_declaration(FINAL))
     assert scope.proofs is None and "proofs" not in scope.to_dict() and "Proof scenarios" not in scope.render()

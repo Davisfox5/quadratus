@@ -1,164 +1,20 @@
-"""R20 on c7e9449: t2's one scope trim was told only the change's total and
-spent 8 rounds and 373,366 reported tokens, more than the draft it trimmed,
-while the harness already held the per-file counts and the diff. Every trim
-now carries what the harness measured: per-file counts split into code and
-tests, and the task's diff whole or stated as omitted, filtered by file
-identity to what every scope over the task permits. Whether that saves
-rounds is a hypothesis; these controls pin what reaches the prompt.
+"""The terminal budget note (B): the terminal record says when what was
+left could not admit an ordinary call (``budget_note``), as an observation,
+never a stop.
 
-And the terminal record says when what was left could not admit an
-ordinary call (``budget_note``), as an observation, never a stop.
+This file once also held the size-trim evidence controls (R20 on c7e9449).
+Size is advisory since the operator directive of 2026-10-20 and the harness
+trims nothing; see tests/lifecycle/test_advisory_sizing.py.
 """
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from quadratus.config import Settings
-from quadratus.project import Project
-from quadratus.scope import TaskScope
-from quadratus.session import _TRIM_DIFF_MAX_CHARS, Session
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import FILES, Script
-from tests.lifecycle.test_step2_recovery import _BLOATED, _FINDING, _R1, _TYPED, DECL_SIMPLE, _plan
-
-MEASURED = "## What the harness measured of this change"
-
-
-def _session(root: Path, *, excludes=(), outer=None):
-    session = Session.__new__(Session)
-    session.project = str(root)
-    session.config = SimpleNamespace(project_excludes=tuple(excludes), default_scope=outer)
-    session._outcome = None
-    return session
-
-
-def _evidence(tmp_path, before_files, after_files, scope, *, excludes=(), outer=None):
-    root = tmp_path / "project"
-    root.mkdir()
-    for name, data in before_files.items():
-        (root / name).parent.mkdir(parents=True, exist_ok=True)
-        (root / name).write_bytes(data)
-    excluded = [str(root / e) for e in excludes]
-    before = Project(root, exclude=excluded).contents()
-    for name, data in after_files.items():
-        path = root / name
-        if data is None:
-            path.unlink()
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-    session = _session(root, excludes=excluded, outer=outer)
-    spec = SimpleNamespace(scope=scope)
-    return session._trim_evidence(spec, before), session, spec, before, root
-
-
-def test_only_files_every_scope_permits_reach_the_trim_on_both_sides(tmp_path):
-    """Filtered by file identity before rendering, on both sides: a changed
-    file outside the scope, a forbidden one inside a permitted glob, one an
-    operator limit forbids, an excluded tree, a .env file and a name that
-    looks like a diff header never appear, by name or by content."""
-    scope = TaskScope(permitted_paths=["app.py", "tests/*", "lib/*"], forbidden_paths=["lib/secret.py"],
-                      max_lines=40)
-    outer = TaskScope(permitted_paths=["*", "*/*"], forbidden_paths=["tests/private_case.py"])
-    before = {"app.py": b"x = 1\n", "outside.py": b"o = 1\n", "lib/secret.py": b"s = 1\n",
-              "tests/test_app.py": b"def test_x():\n    pass\n", "tests/private_case.py": b"p = 1\n",
-              "vendor/keep.py": b"v = 1\n", ".env": b"TOKEN=one\n"}
-    after = {"app.py": b"x = 2\n", "outside.py": b"OUTSIDE-SENTINEL\n", "lib/secret.py": b"SECRET-SENTINEL\n",
-             "tests/test_app.py": b"def test_x():\n    assert True\n", "tests/private_case.py": b"PRIVATE-SENTINEL\n",
-             "vendor/keep.py": b"EXCLUDED-SENTINEL\n", ".env": b"TOKEN=ENV-SENTINEL\n",
-             "x\n+++ b/outside.py": b"HEADER-SENTINEL\n"}
-    text, *_ = _evidence(tmp_path, before, after, scope, excludes=["vendor"], outer=outer)
-    assert MEASURED in text
-    assert "- app.py: 2 line(s), code, changed" in text
-    assert "- tests/test_app.py: 2 line(s), test, changed" in text
-    assert "Code lines: 2; test lines: 2" in text
-    for leak in ("outside.py", "OUTSIDE", "secret", "SECRET", "private_case", "PRIVATE", "vendor", "EXCLUDED",
-                 ".env", "ENV-SENTINEL", "HEADER-SENTINEL"):
-        assert leak not in text, leak
-
-
-def test_deleted_added_and_binary_files_are_measured_and_counts_match_the_scope_report(tmp_path):
-    scope = TaskScope(permitted_paths=["*.py", "*.bin"], max_lines=40)
-    before = {"gone.py": b"a = 1\nb = 2\n", "kept.py": b"k = 1\n", "blob.bin": b"\x00\x01"}
-    after = {"gone.py": None, "kept.py": b"k = 2\n", "new.py": b"n = 1\n", "blob.bin": b"\xff\xfe"}
-    text, session, spec, before_map, root = _evidence(tmp_path, before, after, scope)
-    assert "- gone.py: 2 line(s), code, deleted" in text and "--- a/gone.py\n+++ /dev/null" in text
-    assert "- new.py: 1 line(s), code, added" in text
-    assert "- blob.bin: 0 line(s), code, changed" in text and "Binary file changed: blob.bin" in text
-    report = scope.assess(Project(root).diff(before_map))
-    assert f"Code lines: {report.code_lines}; test lines: {report.test_lines}" in text, \
-        "the same counts the stop reads"
-
-
-def test_an_oversized_diff_is_omitted_whole_never_cut(tmp_path):
-    scope = TaskScope(permitted_paths=["app.py"], max_lines=40)
-    big = "".join(f"value_{i} = {'x' * 60}\n" for i in range(_TRIM_DIFF_MAX_CHARS // 40)).encode()
-    text, *_ = _evidence(tmp_path, {"app.py": b"x = 1\n"}, {"app.py": big}, scope)
-    assert "- app.py:" in text, "counts are always given"
-    assert "```diff" not in text and "value_0" not in text, "no prefix of the diff"
-    assert f"over the {_TRIM_DIFF_MAX_CHARS:,}-character bound for this prompt, so it is not shown" in text
-
-
-def test_the_trim_reads_the_source_as_it_is_now(tmp_path):
-    """Measured fresh at the trim, not from an earlier measurement."""
-    scope = TaskScope(permitted_paths=["app.py"], max_lines=40)
-    text, session, spec, before, root = _evidence(tmp_path, {"app.py": b"x = 1\n"}, {"app.py": b"x = 2\n"}, scope)
-    assert "+x = 2" in text
-    (root / "app.py").write_text("x = 3\n")
-    later = session._trim_evidence(spec, before)
-    assert "+x = 3" in later and "+x = 2" not in later
-
-
-def test_a_review_only_scope_or_no_change_carries_nothing(tmp_path):
-    text, *_ = _evidence(tmp_path, {"app.py": b"x = 1\n"}, {"app.py": b"x = 2\n"},
-                         TaskScope(permitted_paths=["app.py"], review_only=True))
-    assert text == ""
-
-
-# -- the three trim sites, whole controller ------------------------------------------------
-
-@pytest.mark.requirements_ledger
-@pytest.mark.parametrize("site", ["finished-draft", "capped-draft", "revision"])
-def test_every_trim_site_carries_the_measured_change(tmp_path, monkeypatch, site):
-    """Old/new: on c7e9449 no trim prompt carries the per-file counts or the
-    diff. Now the finished-draft trim, the capped-draft trim and the
-    revision trim each do, with no added call and the stop, target and
-    allowance as before."""
-    declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_SIMPLE + "\nCOVERS: R1"
-
-    def lead(call, replay):
-        H.write(call, {"app.py": _TYPED if site == "revision" else _BLOATED})
-        if site == "capped-draft":
-            return H.grok_ok("Still adding helpers", stop="cancelled", num_turns=8)
-        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
-
-    def revision(call, replay):
-        if "Bring the change down" in call.prompt:
-            H.write(call, {"app.py": _TYPED})
-            return 'Trimmed.\nCHANGED: ["app.py"]'
-        H.write(call, {"app.py": _BLOATED})
-        return 'Revised.\nCHANGED: ["app.py"]'
-
-    def collaborator(call, replay):
-        if site == "revision" and not replay.of("revision"):
-            return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
-        return "NO FINDINGS\nR1: MET - app.py:5"
-
-    replay = H.run(tmp_path, monkeypatch, Script(
-        orchestrator=_plan(declared), lead=lead, revision=revision, collaborator=collaborator,
-        recheck=lambda c, r: "RESOLVED", auditor=lambda c, r: "R1: MET - app.py:5",
-        **{"requirements-review": lambda c, r: "COMPLETE"}),
-        files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
-    trims = [c for c in replay.calls if c.role == "revision" and "Bring the change down" in c.prompt]
-    assert len(trims) == 1, [c.role for c in replay.calls]
-    prompt = trims[0].prompt
-    assert MEASURED in prompt and "- app.py:" in prompt and ", code, changed" in prompt
-    assert "```diff" in prompt and "+def _unused_0():" in prompt
-    assert "Aim for about" in prompt, "the target is unchanged"
-
+from tests.lifecycle.test_step2_recovery import _R1, _TYPED, DECL_SIMPLE, _plan
 
 # -- B: the terminal budget note -------------------------------------------------------------
 

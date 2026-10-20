@@ -8,7 +8,7 @@ from quadratus.artifacts import ArtifactStore
 from quadratus.registry import MODE_ROSTERS
 from quadratus.routing import OrchestratorUnavailable, SeatReason, WorkClass
 from quadratus.session import Complexity, Session, SessionConfig, TaskSpec
-from quadratus.task_kinds import MAX_TASK_LINES, TaskKind
+from quadratus.task_kinds import TASK_SIZE_GUIDE, TaskKind
 from quadratus.workers import WorkerBudget
 
 FABLE = "claude:fable"
@@ -457,14 +457,15 @@ def test_a_kind_with_no_hazards_adds_nothing_to_the_prompt(store, rec):
     assert all("known failure modes" not in p for p in lead_prompts)
 
 
-# -- the size ceiling --------------------------------------------------------
+# -- the size guide ----------------------------------------------------------
 
 
-def test_the_size_ceiling_reaches_every_decomposition_prompt(store):
+def test_the_size_guide_reaches_every_decomposition_prompt_as_a_guide(store):
     rec = Recorder(next_tasks=["a", "b", "DONE"])
     s = _session(store, rec)
     s.run()
-    assert all(str(MAX_TASK_LINES) in p for p in rec.prompts_to(FABLE))
+    assert all(str(TASK_SIZE_GUIDE) in p and "a guide, not a limit" in p for p in rec.prompts_to(FABLE))
+    assert not any("at most ~" in p for p in rec.prompts_to(FABLE))
 
 
 def test_the_orchestrator_may_label_kind_and_difficulty(store):

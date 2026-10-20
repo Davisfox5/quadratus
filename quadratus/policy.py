@@ -370,7 +370,13 @@ class RepositoryPolicy:
         return result
 
     def scope(self, scope):
-        """Intersect policy and operator limits with the existing scope checks."""
+        """Intersect policy and operator limits with the existing scope checks.
+        Paths are enforced. ``scope_max_lines`` is the operator's default
+        size estimate for a task that declares none, advisory like the
+        task's own (operator directive 2026-10-20): a declared estimate is
+        kept as declared, the policy figure never clamps it, and neither
+        stops anything. The pinned library schema bounds only the
+        operator's default figure."""
         limit = self.document['defaults']['scope_max_lines']
         deny = self.document['capability_policy']['deny_write'] + list(self.forbid)
         deny += [p for entry in self.document['capability_policy']['sensitive'] for p in entry['paths']]
@@ -378,7 +384,7 @@ class RepositoryPolicy:
             return TaskScope(max_lines=limit, forbidden_paths=tuple(deny),
                              overrun_ratio=min(1.5, self.document['defaults']['overrun_ratio']))
         from dataclasses import replace
-        return replace(scope, max_lines=min(scope.max_lines or limit, limit),
+        return replace(scope, max_lines=scope.max_lines or limit,
                        overrun_ratio=min(scope.overrun_ratio, self.document['defaults']['overrun_ratio']),
                        forbidden_paths=tuple(dict.fromkeys([*scope.forbidden_paths, *deny])))
 
