@@ -24,13 +24,18 @@ Two rules govern the response, and both come from the trial:
 also the only work that existed; discarding it would have destroyed real
 output to satisfy a bookkeeping rule. :class:`ScopeReport` is evidence for the
 lead and the record, and :attr:`ScopeReport.blocking` marks only the case the
-operator actually forbade -- a write outside the permitted paths. Size allows a 50 percent tolerance; the project dispatcher stops when that
-tolerance is exceeded and preserves the unfinished task for review.
+operator actually forbade -- a write outside the permitted paths. Size is
+advisory (operator directive 2026-10-20): :attr:`ScopeReport.oversized`
+marks a change well past the planner's estimate for the record, the
+reviewers and the planner, and the dispatcher stops nothing for it. Until
+then a 50 percent tolerance was a hard stop; that stop is retired.
 
-**Bounds are advisory to the model and checked by the harness.** Telling a
-model its line ceiling helps a little; measuring the diff afterwards is what
-makes the ceiling real. Both happen -- :meth:`render` goes into the prompt,
-:meth:`assess` runs against the diff.
+**The estimate is advisory to the model and measured by the harness.**
+Telling a model its expected size helps a little; measuring the diff
+afterwards and showing the measurement to the reviewers is what makes the
+figure mean something. Both happen -- :meth:`render` goes into the prompt,
+:meth:`assess` runs against the diff, and the reviewer judges whether the
+size was necessary.
 """
 
 from __future__ import annotations

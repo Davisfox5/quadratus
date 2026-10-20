@@ -1117,6 +1117,20 @@ def test_binding_problems_are_carried_by_the_checkpoint(tmp_path):
     assert fresh.proof_binding_problems == session.proof_binding_problems
     older = Session("goal", ArtifactStore(tmp_path / "c"), lambda *a, **k: "", config=SessionConfig())
     state.pop("proof_binding_problems")
-    state["trim_records"] = [dict(task="t1", site="draft")]  # an older checkpoint's field
+    state["trim_records"] = []  # an older checkpoint with no trim: compatible
     checkpoint.restore_state(older, state)
     assert older.proof_binding_problems == [] and not hasattr(older, "trim_records")
+    assert older.evidence_obligations == session.evidence_obligations, "other proof debt is carried"
+    # A checkpoint from before 2026-10-20 whose size trim was still owed
+    # its preservation judgment is refused whole, before any restoration
+    # or claim: the pending evidence is never dropped in silence (root on
+    # 229226b).
+    pending = dict(state, trim_records=[dict(tid="T1", task="t1", site="draft", state="pending",
+                                            changed_tests=["tests/test_app.py"])])
+    untouched = Session("goal", ArtifactStore(tmp_path / "d"), lambda *a, **k: "", config=SessionConfig())
+    with pytest.raises(checkpoint.CheckpointRefused, match="1 trim_records entry.*retired on 2026-10-20"):
+        checkpoint.restore_state(untouched, pending)
+    assert untouched.history == [] and untouched.proof_binding_problems == []
+    with pytest.raises(checkpoint.CheckpointRefused, match="trim_records"):
+        checkpoint.validate(tmp_path, dict(resumable=True, state=pending), {})
+    assert checkpoint.legacy_problem(dict(trim_records=[])) == "" and checkpoint.legacy_problem({}) == ""

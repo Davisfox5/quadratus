@@ -42,7 +42,7 @@ from typing import Dict, List, Optional
 log = logging.getLogger(__name__)
 
 __all__ = ["CheckpointRefused", "VERSION", "capture_state", "restore_state", "write", "load",
-           "validate", "identities", "settings_identity", "consumed", "seal", "claim"]
+           "validate", "identities", "settings_identity", "consumed", "seal", "claim", "legacy_problem"]
 
 VERSION = 1
 NAME = "checkpoint.json"
@@ -66,6 +66,17 @@ _CARRIED = (
 _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admissions", "operations",
                           "_requirement_revision_record", "_plan_gate_receipt", "_route_forfeit",
                           "_terminal_route", "proof_binding_problems"})
+#: Carried state the engine no longer holds, with what a non-empty value
+#: means. A checkpoint written before 2026-10-20 may carry size-trim
+#: records whose independent preservation judgment was still pending; the
+#: trim machinery is gone, nothing can judge them now, and resuming over
+#: them would silently drop pending evidence. Such a checkpoint is refused
+#: (its record stays immutable where it is); an empty or absent field is
+#: compatible (root on 229226b).
+_RETIRED = {
+    "trim_records": ("size-trim records whose assertion-preservation judgment was pending when the run ended; "
+                     "the size trim and its review were retired on 2026-10-20 and nothing can judge them now"),
+}
 #: State a checkpoint does not carry. Any of it present makes the point not
 #: resumable, rather than resuming a job whose record would be incomplete.
 _NOT_CARRIED = (
@@ -163,12 +174,33 @@ def capture_state(session) -> dict:
         return {"uncarried": [f"state: {exc}"]}
 
 
+def legacy_problem(state) -> str:
+    """Why ``state`` (a checkpoint's carried state, encoded or not) cannot
+    be restored by this engine: a retired field that still holds
+    something. "" when every retired field is absent or empty."""
+    if not isinstance(state, dict):
+        return ""
+    for name, meaning in _RETIRED.items():
+        value = state.get(name)
+        if isinstance(value, dict) and set(value) == {"__tuple__"}:
+            value = value["__tuple__"]
+        if value:
+            return (f"the checkpoint carries {len(value) if hasattr(value, '__len__') else 1} {name} "
+                    f"entry(ies): {meaning}; the record stays as written and is not resumed")
+    return ""
+
+
 def restore_state(session, state: dict) -> None:
-    """Put carried state back on a fresh session, before its run starts."""
+    """Put carried state back on a fresh session, before its run starts.
+    Refuses, restoring nothing, when the state holds a retired field that
+    is not empty (``legacy_problem``)."""
     from .artifacts import ArtifactRef
     from .memory import TaskSummary
     from .outcome import Fact, TaskOutcome
 
+    problem = legacy_problem(state)
+    if problem:
+        raise CheckpointRefused(problem)
     state = _decode(state)
 
     def refs(items):
@@ -412,6 +444,12 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
                                 + ", ".join(body.get("uncarried") or ["no carried state"]))
     if (run_dir / RESUMED).exists():
         raise CheckpointRefused("the run was already resumed; resume its latest episode instead")
+    # Before the budget, the identities and the claim: a checkpoint whose
+    # carried state this engine can no longer hold whole is refused here,
+    # so no resume is claimed over it (root on 229226b).
+    problem = legacy_problem(body.get("state"))
+    if problem:
+        raise CheckpointRefused(problem)
     from . import jobstore
     budget, problem = jobstore.read_budget(run_dir)
     if budget is None:
