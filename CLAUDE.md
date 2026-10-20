@@ -2115,23 +2115,33 @@ Key design decisions already settled:
   wrong or stale state or viewport, a changed source, fixture or image, a
   disabled or unavailable capture, an undelivered or capped review, or a
   missing per-row judgment all hold the requirement.
-  **A later task that declares the same scenario on the same requirements
-  takes the proof over** (`_supersede_obligation`): an earlier task's row
-  that never ran (a capped repair continued by a later one, a repair redone
-  by a later repair) is marked `superseded_by` and kept on the record, and
-  no longer holds the requirement; the later row is judged in its place.
-  A row that ran is never superseded, a scenario differing in any field is
-  not the same proof, and the debt moves to the declaration that owns it,
-  never disappears.
-  Sufficiency stays the audit's judgment: a bound executed case proves only
-  that it ran.
-  The reviewer and the rechecker read the task's scenarios with their
-  binding and execution states (`_proof_rows`) and are asked to challenge
-  completeness against the covered requirement text, each expectation
-  against its stated prior state ("unchanged" is not "empty"), and the
-  bound cases as written. The planner's estimate against the first measured
-  split is appended to the codebase map under `sizing` as evidence
-  (`_assess_scope`), never a floor or a multiplier.
+  The design reviewer reads the original goal and the authoritative text
+  and revision of the requirements its capture rows bind (ids alone are no
+  authority; text not on the ledger leaves the rows unjudgeable), and its
+  per-row lines are read only for the rows it was actually handed
+  (`review_rows`): a line naming another task's row judges nothing and
+  overwrites nothing. The design record is labelled with what the reviewer
+  was handed, measured before its call (state snapshot, source, delivered
+  file hashes) and revalidated after it (`_design_review_drift`); a render
+  replaced, removed or re-taken in another state, or a source that moved,
+  makes the verdict usable for nothing, and the final replacement stop
+  stays as it was. A capture scenario's canonical identity carries the
+  declared visual state (`_capture_context`: SCOPE capture route, steps
+  and fixture, or the lead's undeclared self-capture), so two scenarios
+  that read the same but show different states are different proofs.
+  **A later task that declares the exact same scenario on the same
+  requirement revisions and modality takes the proof over**
+  (`_supersede_obligation`; root, SAME Astra and SAME Sol on 4fac862):
+  the earlier task's row, run or not, is marked `superseded_by` and kept
+  on the record, immutable, and no longer holds the requirement; the
+  successor must establish fresh proof and sufficiency of its own (a
+  capped repair continued by a later one, a repair redone by a later
+  repair: the debt moves to the declaration that owns it, never
+  disappears). A scenario differing in any field, including a capture's
+  declared visual state, another requirement set or revision, another
+  modality, a legacy row, a NOT RUN or skip fact, predecessor cap debt
+  and open findings are untouched; sharing COVERS alone supersedes
+  nothing.
 - **A trim is evidence, and its assertion preservation is owed a verdict**
   (`_trim_snapshot`, `_trim_settle`, `_trim_pre_contents`, `_trim_owed`,
   `_trim_block`, `_read_trim_disposition`). Every trim has a record id

@@ -1097,11 +1097,13 @@ def test_a_reviewer_scratch_proof_is_the_receipt_only_with_its_snapshot_measured
 
 
 def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_on_this_source(tmp_path):
-    """Root on 9bedde0: a capture row's execution is the harness's own
-    measurement. Unverified, undelivered, capped, other-source, changed or
-    missing evidence measures nothing; the requirements audit may reject a
-    capture row and never approve it; the typed predicate holds an
-    unmeasured or unjudged row."""
+    """Root on 9bedde0 and 4fac862: a capture row's execution is the
+    harness's own measurement of what the reviewer was handed. Unverified,
+    undelivered, capped, other-source, unrecorded-delivery, authority-less,
+    drifted (replaced render, moved source, other state) or missing
+    evidence measures nothing; the requirements audit may reject a capture
+    row and never approve it; the typed predicate holds an unmeasured or
+    unjudged row."""
     from quadratus import delivery
     project = tmp_path / "project"
     (project / "templates").mkdir(parents=True)
@@ -1119,9 +1121,11 @@ def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_
     snapshot = list(session._capture_state("t1"))
     source = session._source_fingerprint()
     delivered = dict(reviewer="codex:gpt", verdict="APPROVED\nO1: SUFFICIENT shows it", approved=True, blocking=[])
+    hashes = {"templates/index.html": hashlib.sha256((project / "templates" / "index.html").read_bytes()).hexdigest()}
 
     def record(**over):
-        base = dict(task="t1", verified=True, problem="", snapshot=snapshot, source=source, final_review=delivered)
+        base = dict(task="t1", verified=True, problem="", snapshot=snapshot, source=source, final_review=delivered,
+                    delivered_hashes=dict(hashes), review_rows=["O1"], authority_ok=True, review_stale="")
         base.update(over)
         return base
     for over, why in ((dict(verified=False, problem="stale"), "not verified"),
@@ -1129,34 +1133,114 @@ def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_
                       (dict(final_review=None), "not delivered"),
                       (dict(final_review=dict(delivered, verdict="UNFINISHED: capped")), "no verdict"),
                       (dict(snapshot=None), "no measured snapshot"),
-                      (dict(snapshot=[snapshot[0], [["click", "#x", None]], snapshot[2]]), "a different state")):
+                      (dict(delivered_hashes={}), "delivered renders were not recorded"),
+                      (dict(authority_ok=False), "lacked the covered requirements"),
+                      (dict(review_stale="the renders changed after they were reviewed"), "changed after they were reviewed"),
+                      (dict(snapshot=[snapshot[0], [["click", "#x", None]], snapshot[2]]), "changed after they were reviewed"),
+                      (dict(delivered_hashes={"templates/index.html": "0" * 64}), "replaced"),
+                      (dict(delivered_hashes={"templates/missing.html": "0" * 64}), "missing")):
         session.design_checks = [record(**over)]
         measured, reason = session._capture_measurement(row)
         assert measured is None and why in reason, (why, reason)
         session._refresh_obligations()
         assert session.evidence_obligations[0]["execution"] == "missing"
-    session.design_checks = [record()]
-    measured, reason = session._capture_measurement(row)
-    # Whether the identity check verifies these fixture renders is the
-    # design evidence module's business; what this control pins is that
-    # nothing short of a verified, delivered, current record measures, and
-    # that measurement, when it holds, is execution bound to this source.
-    if measured:
-        session._refresh_obligations()
-        settled = session.evidence_obligations[0]
-        assert settled["execution"] == "ran" and settled["source_digest"] == source and list(settled["receipts"]) == [measured]
-        session._judge_obligations("codex:gpt", "O1: SUFFICIENT the render shows the toolbar", {},
-                                   modalities=("capture",))
-        assert session.evidence_obligations[0]["sufficiency"] == "sufficient"
-        session._judge_obligations("auditor", "R1: MET - templates/index.html\nO1: INSUFFICIENT the page overflows", {"R1": (True, "x")})
-        assert session.evidence_obligations[0]["sufficiency"] == "insufficient", "the audit may reject"
-        session._judge_obligations("auditor", "O1: SUFFICIENT fine", {"R1": (True, "x")})
-        assert session.evidence_obligations[0]["sufficiency"] == "insufficient", "the audit never approves a capture row"
-        (project / "templates" / "index.html").write_text("<p>Import!</p>\n")
-        session._refresh_obligations()
-        assert session.evidence_obligations[0]["execution"] == "missing", "a changed source measures nothing"
     unmeasured = delivery.acceptance({"R1": (True, "x")}, [dict(row)], [], {"t1": ["R1"]}, current_requirements={"R1": 1})
     assert not unmeasured["R1"].met and "capture claim not measured" in " ".join(unmeasured["R1"].reasons)
+    # The requirements audit may reject a capture row and never approves one.
+    session.evidence_obligations = [dict(row, execution="ran", source_digest=source, receipts=["capture:t1:x"])]
+    session._judge_obligations("auditor", "O1: SUFFICIENT fine", {"R1": (True, "x")})
+    assert session.evidence_obligations[0]["sufficiency"] == "unjudged"
+    session._judge_obligations("auditor", "O1: INSUFFICIENT the page overflows", {"R1": (True, "x")})
+    assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
+
+
+@pytest.mark.requirements_ledger
+def test_a_capture_scenario_is_measured_delivered_reviewed_and_accepted_through_the_real_lifecycle(tmp_path,
+                                                                                                    monkeypatch):
+    """The mandatory positive (root on 4fac862), through the controller: a
+    review-only audit finds the mobile overflow, the repair declares its
+    capture scenarios, the harness measures the renders, delivers them to
+    the cross-vendor design reviewer with the goal and the covered
+    requirement text, the reviewer approves and judges each row it was
+    handed, the measurement is execution bound to the delivered renders,
+    and the run completes. Generic APPROVED alone, and a line naming a row
+    the reviewer was not handed, establish nothing."""
+    from tests.lifecycle.test_audit_findings import (
+        AUDIT,
+        CAPTURE_JUDGED,
+        REPAIR,
+        REQS,
+        WIDE,
+        _capture,
+        _repair,
+        _run,
+    )
+    positive = _run(_at(tmp_path, "positive"), monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
+                    {"t1": _capture(measured=WIDE), "t2": _repair()})
+    assert positive.result.completed, positive.result.error
+    rows = {o["oid"]: o for o in H.result_json(positive)["evidence_obligations"] if o["task"] == "t2"}
+    assert len(rows) == 2 and all(o["modality"] == "capture" for o in rows.values())
+    for o in rows.values():
+        assert o["execution"] == "ran" and o["receipts"] and str(o["receipts"][0]).startswith("capture:t2:")
+        assert o["sufficiency"] == "sufficient" and o["judged_by"] and o["established"]
+        assert dict(o["scenario"])["capture"] == "self-capture (no SCOPE capture declared)"
+    review = positive.of("design-review")[-1].prompt
+    assert "## Goal (verbatim)" in review and "R1 (revision 1): the import page works on a phone" in review
+    assert "R2 (revision 1): the import button is labelled" in review and "scenario: proof: P1" in review
+    design = [d for d in H.result_json(positive)["design_checks"] if d["task"] == "t2"][-1]
+    assert sorted(design["review_rows"]) == sorted(rows) and design["authority_ok"] and not design["review_stale"]
+    assert design["delivered_hashes"] and design["snapshot"] and design["source"] == H.result_json(positive)["source_fingerprint"]
+    assert H.result_json(positive)["requirements"]["audits"][-1]["acceptance"]["R1"]["met"] is True
+
+    generic = _run(_at(tmp_path, "generic"), monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
+                   {"t1": _capture(measured=WIDE), "t2": _repair()},
+                   roles={"design-review": lambda call, replay: "APPROVED"})
+    rows = [o for o in H.result_json(generic)["evidence_obligations"] if o["task"] == "t2"]
+    assert all(o["execution"] == "ran" and o["sufficiency"] == "unjudged" and not o["established"] for o in rows)
+    assert not generic.result.completed
+    audit = H.result_json(generic)["requirements"]["audits"][-1]["acceptance"]
+    assert audit["R1"]["met"] is False and "capture claim judged unjudged" in " ".join(audit["R1"]["reasons"])
+
+    def cross(call, replay):
+        # t3's reviewer names t2's row as well: never read for a row it was not handed.
+        own = H.obligation_ids(call.prompt, modality="capture", task="t3")
+        other = [o for o in H.obligation_ids(call.prompt, modality="capture") if o not in own]
+        if call.task == "t3":
+            lines = [f"{o}: {CAPTURE_JUDGED}" for o in own] + ["O2: SUFFICIENT the first repair looked fine too"]
+            return "APPROVED\n" + "\n".join(lines)
+        assert not other
+        return "APPROVED"
+    both = {"mobile": 450, "desktop": 1400}
+    second = REPAIR.replace("the toolbar wraps", "the toolbar gap is closed").replace("Fix the mobile overflow.",
+                                                                                     "Fix the desktop overflow.")
+    crossed = _run(_at(tmp_path, "cross"), monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", second + "\nRESOLVES: F2"],
+                   {"t1": _capture(measured=both), "t2": _repair(), "t3": _repair(css=".toolbar { gap: 0; }\n")},
+                   roles={"design-review": cross})
+    rows = {o["oid"]: o for o in H.result_json(crossed)["evidence_obligations"]}
+    assert rows["O2"]["task"] == "t2" and rows["O2"]["sufficiency"] == "unjudged", "a line for a row not handed judges nothing"
+    assert not rows["O2"].get("superseded_by"), "a different scenario is a different proof"
+    assert all(rows[o]["sufficiency"] == "sufficient" for o in rows if rows[o]["task"] == "t3")
+
+
+def test_a_capture_scenario_with_another_declared_state_is_a_different_proof(tmp_path):
+    """Root on 4fac862: the same words at another route or with other
+    steps do not supersede the earlier visual-state debt."""
+    from types import SimpleNamespace as NS
+    session = _session(tmp_path)
+    session.config.requirements_ledger = True
+    session.memory.ledger.requirements["R1"] = "the page fits"
+    proofs = H.proofs_for("R1", "templates/index.html", evidence="capture", operation="render", state="s", expect="e")
+
+    def scope(path, steps=()):
+        return NS(proofs=tuple(dict(p) for p in proofs), capture=dict(path=path, steps=list(steps)), acceptance=(),
+                  review_only=False)
+    for tid, sc in (("t2", scope("/one")), ("t3", scope("/two")), ("t4", scope("/two", [dict(action="click", selector="#x")])),
+                    ("t5", scope("/two", [dict(action="click", selector="#x")]))):
+        session._register_acceptance_obligations(NS(task_id=tid, scope=sc, kind=None), ["R1"])
+    rows = {o["task"]: o for o in session.evidence_obligations}
+    assert "/one" in dict(rows["t2"]["scenario"])["capture"] and not rows["t2"].get("superseded_by")
+    assert not rows["t3"].get("superseded_by"), "other steps are another state"
+    assert rows["t4"]["superseded_by"] == "t5", "the exact same declared state is the same proof"
 
 
 @pytest.mark.requirements_ledger
