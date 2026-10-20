@@ -2278,6 +2278,37 @@
         "SAME: Candidate 2b804d3 (SAME): root's 30 full-suite failures on c9a665b corrected as one patch with the recapture identity gap (capture rows rebound to the effective declaration with lineage; supersession reconciled to the effective state, lifted rows keep their own judgment) and the two boundary details (capture_fragment declares and judges Clear/fragment behaviour; t1 superseded by t2's A is lifted when t2 redeclares to B). Measured on the scratch worktree, raw logs kept under scratchpad/logs: p36 (the seven failing files whole plus explicit_tasks, direct_tier, proof_binding, audit_findings, scope lint; browser variable not reaching pytest, so browser cases skipped) 2 failed / 229 passed / 26 skipped; p37 (only p36's 26 skipped browser cases, QUADRATUS_CHROMIUM on the pytest process, /opt/pw-browsers/chromium) 1 failed / 25 passed / 0 skipped, the failure a wrong substring in SAME's own new prompt assertion; p39 (the two boundary cases, the combined-debt boundary control and the dropped-fragment positive, after the test-side corrections: NOT RUN row targeted by its exact path behavior, assertion fixed) 4 passed / 0 failed / 0 skipped. Setup records kept and labelled: p35 stopped before an edit to _reconcile_supersession (partial), p38 an unintended empty-selection full suite stopped at ~3% (not a result, not a gate). Root's failed-30 record and CI 1ba4685 (14 FAIL / 4257 PASS / 90 skip on 3.11 and 3.12, the 14 within the diagnosed non-browser set) stand as recorded. No full suite on SAME's side; root's scoped review and single final gate pending.",
         "SAME: Candidate 54aa8f5 (SAME): the one consolidated fixture correction from root and SAME's review of e77d859 (production CLEAR, five controls PASS, 94 contracts retained): the harness_capture toolbar and upload pages and the design_review_fix page now carry the elements their requirements, legacy row and P2 scenarios claim (a labelled Import button; a search field and the Ctrl+K hint, squeezed in the draft, given room by the fix), and the FIT/TABLE/HINT P2 scenarios and scripted observations name them. No production, assertion, negative reply or parameter change; no other cleared group touched. Measured once on the scratch worktree with explicit node ids and QUADRATUS_CHROMIUM on the pytest process, raw log kept: p40 (the 20 browser ids of harness_capture, design_review_fix and verification_handoff, the files whose rendered pages changed) 23 passed / 0 failed / 0 skipped. p36, p37, p39 and the labelled p35/p38 setup records stand as recorded. No full suite on SAME's side; root's single full suite not started; this head needs its own CI."
       ]
+    },
+    {
+      "id": "T-advisory-sizing",
+      "purpose": "advisory sizing (Davis, 2026-10-20): the size stop, the trim call, the trim evidence and preservation-debt subsystem and the plan refusal above 100 lines are replaced by a measured, reported size estimate; reviewers judge necessity; paths, original tests, budgets, roles, reviews, goal confirmation, audit and evidence rules unchanged",
+      "base": "22f91ec",
+      "owns": [
+        "quadratus/scope.py",
+        "quadratus/task_kinds.py",
+        "quadratus/session.py",
+        "quadratus/policy.py",
+        "quadratus/obligations.py",
+        "quadratus/delivery.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tests/lifecycle/test_advisory_sizing.py",
+        "tests/harness_pack/cases/02-scope-overrun-is-advisory-work-reviewed.json"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-20T22:24:50Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "288c2f3",
+        "at": "2026-10-20T22:25:26Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "SAME: Claimed with --resolve as coordinator: the base is 22f91ec, the head root cleared and the stage A records were delivered on, while the record's candidate still reads 627468d; root advances the candidate. Candidate 288c2f3 (SAME, Davis-authorized batch past 150 lines). Measured on the scratch worktree, raw logs kept under scratchpad/logs: unit set (scope lint, task_kinds, session, enhancements, prompt parity, review_fixes_0925, boundary_records, policy, acceptance_repairs, delivery_records, reliability_repair) all passed with test_policy::test_wheel_loads_library_outside_source_tree deselected (it fails identically on the untouched 22f91ec checkout: offline pip wheel build, environment); p41 (advisory_sizing, lifecycle_matrix, step2_recovery, trim_evidence, proof_binding, joint_scope_telemetry, direct_tier, codex_check_debt, finish_capacity, delivery_controller, boundary_correction) 3 failed / 339 passed, the three being two assertion mistakes in SAME's new controls and the obsolete checkpoint trim test, corrected; p42 (advisory_sizing whole + the checkpoint control) 1 failed / 9 passed, the one a final-audit assertion corrected to the recorded finding state; p43 that case 1 passed. Harness pack: 28 of 30 on the final bytes, the two failures (ask-becomes-standing-ruling good, same-task-twice-stalls base) identical on the untouched 22f91ec checkout, pre-existing. No full suite on SAME's side; no live provider run; root's independent review, single full suite, install and fresh test pending. The pinned harness library schema is untouched (its digest is verified at load); the policy figure no longer clamps a declared estimate."
+      ]
     }
   ],
   "receipts": [
