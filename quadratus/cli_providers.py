@@ -93,16 +93,22 @@ class CLINotInstalled(RuntimeError):
 
 
 class StaleClient(RuntimeError):
-    """An installed vendor client is older than the version this engine was
-    qualified against. Raised by the run preflight before any model call,
+    """An installed vendor client is older than the version this engine
+    qualified. Raised by the run preflight before any model call,
     never by a provider: the seat stays constructed and reported, the run
     is refused with both versions named (see ``CLISpec.minimum_client``)."""
 
 
-#: ``<binary> --version`` output, read once per binary path per process and
-#: kept for the status line, the invocation ledger and the preflight.
-_CLIENT_VERSIONS: Dict[str, Optional[str]] = {}
-_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?")
+#: The version ``<binary> --version`` reported, read once per executable
+#: identity (path, arguments, device, inode, size, mtime) per process and
+#: kept for the status line, the invocation ledger and the preflight. A
+#: replaced or upgraded executable at the same path is a new identity and
+#: is read again, so a long-lived process sees the operator's remedy.
+_CLIENT_VERSIONS: Dict[tuple, Optional[str]] = {}
+_VERSION = re.compile(r"(?<![\w.])(\d{1,5})\.(\d{1,5})\.(\d{1,5})(?:-([0-9A-Za-z.]{1,32}))?(?![\w.])")
+#: What a recorded client version may look like: exactly the bounded
+#: ``major.minor.patch[-pre]`` form, never the binary's own line.
+CLIENT_VERSION_FORM = re.compile(r"\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[0-9A-Za-z.]{1,32})?")
 
 
 def parse_client_version(text) -> Optional[tuple]:
@@ -116,6 +122,13 @@ def parse_client_version(text) -> Optional[tuple]:
     return (int(major), int(minor), int(patch), 0 if pre is None else -1, pre or "")
 
 
+def _version_text(match) -> str:
+    """The bounded ``major.minor.patch[-pre]`` a match found, and nothing
+    around it: no product name, path, error or token text."""
+    major, minor, patch, pre = match.groups()
+    return f"{int(major)}.{int(minor)}.{int(patch)}" + (f"-{pre}" if pre else "")
+
+
 def client_version_at_least(found, minimum) -> Optional[bool]:
     """Whether ``found`` (version text) meets ``minimum`` (version text);
     None when either does not parse: unknown is never a pass."""
@@ -126,16 +139,24 @@ def client_version_at_least(found, minimum) -> Optional[bool]:
 
 
 def client_version(path: str, args: Sequence[str]) -> Optional[str]:
-    """The installed client's own version line (``codex-cli 0.154.0``), read
-    once per binary path with a bounded subprocess; None when the binary
-    cannot be run or prints nothing. Never a model call, never raises."""
-    key = f"{path} {' '.join(args)}"
+    """The version the installed client reports (``0.154.0`` from
+    ``codex-cli 0.154.0``), read once per executable identity with a
+    bounded subprocess. None, meaning unknown, when the executable cannot
+    be stat'ed or run, exits non-zero, or prints no recognised version on
+    its first stdout line; stderr is never read, and nothing but the
+    bounded version form is kept. Never a model call, never raises."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (path, tuple(args), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
     if key not in _CLIENT_VERSIONS:
         text = None
         try:
             proc = subprocess.run([path, *args], capture_output=True, text=True, timeout=15, check=False)
-            first = (proc.stdout or proc.stderr or "").strip().splitlines()
-            text = first[0].strip()[:120] if first else None
+            first = (proc.stdout or "").strip().splitlines()
+            match = _VERSION.search(first[0][:200]) if proc.returncode == 0 and first else None
+            text = _version_text(match) if match else None
         except (OSError, subprocess.SubprocessError, ValueError):
             text = None
         _CLIENT_VERSIONS[key] = text
@@ -1403,7 +1424,7 @@ class CLISpec:
     verified: bool = False
     #: Arguments that print the client's version (read once per binary).
     version_args: List[str] = field(default_factory=lambda: ["--version"])
-    #: The oldest client this engine is qualified against, or None. A run
+    #: The oldest client this engine qualified, or None. A run
     #: whose installed client parses below it is refused before any call
     #: (``runtime.Fleet.stale_clients``, ``project_run``); an unreadable
     #: version is reported as unknown and not refused. No override: the
@@ -1902,8 +1923,9 @@ CODEX_SPEC = CLISpec(
     # retries. rust-v0.162.0 carries Retry-After through the websocket
     # TransportError (protocol/src/error.rs retry_delay) and waits inside
     # the same sampling session under its retry budget and the call
-    # deadline (core/src/responses_retry.rs; suite retry_after.rs); 0.163.0
-    # is the first stable release with it, qualified live on 2026-10-21.
+    # deadline (core/src/responses_retry.rs; suite retry_after.rs). 0.163.0
+    # is the first version this engine qualified, live on 2026-10-21; it is
+    # not a claim about which upstream release first carried the wait.
     # The engine runs no outer retry: the client is where the wait belongs,
     # and a run on a client that cannot wait is refused before any call.
     minimum_client="0.163.0",
@@ -2459,9 +2481,9 @@ class CLIProvider(LLMProvider):
             )
         # The installed client's version, for the status line, every
         # invocation row and the run preflight (codex 0.154 discarded a
-        # 429's body and Retry-After inside its API bridge; 0.162 and later
-        # wait inside the same sampling session). Recorded here, never
-        # refused here: a seat is constructed and reported as it is.
+        # 429's body and Retry-After inside its API bridge; 0.163.0 is the
+        # version this engine qualified). Recorded here, never refused
+        # here: a seat is constructed and reported as it is.
         self.client_version = client_version(path, self.spec.version_args)
         self.minimum_client = self.spec.minimum_client or None
         if not self.spec.verified:

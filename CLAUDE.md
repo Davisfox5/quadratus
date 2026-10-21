@@ -876,15 +876,20 @@ Key design decisions already settled:
   `turn.failed` carried only "exceeded retry limit, last status: 429" and
   the attempt settled as unknown usage; 0.162 carries Retry-After through
   the transport error and waits inside the same sampling session under
-  its own retry budget and the call deadline; 0.163.0 is the first stable
-  client with it, and root qualified it live. So the fix is the client,
+  its own retry budget and the call deadline; 0.163.0 is the first version
+  this engine qualified, live by root (not a claim about which upstream
+  release first carried the wait). So the fix is the client,
   not an outer replay (no `CapacityRejected` loop, no parallel retry
   framework, no raw trace capture: rejected as scope). What the engine
   does: `CLISpec.minimum_client` (`0.163.0` for codex; none for claude or
   grok, which showed no such fault) and `version_args`; `_build_client`
-  reads `<binary> --version` once per path (`client_version`, bounded,
-  never raises) and records `client_version` and `minimum_client` on the
-  provider without refusing; `Fleet.status_lines` shows `client <v>,
+  reads `<binary> --version` once per executable identity (path, device,
+  inode, size, mtime: a replaced binary at the same path is read again,
+  so a long-lived process sees the remedy) and keeps only the bounded
+  `major.minor.patch[-pre]` form from a zero exit's first stdout line,
+  never the binary's own line, stderr, or any path or error text
+  (`client_version`, never raises); it records `client_version` and
+  `minimum_client` on the provider without refusing; `Fleet.status_lines` shows `client <v>,
   qualified minimum <m>` with STALE or "version unreadable; not refused";
   `Fleet.stale_clients` lists an available CLI vendor whose version parses
   below the minimum, and `project_run` raises `StaleClient` before the
@@ -900,7 +905,9 @@ Key design decisions already settled:
   the budget's unknown-usage settlement, `_looks_exhausted` and every
   review, usage and partial-work protection are unchanged. Controls:
   `tests/test_client_version_preflight.py` (parse and semver pre-release
-  ordering, read-once, provider recording, failed and completed turn
+  ordering, read once per identity and again after the executable is
+  replaced, non-zero exit and stderr and unrecognised lines all unknown,
+  provider recording, failed and completed turn
   diagnostics, the allowlist dropping free text, status lines, the
   preflight refusing before any call at 0.154.0 and running at 0.163.0,
   an environment variable lifting nothing).

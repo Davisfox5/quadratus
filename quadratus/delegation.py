@@ -327,7 +327,7 @@ def safe_diagnostics(value) -> dict:
     # bounded facts for reading a row against the client's known behaviour.
     # The failure message itself is not carried; it is vendor free text.
     client = value.get('client_version')
-    if isinstance(client, str) and re.fullmatch(r"[A-Za-z0-9_. :/+-]{1,120}", client):
+    if isinstance(client, str) and re.fullmatch(r"\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[0-9A-Za-z.]{1,32})?", client):
         result['client_version'] = client
     status = value.get('status')
     if type(status) is int and 100 <= status <= 599:

@@ -558,8 +558,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         except AttributeError:  # a fake fleet without the preflight (tests)
             stale = []
         if stale:
-            # Before any call: a client older than the one this engine was
-            # qualified against runs nothing (2026-10-21: codex 0.154 ended
+            # Before any call: a client older than the one this engine
+            # qualified runs nothing (2026-10-21: codex 0.154 ended
             # two runs on a capacity 429 it could neither report nor wait
             # out). The versions are the error; nothing is substituted.
             from .cli_providers import StaleClient

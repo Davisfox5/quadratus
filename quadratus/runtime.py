@@ -894,7 +894,7 @@ class Fleet:
 
     def stale_clients(self) -> List[str]:
         """One line per CLI vendor whose installed client parses below the
-        version this engine is qualified against; the run preflight refuses
+        version this engine qualified; the run preflight refuses
         on any. A client whose version cannot be read is not listed (it is
         shown as unknown on the status line), and a vendor whose seats are
         not usable anyway is not listed either."""
