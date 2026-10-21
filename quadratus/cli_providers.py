@@ -915,7 +915,7 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             diagnostics["cached_input_tokens"] = account["cached_input_tokens"]
         if not account["complete"] and account["completed_turns"]:
             diagnostics["usage_lower_bound"] = dict(account["reported"],
-                usage_source="completed parent turns; incomplete call")
+                usage_source="last cumulative thread snapshot; incomplete call")
     return diagnostics or None
 
 
@@ -985,20 +985,28 @@ def _extract_plain(stdout: str) -> str:
 
 
 def _codex_usage_account(stdout: str) -> dict:
-    """Completed-turn counts, never estimates or a partial stream as a total.
+    """The call's token count from the thread's cumulative total, never a
+    sum of snapshots and never a partial stream as a total.
 
-    Codex reports parent usage once per turn; cached input is a subset.
-    A failed/open or malformed turn leaves the call's total unknown even
-    when earlier completed turns supply a useful observed lower bound. An
-    unaccounted turn stays unaccounted: a turn.failed or error event, or a
-    turn.started while a turn is still open, is not cleared by a later
-    turn.completed (root, 2026-10-21), so a recovered call's answer stands
-    (``_extract_codex_result``) while its usage is unresolved, never the
-    good turns alone presented as the whole.
+    Upstream rust-v0.163.0 ``exec/src/event_processor_with_jsonl_output.rs``
+    (lines 118-128, 509-535): ``ThreadTokenUsageUpdated`` stores the
+    thread's cumulative total and every ``turn.completed`` emits
+    ``usage_from_last_total``, so successive completions repeat a running
+    total and summing them double-counts (root's correction, 2026-10-21,
+    of root's own earlier sum). The account is therefore the last valid
+    snapshot on a single thread: snapshots must be monotonic (a regression
+    is malformed), a repeated total charges nothing extra, cached input is
+    a subset never added, and a second thread id in one stream is not the
+    same cumulative account. A failed, open, double-started or malformed
+    turn, a regression or a second thread leaves the call unknown, with the
+    last valid snapshot kept as the observed lower bound. Nothing here
+    recovers a historical call's usage or verifies the backend's bill.
     """
-    totals = {"input_tokens": 0, "output_tokens": 0}
-    completed, cached, invalid = 0, 0, False
+    last: Optional[Dict[str, int]] = None
+    last_cache = 0
+    completed, invalid = 0, False
     open_turn, unaccounted = False, False
+    threads: set = set()
     for line in stdout.splitlines():
         if not line.lstrip().startswith("{"):
             continue
@@ -1011,6 +1019,9 @@ def _codex_usage_account(stdout: str) -> dict:
             invalid = True
             continue
         kind = event.get("type")
+        if kind == "thread.started":
+            thread = event.get("thread_id")
+            threads.add(thread if isinstance(thread, str) else repr(thread))
         if kind == "turn.started":
             unaccounted = unaccounted or open_turn
             open_turn = True
@@ -1024,7 +1035,7 @@ def _codex_usage_account(stdout: str) -> dict:
         if not isinstance(usage, dict):
             invalid = True
             continue
-        values = {key: _strict_count(usage, key, missing_ok=False) for key in totals}
+        values = {key: _strict_count(usage, key, missing_ok=False) for key in ("input_tokens", "output_tokens")}
         cache = _strict_count(usage, "cached_input_tokens", missing_ok=True)
         if any(value is None for value in values.values()) or cache is None:
             invalid = True
@@ -1032,14 +1043,19 @@ def _codex_usage_account(stdout: str) -> dict:
         if cache > values["input_tokens"]:
             invalid = True
             continue
-        for key, value in values.items():
-            totals[key] += value
-        cached += cache
+        if last is not None and (values["input_tokens"] < last["input_tokens"]
+                                 or values["output_tokens"] < last["output_tokens"] or cache < last_cache):
+            # A cumulative total cannot fall: the stream is not one account.
+            invalid = True
+            continue
+        last, last_cache = dict(values), cache
         completed += 1
     pending = open_turn or unaccounted
-    return {"complete": bool(completed) and not pending and not invalid,
-            "completed_turns": completed, "reported": totals,
-            "cached_input_tokens": cached, "invalid": invalid, "pending": pending}
+    several_threads = len(threads) > 1
+    reported = dict(last) if last is not None else {"input_tokens": 0, "output_tokens": 0}
+    return {"complete": bool(completed) and not pending and not invalid and not several_threads,
+            "completed_turns": completed, "reported": reported, "cached_input_tokens": last_cache,
+            "invalid": invalid, "pending": pending, "threads": len(threads)}
 
 
 def _extract_codex_usage(stdout: str) -> Optional[Dict[str, int]]:

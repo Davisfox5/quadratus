@@ -14,12 +14,44 @@ def done(i=100, o=10, **extra):
     return {'type': 'turn.completed', 'usage': {'input_tokens': i, 'output_tokens': o, **extra}}
 
 
-def test_multiple_turns_sum_only_parent_usage_and_keep_cache_as_subset():
+def test_multiple_completions_are_one_cumulative_thread_total_never_summed():
+    """Upstream 0.163 emits the thread's running total on every
+    turn.completed (usage_from_last_total): the last snapshot is the
+    account; summing 100 and 200 would double-count."""
     data = stream(done(100, 10, cached_input_tokens=90),
                   {'type': 'item.completed', 'usage': {'input_tokens': 999999}},
                   done(200, 20, cached_input_tokens=150))
-    assert _extract_codex_usage(data) == {'input_tokens': 300, 'output_tokens': 30}
-    assert _extract_codex_diagnostics(data)['cached_input_tokens'] == 240
+    assert _extract_codex_usage(data) == {'input_tokens': 200, 'output_tokens': 20}
+    facts = _extract_codex_diagnostics(data)
+    assert facts['cached_input_tokens'] == 150 and facts['completed_turns'] == 2
+    assert facts['usage_completeness'] == 'complete'
+
+
+def test_a_repeated_total_charges_nothing_extra():
+    data = stream(done(200, 20, cached_input_tokens=150), done(200, 20, cached_input_tokens=150))
+    assert _extract_codex_usage(data) == {'input_tokens': 200, 'output_tokens': 20}
+    assert _extract_codex_diagnostics(data)['cached_input_tokens'] == 150
+
+
+@pytest.mark.parametrize('later', [done(150, 25), done(250, 15), done(250, 25, cached_input_tokens=100)])
+def test_a_falling_cumulative_total_is_unresolved_with_the_last_valid_snapshot_as_lower_bound(later):
+    data = stream(done(200, 20, cached_input_tokens=150), later)
+    assert _extract_codex_usage(data) is None
+    facts = _extract_codex_diagnostics(data)
+    assert facts['usage_completeness'] == 'unresolved' and facts['completed_turns'] == 1
+    assert facts['usage_lower_bound'] == {'input_tokens': 200, 'output_tokens': 20,
+                                          'usage_source': 'last cumulative thread snapshot; incomplete call'}
+
+
+def test_a_second_thread_in_one_stream_is_not_the_same_cumulative_account():
+    data = stream({'type': 'thread.started', 'thread_id': 'a'}, done(100, 10),
+                  {'type': 'thread.started', 'thread_id': 'b'}, done(300, 30))
+    assert _extract_codex_usage(data) is None
+    facts = _extract_codex_diagnostics(data)
+    assert facts['usage_completeness'] == 'unresolved' and facts['completed_turns'] == 2
+    assert facts['usage_lower_bound']['input_tokens'] == 300, 'the last valid snapshot, observed, never a sum'
+    one = stream({'type': 'thread.started', 'thread_id': 'a'}, done(100, 10), done(300, 30))
+    assert _extract_codex_usage(one) == {'input_tokens': 300, 'output_tokens': 30}
 
 
 @pytest.mark.parametrize('tail', [

@@ -58,7 +58,7 @@ def test_a_completed_turn_after_a_failed_one_is_the_clients_recovery_and_a_real_
     assert got["stop_reason"] == "turn.completed" and "status" not in got
     assert got["usage_completeness"] == "unresolved" and got["completed_turns"] == 1
     assert got["usage_lower_bound"] == {"input_tokens": 20, "output_tokens": 5,
-                                        "usage_source": "completed parent turns; incomplete call"}
+                                        "usage_source": "last cumulative thread snapshot; incomplete call"}
     assert _extract_codex_usage(stream) is None
 
 
@@ -81,10 +81,10 @@ def test_one_started_and_completed_turn_is_complete_and_a_transport_retry_in_std
 def test_the_ledger_keeps_the_usage_account_facts_bounded():
     kept = safe_diagnostics({"usage_completeness": "unresolved", "completed_turns": 1,
                              "usage_lower_bound": {"input_tokens": 20, "output_tokens": 5,
-                                                   "usage_source": "completed parent turns; incomplete call"}})
+                                                   "usage_source": "last cumulative thread snapshot; incomplete call"}})
     assert kept == {"usage_completeness": "unresolved", "completed_turns": 1,
                     "usage_lower_bound": {"input_tokens": 20, "output_tokens": 5,
-                                          "usage_source": "completed parent turns; incomplete call"}}
+                                          "usage_source": "last cumulative thread snapshot; incomplete call"}}
     assert safe_diagnostics({"usage_lower_bound": 1234})["usage_lower_bound"] == 1234
     for bad in ({"usage_completeness": "partial"}, {"completed_turns": -1}, {"usage_lower_bound": "20"},
                 {"usage_lower_bound": {"input_tokens": 20, "usage_source": "x" * 81}},

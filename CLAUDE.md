@@ -1032,11 +1032,18 @@ Key design decisions already settled:
   turn is never hidden** (root, 2026-10-21, `_codex_usage_account`). The
   saved failed call's thread state read tokens_used=0 only as a default,
   with no token_count or completed event in the rollout, so nothing could
-  say what it spent. The extractor now sums every `turn.completed`
-  parent usage (cached input a subset, never above input), and leaves the
-  call unknown when a turn is open, failed, started twice before
-  completing, or malformed; a later `turn.completed` does not clear an
-  earlier `turn.failed`, `error` or double start. The answer semantics are
+  say what it spent. Upstream 0.163 `exec/src/event_processor_with_jsonl_output.rs`
+  emits the thread's cumulative total on every `turn.completed`
+  (`usage_from_last_total`), so the account is the last valid snapshot
+  on a single thread, never a sum (root's correction of root's own
+  earlier sum): snapshots must be monotonic, a repeated total charges
+  nothing extra, cached input is a subset never added, and a second
+  thread id in one stream is not the same account. The call is unknown
+  when a turn is open, failed, started twice before completing or
+  malformed, when a total falls, or when a second thread appears; a later
+  `turn.completed` does not clear an earlier `turn.failed`, `error` or
+  double start, and the last valid snapshot is kept as the observed lower
+  bound. Nothing recovers a historical call's usage or verifies a bill. The answer semantics are
   separate: `_extract_codex_result` still honours a completed turn after
   a failed one as the client's recovery. Diagnostics carry
   `usage_completeness` (complete or unresolved), `completed_turns`,
