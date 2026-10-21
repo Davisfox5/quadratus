@@ -2396,14 +2396,31 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-21T11:40:17Z",
       "acknowledged": false,
       "delivery": {
         "sha": "f4af6dd",
         "at": "2026-10-21T11:43:20Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "f4af6dd",
+          "verdict": "cleared",
+          "evidence": "Root independently reviewed f1d9ba2..f4af6dd source and retained test changes. Measured final 129 focused tests PASS, 0 FAIL, 0 skip in 48.23sec, including 13 independent error/current-client controls and strict binding lifecycle controls. Initial ace40f8 9PASS1FAIL preserved; final empty/malformed failure and status-wording corrections clear. No review, execution, source identity, proof grammar or final-audit weakening. Real updated-client compatibility, one final local full suite, fresh pinned install, exact CI and independent fresh preparation admission remain pending; no feature run or acceptance claim.",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/delegation.py",
+            "quadratus/runtime.py",
+            "quadratus/scope.py",
+            "quadratus/session.py",
+            "tests/test_provider_contract.py",
+            "tests/lifecycle/test_proof_declaration_feedback.py"
+          ],
+          "at": "2026-10-21T11:44:57Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: SAME: Claimed with --resolve as coordinator on f1d9ba2 (record candidate still reads 627468d; root advances it). Delivered ace40f8. Davis's batched follow-up of 2026-10-21 plus root's offline-control findings on f1d9ba2: (1) claude 2.1.304 and grok 1.0.62 minimums beside codex 0.163.0, shared failure_facts (status, class in cap/auth/rate_limited/unavailable) from error envelopes only, codex error dominates partial text with a later turn.completed honoured as recovery, claude max_tokens and row-less error envelopes keep ending facts, grok error status kept; (2) scope.PROVES_RULE and _proves_problem measured reasons to lead, revision (_binding_feedback) and reviewer, declaration fault alone asks for corrected lines; (3) scope.TEST_SUBSTANCE_RULE to lead, revision, reviewer. No outer retry, override, normalization, extra model round or audit change. Fixtures: workflow fake vendor 99.0.0, preflight run control per-vendor versions, claude limit-envelope diagnostics assertion now the kept ending facts. Measured with explicit args, raw logs kept: provider-side files (cli_providers, claude_auxiliary_usage, grok_diagnostics, client_version_preflight, runtime, project_workflow, reread_visibility) 222 passed; test_provider_contract plus scope_declaration_lint 76 passed; session-side files (proof_declaration_feedback, proof_binding, session, requirements_ledger, joint_review_verdicts, acceptance_repairs, design_debt_binding, review_seat_cap, usage_and_channels, gate_suite, advisory_sizing, capture_scope_guidance, scope_declaration_lint) 344 passed; ruff clean. No native, provider or full-suite run on my side; root's independent review, full suite, fresh pinned runtime, exact CI and fresh freeze wait on ace40f8.",
