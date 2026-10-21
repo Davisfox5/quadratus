@@ -257,8 +257,8 @@ class TaskScope:
         if self.review_only:
             parts.append("Declared review-only: report findings; do not change project source.")
         if self.proofs:
-            parts.append("Proof scenarios (a test scenario is shown only by a named test case that runs and passes; "
-                         "deliver one line per test scenario 'PROVES: P<n> - path/test_x.py::Class::test_case'. "
+            parts.append("Proof scenarios (a test scenario is shown only by a named test case that runs and passes. "
+                         + PROVES_RULE + " "
                          "A scenario marked 'evidence: reading' is a documentation claim the audit reads and cites; "
                          "one marked 'evidence: capture' is a visual state the harness renders and the design "
                          "reviewer judges; neither takes a PROVES line):\n"
@@ -400,6 +400,41 @@ def count_change_lines_by_path(diff: str) -> Dict[str, int]:
 _TEST_DIRS = frozenset({"test", "tests", "spec", "specs", "__tests__"})
 _TEST_NAMES = re.compile(
     r"^(test_.*|.*_test|.*\.test|.*\.spec|.*_spec|conftest)\.[A-Za-z0-9]+$"
+)
+
+
+#: How a proof scenario is bound to its executed cases, stated once for
+#: every seat that writes or judges a delivery (the lead's packet, the
+#: revision prompt, the reviewer's proof rows). The settings-migration run
+#: (2026-10-21): the lead's P11 first named a test class, then a
+#: comma-separated case list; the harness rightly rejected both, the
+#: reviewer asked for source revisions, and the second revision was spent
+#: on a format the prompt had never spelled out. The grammar is unchanged
+#: and strict; the rule now says it, and the measured reason comes back.
+PROVES_RULE = (
+    "Bind each proof scenario with one line per named test case, exactly "
+    "'PROVES: P<n> - path/test_x.py::Class::test_case' (the Class segment only when the case "
+    "is in a class; a parametrized id in brackets is part of the case), one case per line and "
+    "nothing else on the line. A scenario shown by several cases takes several PROVES lines, "
+    "repeated with the same P<n>. A line that names a test class, a test file, or a "
+    "comma-separated list binds nothing and invalidates that scenario's declaration; the "
+    "measured reason is returned to you, and the correction is the corrected line(s)."
+)
+
+#: What a delivered test must do, stated for the author and the judge
+#: alike. The same run's independent source finding: a generated
+#: standard-library-only test forbade every module import and held a loop
+#: that asserted nothing, which the next task's json import could not
+#: satisfy. Generic by design: the requirement decides what is asserted.
+TEST_SUBSTANCE_RULE = (
+    "A test proves the requirement its scenario names: it performs the stated operation from "
+    "the stated prior state and asserts the stated result or resulting state, so that it fails "
+    "when that behaviour is absent. A test with no assertion, a loop whose body asserts nothing, "
+    "or an assertion that cannot fail proves nothing. Assert only what the requirement states and "
+    "nothing it does not: a 'standard library only' requirement permits every standard-library "
+    "import (json, sqlite3, http.server, threading and the rest) and forbids third-party packages, "
+    "so a test never forbids imports, files or constructs that the goal's later work may validly "
+    "use. A test that would fail valid future work on this goal is a defect in the test."
 )
 
 

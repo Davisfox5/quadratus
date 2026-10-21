@@ -911,6 +911,65 @@ Key design decisions already settled:
   diagnostics, the allowlist dropping free text, status lines, the
   preflight refusing before any call at 0.154.0 and running at 0.163.0,
   an environment variable lifting nothing).
+- **Every vendor client is held to a qualified minimum, and a failed call
+  is recorded by the same bounded facts** (Davis, 2026-10-21, the batch
+  after the codex fix). Root's qualification targets: claude 2.1.304 (npm
+  stable, from 2.1.296), grok 1.0.62 (Homebrew/x.ai stable, from 1.0.30),
+  codex 0.163.0 unchanged; set as `minimum_client` on all three specs, same
+  preflight, unreadable stays unknown and is not refused. No upstream
+  fault is established for claude or grok; the baseline records what root
+  qualified. `failure_facts(status, text)` is shared by the three
+  extractors and yields at most `status` (an integer field, or a bare 4xx
+  or 5xx in text the vendor reported as an error) and `failure_class` in
+  `cap`, `auth`, `rate_limited`, `unavailable`: the window's own wording
+  (`EXHAUSTION_MARKERS`, one tuple with `runtime._looks_exhausted`) outranks
+  a 429, 401 or 403 or sign-in wording is auth, 429 alone is rate limiting,
+  502 to 504 unavailable; anything else is unknown by absence, no retry
+  delay is inferred, no text is kept, and prose in a successful answer that
+  mentions 429 or 503 records nothing because only error envelopes are
+  read (codex `turn.failed`, claude `is_error` with `api_error_status` or
+  `errors`, grok `error` or `type: error`). Root's offline controls on
+  f1d9ba2 found the false-success boundary: `_extract_codex_result` returned
+  an earlier `agent_message` when a later `turn.failed` carried the 429.
+  The error now dominates partial text (kept on the error as
+  `partial_text`, never returned), and a `turn.completed` after a
+  `turn.failed` is the client's own recovery and is read as the success it
+  is: the last terminal event in stream order decides. Claude's
+  `stop_reason: max_tokens` is likewise an error with partial text (the
+  API's documented stop, not yet seen from the binary), and an error
+  envelope with no auxiliary rows now keeps its ending facts where it used
+  to report None. Native retry defaults, the deadline, reviews, usage and
+  partial-work protections are unchanged; no outer retry, override or
+  retry system was added. The workflow fake vendor reports 99.0.0 because
+  one fake serves three vendors. Controls: `tests/test_provider_contract.py`
+  and the vendor cases in `tests/test_client_version_preflight.py`.
+- **The PROVES rule is stated to every seat that writes or judges a
+  delivery, and a malformed line comes back with its measured reason**
+  (the settings-migration run, 2026-10-21: P11 first named a test class,
+  then a comma-separated list; `_record_proves` rightly rejected both, the
+  reviewer asked for source revisions, and the second revision was spent
+  on a format the prompt had never spelled out). `scope.PROVES_RULE`: one
+  `PROVES: P<n> - path/test_x.py::Class::test_case` per named case,
+  repeated with the same P<n> for several cases, never a class, a file or a
+  comma list. It is in the lead's packet (the scope render), the revision
+  prompt (`_binding_feedback`, which also lists each scenario whose
+  binding is an invalid declaration with the reason `_proves_problem`
+  measured from the line's shape) and the reviewer's proof rows. A
+  declaration fault alone asks for the corrected line(s) and no code or
+  test rewrite; findings about the code or the cases still need their
+  fix. The grammar is unchanged and strict: no normalization, no class
+  expansion, no extra model round, and the reasons name the fault, never
+  repair it. Beside it, `scope.TEST_SUBSTANCE_RULE` (the same run's
+  independent finding: a standard-library-only test forbade every import
+  and looped over nothing): a test asserts the stated operation's result
+  from the stated prior state, a test with no assertion or one that cannot
+  fail proves nothing, 'standard library only' permits standard-library
+  imports and forbids third-party packages, and a test never forbids what
+  the goal's later work may validly use. Shown to the lead when the task
+  declares scenarios, in every revision, and to the reviewer, who treats a
+  vacuous or over-forbidding case as a BLOCKING finding on that test.
+  Nothing task-specific is graded. Controls:
+  `tests/lifecycle/test_proof_declaration_feedback.py`.
 - **Historical: a revision past the size stop spent the remaining fix
   allowance coming back under it** (r11 on 136a3ec; retired 2026-10-20).
   t2's in-bound draft was revised past the hard stop by one line, though

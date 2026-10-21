@@ -123,25 +123,32 @@ def test_the_provider_records_the_client_and_the_qualified_minimum(monkeypatch):
     assert provider.available(), "recorded, never refused by the provider"
 
 
-def test_vendors_without_a_qualified_minimum_record_none(monkeypatch):
+def test_every_vendor_carries_its_qualified_minimum(monkeypatch):
+    """Root's qualification targets of 2026-10-21: codex 0.163.0, claude
+    2.1.304 (npm stable, from 2.1.296) and grok 1.0.62 (Homebrew/x.ai
+    stable, from 1.0.30)."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
-    monkeypatch.setattr("quadratus.cli_providers.client_version", lambda path, args: "2.1.47")
+    monkeypatch.setattr("quadratus.cli_providers.client_version", lambda path, args: "2.1.296")
     provider = ClaudeCLIProvider(model="opus")
-    assert provider.client_version == "2.1.47" and provider.minimum_client is None
+    assert provider.client_version == "2.1.296" and provider.minimum_client == "2.1.304"
+    assert {v: CLI_SPECS[v].minimum_client for v in ("claude", "openai", "grok")} == {
+        "claude": "2.1.304", "openai": "0.163.0", "grok": "1.0.62"}
 
 
 # -- diagnostics ----------------------------------------------------------
 
 
-def test_a_failed_turn_records_its_terminal_reason_and_status_only():
-    assert _extract_codex_diagnostics(FAILED_STREAM) == {"stop_reason": "turn.failed", "status": 429}
+def test_a_failed_turn_records_its_terminal_reason_status_and_class_only():
+    assert _extract_codex_diagnostics(FAILED_STREAM) == {"stop_reason": "turn.failed", "status": 429,
+                                                         "failure_class": "rate_limited"}
 
 
 def test_a_failed_turn_without_a_status_in_its_message_records_the_reason_alone():
     stream = '{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}'
     assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed"}
     stream = '{"type":"turn.failed","error":{"message":"rejected","status":503}}'
-    assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed", "status": 503}
+    assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed", "status": 503,
+                                                  "failure_class": "unavailable"}
 
 
 def test_a_completed_turn_reads_as_before():
@@ -154,7 +161,7 @@ def test_the_answering_client_is_on_every_observed_call(monkeypatch):
     provider = CodexCLIProvider(model="gpt-6-astra")
     provider._observe_output(FAILED_STREAM)
     assert provider.last_diagnostics == {"stop_reason": "turn.failed", "status": 429,
-                                         "client_version": "0.163.0"}
+                                         "failure_class": "rate_limited", "client_version": "0.163.0"}
     provider._observe_output(CODEX_STREAM)
     assert provider.last_diagnostics["client_version"] == "0.163.0"
     assert provider.last_diagnostics["stop_reason"] == "turn.completed"
@@ -235,9 +242,15 @@ def test_the_refusal_is_not_read_as_an_exhausted_window():
     assert not _looks_exhausted(exc)
 
 
-def _run_with_client(tmp_path, monkeypatch, version):
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
-    monkeypatch.setattr("quadratus.cli_providers.client_version", lambda path, args: version)
+QUALIFIED = {"claude": "2.1.304", "codex": "0.163.0", "grok": "1.0.62"}
+
+
+def _run_with_client(tmp_path, monkeypatch, version, vendor_binary="codex"):
+    """Every vendor's fake binary reports its qualified version except
+    ``vendor_binary``, which reports ``version``."""
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("quadratus.cli_providers.client_version",
+                        lambda path, args: version if path.endswith("/" + vendor_binary) else QUALIFIED[path.rsplit("/", 1)[-1]])
     monkeypatch.setattr(CLIProvider, "available", lambda _: True)
     calls = []
 
@@ -264,6 +277,14 @@ def test_a_qualified_client_runs(tmp_path, monkeypatch):
     _, calls, data = _run_with_client(tmp_path, monkeypatch, "0.163.0")
     assert calls, "the run reached the orchestrator"
     assert "StaleClient" not in (data["error"] or "")
+
+
+@pytest.mark.parametrize("binary, installed, minimum", [("claude", "2.1.296", "2.1.304"), ("grok", "1.0.30", "1.0.62")])
+def test_the_other_vendors_previous_clients_are_refused_the_same_way(tmp_path, monkeypatch, binary, installed, minimum):
+    _, calls, data = _run_with_client(tmp_path, monkeypatch, installed, vendor_binary=binary)
+    assert calls == []
+    assert data["error"].startswith(f"StaleClient: {'openai' if binary == 'codex' else binary}: installed client "
+                                    f"{installed} is below the qualified minimum {minimum}")
 
 
 def test_no_environment_override_lifts_the_minimum(tmp_path, monkeypatch):

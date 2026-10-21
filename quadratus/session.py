@@ -89,7 +89,15 @@ from .routing import (
     orchestrator_seat,
 )
 from .run_budget import FinishReserved, finishing
-from .scope import ScopeReport, TaskScope, changed_paths, count_change_lines, is_test_path
+from .scope import (
+    PROVES_RULE,
+    TEST_SUBSTANCE_RULE,
+    ScopeReport,
+    TaskScope,
+    changed_paths,
+    count_change_lines,
+    is_test_path,
+)
 from .structured import StructuredError, parse_security_verdict
 from .task_kinds import (
     KNOWN_NEEDS,
@@ -1407,6 +1415,30 @@ _DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
 _PROVES_ANY = re.compile(r"^\s*PROVES:(.*)$", re.MULTILINE)
 _PROVES_BODY = re.compile(r"(P\d+)\s*-\s*(\S+)")
 _PROVES_PID = re.compile(r"\s*(P\d+)\b")
+#: The same line read loosely, only to say what is wrong with it.
+_PROVES_LOOSE = re.compile(r"(P\d+)\s*-\s*(.+)")
+
+
+def _proves_problem(rest: str) -> str:
+    """Why the text after 'P<n> -' is not one test case, measured from its
+    shape and said in the terms the correction needs (one exact
+    file::[Class::]test_case per line, repeated per case). The grammar
+    itself is unchanged: this names the fault, it never repairs it."""
+    rest = rest.strip().strip("`")
+    shown = rest[:80]
+    if "," in rest:
+        parts = [p.strip() for p in rest.split(",") if p.strip()]
+        return (f"'{shown}' lists {len(parts)} items on one line (comma-separated): one test case per "
+                f"PROVES line, one line per case, repeated with the same P<n>")
+    if any(ch.isspace() for ch in rest):
+        return f"'{shown}' names no single test case: one exact file::[Class::]test_case per PROVES line, nothing else on it"
+    if "::" not in rest:
+        return f"'{shown}' names a file, not a test case: one exact file::[Class::]test_case per PROVES line"
+    last = rest.rsplit("::", 1)[-1]
+    if not re.fullmatch(r"test\w*(?:\[[^\]\s]*\])?", last):
+        return (f"'{shown}' names a test class or object, not a test case: one exact "
+                f"file::Class::test_case per PROVES line, one line per case")
+    return f"'{shown}' is not a file::[Class::]test_case identity in a test file"
 _SCENARIO_RENDER_MAX_CHARS = 4_000
 def _check_runs(check: dict, root=None) -> List[dict]:
     """Each command of a recorded check as execution evidence: whether it
@@ -9746,7 +9778,9 @@ class Session:
             well = _PROVES_BODY.fullmatch(body)
             pid_only = _PROVES_PID.match(body)
             if well is None:
-                problem = f"'{body[:80]}' is not 'P<n> - file::[Class::]test_case'"
+                loose = _PROVES_LOOSE.fullmatch(body)
+                problem = (_proves_problem(loose.group(2)) if loose
+                           else f"'{body[:80]}' is not 'P<n> - file::[Class::]test_case'")
                 if pid_only and pid_only.group(1) in mine:
                     invalid[pid_only.group(1)] = problem
                 else:
@@ -9758,7 +9792,7 @@ class Session:
                 continue
             cited = _CASE_CITATION.fullmatch(case)
             if cited is None or not is_test_path(cited.group(1)):
-                invalid[pid] = f"'{case[:80]}' is not a file::[Class::]test_case identity in a test file"
+                invalid[pid] = _proves_problem(case)
                 continue
             if case in bound.setdefault(pid, []):
                 # The strict protocol: distinct cases bind a set; the same
@@ -12810,6 +12844,8 @@ class Session:
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
         parts.append(self._role_packet(spec, 'lead'))
+        if self._writes() and spec.scope and spec.scope.proofs:
+            parts.append(TEST_SUBSTANCE_RULE)
         parts.append(worker_menu())
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
@@ -12963,7 +12999,14 @@ class Session:
                 "stated prior state (a state that already holds stays as it is: 'unchanged' is not 'empty'); and "
                 "whether the bound cases, as written, exercise their scenarios. A case that ran proves only that "
                 "it ran. An unbound scenario, a case not shown executed on this source, or a scenario whose "
-                "expectation contradicts its prior state is not evidence for its requirement.")
+                "expectation contradicts its prior state is not evidence for its requirement. "
+                + TEST_SUBSTANCE_RULE + " A case that asserts nothing, cannot fail, or forbids what the "
+                "requirement permits is a BLOCKING finding on that test. "
+                "The binding rule the lead is held to: " + PROVES_RULE + " A row whose binding reads 'invalid "
+                "declaration' is a measured fault of the PROVES line, with its reason shown: report it as a "
+                "BLOCKING finding that asks for the corrected PROVES line(s), one exact case per line, and "
+                "nothing more; it calls for no code or test rewrite by itself. Ask for code or test changes "
+                "only where the code or the cases themselves are wrong.")
 
     def _goal_block(self) -> str:
         """The original goal and the covered requirements' original text,
@@ -13309,10 +13352,35 @@ class Session:
             "you cannot decide goes to the record as an open question, not "
             "into the void. "
             + self._revision_delivery()
+            + self._binding_feedback(spec)
             + (self._scope_size_note(spec, audience="editor") if self._writes() else "")
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
             + _NO_REQUESTS_IN_FIX
         )
+
+    def _binding_feedback(self, spec) -> str:
+        """The harness's own measurement of this task's PROVES declaration,
+        for the call that corrects it: each scenario whose binding is an
+        invalid declaration with the measured reason, the binding rule and
+        the test rule, and what a declaration fault alone calls for (the
+        corrected lines, not rewritten code or tests). Empty when every
+        scenario is bound or unbound: nothing is said twice."""
+        task = getattr(spec, "task_id", None)
+        if task is None:
+            return ""
+        rows = [r for r in self.evidence_obligations if r.get("task") == task and r.get("kind") == "acceptance"]
+        if not rows:
+            return ""
+        faults = [f"- {r.get('proof_id') or r['oid']}: {r['binding'][len('invalid declaration: '):][:200]}"
+                  for r in rows if str(r.get("binding", "")).startswith("invalid declaration")]
+        text = "\n\n## Proof binding\n" + PROVES_RULE + " " + TEST_SUBSTANCE_RULE
+        if faults:
+            text += ("\nThe harness measured these PROVES lines of your delivery invalid; each scenario is unbound "
+                     "until redeclared:\n" + "\n".join(faults)
+                     + "\nA declaration fault alone is corrected by the corrected PROVES line(s) in this reply, one "
+                     "exact case per line; it calls for no code or test rewrite. Findings about the code or the "
+                     "cases themselves still need the fix they ask for.")
+        return text
 
     def _revision_delivery(self) -> str:
         """How the lead should return a revision, given its actual grant.

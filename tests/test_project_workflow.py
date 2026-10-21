@@ -27,7 +27,10 @@ if args == ['--version']:
     # prompt, touching the source or running an agent turn, and so does
     # this one: before 0e8a0db it fell through to stdin and traced a
     # coding call at the caller's cwd.
-    print('fake-vendor 0.163.0')
+    # One fake serves all three vendors, so it reports a version above every
+    # vendor's qualified minimum; the minimums themselves are tested in
+    # tests/test_client_version_preflight.py.
+    print('fake-vendor 99.0.0')
     sys.exit(0)
 source_before = {p.name: p.read_bytes() for p in Path('.').glob('*.py')}
 def flag(key, default=''):

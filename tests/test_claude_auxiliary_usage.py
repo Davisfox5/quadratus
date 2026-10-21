@@ -221,7 +221,10 @@ LIMIT_ENVELOPE = json.dumps({
 
 def test_a_vendor_limit_envelope_reports_zero_rather_than_unknown():
     assert _extract_claude_usage(LIMIT_ENVELOPE) == {"input_tokens": 0, "output_tokens": 0}
-    assert _extract_claude_diagnostics(LIMIT_ENVELOPE) is None
+    # No auxiliary rows, so no usage provenance; how the call ended is kept
+    # (the client preflight batch, 2026-10-21): the vendor's own wording
+    # classes it as the window, never as a transient rate limit.
+    assert _extract_claude_diagnostics(LIMIT_ENVELOPE) == {"stop_reason": "stop_sequence", "failure_class": "cap"}
 
 
 def test_an_empty_model_usage_agrees_with_a_zero_seat_and_contradicts_a_spending_one():

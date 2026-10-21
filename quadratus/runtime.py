@@ -59,7 +59,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .cli_providers import SANDBOX_REFUSAL, client_version_at_least
+from .cli_providers import EXHAUSTION_MARKERS, SANDBOX_REFUSAL, client_version_at_least
 from .config import Settings
 from .delegation import (
     DelegationLedger,
@@ -116,18 +116,7 @@ class WindowExhausted(ProviderError):
 #: manage usage credits at claude.ai/..." -- which matched none of the
 #: patterns written from imagination, so the run saw a generic transport
 #: error instead of an exhausted window. Add what you actually see here.
-_EXHAUSTION_MARKERS = (
-    "reached your",          # "You've reached your Fable limit" (Claude, seen)
-    "usage limit",
-    "usage limits",
-    "quota exceeded",
-    "out of credits",
-    "subscription limit",
-    "weekly limit",
-    "plan limit",
-    "limit reached",
-    "upgrade to continue",
-)
+_EXHAUSTION_MARKERS = EXHAUSTION_MARKERS  # one tuple with the ledger's failure class
 
 
 #: The editing roles the lead owns, each bound by ``Settings.lead_max_turns``.

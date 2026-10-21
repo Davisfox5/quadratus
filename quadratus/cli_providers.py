@@ -138,6 +138,62 @@ def client_version_at_least(found, minimum) -> Optional[bool]:
     return have[:4] >= want[:4]
 
 
+#: Vendor wording for a spent subscription window, as seen or documented.
+#: One tuple, shared with ``runtime._looks_exhausted`` so the fact the
+#: fleet routes on and the class the ledger records cannot drift apart.
+EXHAUSTION_MARKERS = (
+    "reached your",          # "You've reached your Fable limit" (Claude, seen)
+    "usage limit",
+    "usage limits",
+    "quota exceeded",
+    "out of credits",
+    "subscription limit",
+    "weekly limit",
+    "plan limit",
+    "limit reached",
+    "upgrade to continue",
+)
+#: Vendor wording for a rejected sign-in (codex 401 seen on GameTape run 6;
+#: grok "Not signed in" seen on blind-acceptance attempt 7).
+_AUTH_MARKERS = ("unauthori", "not signed in", "not logged in", "sign in again", "authentication")
+#: The classes a failed call may be recorded as. Anything else is unknown,
+#: and unknown is recorded by absence, never guessed.
+FAILURE_CLASSES = ("cap", "auth", "rate_limited", "unavailable")
+#: A status in a failure message: "last status: 429 Too Many Requests"
+#: (codex), "API Error: 429 temporary capacity" (claude). Read only from
+#: text a vendor reported as an error, never from an answer.
+_STATUS_IN_TEXT = re.compile(r"(?<![\d.])([45]\d{2})(?![\d.])")
+
+
+def failure_facts(status, text) -> Dict[str, object]:
+    """Bounded facts about how a failed call ended, shared by every vendor's
+    extractor: the HTTP ``status`` the client reported (an integer field or
+    a bare 4xx or 5xx in its error message) and a ``failure_class`` drawn only
+    from what that status and the vendor's own wording establish. A cap
+    (the subscription window) outranks a 429, because the vendor says it
+    with the same status; an auth rejection is 401 or 403 or its wording;
+    429 alone is rate limiting; 502, 503 and 504 are the service being
+    unavailable. Nothing else is classified, no retry delay is inferred,
+    and no text is kept: the message stays in the ledger's stderr tail."""
+    facts: Dict[str, object] = {}
+    message = str(text or "")
+    if type(status) is not int or not 100 <= status <= 599:
+        found = _STATUS_IN_TEXT.search(message)
+        status = int(found.group(1)) if found else None
+    if status is not None:
+        facts["status"] = status
+    lowered = message.lower()
+    if any(marker in lowered for marker in EXHAUSTION_MARKERS):
+        facts["failure_class"] = "cap"
+    elif status in (401, 403) or any(marker in lowered for marker in _AUTH_MARKERS):
+        facts["failure_class"] = "auth"
+    elif status == 429:
+        facts["failure_class"] = "rate_limited"
+    elif status in (502, 503, 504):
+        facts["failure_class"] = "unavailable"
+    return facts
+
+
 def client_version(path: str, args: Sequence[str]) -> Optional[str]:
     """The version the installed client reports (``0.154.0`` from
     ``codex-cli 0.154.0``), read once per executable identity with a
@@ -196,6 +252,14 @@ def _extract_claude_result(stdout: str) -> str:
         if not str(detail).strip():
             detail = f"no detail in the envelope (subtype {payload.get('subtype')!r})"
         raise ProviderError(f"claude reported an error: {str(detail)[:300]}")
+    if payload.get("stop_reason") == "max_tokens":
+        # The output limit cut the final message: whatever text came back is
+        # where the answer stopped, not the answer (the API's documented stop
+        # reason; not yet seen from the installed binary). Kept as evidence
+        # on the error, never returned as a completed reply.
+        error = ProviderError("claude stopped at its output limit before finishing the reply")
+        error.partial_text = payload.get("result")
+        raise error
     return payload.get("result", "") or ""
 
 
@@ -237,6 +301,11 @@ def _extract_codex_result(stdout: str) -> str:
         saw_json = True
         if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
             failed = str(event["error"].get("message") or "")
+        elif event.get("type") == "turn.completed":
+            # A completed turn after a failed one is the client's own
+            # recovery (0.163 waits and resumes inside the sampling
+            # session): the last terminal event in stream order decides.
+            failed = ""
         item = event.get("item")
         if not isinstance(item, dict):
             continue
@@ -249,7 +318,7 @@ def _extract_codex_result(stdout: str) -> str:
             message = item.get("message")
             if isinstance(message, str) and message.strip():
                 errors.append(message.strip())
-    if answer:
+    if answer and not failed:
         return answer
     if re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failed, re.IGNORECASE):
         # GameTape run 6: the turn failed with 401 after the websocket dropped.
@@ -261,8 +330,16 @@ def _extract_codex_result(stdout: str) -> str:
             "account refreshed it. Sign in again before the next run.")
         error.auth_invalid = True
         raise error
-    if failed and not errors:
-        raise ProviderError(f"codex turn failed: {failed[:300]}")
+    if failed:
+        # The turn ended in failure whatever came before it. Text an earlier
+        # agent_message carried is where the turn had got to (an interim
+        # message, a draft of the reply) and is kept on the error as
+        # evidence; returning it as the answer made a 429 after a progress
+        # message read as a completed delivery.
+        error = ProviderError(f"codex turn failed: {failed[:300]}"
+                              + (f" (after a reported error: {errors[-1][:200]})" if errors else ""))
+        error.partial_text = answer or None
+        raise error
     if errors:
         raise ProviderError(f"codex reported an error: {errors[-1][:300]}")
     if saw_json:
@@ -404,6 +481,19 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         diagnostics.setdefault("model_calls", turns)
     diagnostics.update(_reread_and_cost(payload.get("usage"),
                                         payload.get("total_cost_usd")))
+    error = payload.get("error")
+    if error or payload.get("type") == "error":
+        # How the failed call ended, as the client reports it: an integer
+        # status on the envelope or its error object, and the class the
+        # status and the vendor's wording establish. The grok envelope's
+        # error shape is not documented; a field that is not there is
+        # unknown, not zero.
+        holder = error if isinstance(error, dict) else {}
+        status = next((v for v in (holder.get("status"), holder.get("statusCode"), holder.get("code"),
+                                   payload.get("status"), payload.get("statusCode"))
+                       if type(v) is int), None)
+        text = " ".join(str(v) for v in (holder.get("message") if holder else error, payload.get("message")) if v)
+        diagnostics.update(failure_facts(status, text))
     names: List[str] = []
 
     def tool_name(item, certain):
@@ -792,13 +882,8 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             # Recorded, not acted on: the budget still settles the attempt
             # as unknown usage, and nothing here says the turn never ran.
             error = event["error"]
-            message = str(error.get("message") or "")
             diagnostics = {"stop_reason": "turn.failed"}
-            status = re.search(r"\bstatus:?\s*(\d{3})\b", message)
-            if status is not None:
-                diagnostics["status"] = int(status.group(1))
-            elif type(error.get("status")) is int:
-                diagnostics["status"] = int(error["status"])
+            diagnostics.update(failure_facts(error.get("status"), error.get("message")))
             continue
         if event.get("type") != "turn.completed":
             continue
@@ -1159,6 +1244,14 @@ def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
     return seat
 
 
+def _ending_only(diagnostics: Dict[str, object]) -> Optional[Dict[str, object]]:
+    """An envelope with no auxiliary rows reports no usage provenance, as
+    before; how a failed call ended is kept regardless, so an error
+    envelope's status and class reach the ledger."""
+    kept = {k: diagnostics[k] for k in ("stop_reason", "status", "failure_class") if k in diagnostics}
+    return kept or None
+
+
 def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     """Provenance for the usage figure: which rows beyond the seat were counted.
 
@@ -1187,13 +1280,25 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             diagnostics.setdefault("model_calls", turns)
         diagnostics.update(_reread_and_cost(payload.get("usage"),
                                             payload.get("total_cost_usd")))
+        if payload.get("is_error"):
+            # How the failed call ended, as the client reports it: the
+            # envelope's stop reason, the HTTP status it names
+            # (``api_error_status`` on a 429, seen) and the class those
+            # establish. Facts only, never the result text.
+            stop = payload.get("stop_reason") or payload.get("subtype")
+            if isinstance(stop, str) and re.fullmatch(r"[A-Za-z_.-]{1,40}", stop):
+                diagnostics["stop_reason"] = stop
+            errors = payload.get("errors")
+            text = str(payload.get("result") or "") + " " + (
+                " ".join(str(e) for e in errors) if isinstance(errors, list) else "")
+            diagnostics.update(failure_facts(payload.get("api_error_status"), text))
     if malformed:
         diagnostics["auxiliary_usage"] = "unknown"
         if seat is not None:
             diagnostics["seat_tokens"] = seat["input_tokens"] + seat["output_tokens"]
         return diagnostics
     if not rows:
-        return None
+        return _ending_only(diagnostics)
     total = sum(r["input_tokens"] + r["output_tokens"] for r in rows.values())
     if seat is None:
         diagnostics["auxiliary_models"] = sorted(rows)
@@ -1204,7 +1309,7 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     if len(seat_rows) == 1:
         aux = {name: r for name, r in rows.items() if name != seat_rows[0]}
         if not aux:
-            return None
+            return _ending_only(diagnostics)
         diagnostics["auxiliary_models"] = sorted(aux)
         diagnostics["auxiliary_tokens"] = sum(r["input_tokens"] + r["output_tokens"] for r in aux.values())
         return diagnostics
@@ -1534,6 +1639,13 @@ CLAUDE_WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 #: an assigned collaboration role from competing with the coding-agent persona.
 CLAUDE_SPEC = CLISpec(
     vendor="claude",
+    # Root's qualification target (2026-10-21): the official npm stable
+    # 2.1.304, from the installed 2.1.296, in the same batch that moved
+    # codex to 0.163.0. Set with the client preflight so a run names both
+    # versions and refuses before any call; an unreadable version is
+    # unknown and not refused. No upstream 429 defect is established for
+    # this client; the baseline records what was qualified, not a fault.
+    minimum_client="2.1.304",
     editing_commands="granted",
     extract_tool_failures=_extract_claude_denials,
     binary="claude",
@@ -2030,6 +2142,10 @@ STDERR_TAIL = 2_000
 GROK_SPEC = CLISpec(
     vendor="grok",
     binary="grok",
+    # Root's qualification target (2026-10-21): the official Homebrew/x.ai
+    # stable 1.0.62, from the installed 1.0.30 that every grok flag note
+    # below was verified on. Same preflight as the other two vendors.
+    minimum_client="1.0.62",
     system_flag="--system-prompt-override",
     model_flag="--model",
     # Without this the CLI streams the agent's narration and the "answer" is

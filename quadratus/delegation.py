@@ -332,6 +332,9 @@ def safe_diagnostics(value) -> dict:
     status = value.get('status')
     if type(status) is int and 100 <= status <= 599:
         result['status'] = status
+    failure_class = value.get('failure_class')
+    if failure_class in ('cap', 'auth', 'rate_limited', 'unavailable'):
+        result['failure_class'] = failure_class
     # How much of this call's input the model was being handed again. An agent
     # re-sends its whole conversation on every step, so a long loop's reported
     # total is mostly text it has already seen -- 402,816 of attempt 9's
