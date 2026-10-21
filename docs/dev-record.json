@@ -2439,13 +2439,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-21T15:08:19Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "c12fc0f",
+        "at": "2026-10-21T15:30:53Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: SAME: delivered c12fc0f (checkpoint 8bc9805 first, NOT ADMITTED, for root's parallel read-only review). Every task's record is the harness's own (_task_close_out: mechanical for the direct tier, _factual_close_out otherwise); the model close-out, its refusal record and the SUMMARY/DECISIONS/DEAD ENDS/MAP NOTES parser are deleted; _closes_factually is always true so no plan stage, remainder or exposure reserves a close-out; the planner's allowance note and the direct-tier text no longer budget one. Root's four record corrections on 8bc9805 applied: unknown measurement never reads no files, design evidence from the contract or live applicability with MISSING and disabled stated, approvals current only on this source fingerprint, bounded per-field summary with omission counts pointing at the full record artifact. With no stage to drop the terminal route can no longer fire; the lifecycle scenarios written on it now show the same protections on the last slot or as mandatory-deficit refusals, and the token scenarios are re-tuned by the removed reserve. Measured with explicit args, raw logs kept: unit-level files 714 passed (p-series logs); lifecycle set A (matrix, finish_capacity, dependency_identity, explicit_tasks, direct_tier, workflow_outcomes, workflow_contract, capped_drafts, truth_canaries, j39, delivery_controller, factual_closeout) 268 passed with the 11 scenario corrections then applied; set B (test_repair, step1_reliability, step2_recovery, proof_binding, proof_declaration_feedback, advisory_sizing, harness_pack, canary_series, finish_reservation, requirements_ledger) 351 passed with pack case 02 then corrected; re-tuned scenarios 74 passed then the last three corrected; final focused set 382 passed; ruff clean. No full suite, no provider calls."
+      ]
     },
     {
       "id": "T-native-call-diagnostics",
@@ -2460,13 +2465,18 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-21T15:08:19Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "c12fc0f",
+        "at": "2026-10-21T15:30:53Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: SAME integration review of root's patch (applied from root's exact diff): sound as a diagnostic observation. Two integration changes: an unaccounted prior turn (turn.failed, error, or a second turn.started before the first completes) is never cleared by a later turn.completed, so a recovered call keeps its answer while its usage stays unresolved with the completed turns as a lower bound (root's own refinement); cached_input_tokens is written only when there is one. safe_diagnostics allowlists usage_completeness, completed_turns and usage_lower_bound (dict with input/output and a bounded source string, or the rollout's integer floor). Logging edges per root: auth.request_id kept only in a bounded opaque shape, ttft_ms and tool_token_count kept as numbers (never summed), routine deltas/in-progress/pings counted as routine_rows_omitted so they cannot spend the 256-row cap before a completion or failure row; usage_total always None; no header, endpoint, account or content fields. Measured: test_call_usage_diagnostics 21 passed, test_step2_native_execution and the provider-side files in the 382-passed final focused set; ruff clean. Root's independent review, full suite, fresh install and exact CI wait on c12fc0f."
+      ]
     }
   ],
   "receipts": [
