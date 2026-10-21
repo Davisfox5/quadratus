@@ -21,6 +21,14 @@ FAKE_CLI = r'''
 import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
+if args == ['--version']:
+    # The provider reads the client's version once at construction (the
+    # stale-client preflight). A real binary answers it without reading a
+    # prompt, touching the source or running an agent turn, and so does
+    # this one: before 0e8a0db it fell through to stdin and traced a
+    # coding call at the caller's cwd.
+    print('fake-vendor 0.163.0')
+    sys.exit(0)
 source_before = {p.name: p.read_bytes() for p in Path('.').glob('*.py')}
 def flag(key, default=''):
     return args[args.index(key) + 1] if key in args else default
