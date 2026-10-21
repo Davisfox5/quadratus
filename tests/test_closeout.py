@@ -302,7 +302,19 @@ def test_a_design_approval_on_another_source_is_historical_not_current(tmp_path)
     current = session._source_fingerprint()
     session.design_checks = [{'task': 't1', 'verified': True, 'final_review': {'approved': True}, 'source': current}]
     summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
+    assert 'current render/context validity is unverified' in summary
+    record = session.design_checks[-1]
+    record['snapshot'] = session._capture_state('t1')
+    record['review_context'] = {'goal': session.memory.goal.strip(), 'requirements': {}, 'rows': {}}
+    summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
     assert f'Design: design evidence verified and reviewed on this source (source {current[:12]})' in summary
+    record['review_context']['goal'] = 'an earlier goal'
+    summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
+    assert 'the goal changed since the review' in summary
+    record['review_context']['goal'] = session.memory.goal.strip()
+    record['snapshot'] = ['another render', [], {}]
+    summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
+    assert 'the renders changed after they were reviewed' in summary
     session.design_checks = [{'task': 't1', 'verified': True, 'final_review': {'approved': True}}]
     summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
     assert 'source identity is not recorded' in summary

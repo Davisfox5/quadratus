@@ -14513,6 +14513,11 @@ class Session:
             return (f"design evidence not verified ({identity}): "
                     f"{str(record.get('problem') or 'no approval recorded')[:160]}")
         if source and current and source == current:
+            drift = (record.get("review_stale") or self._design_review_drift(record)
+                     or self._design_context_drift(record))
+            if drift:
+                return (f"design approval recorded on this source ({identity}), but its current "
+                        f"render/context validity is unverified: {str(drift)[:160]}")
             return f"design evidence verified and reviewed on this source ({identity})"
         if source and current:
             return (f"design evidence verified and reviewed on an EARLIER source ({identity}; current "

@@ -1008,7 +1008,11 @@ Key design decisions already settled:
   evidence reads the task's contract or the live applicability, so a
   required record that is missing is MISSING and a disabled one is
   disabled, and an approval is current only on this source fingerprint
-  (an earlier source is historical, an unrecorded identity is said so);
+  (an earlier source is historical, an unrecorded identity is said so,
+  and source equality alone does not make it current: root's final
+  review reuses the design review's own drift checks, so an approval
+  whose renders or goal/requirement context moved since the review reads
+  as "validity unverified" with the drift named);
   the model-facing summary is bounded per field (twelve paths, eight
   items per list, explicit "and N more" counts) and points at the
   unbounded full record artifact, so no debt is truncated away. With no
