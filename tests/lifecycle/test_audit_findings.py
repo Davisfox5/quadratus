@@ -409,7 +409,24 @@ def test_an_audit_that_edits_source_fails_the_task_and_records_no_finding(tmp_pa
 
 
 def test_a_refused_audit_lead_is_todays_refusal_stop(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": lambda call, replay: H.claude_refusal("cyber")})
+    """The refusal envelope is Claude's, so the audit is seated on a Claude
+    lead (complex difficulty rides the ladder to Opus). Until root's usage
+    account on 066c060 a Claude envelope fed to the Sol lead this task
+    used to draw passed its usage through the Codex parser and the run
+    went on to a Claude recovery lead that refused; the Codex parser now
+    reads only its own completed turns, so a foreign envelope is unknown
+    usage and that route stops on the budget, not on a refusal. The
+    control is vendor-correct now: one Claude lead, one refusal, the
+    refusal stop, no findings."""
+    audit = AUDIT.replace("KIND: frontend standard", "KIND: frontend complex")
+    refusals = []
+
+    def lead(call, replay):
+        assert call.vendor == "claude", call.vendor
+        refusals.append(call.model)
+        return H.claude_refusal("cyber")
+    replay = _run(tmp_path, monkeypatch, [REQS + audit], {"t1": lead})
+    assert refusals == ["opus"] and [c.role for c in replay.calls if c.task == "t1"] == ["lead"]
     assert replay.result.error.startswith("ProviderRefusal") and replay.findings == []
 
 

@@ -464,7 +464,9 @@ def test_the_repair_route_after_a_failed_check_is_admitted_before_the_editor_wri
     assert len(replay.of("gate-fix")) == 1
     repair = [a for a in H.result_json(replay)["plan_admissions"] if a["scope"] == "gate-repair"]
     assert len(repair) == 1 and repair[0]["task"] == "t1" and repair[0]["feasible"]
-    assert repair[0]["stages"] == ["gate fix(editing/write)", "close-out(reserve)"]
+    # The route is the repair alone: the task's record is the harness's and
+    # costs no call (2026-10-21), so nothing else is owed after the fix.
+    assert repair[0]["stages"] == ["gate fix(editing/write)"]
     assert repair[0]["wall_known"] is True and repair[0]["wall_extra"] > 0, "the failed run measured the gate"
     assert "unmeasured" not in repair[0]["detail"]
 

@@ -264,11 +264,16 @@ def test_the_planner_and_the_audit_read_the_same_recorded_view(tmp_path, monkeyp
 @pytest.mark.requirements_ledger
 def test_a_task_whose_lead_and_reviews_cannot_be_paid_is_not_started(tmp_path, monkeypatch):
     """Exact counts, no estimate: after t1 (orchestrator, requirements
-    review, lead, review, close-out) and the planning call for t2, the
-    calls left after the held goal question and audit cannot pay t2's lead
-    and its review. t2 is not started before any call."""
+    review, lead, review; its record is the harness's and costs no call
+    since 2026-10-21) and the planning call for t2, five calls are spent,
+    two are held for the goal question and the audit, and the one left of
+    eight cannot pay t2's lead and its review. t2 is not started before
+    any call. (Nine calls paid the same five plus a close-out before; at
+    nine, t2 now fits.)"""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2), files=FILES,
-                   max_tasks=2, record_complete=False, limits=_limits(max_calls=9))
+                   max_tasks=2, record_complete=False, limits=_limits(max_calls=8))
+    assert [(c.task, c.role) for c in replay.calls][:5] == [("run", "orchestrator"), ("plan", "requirements-review"),
+                                                             ("t1", "lead"), ("t1", "collaborator"), ("run", "orchestrator")]
     assert not [c for c in replay.calls if c.task == "t2"]
     result = H.result_json(replay)
     assert [n["task"] for n in result["not_started"]] == ["t2"]
