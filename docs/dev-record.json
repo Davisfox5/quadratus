@@ -2439,12 +2439,12 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-21T15:08:19Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "5e4b815",
-        "at": "2026-10-21T15:56:47Z"
+        "sha": "06007e0",
+        "at": "2026-10-21T16:35:43Z"
       },
       "reviews": [
         {
@@ -2464,7 +2464,7 @@
         {
           "reviewer": "codex",
           "sha": "5e4b815",
-          "verdict": "cleared",
+          "verdict": "stale",
           "evidence": "Root reviewed test-only correction against dac3629: vendor-correct single Claude refusal; actual no-summary repair stage; measured eight-call pre-dispatch boundary retains required review and goal/audit. Final combined production/accounting review and focused receipts in usage-closeout-final-20261021. Earlier interrupted suite and all failures retained; final full and live gates still pending.",
           "scope": [
             "quadratus/session.py",
@@ -2472,14 +2472,16 @@
             "tests/test_closeout.py",
             "tests/lifecycle/test_factual_closeout.py"
           ],
-          "at": "2026-10-21T16:00:19Z"
+          "at": "2026-10-21T16:00:19Z",
+          "stale_reason": "delivery moved from 5e4b815 to 06007e0"
         }
       ],
       "blockers": [],
       "decisions": [
         "claude: SAME: delivered c12fc0f (checkpoint 8bc9805 first, NOT ADMITTED, for root's parallel read-only review). Every task's record is the harness's own (_task_close_out: mechanical for the direct tier, _factual_close_out otherwise); the model close-out, its refusal record and the SUMMARY/DECISIONS/DEAD ENDS/MAP NOTES parser are deleted; _closes_factually is always true so no plan stage, remainder or exposure reserves a close-out; the planner's allowance note and the direct-tier text no longer budget one. Root's four record corrections on 8bc9805 applied: unknown measurement never reads no files, design evidence from the contract or live applicability with MISSING and disabled stated, approvals current only on this source fingerprint, bounded per-field summary with omission counts pointing at the full record artifact. With no stage to drop the terminal route can no longer fire; the lifecycle scenarios written on it now show the same protections on the last slot or as mandatory-deficit refusals, and the token scenarios are re-tuned by the removed reserve. Measured with explicit args, raw logs kept: unit-level files 714 passed (p-series logs); lifecycle set A (matrix, finish_capacity, dependency_identity, explicit_tasks, direct_tier, workflow_outcomes, workflow_contract, capped_drafts, truth_canaries, j39, delivery_controller, factual_closeout) 268 passed with the 11 scenario corrections then applied; set B (test_repair, step1_reliability, step2_recovery, proof_binding, proof_declaration_feedback, advisory_sizing, harness_pack, canary_series, finish_reservation, requirements_ledger) 351 passed with pack case 02 then corrected; re-tuned scenarios 74 passed then the last three corrected; final focused set 382 passed; ruff clean. No full suite, no provider calls.",
         "claude: SAME scoped review of root's final record-truth patch, integrated at 066c060: source equality alone no longer claims a current design approval; _design_state_for_record reuses review_stale, _design_review_drift and _design_context_drift (the same checks the design review records at delivery) and says 'validity unverified' with the drift named; audit gates unchanged, record wording only. Applied from root's exact diff, no edits. Measured with explicit args: tests/test_closeout.py, tests/lifecycle/test_factual_closeout.py, tests/lifecycle/test_direct_tier.py 31 passed; ruff clean. Root's external four-boundary check keeps its raw 18 pass / 1 fail; the one obsolete wording assertion (it forbids even an explicitly historical approval) is root's to correct. Final head for root's one full suite: 066c060.",
-        "claude: SAME test-only correction at 5e4b815 for the three failures root's full suite found on dac3629 (production identical to 066c060): test_audit_findings refused-audit control made vendor-correct (a Claude refusal envelope fed to the Sol lead was unknown usage under root's stricter Codex accounting; complex difficulty now seats a Claude lead, one refusal, the refusal stop; parser not loosened); test_boundary_correction gate-repair route is the repair alone; test_judgment_integrity unpaid lead/review refusal at the measured eight-call boundary with the five spent calls asserted. Measured with explicit args, raw logs p54 to p57: the three cases 3 passed; test_audit_findings plus test_boundary_correction whole 68 passed; test_judgment_integrity whole 34 passed; ruff clean. No production edits, no broad suite, no provider calls."
+        "claude: SAME test-only correction at 5e4b815 for the three failures root's full suite found on dac3629 (production identical to 066c060): test_audit_findings refused-audit control made vendor-correct (a Claude refusal envelope fed to the Sol lead was unknown usage under root's stricter Codex accounting; complex difficulty now seats a Claude lead, one refusal, the refusal stop; parser not loosened); test_boundary_correction gate-repair route is the repair alone; test_judgment_integrity unpaid lead/review refusal at the measured eight-call boundary with the five spent calls asserted. Measured with explicit args, raw logs p54 to p57: the three cases 3 passed; test_audit_findings plus test_boundary_correction whole 68 passed; test_judgment_integrity whole 34 passed; ruff clean. No production edits, no broad suite, no provider calls.",
+        "claude: SAME test-and-manifest-only correction at 06007e0 for the three failures root's final full suite found on 2fc6543 (4436 passed, 3 failed, 15 original skips, source unchanged): test_boundary_records repair-route control expects no close-out on any route and asserts every task closes factually, keeping the design, security, recheck, post-merge, refused-no-editor and final-work-slot checks; test_cli_session asserts the printed harness record (unknown source with no project, no check recorded, full record pointer) and its fake fleet fails if a summary prompt is sent; docs/workflow-acceptance-manifest.json J17 selectors name test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused in all three fields. Adjacent scan: no other test, doc or tool names the removed test or expects a close-out stage; the monitor's close-out stage label is a display name and stays. Measured with explicit args, raw log p60: test_boundary_records, test_cli_session, test_workflow_acceptance and both J17 controls 82 passed; ruff clean. No production change, no provider call, no full suite; root owns the final full gate and fresh admission; the three raw failures on 2fc6543 stand as recorded."
       ]
     },
     {
