@@ -2329,13 +2329,14 @@
       "claimed_at": "2026-10-21T04:12:04Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "955d3ad",
-        "at": "2026-10-21T04:12:29Z"
+        "sha": "c774880",
+        "at": "2026-10-21T04:15:07Z"
       },
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "claude: SAME: Claimed with --resolve as coordinator (record candidate still reads 627468d; root advances it). Base e8866ee, delivered 955d3ad. Scope per Davis 2026-10-21 after root's upstream reading (0.154 api_bridge.rs discards the 429 body and Retry-After; 0.162 waits in-session; 0.163.0 stable, qualified live by root): client version recorded per provider and per ledger row, Fleet.stale_clients plus project_run StaleClient before any call, codex turn.failed recorded as stop_reason and status only (no failure text, no retry_after, no QUADRATUS_CLI_MIN override). Measured on the scratch worktree with explicit args: tests/test_client_version_preflight.py 23 passed; with test_cli_providers, test_runtime, test_joint_scope_telemetry, test_providers, test_claude_auxiliary_usage 172 passed; the other files touching diagnostics, status lines, fake fleets and the stop fixtures 206 passed; ruff clean. No native, provider or full-suite run on my side; root's full suite, CI and a fresh manifest are owed on 955d3ad."
+        "claude: SAME: Claimed with --resolve as coordinator (record candidate still reads 627468d; root advances it). Base e8866ee, delivered 955d3ad. Scope per Davis 2026-10-21 after root's upstream reading (0.154 api_bridge.rs discards the 429 body and Retry-After; 0.162 waits in-session; 0.163.0 stable, qualified live by root): client version recorded per provider and per ledger row, Fleet.stale_clients plus project_run StaleClient before any call, codex turn.failed recorded as stop_reason and status only (no failure text, no retry_after, no QUADRATUS_CLI_MIN override). Measured on the scratch worktree with explicit args: tests/test_client_version_preflight.py 23 passed; with test_cli_providers, test_runtime, test_joint_scope_telemetry, test_providers, test_claude_auxiliary_usage 172 passed; the other files touching diagnostics, status lines, fake fleets and the stop fixtures 206 passed; ruff clean. No native, provider or full-suite run on my side; root's full suite, CI and a fresh manifest are owed on 955d3ad.",
+        "claude: SAME: root's review of 955d3ad, two corrections batched at c774880: the version cache is keyed on executable identity (path, args, device, inode, size, mtime) so a replaced binary at the same path is read again; client_version keeps only the bounded major.minor.patch[-pre] form from a zero exit's first stdout line (stderr never read, no path, error or token text) and safe_diagnostics accepts exactly that form; 0.163.0 described as the first version this engine qualified. Retry policy unchanged. Measured with explicit args: tests/test_client_version_preflight.py 43 passed; with test_cli_providers, test_runtime, test_joint_scope_telemetry, test_providers, test_claude_auxiliary_usage, test_joint_diagnostic_ledger, test_native_mode 241 passed; ruff clean. Root's full suite waits on this head."
       ]
     }
   ],
