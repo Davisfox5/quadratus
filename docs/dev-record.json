@@ -2439,7 +2439,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-21T15:08:19Z",
       "acknowledged": false,
       "delivery": {
@@ -2460,6 +2460,19 @@
           ],
           "at": "2026-10-21T15:38:20Z",
           "stale_reason": "delivery moved from 066c060 to 5e4b815"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "5e4b815",
+          "verdict": "cleared",
+          "evidence": "Root reviewed test-only correction against dac3629: vendor-correct single Claude refusal; actual no-summary repair stage; measured eight-call pre-dispatch boundary retains required review and goal/audit. Final combined production/accounting review and focused receipts in usage-closeout-final-20261021. Earlier interrupted suite and all failures retained; final full and live gates still pending.",
+          "scope": [
+            "quadratus/session.py",
+            "quadratus/delegation.py",
+            "tests/test_closeout.py",
+            "tests/lifecycle/test_factual_closeout.py"
+          ],
+          "at": "2026-10-21T16:00:19Z"
         }
       ],
       "blockers": [],
