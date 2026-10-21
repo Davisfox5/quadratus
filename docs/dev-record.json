@@ -2439,14 +2439,28 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-21T15:08:19Z",
       "acknowledged": false,
       "delivery": {
         "sha": "066c060",
         "at": "2026-10-21T15:37:47Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "066c060",
+          "verdict": "cleared",
+          "evidence": "Root diff review against 439d757; 153 focused controls passed with no skips, existing four raw failures and obsolete wording assertion retained. No model summary or closeout reserve, review/goal/audit and unknown-usage stop remain. Root render/context correction independently reviewed by Claude with 31 controls; actual live behavior remains unproved.",
+          "scope": [
+            "quadratus/session.py",
+            "quadratus/delegation.py",
+            "tests/test_closeout.py",
+            "tests/lifecycle/test_factual_closeout.py"
+          ],
+          "at": "2026-10-21T15:38:20Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: SAME: delivered c12fc0f (checkpoint 8bc9805 first, NOT ADMITTED, for root's parallel read-only review). Every task's record is the harness's own (_task_close_out: mechanical for the direct tier, _factual_close_out otherwise); the model close-out, its refusal record and the SUMMARY/DECISIONS/DEAD ENDS/MAP NOTES parser are deleted; _closes_factually is always true so no plan stage, remainder or exposure reserves a close-out; the planner's allowance note and the direct-tier text no longer budget one. Root's four record corrections on 8bc9805 applied: unknown measurement never reads no files, design evidence from the contract or live applicability with MISSING and disabled stated, approvals current only on this source fingerprint, bounded per-field summary with omission counts pointing at the full record artifact. With no stage to drop the terminal route can no longer fire; the lifecycle scenarios written on it now show the same protections on the last slot or as mandatory-deficit refusals, and the token scenarios are re-tuned by the removed reserve. Measured with explicit args, raw logs kept: unit-level files 714 passed (p-series logs); lifecycle set A (matrix, finish_capacity, dependency_identity, explicit_tasks, direct_tier, workflow_outcomes, workflow_contract, capped_drafts, truth_canaries, j39, delivery_controller, factual_closeout) 268 passed with the 11 scenario corrections then applied; set B (test_repair, step1_reliability, step2_recovery, proof_binding, proof_declaration_feedback, advisory_sizing, harness_pack, canary_series, finish_reservation, requirements_ledger) 351 passed with pack case 02 then corrected; re-tuned scenarios 74 passed then the last three corrected; final focused set 382 passed; ruff clean. No full suite, no provider calls.",
