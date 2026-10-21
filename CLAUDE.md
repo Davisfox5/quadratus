@@ -934,7 +934,14 @@ Key design decisions already settled:
   The error now dominates partial text (kept on the error as
   `partial_text`, never returned), and a `turn.completed` after a
   `turn.failed` is the client's own recovery and is read as the success it
-  is: the last terminal event in stream order decides. Claude's
+  is: the last terminal event in stream order decides. The failed flag is
+  held apart from its detail (root's review of ace40f8: `{"status": 503}`
+  with no message left the old message-as-boolean empty and let an earlier
+  message through), so a `turn.failed` with a missing, empty or malformed
+  error is still a failed turn, with a default detail. A status is read
+  from error text only behind status, HTTP or error wording ("last status:
+  429", "API Error: 429", "HTTP 503", "status code 502"); a bare number in
+  prose ("file429.py", "line 503") is not a status. Claude's
   `stop_reason: max_tokens` is likewise an error with partial text (the
   API's documented stop, not yet seen from the binary), and an error
   envelope with no auxiliary rows now keeps its ending facts where it used

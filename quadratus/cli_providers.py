@@ -159,10 +159,14 @@ _AUTH_MARKERS = ("unauthori", "not signed in", "not logged in", "sign in again",
 #: The classes a failed call may be recorded as. Anything else is unknown,
 #: and unknown is recorded by absence, never guessed.
 FAILURE_CLASSES = ("cap", "auth", "rate_limited", "unavailable")
-#: A status in a failure message: "last status: 429 Too Many Requests"
-#: (codex), "API Error: 429 temporary capacity" (claude). Read only from
-#: text a vendor reported as an error, never from an answer.
-_STATUS_IN_TEXT = re.compile(r"(?<![\d.])([45]\d{2})(?![\d.])")
+#: A status in a failure message, only where the wording says it is one:
+#: "last status: 429 Too Many Requests" (codex), "API Error: 429 temporary
+#: capacity" (claude), "HTTP 503", "status code 502". A bare number in
+#: other prose ("cannot open file429.py", "line 503") is not a status
+#: (root's review of ace40f8). Read only from text a vendor reported as
+#: an error, never from an answer; unknown otherwise.
+_STATUS_IN_TEXT = re.compile(
+    r"(?i)(?:\bstatus(?:\s+code)?\s*[:=]?\s*|\bhttp\s*[:=]?\s*|\berror\s*[:=]\s*)([45]\d{2})(?![\d.\w])")
 
 
 def failure_facts(status, text) -> Dict[str, object]:
@@ -288,7 +292,12 @@ def _extract_codex_result(stdout: str) -> str:
     """
     answer = ""
     errors: List[str] = []
-    failed = ""
+    #: An explicit terminal failure, held apart from its detail: a
+    #: turn.failed whose error carries no message, an empty one or a
+    #: malformed one is still a failed turn (root's review of ace40f8,
+    #: where {"status": 503} alone let an earlier message through).
+    failed = False
+    failure_detail = ""
     saw_json = False
     for line in stdout.splitlines():
         line = line.strip()
@@ -299,13 +308,20 @@ def _extract_codex_result(stdout: str) -> str:
         except ValueError:
             continue
         saw_json = True
-        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
-            failed = str(event["error"].get("message") or "")
+        if event.get("type") == "turn.failed":
+            failed = True
+            error = event.get("error")
+            message = error.get("message") if isinstance(error, dict) else None
+            status = error.get("status") if isinstance(error, dict) else None
+            failure_detail = (message.strip() if isinstance(message, str) and message.strip()
+                              else f"status {status}" if type(status) is int
+                              else "the client reported no detail")
         elif event.get("type") == "turn.completed":
             # A completed turn after a failed one is the client's own
             # recovery (0.163 waits and resumes inside the sampling
             # session): the last terminal event in stream order decides.
-            failed = ""
+            failed = False
+            failure_detail = ""
         item = event.get("item")
         if not isinstance(item, dict):
             continue
@@ -320,7 +336,7 @@ def _extract_codex_result(stdout: str) -> str:
                 errors.append(message.strip())
     if answer and not failed:
         return answer
-    if re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failed, re.IGNORECASE):
+    if failed and re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failure_detail, re.IGNORECASE):
         # GameTape run 6: the turn failed with 401 after the websocket dropped.
         # A run on a copied sign-in loses it when another codex client on the
         # same account refreshes the token. Named, and vendor-wide.
@@ -336,7 +352,7 @@ def _extract_codex_result(stdout: str) -> str:
         # message, a draft of the reply) and is kept on the error as
         # evidence; returning it as the answer made a 429 after a progress
         # message read as a completed delivery.
-        error = ProviderError(f"codex turn failed: {failed[:300]}"
+        error = ProviderError(f"codex turn failed: {failure_detail[:300]}"
                               + (f" (after a reported error: {errors[-1][:200]})" if errors else ""))
         error.partial_text = answer or None
         raise error
@@ -873,7 +889,7 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             continue
         if not isinstance(event, dict):
             continue
-        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
+        if event.get("type") == "turn.failed":
             # A failed turn as the client reports it: the terminal reason
             # and the HTTP status its message names ("exceeded retry limit,
             # last status: 429 Too Many Requests" on codex 0.154, which
@@ -881,7 +897,7 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             # the vendor's free text, and the ledger holds stderr already.
             # Recorded, not acted on: the budget still settles the attempt
             # as unknown usage, and nothing here says the turn never ran.
-            error = event["error"]
+            error = event.get("error") if isinstance(event.get("error"), dict) else {}
             diagnostics = {"stop_reason": "turn.failed"}
             diagnostics.update(failure_facts(error.get("status"), error.get("message")))
             continue

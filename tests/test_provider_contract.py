@@ -60,6 +60,24 @@ def test_a_failed_turn_after_a_completed_one_is_still_the_last_word():
     assert _extract_codex_diagnostics(stream)["stop_reason"] == "turn.failed"
 
 
+@pytest.mark.parametrize("error", [
+    {"status": 503},                      # a status and no message (root's review of ace40f8)
+    {},                                   # nothing at all
+    {"message": ""},                      # an empty message
+    {"message": 12},                      # a malformed one
+    "not an object",                      # a malformed error field
+])
+def test_an_explicit_failed_turn_with_no_usable_detail_still_fails(error):
+    stream = "\n".join(['{"type":"turn.started"}', MESSAGE, json.dumps({"type": "turn.failed", "error": error})])
+    with pytest.raises(ProviderError) as caught:
+        _extract_codex_result(stream)
+    assert str(caught.value).startswith("codex turn failed: ")
+    assert caught.value.partial_text == "Implemented the first half."
+    got = _extract_codex_diagnostics(stream)
+    assert got["stop_reason"] == "turn.failed"
+    assert (got.get("status"), got.get("failure_class")) == ((503, "unavailable") if error == {"status": 503} else (None, None))
+
+
 def test_a_codex_answer_mentioning_a_status_records_no_failure():
     prose = '{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"Handle 429 and 503 by retrying."}}'
     stream = "\n".join(['{"type":"turn.started"}', prose, COMPLETED])
@@ -165,6 +183,12 @@ def test_a_grok_sign_in_refusal_is_auth_and_an_answer_mentioning_a_status_record
     (None, "retry after 30 seconds", {}),
     (None, "stream disconnected", {}),
     (200, "", {"status": 200}),
+    (None, "HTTP 503 from upstream", {"status": 503, "failure_class": "unavailable"}),
+    (None, "status code 502", {"status": 502, "failure_class": "unavailable"}),
+    (None, "cannot open file429.py", {}),               # a number in prose is not a status
+    (None, "failed at line 503 of the transcript", {}),
+    (None, "error 4290 widgets", {}),
+    (None, "the 429 handler is missing", {}),
 ])
 def test_failure_facts_are_bounded_and_never_inferred(status, text, expect):
     got = failure_facts(status, text)
