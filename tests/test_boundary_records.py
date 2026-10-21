@@ -803,8 +803,9 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     recovery, because the peers were set in that branch alone and never
     cleared; the merge gate's route listed a close-out no model makes and
     not the post-merge rechecks that follow it. Each task's peers are its
-    own; the merge route lists its rechecks and capped reviews and no
-    close-out; a refused repair is recorded and no editor is called."""
+    own; the merge route lists its rechecks and capped reviews; no route
+    lists a close-out since every record is the harness's (2026-10-21); a
+    refused repair is recorded and no editor is called."""
     from types import SimpleNamespace
 
     from quadratus.session import TaskSpec
@@ -816,33 +817,32 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     names = [r.name for r in s._gate_repair_stages(spec, gate, "subset")]
     # The reviews ahead are known; the correction they may select is
     # admitted when they do (admission/2), never costed here.
-    assert names == ["gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "close-out"]
-    assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "close-out"]
+    assert names == ["gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default"]
+    assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix"]
     # Every repair carries the task's known remainder (root's control on
-    # fef1e27): a required design review still ahead and the model
-    # close-out are on the fix cycle's, the gate fix's, the render fix's
-    # and the trim's routes; nothing is listed twice, and a last-slot
-    # task, which closes factually, owes no close-out.
+    # fef1e27): a required design review still ahead is on the fix cycle's,
+    # the gate fix's and the render fix's routes; nothing is listed twice.
+    # No route lists a close-out any more: every task's record is the
+    # harness's and costs no call (Davis, 2026-10-21), on any slot.
     assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
-        "fix revision", "recheck by openai:gpt-5.6-sol", "close-out"]
+        "fix revision", "recheck by openai:gpt-5.6-sol"]
     s._contract = SimpleNamespace(task_id="t1", required=SimpleNamespace(design_review=True))
     assert s._mandatory_stages(spec, ["openai:gpt-5.6-sol"]) == ["lead draft", "review by openai:gpt-5.6-sol",
                                                                   "design review"]
     assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
-        "fix revision", "recheck by openai:gpt-5.6-sol", "design review", "close-out"]
-    assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "design review", "close-out"]
+        "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
+    assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "design review"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "subset")] == [
-        "gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "design review", "close-out"]
-    assert [r.name for r in s._design_repair_stages(spec, None)] == ["design fix", "design review", "close-out"]
+        "gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "design review"]
+    assert [r.name for r in s._design_repair_stages(spec, None)] == ["design fix", "design review"]
     assert [r.name for r in s._design_repair_stages(spec, "openai:independent")] == [
-        "design fix", "design review by openai:independent", "close-out"]
-    assert [r.name for r in s._known_remainder(spec, after="design")] == ["close-out"]
-    # The task the job committed to end after (admission/3) closes
-    # factually whatever its slot: its repairs owe the design review and
-    # the security verification still, never a close-out; another task's
-    # routes are unchanged.
+        "design fix", "design review by openai:independent"]
+    assert [r.name for r in s._known_remainder(spec, after="design")] == []
+    # The task the job committed to end after (admission/3) and any other
+    # task close the same way, factually: repairs owe the design review and
+    # the security verification still, never a close-out.
     s._terminal_route = dict(task="t1", reason="r", selected="s", slots_used=1, relinquished=3, max_tasks=4)
-    assert s._closes_factually(spec) and not s._closes_factually(TaskSpec("t9", "other"))
+    assert s._closes_factually(spec) and s._closes_factually(TaskSpec("t9", "other"))
     assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
         "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "design review"]
@@ -872,9 +872,9 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
         "gate fix", "post-merge recheck by openai:gpt-5.6-sol", "capped final review of t2"]
     s._route_after_merge = None
     assert [r.name for r in s._security_repair_stages(spec, "openai:gpt-5.6-sol")] == [
-        "security fix", "security verification by openai:gpt-5.6-sol", "close-out"]
+        "security fix", "security verification by openai:gpt-5.6-sol"]
     assert [r.name for r in s._design_repair_stages(spec, "openai:independent")] == [
-        "design fix", "design review by openai:independent", "close-out"]
+        "design fix", "design review by openai:independent"]
     # The subset route's wall counts the full gate after the revision only
     # where it was measured; the unmeasured half is reported, not guessed.
     s._check_walls = {}

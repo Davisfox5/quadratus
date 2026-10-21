@@ -366,7 +366,7 @@
       "id": "J17",
       "tests": [
         "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
-        "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+        "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused"
       ],
       "required_obligations": [
         "calls",
@@ -377,11 +377,11 @@
       "coverage": {
         "calls": [
           "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
-          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused"
         ],
         "outcome": [
           "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
-          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused"
         ]
       }
     },
