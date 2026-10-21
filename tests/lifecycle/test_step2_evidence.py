@@ -225,8 +225,8 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
     if not _sandboxed():
         pytest.skip("no scratch sandbox here")
     # The route's calls are made (``blocking``: one standing finding per
-    # reviewer, resolved on the recheck): t1 spends its known four (lead
-    # draft, two reviews, close-out) and the correction the findings
+    # reviewer, resolved on the recheck): t1 spends its known three (lead
+    # draft, two reviews; the harness record costs no call) and the correction the findings
     # selected (revision, two rechecks), admitted on its own, so the call
     # allowance that admits the route at dispatch (two calls used, two held
     # for the finish) is the one that is spent exactly at the reassessment
@@ -236,7 +236,9 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
     roles = [c.role for c in calibration.calls[:before]]
     assert roles.count("revision") == 1 and roles.count("recheck") == 2, roles
     admitted = [a for a in H.result_json(calibration)["plan_admissions"] if a["task"] == "t1" and a["scope"] == "full"]
-    assert len(admitted[0]["stages"]) == 4 and before + 1 - admitted[0]["at_attempt"] - 2 >= 4, (admitted, before)
+    assert admitted[0]["stages"] == ["lead draft(editing/write)",
+                                    "review by openai:gpt-5.6-sol(reserve)", "review by grok:default(reserve)"]
+    assert before + 1 - admitted[0]["at_attempt"] - 2 >= 3, (admitted, before)
     # The reassessment follows the DONE audit, which has started; the cap's
     # goal question is still held one call (Davis, 2026-10-16), so with one
     # call over the reassessment's position it is the ordinary call refused.
