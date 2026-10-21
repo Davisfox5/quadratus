@@ -2380,6 +2380,34 @@
         "candidate": "5f0bb9ed2a75847be01909d75575787f6c811d33",
         "at": "2026-10-21T04:51:10Z"
       }
+    },
+    {
+      "id": "T-provider-hardening",
+      "purpose": "client preflight for every vendor and bounded failure facts, PROVES rule with measured reasons to lead, revision and reviewer, test-substance rule (Davis, 2026-10-21): claude 2.1.304 and grok 1.0.62 minimums beside codex 0.163.0, failure_facts status/class from error envelopes only, error dominates partial text with later recovery honoured; no outer retry, override, normalization, extra round or audit change",
+      "base": "f1d9ba2",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "quadratus/delegation.py",
+        "quadratus/runtime.py",
+        "quadratus/scope.py",
+        "quadratus/session.py",
+        "tests/test_provider_contract.py",
+        "tests/lifecycle/test_proof_declaration_feedback.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-21T11:40:17Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "ace40f8",
+        "at": "2026-10-21T11:41:39Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: SAME: Claimed with --resolve as coordinator on f1d9ba2 (record candidate still reads 627468d; root advances it). Delivered ace40f8. Davis's batched follow-up of 2026-10-21 plus root's offline-control findings on f1d9ba2: (1) claude 2.1.304 and grok 1.0.62 minimums beside codex 0.163.0, shared failure_facts (status, class in cap/auth/rate_limited/unavailable) from error envelopes only, codex error dominates partial text with a later turn.completed honoured as recovery, claude max_tokens and row-less error envelopes keep ending facts, grok error status kept; (2) scope.PROVES_RULE and _proves_problem measured reasons to lead, revision (_binding_feedback) and reviewer, declaration fault alone asks for corrected lines; (3) scope.TEST_SUBSTANCE_RULE to lead, revision, reviewer. No outer retry, override, normalization, extra model round or audit change. Fixtures: workflow fake vendor 99.0.0, preflight run control per-vendor versions, claude limit-envelope diagnostics assertion now the kept ending facts. Measured with explicit args, raw logs kept: provider-side files (cli_providers, claude_auxiliary_usage, grok_diagnostics, client_version_preflight, runtime, project_workflow, reread_visibility) 222 passed; test_provider_contract plus scope_declaration_lint 76 passed; session-side files (proof_declaration_feedback, proof_binding, session, requirements_ledger, joint_review_verdicts, acceptance_repairs, design_debt_binding, review_seat_cap, usage_and_channels, gate_suite, advisory_sizing, capture_scope_guidance, scope_declaration_lint) 344 passed; ruff clean. No native, provider or full-suite run on my side; root's independent review, full suite, fresh pinned runtime, exact CI and fresh freeze wait on ace40f8."
+      ]
     }
   ],
   "receipts": [
