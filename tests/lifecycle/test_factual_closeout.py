@@ -39,7 +39,8 @@ def test_a_reviewed_task_closes_on_the_harness_record_and_the_run_goes_on_to_the
                              ["claude:opus", "recheck: RFT1-1 resolved"]], t1["reviews"]
     assert t1["check"].startswith("last check PASSED") and "on the current source" in t1["check"]
     assert t1["proof_scenarios"] == ["P1: binding bound (tests/test_app.py::test_add), execution ran"]
-    assert t1["source"] and t1["changed"] == ["app.py"] and t1["design"] == "no design evidence required"
+    assert t1["source"] and t1["changed"] == ["app.py"] and t1["design"] == "no design evidence required for this task"
+    assert t1["measurement"] == "measured against the pre-task snapshot"
     # The reviews, the revision and its recheck happened; the next planning
     # call read the record; the goal question and the final audit still ran.
     roles = _roles(replay)

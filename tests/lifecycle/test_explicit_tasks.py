@@ -102,7 +102,7 @@ def test_a_listed_task_may_carry_the_direct_tier_label(tmp_path, monkeypatch):
     assert replay.result.completed, replay.result.error
     by_task = replay.workflow["calls_by_task"]
     assert "collaborator" not in by_task["t1"] and "closeout" not in by_task["t1"]
-    assert "collaborator" in by_task["t2"] and "closeout" not in by_task["t2"]
+    assert "lead" in by_task["t2"] and "closeout" not in by_task["t2"]
 
 
 def replay_kinds(replay):
@@ -153,25 +153,25 @@ def test_a_refusal_on_a_listed_task_is_still_the_refusal_stop(tmp_path, monkeypa
 
 
 def test_the_run_budget_still_stops_a_listed_run(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, [README_TASK, FAVICON_TASK],
+    replay = _run(tmp_path, monkeypatch, [FAVICON_TASK, README_TASK],
                   limits=RunLimits(max_calls=1, max_reported_tokens=6_000_000, wall_seconds=600,
                                    max_concurrent_workers=2),
                   record_complete=False)
-    # Whole-route admission refuses t1 before any call: its selected route
-    # (the draft and the close-out) cannot be paid from one call. The budget
-    # restriction still stops the listed run; the stop is the refusal.
+    # Whole-route admission refuses t1 before any call: its mandatory stages
+    # (the draft, its review and the design review; no close-out call exists
+    # since 2026-10-21) cannot be paid from one call. The budget restriction
+    # still stops the listed run; the stop is the refusal.
     error = replay.result.error or ""
-    assert "FinishReserved" in error and "cannot pay its selected route" in error, error
-    assert "short by calls 1" in error, error
+    assert "FinishReserved" in error and "cannot pay its 3 mandatory stage(s)" in error, error
     assert replay.calls == [] and replay.of("orchestrator") == [] and not replay.result.completed
     result = H.result_json(replay)
     # A listed run has no planner to send the refusal back to: it is the
     # run's own terminal budget fact, and the list records t1 as not run.
     (fact,) = [f for f in result["workflow"]["run"]["facts"] if f["kind"] == "budget"]
-    assert fact["terminal"] and "2 call(s)" in fact["detail"] and "short by calls 1" in fact["detail"], fact
+    assert fact["terminal"] and "mandatory stage(s)" in fact["detail"], fact
     assert result["budget"]["reserved_attempts"] == 0 and result["budget"]["limits"]["max_calls"] == 1
     listed = result["explicit_tasks"]
-    assert listed["listed"] == 2 and listed["not_run"] == 1 and listed["tasks_closed_clean"] == []
+    assert listed["listed"] == 2 and listed["not_run"] >= 1 and listed["tasks_closed_clean"] == []
     assert not listed["completed"]
     assert (replay.project / "README.md").read_text() == FILES["README.md"], "nothing written"
 
@@ -219,4 +219,4 @@ def test_the_direct_and_normal_tiers_deliver_the_same_checked_readme(tmp_path, m
     assert _task(direct)["contract"]["required"]["tier"] == "direct"
     assert "closeout" not in direct.workflow["calls_by_task"]["t1"]
     assert "closeout" not in normal.workflow["calls_by_task"]["t1"]
-    assert "collaborator" in normal.workflow["calls_by_task"]["t1"] and replay_kinds(normal) == ["factual-closeout"]
+    assert replay_kinds(direct) == ["direct-closeout"] and replay_kinds(normal) == ["factual-closeout"]

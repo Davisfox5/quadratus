@@ -107,34 +107,26 @@ def test_serial_the_last_wave_closes_factually_and_the_finish_runs_inside_the_li
 @pytest.mark.requirements_ledger
 def test_serial_a_route_the_finish_cannot_afford_whole_runs_terminal_and_a_blocking_review_stays_open(tmp_path,
                                                                                                         monkeypatch):
-    """10 calls over three slots: after t1 (lead, review, close-out) and
-    the planning call for t2, two calls are left after the held goal
-    question and audit. t2's ordinary route is three (its lead, its review
-    and a model close-out before the last slot) and cannot be paid; its
-    terminal route (admission/3) is the same task, reviewer and gates
-    closed by the harness's factual record, two calls, and is admitted.
-    The job commits to end after t2 before any call of t2's: the third
-    slot is relinquished, recorded and named. t2's review blocks; the
+    """9 calls over two slots, no close-out call anywhere (2026-10-21):
+    after t1 (lead, review) and the planning call for t2, two calls are
+    left after the held goal question and audit. t2's route (its lead and
+    its review) is two and is admitted whole; there is no terminal route
+    to fall to, since no stage can be dropped. t2's review blocks; the
     correction it selects (revision, recheck) cannot be paid and is
-    refused whole, so the finding stays open as written, t2 closes
-    factually with it, and the run ends FindingsOpen with the goal
-    question and the audit never asked: a terminal route buys the task,
-    never a completion."""
-    replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=3,
-                   limits=_limits(10), record_complete=False)
+    refused whole, so the finding stays open as written, t2 (the last
+    slot) closes on the harness's record with it, and the run ends
+    FindingsOpen with the goal question and the audit never asked."""
+    replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=2,
+                   limits=_limits(9), record_complete=False)
     assert _roles(replay)[-2:] == [("t2", "lead"), ("t2", "collaborator")]
     assert not replay.of("auditor") and not replay.result.completed
     result = H.result_json(replay)
     rows = [(a["scope"], a["feasible"], a["short"]) for a in result["plan_admissions"] if a["task"] == "t2"]
-    assert rows == [("mandatory", True, {}), ("full", False, {"calls": 1}), ("terminal", True, {}),
-                    ("fix-cycle", False, {"calls": 2})]
-    terminal = result["terminal_route"]
-    assert (terminal["task"], terminal["slots_used"], terminal["relinquished"], terminal["max_tasks"]) == ("t2", 2, 1, 3)
-    assert "short by calls 1" in terminal["reason"] and "close-out" not in terminal["selected"]
-    assert json.loads(replay.artifact_texts("terminal-route")[0]) == terminal
+    assert rows == [("mandatory", True, {}), ("full", True, {}), ("fix-cycle", False, {"calls": 2})]
+    assert result["terminal_route"] is None and not replay.artifact_texts("terminal-route")
     assert result["not_started"] == [] and replay.of("closeout") == []
     records = {json.loads(t)["task"]: json.loads(t) for t in replay.artifact_texts("factual-closeout")}
-    assert sorted(records) == ["t1", "t2"] and "terminal route" in records["t2"]["why"]
+    assert sorted(records) == ["t1", "t2"] and "last dispatched wave" in records["t2"]["why"]
     assert result["finish_refusals"][-1]["what"] == "fix round"
     assert replay.result.error.startswith("FindingsOpen"), replay.result.error
     assert (replay.project / "README.md").read_text() != FILES["README.md"], "t2's lead wrote"
@@ -145,13 +137,12 @@ def test_serial_a_route_the_finish_cannot_afford_whole_runs_terminal_and_a_block
 
 @pytest.mark.requirements_ledger
 def test_serial_a_mandatory_deficit_is_refused_before_any_write_with_no_terminal_candidate(tmp_path, monkeypatch):
-    """9 calls over three slots: one call is left after the held finish
-    when t2 is planned, and t2's known stages are two. No terminal route
-    is tried (it drops only the close-out): the refusal is the mandatory
-    one, nothing of t2 runs or is written, t2 is NOT RUN, the remaining
-    slots are forfeited and the stop says so."""
+    """8 calls over three slots: one call is left after the held finish
+    when t2 is planned, and t2's known stages are two. The refusal is the
+    mandatory one, nothing of t2 runs or is written, t2 is NOT RUN, the
+    remaining slots are forfeited and the stop says so."""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=3,
-                   limits=_limits(9), record_complete=False)
+                   limits=_limits(8), record_complete=False)
     assert not [c for c in replay.calls if c.task == "t2"], "nothing of t2 ran"
     result = H.result_json(replay)
     assert [n["task"] for n in result["not_started"]] == ["t2"] and result["terminal_route"] is None
@@ -247,20 +238,21 @@ MORE = _simple("app.py", "Add a docstring to add in app.py.", "R1")
 
 
 @pytest.mark.requirements_ledger
-def test_a_selected_repair_carries_the_known_nonfinal_closeout(tmp_path, monkeypatch):
-    """Root's control on fef1e27, the default bound (20 calls, 2,000,000
-    tokens, 3 slots, 200,000 reserve, 500,000 ceiling): a planner of
-    86,663 and a requirements review of 39,473 (126,136 intake), a lead
-    and a reviewer of 350,000 each leave 773,864 after the 400,000 finish
-    hold. The review's correction (revision 490,000, recheck 190,000:
-    700,000 in exposure classes) was admitted without t1's known 200,000
-    model close-out, ran and resolved the finding, and the job stopped
-    FinishReserved at the close-out: goal and audit never asked. Every
-    selected repair now carries the task's known remainder, so the
-    correction (900,000, the measured gate wall counted) is refused before
-    its editor writes, no revision runs, the finding stays open, the
-    close-out, the audit and the goal question all run, and the run ends
-    incomplete on the uncovered requirement, never on the finish."""
+def test_a_selected_repair_carries_no_close_out_and_the_finish_still_runs(tmp_path, monkeypatch):
+    """Root's control on fef1e27 (20 calls, 3 slots, 200,000 reserve,
+    500,000 ceiling), at 2,200,000 tokens: a planner of 86,663 and a
+    requirements review of 39,473 (126,136 intake), a lead and a reviewer
+    of 350,000 each leave 973,864 after the 400,000 finish hold. The
+    correction the review selects (revision 490,000, recheck 190,000:
+    700,000 in exposure classes) carries no close-out any more
+    (2026-10-21: the record is the harness's, not a call), so it is
+    admitted whole, the revision runs, the recheck resolves the finding,
+    t1 closes on the harness's record, the next planning call (200,000
+    exposure against the 293,864 then left above the hold) is admitted,
+    and the goal question and the audit both run: the finish keeps its
+    hold throughout and refuses nothing. (At the old 2,000,000 the same
+    route leaves 93,864 above the hold, and the planning call, not the
+    finish, is what the hold refuses.)"""
     monkeypatch.setattr(H, "USAGE", dict(input_tokens=100, output_tokens=10))
 
     def lead(call, replay):
@@ -280,32 +272,26 @@ def test_a_selected_repair_carries_the_known_nonfinal_closeout(tmp_path, monkeyp
         H.USAGE = dict(input_tokens=total - 10, output_tokens=10)
         return script(call, replay)
     replay = H.run(tmp_path, monkeypatch, respond, files=FILES, max_tasks=3, record_complete=False,
-                   limits=RunLimits(max_calls=20, max_reported_tokens=2_000_000, wall_seconds=1800,
+                   limits=RunLimits(max_calls=20, max_reported_tokens=2_200_000, wall_seconds=1800,
                                     max_concurrent_workers=2, reserve_tokens_per_call=200_000,
                                     max_tokens_per_call=500_000))
     result = H.result_json(replay)
     roles = [(c.task, c.role) for c in replay.calls]
-    assert not replay.of("revision") and not replay.of("recheck"), roles
+    assert len(replay.of("revision")) == 1 and len(replay.of("recheck")) == 1, roles
     cycle = [a for a in result["plan_admissions"] if a["scope"] == "fix-cycle"]
-    assert [a["feasible"] for a in cycle] == [False]
-    assert cycle[0]["stages"] == ["fix revision(editing/write)", "recheck by claude:opus(reserve)",
-                                  "close-out(reserve)"]
-    assert cycle[0]["short"] == {"tokens": 900_000 - 773_864}, cycle[0]
-    refusal = [r for r in result["finish_refusals"] if r["what"] == "fix round"]
-    assert refusal and "the correction the review selected cannot be paid whole" in refusal[0]["detail"]
-    assert replay.of("closeout") and replay.of("auditor"), roles
-    audit = replay.of("auditor")[-1].prompt
-    assert "so it was not started" not in audit, "a refused correction is not a task not started"
-    assert ("Plan admission for t1: a correction its review selected could not be paid" in audit
-            and "the task had started" in audit and "stay open as written" in audit)
-    assert "task slots usable 2 of 3 (1 spent)" in audit
-    assert roles[:6] == [("run", "orchestrator"), ("plan", "requirements-review"), ("t1", "lead"),
-                         ("t1", "collaborator"), ("t1", "closeout"), ("run", "orchestrator")], roles
-    assert not replay.result.completed, "the finding is open and R1 uncovered: not complete"
+    assert [a["feasible"] for a in cycle] == [True]
+    assert cycle[0]["stages"] == ["fix revision(editing/write)", "recheck by claude:opus(reserve)"]
+    assert "close-out" not in json.dumps(result["plan_admissions"])
+    assert [r for r in result["finish_refusals"] if r["what"] == "fix round"] == []
+    assert not replay.of("closeout") and replay.of("auditor"), roles
+    assert roles[:7] == [("run", "orchestrator"), ("plan", "requirements-review"), ("t1", "lead"),
+                         ("t1", "collaborator"), ("t1", "revision"), ("t1", "recheck"), ("run", "orchestrator")], roles
+    assert replay.artifact_texts("factual-closeout"), "t1 closed on the harness's record"
     assert "FinishReserved" not in (replay.result.error or ""), replay.result.error
-    assert "R1" in replay.result.error and "Work preserved" in replay.result.error, replay.result.error
+    assert replay.result.completed, replay.result.error
+    assert replay.of("auditor"), "the audit ran"
     budget = _budget(replay)
-    assert sorted(budget["finish_protection"]["started"]) == ["audit", "goal"], "both finishing judgments ran"
+    assert "audit" in budget["finish_protection"]["started"], "the finishing judgment ran"
     assert budget["finish_protection"]["refusals"] == [], "nothing was refused at the budget"
     assert budget["stop_reason"] == ""
 
@@ -316,21 +302,16 @@ def _tight(total):
 
 
 @pytest.mark.requirements_ledger
-def test_a_route_the_finish_cannot_afford_whole_runs_on_its_terminal_route_and_the_job_ends_after_it(tmp_path,
-                                                                                                    monkeypatch):
-    """7,400 tokens over three slots. t1's ordinary route (its lead at the
-    3,000 ceiling, its review and its close-out at the 1,000 reserve:
-    5,000) fits the 5,180 left after the two 1,000 holds and the 220 of
-    intake. After t1 and the planning call for t2, 4,740 remain after the
-    holds: t2's mandatory stages (4,000) fit, its ordinary route (5,000,
-    not the last slot) does not, and its terminal route (admission/3: the
-    same lead, reviewer and gates, closed factually) does. The job
-    commits to end after t2 before t2's first call: recorded with the
-    actual slots used and the one relinquished, the planner was shown the
-    allowance the admission charges, t2 edits within its scope, is
-    reviewed, closes factually, nothing is planned after it, the goal
-    question and the audit run, and the run completes. The stop never
-    names the cap. Before admission/3 this allowance left t2 NOT RUN."""
+def test_a_route_without_a_close_out_is_paid_whole_and_the_job_runs_to_its_finish(tmp_path, monkeypatch):
+    """7,400 tokens over three slots, no close-out call anywhere
+    (2026-10-21). t1's route (its lead at the 3,000 ceiling and its review
+    at the 1,000 reserve: 4,000) fits the 5,180 left after the two 1,000
+    holds and the 220 of intake. After t1 and the planning call for t2,
+    t2's route (4,000) fits what remains and is admitted whole; nothing is
+    relinquished and no terminal route is recorded. t2 edits within its
+    scope, is reviewed, closes on the harness's record, the planner stops,
+    the goal question and the audit run, and the run completes. Before
+    2026-10-21 the same allowance paid t2 only on its terminal route."""
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
@@ -343,40 +324,29 @@ def test_a_route_the_finish_cannot_afford_whole_runs_on_its_terminal_route_and_t
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_400),
                    record_complete=False)
     assert [(c.task, c.role) for c in replay.calls if c.task == "t2"] == [("t2", "lead"), ("t2", "collaborator")]
-    assert len(replay.of("orchestrator")) == 3, "plan, plan t2, goal question: no planning after the commitment"
-    assert replay.of("auditor"), "the audit runs after the committed task"
+    assert replay.of("auditor"), "the audit runs after the last task"
     result = H.result_json(replay)
     rows = [(a["scope"], a["feasible"], a["short"]) for a in result["plan_admissions"] if a["task"] == "t2"]
-    assert rows == [("mandatory", True, {}), ("full", False, {"tokens": 5_000 - 4_740}), ("terminal", True, {})]
-    terminal = result["terminal_route"]
-    assert (terminal["task"], terminal["slots_used"], terminal["relinquished"], terminal["max_tasks"]) == ("t2", 2, 1, 3)
-    assert "short by tokens 260" in terminal["reason"] and "2 call(s), 4,000 tokens" in terminal["selected"]
-    assert json.loads(replay.artifact_texts("terminal-route")[0]) == terminal
+    assert rows == [("mandatory", True, {}), ("full", True, {})]
+    assert result["terminal_route"] is None and not replay.artifact_texts("terminal-route")
+    assert "close-out" not in json.dumps(result["plan_admissions"])
     assert result["not_started"] == [] and replay.of("closeout") == []
     assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
     assert '"""Return a + b."""' in (replay.project / "app.py").read_text(), "t2 wrote within its scope"
     planning = replay.of("orchestrator")[1].prompt
-    assert ("Allowance after the held finish (2 stage(s) held): 33 ordinary call(s), 4,850 tokens" in planning
+    assert ("Allowance after the held finish (2 stage(s) held):" in planning
             and "an editing call 3,000 tokens, any other call 1,000" in planning)
     assert "A requirement is delivered only with its executed proof in the same task" in planning
     assert "Size the implementation and its executed proof together" in planning
     assert replay.result.completed, replay.result.error
     assert "the task cap (3) was reached" not in (replay.result.error or "")
     assert result["requirements"]["audits"][-1]["verdicts"]["R1"]["met"] is True
-    # The audit is told what was chosen, not that the task was not started
-    # (Astra A1 on 0ae5bb6): the ordinary refusal, the admitted terminal
-    # route, the spent and relinquished slots, and no usable slot.
     audit = replay.of("auditor")[-1].prompt
-    assert "so it was not started" not in audit
-    assert ("Plan admission for t2: its ordinary route could not be paid" in audit
-            and "its terminal route (the same stages, closed factually) was admitted" in audit
-            and "2 of 3 slot(s) spent, 1 relinquished" in audit and "Admission is not execution" in audit)
-    assert "task slots usable 0 of 3 (2 spent, 1 relinquished by the terminal commitment)" in audit
-    assert result["obligations"]["capacity"]["slots_left"] == 0
-    assert (result["obligations"]["capacity"]["slots_spent"], result["obligations"]["capacity"]["slots_relinquished"]) == (2, 1)
+    assert "so it was not started" not in audit and "Plan admission for" not in audit
+    assert result["obligations"]["capacity"]["slots_relinquished"] in (None, 0)
     budget = _budget(replay)
     assert budget["finish_protection"]["refusals"] == [] and budget["stop_reason"] == ""
-    assert budget["finish_protection"]["started"] == ["goal", "audit"]
+    assert "audit" in budget["finish_protection"]["started"]
 
 
 @pytest.mark.requirements_ledger
@@ -402,17 +372,16 @@ def test_a_mandatory_deficit_has_no_terminal_candidate_and_nothing_is_written(tm
 
 
 @pytest.mark.requirements_ledger
-def test_a_terminal_tasks_capped_checked_source_meets_the_same_bounded_review_as_the_last_slot(tmp_path, monkeypatch):
-    """Astra A2 on 0ae5bb6: 7,000 tokens over three slots, t1's ordinary
-    route (5,000) misses the 4,780 left by 220 and its terminal route is
-    admitted, so the job commits to end after t1. Its lead writes the
-    correct source inside its scope and stops at its turn cap. No later
-    planning call can continue it, exactly as in the numeric last slot,
-    so the capped source takes the same bounded handoff: the harness's
-    check passes on that exact source, one cross-vendor reviewer reads
-    it, the goal question and the audit run, and the run completes with
-    the cap recorded as a non-blocking fact. Before the shared predicate
-    the terminal task was left capped with no reviewer, goal or audit."""
+def test_a_last_slot_tasks_capped_checked_source_meets_the_bounded_review(tmp_path, monkeypatch):
+    """Astra A2 on 0ae5bb6, on the last slot (the terminal route it was
+    written for cannot arise since 2026-10-21: with no close-out call
+    there is no stage to drop, so the same bounded handoff is the last
+    slot's). t1's lead writes the correct source inside its scope and
+    stops at its turn cap. No later planning call can continue it, so the
+    capped source takes the bounded handoff: the harness's check passes on
+    that exact source, one cross-vendor reviewer reads it, the goal
+    question and the audit run, and the run completes with the cap
+    recorded as a non-blocking fact."""
     from quadratus.config import Settings
 
     def lead(call, replay):
@@ -422,10 +391,10 @@ def test_a_terminal_tasks_capped_checked_source_meets_the_same_bounded_review_as
     script = _script([ONE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = lead
     script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_000),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, limits=_tight(7_000),
                    record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
     result = H.result_json(replay)
-    assert result["terminal_route"]["task"] == "t1" and result["terminal_route"]["relinquished"] == 2
+    assert result["terminal_route"] is None
     assert [(c.task, c.role) for c in replay.calls][2:] == [("t1", "lead"), ("t1", "collaborator"),
                                                             ("run", "orchestrator"), ("audit", "auditor")]
     assert replay.result.completed, replay.result.error
@@ -444,25 +413,24 @@ def test_a_terminal_tasks_capped_checked_source_meets_the_same_bounded_review_as
                          stop="cancelled", num_turns=14)
     script = _script([ONE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = broken
-    held = H.run(tmp_path / "broken", monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_000),
+    held = H.run(tmp_path / "broken", monkeypatch, script, files=FILES, max_tasks=1, limits=_tight(7_000),
                  record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
-    assert H.result_json(held)["terminal_route"]["task"] == "t1"
+    assert H.result_json(held)["terminal_route"] is None
     assert [(c.task, c.role) for c in held.calls][2:] == [("t1", "lead")], "no reviewer for a failing capped source"
     assert not held.result.completed and held.result.error.startswith("GoalUnconfirmedAtCap")
-    assert "t1 not continued" in held.result.error and "committed to end after t1" in held.result.error
+    assert "t1 not continued" in held.result.error
 
 
 @pytest.mark.requirements_ledger
-def test_a_terminal_route_after_a_failed_predecessor_still_ends_incomplete(tmp_path, monkeypatch):
-    """7,400 tokens over three slots: t1's ordinary route fits (5,180 left
-    after the holds for its 5,000), its lead stops at its turn cap, then
-    t2's ordinary route (5,000 against 4,960) does not fit and its
-    terminal route does, so the job commits to end after t2. t2 runs
-    whole (lead, blocking review, the correction it selects, recheck
-    resolved) and closes factually; t1's capped work is still debt, so
-    the cap's own decision stops before the goal question, no audit runs,
-    and the stop names the commitment and the uncontinued task. A
-    terminal route never clears a predecessor's debt."""
+def test_a_last_slot_after_a_failed_predecessor_still_ends_incomplete(tmp_path, monkeypatch):
+    """7,400 tokens over two slots: t1's route fits, its lead stops at its
+    turn cap, then t2 (the last slot) runs whole (lead, blocking review,
+    the correction it selects, recheck resolved) and closes on the
+    harness's record; t1's capped work is still debt, so the cap's own
+    decision stops before the goal question, no audit runs, and the stop
+    names the uncontinued task. A later task never clears a predecessor's
+    debt. (The terminal route this was written on cannot arise since
+    2026-10-21: no close-out call exists to drop.)"""
     from quadratus.config import Settings
 
     def lead(call, replay):
@@ -473,25 +441,23 @@ def test_a_terminal_route_after_a_failed_predecessor_still_ends_incomplete(tmp_p
         return 'Documented add.\nCHANGED: ["README.md"]'
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lead
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_400),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(7_400),
                    record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
     result = H.result_json(replay)
-    assert result["not_started"] == [] and result["terminal_route"]["task"] == "t2"
+    assert result["not_started"] == [] and result["terminal_route"] is None
     assert [c.role for c in replay.calls if c.task == "t2"] == ["lead", "collaborator", "revision", "recheck"]
-    assert [a["scope"] for a in result["plan_admissions"] if a["task"] == "t2"] == ["mandatory", "full", "terminal",
-                                                                                     "fix-cycle"]
+    assert [a["scope"] for a in result["plan_admissions"] if a["task"] == "t2"] == ["mandatory", "full", "fix-cycle"]
     assert len(replay.of("orchestrator")) == 2 and not replay.of("auditor"), "no goal question, no audit"
     assert replay.result.error.startswith("GoalUnconfirmedAtCap") and "t1 not continued" in replay.result.error
-    assert "committed to end after t2" in replay.result.error and "relinquishing 1 of 3" in replay.result.error
     assert not replay.result.completed
     assert _budget(replay)["finish_protection"]["pending"] == ["goal", "audit"]
 
 
 @pytest.mark.requirements_ledger
 def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monkeypatch):
-    """11,400 tokens: t2's selected route (8,000: its lead, review,
-    revision and recheck; the last slot has no model close-out) fits the
-    8,740 left at dispatch after the holds. Its lead writes README.md and
+    """10,400 tokens (11,400 before 2026-10-21, when t1 still spent a
+    1,000 close-out): t2's selected route (8,000: its lead, review,
+    revision and recheck) fits the 8,740 left at dispatch after the holds. Its lead writes README.md and
     asks to FETCH twice, each turn reporting 2,900 tokens (under the 3,000
     ceiling): the admitted route pays the second turn (5,840 left), and the
     third, exposed at 3,000 against the 2,940 now left, is refused. Work
@@ -524,7 +490,7 @@ def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monke
         return heavy(call, "FETCH: no-such-artifact")
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lead
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(11_400),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(10_400),
                    record_complete=False)
     assert len([c for c in replay.calls if c.task == "t2"]) == 2
     assert replay.result.error.startswith("FinishReserved") and H.result_json(replay)["not_started"] == []

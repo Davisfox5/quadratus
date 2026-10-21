@@ -40,10 +40,6 @@
   {
    "role": "collaborator",
    "reply": "NO FINDINGS"
-  },
-  {
-   "role": "closeout",
-   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
   }
  ],
  "expect": {
@@ -67,7 +63,7 @@
   },
   "calls": {
    "role:collaborator": 1,
-   "role:closeout": 1,
+   "role:closeout": 0,
    "role:revision": 0
   },
   "prompts": [

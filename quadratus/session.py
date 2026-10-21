@@ -1885,10 +1885,11 @@ def _tier_request(max_lines: int) -> str:
         f"policy-denied or sensitive path; max_lines is at most {max_lines}; it is not an audit (edits none), not a "
         "security task, not a review task, names no RESOLVES, no CONTINUES and no COVERS (work that covers "
         "goal requirements meets a cross-vendor review, which direct work does not run); and the run has "
-        "a check to run. An admitted task runs with no collaborator review, no revision round "
-        "and no model close-out: one lead call, the scope measurement, the check and its one "
-        "fix round, the harness capture and the design review where the task changes what "
-        "users see, all stops unchanged. On the direct tier each permitted path permits only "
+        "a check to run. An admitted task runs with no collaborator review and no revision "
+        "round: one lead call, the scope measurement, the check and its one fix round, the "
+        "harness capture and the design review where the task changes what users see, all "
+        "stops unchanged; its record, like every task's, is written by the harness and costs "
+        "no call. On the direct tier each permitted path permits only "
         "that one file: a write anywhere else, including under a declared path, is out of "
         "scope. A refused label runs the task normally and records "
         "why; the label proves nothing about risk on its own."
@@ -6184,10 +6185,10 @@ class Session:
         return (f" Allowance after the held finish ({held} stage(s) held): {calls} ordinary call(s), "
                 f"{tokens:,} tokens, {wall:.0f} s. Admission charges exposures, not reported usage: an editing "
                 f"call {editing:,} tokens, any other call {reserve:,}. A reviewed task's known route is one "
-                f"editing call plus one reserve call per required review, plus a close-out at the reserve "
-                f"before the last slot; a correction a review selects adds an editing call and one reserve "
-                f"call per recheck. A route the allowance cannot pay is not started, so name a task whose "
-                f"route fits, or say which requirements will be left open.")
+                f"editing call plus one reserve call per required review; its record is written by the "
+                f"harness and costs no call. A correction a review selects adds an editing call and one "
+                f"reserve call per recheck. A route the allowance cannot pay is not started, so name a task "
+                f"whose route fits, or say which requirements will be left open.")
 
     def _quiescent(self) -> None:
         """Offer the quiescent point to the checkpoint writer; a failure to
@@ -14388,11 +14389,21 @@ class Session:
         note, and it says so."""
         transcript = "\n\n".join(f"[{t.role}] {t.content}" for t in task.turns()
                                    if not (t.role == "user" and t.content == spec.description))
-        changed, lines, diff = [], 0, "No project source diff is available."
-        if self.project and self._task_before is not None:
+        # The measurement, with its status: a change list is a fact only when
+        # the pre-task snapshot exists and the inspection ran; otherwise the
+        # record says unknown (root's review of 8bc9805: "no files" was
+        # written for a task with edits and no snapshot).
+        changed, lines, diff = None, 0, "No project source diff is available."
+        measured = "no project selected"
+        if self.project and self._task_before is None:
+            measured = "unknown: no pre-task source snapshot was taken"
+        elif self.project:
             state = self._inspect_partial_edits(self._task_before, stopped=False)
             if state.get("inspected"):
                 changed, lines = list(state.get("changed") or []), state.get("changed_lines", 0)
+                measured = "measured against the pre-task snapshot"
+            else:
+                measured = f"unknown: the source could not be inspected ({str(state.get('note') or '')[:120]})"
             try:
                 from .project import Project
                 diff = Project(self.project, exclude=self.config.project_excludes).diff(self._task_before) or \
@@ -14415,12 +14426,7 @@ class Session:
                        + (f" [{gates}]" if gates else "")
                        + (" on the current source" if current and check.get("source") == current
                           else " (not shown to be on the current source)"))
-        design = (self.design_checks[-1] if self.design_checks
-                  and self.design_checks[-1].get("task") == spec.task_id else None)
-        evidence = ("no design evidence required" if design is None else
-                    "design evidence verified and reviewed" if design.get("verified")
-                    and (design.get("final_review") or {}).get("approved") is True
-                    else f"design evidence not verified: {str(design.get('problem') or '')[:160]}")
+        evidence = self._design_state_for_record(spec, current)
         scenarios = [f"{r.get('proof_id') or r.get('oid')}: binding {r.get('binding', 'unknown')}"
                      + (f" ({', '.join(r.get('cases') or ())})" if r.get("cases") else "")
                      + f", execution {r.get('execution', 'unknown')}"
@@ -14436,28 +14442,82 @@ class Session:
         proofs = [f"{p.get('peer')}: {p.get('status')}" for p in self.scratch_proofs if p.get("task") == spec.task_id]
         refused = [r["what"] for r in self.finish_refusals if r.get("task") == spec.task_id]
 
-        def listed(items):
-            items = [str(i)[:300] for i in items]
-            return "; ".join(items[:8]) + (f" and {len(items) - 8} more" if len(items) > 8 else "") if items else "none"
+        # The full record is durable and unbounded (every path, every finding);
+        # the model-facing summary is bounded per field with explicit omission
+        # counts and points at it, so no debt is truncated away.
+        full = task.keep(json.dumps(dict(task=spec.task_id, lead=lead, why=why, changed=changed, changed_lines=lines,
+                                         measurement=measured, source=current, check=checked, reviews=reviews,
+                                         design=evidence, proof_scenarios=scenarios, open=open_,
+                                         unresolved=unresolved, not_run=not_run, scratch_proofs=proofs,
+                                         finish_refused=refused, evidence=pointers)),
+                         kind="factual-closeout", author="harness")
+        record_pointer = f"full record: artifact {getattr(full, 'id', 'unavailable')}"
+
+        def listed(items, limit=8, width=300):
+            items = [str(i)[:width] for i in items]
+            if not items:
+                return "none"
+            shown = "; ".join(items[:limit])
+            return shown + (f" and {len(items) - limit} more ({record_pointer})" if len(items) > limit else "")
+        if changed is None:
+            changed_text = f"unknown ({measured})"
+        elif not changed:
+            changed_text = f"no files ({measured})"
+        else:
+            names = ", ".join(c[:120] for c in changed[:12])
+            changed_text = (f"{len(changed)} file(s), {lines} lines: {names}"
+                            + (f" and {len(changed) - 12} more ({record_pointer})" if len(changed) > 12 else ""))
         summary_text = (
-            f"Recorded by the harness, not a model ({why}). "
-            f"Changed: {', '.join(changed) or 'no files'}" + (f" ({lines} lines)" if changed else "")
-            + (f"; source {current[:12]}" if current else "") + ". "
-            f"Checks: {checked}. Reviews: {reviewed}. Design: {evidence}. "
+            f"Recorded by the harness, not a model ({why[:300]}). "
+            f"Changed: {changed_text}" + (f"; source {current[:12]}" if current else "") + ". "
+            f"Checks: {checked[:600]}. Reviews: {listed(reviews and [f'{peer}: {d}' for peer, d in reviews] or [reviewed])}. "
+            f"Design: {evidence[:400]}. "
             f"Proof scenarios: {listed(scenarios)}. "
             f"Open at close: {listed(open_)}. Unresolved review findings: {listed(unresolved)}. "
             f"NOT RUN reports: {listed(not_run)}. Scratch proofs: {listed(proofs)}. "
             f"Calls refused to keep the finish: {listed(refused)}. "
             "No decisions or dead ends were written by a model, and the codebase map was not amended by "
-            "this task. Evidence: " + "; ".join(pointers))
-        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, why=why, changed=changed, changed_lines=lines,
-                                  source=current, check=checked, reviews=reviews, design=evidence,
-                                  proof_scenarios=scenarios, open=open_, unresolved=unresolved,
-                                  not_run=not_run, scratch_proofs=proofs, finish_refused=refused,
-                                  evidence=pointers)),
-                  kind="factual-closeout", author="harness")
+            "this task. Evidence: " + "; ".join(pointers) + f"; {record_pointer}")
         self._note(f"{spec.task_id}: close-out recorded by the harness ({why})")
         return summary_text, f"No model-written decision record: recorded by the harness ({why}).", []
+
+    def _design_state_for_record(self, spec, current) -> str:
+        """Design evidence as the harness holds it for this task, for the
+        record (root's review of 8bc9805): required or not from the task's
+        contract where one is fixed, else the live reading; a required
+        record that is missing is missing, a disabled one is disabled, and
+        an approval on another source is historical, never current."""
+        contract = getattr(self, "_contract", None)
+        required = getattr(contract, "required", None) if getattr(contract, "task_id", None) == spec.task_id else None
+        if required is not None:
+            applicable = bool(getattr(required, "design_collaboration_applicable", False)
+                              or getattr(required, "design_evidence", None) in ("harness", "self")
+                              or getattr(required, "design_review", False))
+        else:
+            applicable = bool(self._live_collaboration(spec))
+        record = (self.design_checks[-1] if self.design_checks
+                  and self.design_checks[-1].get("task") == spec.task_id else None)
+        if record is None:
+            if not applicable:
+                return "no design evidence required for this task"
+            if not self.config.design_cross_check:
+                return "design evidence applies to this task but design cross-checking is disabled; no record"
+            return "design evidence required for this task and MISSING: no design record was produced"
+        approved = bool(record.get("verified")) and (record.get("final_review") or {}).get("approved") is True
+        source = record.get("source")
+        identity = (f"source {str(source)[:12]}" if source else "source not recorded")
+        for key in ("context", "render", "renders"):
+            if record.get(key):
+                identity += f", {key} {str(record.get(key))[:40]}"
+        if not approved:
+            return (f"design evidence not verified ({identity}): "
+                    f"{str(record.get('problem') or 'no approval recorded')[:160]}")
+        if source and current and source == current:
+            return f"design evidence verified and reviewed on this source ({identity})"
+        if source and current:
+            return (f"design evidence verified and reviewed on an EARLIER source ({identity}; current "
+                    f"{current[:12]}): historical, not evidence for the current source")
+        return f"design evidence verified and reviewed, but its source identity is not recorded ({identity})"
 
     def _mechanical_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
         """The direct tier's record, written by the harness from what it

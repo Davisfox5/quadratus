@@ -1002,7 +1002,22 @@ Key design decisions already settled:
   written by a model. Reviews, the goal question, the final audit, the
   budget policy and the unknown-usage stop are unchanged; a stale or
   failed check is never promoted. The harness stage edge `closeout` and
-  the monitor's stage names are kept. Controls:
+  the monitor's stage names are kept. Root's review of 8bc9805 shaped the
+  record further: with no pre-task snapshot the change list is
+  "unknown" with the measurement status, never "no files"; design
+  evidence reads the task's contract or the live applicability, so a
+  required record that is missing is MISSING and a disabled one is
+  disabled, and an approval is current only on this source fingerprint
+  (an earlier source is historical, an unrecorded identity is said so);
+  the model-facing summary is bounded per field (twelve paths, eight
+  items per list, explicit "and N more" counts) and points at the
+  unbounded full record artifact, so no debt is truncated away. With no
+  close-out call there is no stage to drop, so the terminal route
+  (admission/3) can no longer differ from the full route and never
+  fires: the lifecycle scenarios written on it now show the same
+  protections on the last slot or as mandatory-deficit refusals, and
+  the planner's allowance note and the direct-tier text no longer
+  budget a close-out call. Controls:
   `tests/test_closeout.py` (the record's contents, bounds, gate-command
   privacy, no map amendment, no model asked), `tests/lifecycle/
   test_factual_closeout.py` (a reviewed t1 closes on the record, the
@@ -1031,8 +1046,15 @@ Key design decisions already settled:
   event names, numbers, booleans, the failure class and a stated backoff
   (never a message, header, prompt or identity) in
   `native-transport.json`, removing the selected trace lines from ordinary
-  stderr; `usage_total` is always None there. Diagnostic observation only:
-  no retry, model, permission or config change.
+  stderr; `usage_total` is always None there. It also keeps the
+  provider's request correlation id in a bounded opaque shape
+  (`auth.request_id` upstream, never a header, endpoint or account
+  field), `ttft_ms` and `tool_token_count` (the upstream spelling of the
+  response total, never summed into a bill), and counts routine stream
+  deltas, in-progress notices and pings as `routine_rows_omitted`
+  instead of letting them spend the 256-row cap before the completion or
+  failure row. Diagnostic observation only: no retry, model, permission
+  or config change.
 - **Historical: a revision past the size stop spent the remaining fix
   allowance coming back under it** (r11 on 136a3ec; retired 2026-10-20).
   t2's in-bound draft was revised past the hard stop by one line, though

@@ -54,7 +54,8 @@ def test_every_task_record_is_the_harness_s_own_and_asks_no_model(tmp_path):
     memory.record('assistant', 'Changed app.py\nCHANGED: ["app.py", "new.py"]')
     summary, reasoning, dead_ends = session._task_close_out('openai:gpt-5.6-sol', spec, memory)
     assert summary.startswith('Recorded by the harness, not a model (every task closes on the harness')
-    assert 'Changed: app.py, new.py' in summary and f'source {digest[:12]}' in summary
+    assert 'Changed: 2 file(s), 2 lines: app.py, new.py (measured' not in summary
+    assert 'Changed: 2 file(s), ' in summary and 'app.py, new.py' in summary and f'source {digest[:12]}' in summary
     assert 'last check PASSED [unit: passed] on the current source' in summary
     assert 'Reviews: claude:opus: reviewed: no findings' in summary
     assert 'No decisions or dead ends were written by a model' in summary and dead_ends == []
@@ -100,7 +101,7 @@ def test_the_record_carries_design_evidence_proof_scenarios_and_open_items(tmp_p
     session.unresolved_reviews = [{'task': 't1', 'text': 'negative sums untested'}]
     session.unexecuted_acceptance = [{'task': 't1', 'item': 'tests/test_cli.py'}]
     summary, _, _ = session._task_close_out('claude:opus', spec, TaskMemory('t1', 'claude:opus', store))
-    assert 'Design: design evidence not verified: console error on load' in summary
+    assert 'Design: design evidence not verified (source not recorded): console error on load' in summary
     assert ('Proof scenarios: P1: binding bound (tests/test_app.py::test_add), execution ran; '
             "P2: binding invalid declaration: 'tests/test_app.py::TestAdd' names a test class, execution missing")
     assert 'P1: binding bound (tests/test_app.py::test_add), execution ran' in summary
@@ -246,3 +247,76 @@ def test_closeout_timeout_is_one_attempt_and_normal_provider_stays_unchanged(clo
     assert not launches[0][0].exists()
     assert budget.snapshot()['reserved_attempts'] == 1
     assert owner.timeout == 900 and owner.max_retries == 4
+
+
+# -- root's review of 8bc9805: measurement status, design applicability, bounds ---
+
+def _writable(tmp_path):
+    root = tmp_path / 'project'
+    root.mkdir()
+    (root / 'app.py').write_text('old\n')
+    store = ArtifactStore(tmp_path / 'artifacts')
+    session = Session('goal', store, _never, config=SessionConfig(project=root, allow_writes=True))
+    session._task_before = Project(root).contents()
+    return session, store, root
+
+
+def _record(session, store, spec):
+    return session._task_close_out('claude:opus', spec, TaskMemory(spec.task_id, 'claude:opus', store))[0]
+
+
+def test_an_unavailable_pre_task_snapshot_reports_unknown_not_no_files(tmp_path):
+    session, store, root = _writable(tmp_path)
+    session._task_before = None
+    (root / 'app.py').write_text('edited\n')
+    summary = _record(session, store, TaskSpec('t1', 'edit'))
+    assert 'Changed: no files' not in summary
+    assert 'Changed: unknown (unknown: no pre-task source snapshot was taken)' in summary
+    record = json.loads(store.get(next(k for k in store.ids() if '"measurement"' in store.get(k))))
+    assert record['changed'] is None and record['measurement'].startswith('unknown')
+
+
+def test_a_measured_no_change_is_said_with_its_measurement(tmp_path):
+    session, store, root = _writable(tmp_path)
+    summary = _record(session, store, TaskSpec('t1', 'look only'))
+    assert 'Changed: no files (measured against the pre-task snapshot)' in summary
+
+
+def test_a_required_design_record_that_is_missing_is_not_no_design_required(tmp_path):
+    from quadratus.task_kinds import TaskKind
+    session, store, root = _writable(tmp_path)
+    summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
+    assert 'no design evidence required' not in summary
+    assert 'Design: design evidence required for this task and MISSING' in summary
+    plain = _record(session, store, TaskSpec('t2', 'backend only'))
+    assert 'Design: no design evidence required for this task' in plain
+
+
+def test_a_design_approval_on_another_source_is_historical_not_current(tmp_path):
+    from quadratus.task_kinds import TaskKind
+    session, store, root = _writable(tmp_path)
+    session.design_checks = [{'task': 't1', 'verified': True, 'final_review': {'approved': True}, 'source': 'stale'}]
+    summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
+    assert 'Design: design evidence verified and reviewed' not in summary.replace('reviewed on an EARLIER', '')
+    assert 'verified and reviewed on an EARLIER source (source stale' in summary and 'historical' in summary
+    current = session._source_fingerprint()
+    session.design_checks = [{'task': 't1', 'verified': True, 'final_review': {'approved': True}, 'source': current}]
+    summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
+    assert f'Design: design evidence verified and reviewed on this source (source {current[:12]})' in summary
+    session.design_checks = [{'task': 't1', 'verified': True, 'final_review': {'approved': True}}]
+    summary = _record(session, store, TaskSpec('t1', 'change interface', kind=TaskKind.FRONTEND))
+    assert 'source identity is not recorded' in summary
+
+
+def test_many_changed_paths_give_a_bounded_handoff_with_the_full_record_kept(tmp_path):
+    session, store, root = _writable(tmp_path)
+    for i in range(200):
+        (root / (str(i) + 'x' * 100 + '.py')).write_text('x=1\n')
+    session.unresolved_reviews = [{'task': 't1', 'text': f'finding {i} ' + 'y' * 300} for i in range(30)]
+    summary = _record(session, store, TaskSpec('t1', 'large codebase change'))
+    assert len(summary.encode()) < 10_000
+    assert 'Changed: 200 file(s)' in summary and 'and 188 more (full record: artifact' in summary
+    assert 'and 22 more (full record: artifact' in summary
+    record = json.loads(store.get(next(k for k in store.ids() if '"measurement"' in store.get(k))))
+    assert len(record['changed']) == 200 and len(record['unresolved']) == 30
+    assert all(len(p) > 100 for p in record['changed'])
