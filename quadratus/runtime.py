@@ -59,7 +59,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .cli_providers import SANDBOX_REFUSAL
+from .cli_providers import SANDBOX_REFUSAL, client_version_at_least
 from .config import Settings
 from .delegation import (
     DelegationLedger,
@@ -882,8 +882,34 @@ class Fleet:
             spent = [k for k in self._exhausted if k.startswith(f"{vendor}:")]
             if spent:
                 state += f" — window exhausted this run: {', '.join(sorted(spent))}"
+            version, minimum = getattr(provider, "client_version", None), getattr(provider, "minimum_client", None)
+            if version or minimum:
+                state += f"; client {version or 'unknown'}"
+                if minimum:
+                    state += f", qualified minimum {minimum}"
+                    state += {True: "", False: " (STALE: refused before any call)",
+                              None: " (version unreadable; not refused)"}[client_version_at_least(version, minimum)]
             lines.append(f"{vendor} [{backend}]: {state}")
         return lines
+
+    def stale_clients(self) -> List[str]:
+        """One line per CLI vendor whose installed client parses below the
+        version this engine is qualified against; the run preflight refuses
+        on any. A client whose version cannot be read is not listed (it is
+        shown as unknown on the status line), and a vendor whose seats are
+        not usable anyway is not listed either."""
+        stale = []
+        for vendor in VENDORS:
+            if self.settings.backend_for(vendor) != "cli":
+                continue
+            provider = self._vendor_provider(vendor)
+            if provider is None or not provider.available():
+                continue
+            version, minimum = getattr(provider, "client_version", None), getattr(provider, "minimum_client", None)
+            if minimum and client_version_at_least(version, minimum) is False:
+                stale.append(f"{vendor}: installed client {version} is below the qualified minimum "
+                             f"{minimum}; update the client before running")
+        return stale
 
     def alias_lines(self) -> List[str]:
         """What every roster key resolves to, and on whose authority."""

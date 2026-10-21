@@ -322,6 +322,16 @@ def safe_diagnostics(value) -> dict:
     seat = value.get('seat_tokens')
     if type(seat) is int and 0 <= seat <= 1_000_000_000:
         result['seat_tokens'] = seat
+    # The installed client that answered, and how a failed turn ended as
+    # that client reports it (terminal reason via stop_reason, HTTP status):
+    # bounded facts for reading a row against the client's known behaviour.
+    # The failure message itself is not carried; it is vendor free text.
+    client = value.get('client_version')
+    if isinstance(client, str) and re.fullmatch(r"[A-Za-z0-9_. :/+-]{1,120}", client):
+        result['client_version'] = client
+    status = value.get('status')
+    if type(status) is int and 100 <= status <= 599:
+        result['status'] = status
     # How much of this call's input the model was being handed again. An agent
     # re-sends its whole conversation on every step, so a long loop's reported
     # total is mostly text it has already seen -- 402,816 of attempt 9's

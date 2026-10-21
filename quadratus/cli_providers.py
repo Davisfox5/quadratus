@@ -92,6 +92,56 @@ class CLINotInstalled(RuntimeError):
     """The vendor CLI binary could not be found on PATH."""
 
 
+class StaleClient(RuntimeError):
+    """An installed vendor client is older than the version this engine was
+    qualified against. Raised by the run preflight before any model call,
+    never by a provider: the seat stays constructed and reported, the run
+    is refused with both versions named (see ``CLISpec.minimum_client``)."""
+
+
+#: ``<binary> --version`` output, read once per binary path per process and
+#: kept for the status line, the invocation ledger and the preflight.
+_CLIENT_VERSIONS: Dict[str, Optional[str]] = {}
+_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?")
+
+
+def parse_client_version(text) -> Optional[tuple]:
+    """The first ``major.minor.patch[-pre]`` in ``text`` as an orderable
+    tuple, or None. A pre-release orders below its release (semver), so
+    ``0.162.0-alpha.17.2 < 0.162.0 < 0.163.0``."""
+    match = _VERSION.search(str(text or ""))
+    if not match:
+        return None
+    major, minor, patch, pre = match.groups()
+    return (int(major), int(minor), int(patch), 0 if pre is None else -1, pre or "")
+
+
+def client_version_at_least(found, minimum) -> Optional[bool]:
+    """Whether ``found`` (version text) meets ``minimum`` (version text);
+    None when either does not parse: unknown is never a pass."""
+    have, want = parse_client_version(found), parse_client_version(minimum)
+    if have is None or want is None:
+        return None
+    return have[:4] >= want[:4]
+
+
+def client_version(path: str, args: Sequence[str]) -> Optional[str]:
+    """The installed client's own version line (``codex-cli 0.154.0``), read
+    once per binary path with a bounded subprocess; None when the binary
+    cannot be run or prints nothing. Never a model call, never raises."""
+    key = f"{path} {' '.join(args)}"
+    if key not in _CLIENT_VERSIONS:
+        text = None
+        try:
+            proc = subprocess.run([path, *args], capture_output=True, text=True, timeout=15, check=False)
+            first = (proc.stdout or proc.stderr or "").strip().splitlines()
+            text = first[0].strip()[:120] if first else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            text = None
+        _CLIENT_VERSIONS[key] = text
+    return _CLIENT_VERSIONS[key]
+
+
 def _extract_claude_result(stdout: str) -> str:
     """Pull the assistant text out of ``claude --output-format json``."""
     payload = json.loads(stdout)
@@ -710,7 +760,26 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             event = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
+            # A failed turn as the client reports it: the terminal reason
+            # and the HTTP status its message names ("exceeded retry limit,
+            # last status: 429 Too Many Requests" on codex 0.154, which
+            # carries nothing else). The message itself is not kept: it is
+            # the vendor's free text, and the ledger holds stderr already.
+            # Recorded, not acted on: the budget still settles the attempt
+            # as unknown usage, and nothing here says the turn never ran.
+            error = event["error"]
+            message = str(error.get("message") or "")
+            diagnostics = {"stop_reason": "turn.failed"}
+            status = re.search(r"\bstatus:?\s*(\d{3})\b", message)
+            if status is not None:
+                diagnostics["status"] = int(status.group(1))
+            elif type(error.get("status")) is int:
+                diagnostics["status"] = int(error["status"])
+            continue
+        if event.get("type") != "turn.completed":
             continue
         # The last completed turn wins, matching _extract_codex_usage.
         diagnostics = {"stop_reason": "turn.completed"}
@@ -1332,6 +1401,14 @@ class CLISpec:
     extract_tool_failures: Optional[Callable[[str], List[Dict[str, object]]]] = None
     #: Whether these flags have been checked against a real binary.
     verified: bool = False
+    #: Arguments that print the client's version (read once per binary).
+    version_args: List[str] = field(default_factory=lambda: ["--version"])
+    #: The oldest client this engine is qualified against, or None. A run
+    #: whose installed client parses below it is refused before any call
+    #: (``runtime.Fleet.stale_clients``, ``project_run``); an unreadable
+    #: version is reported as unknown and not refused. No override: the
+    #: remedy is updating the client, and the refusal names both versions.
+    minimum_client: Optional[str] = None
     #: Environment variables to set for the subprocess.
     env: Dict[str, str] = field(default_factory=dict)
     #: Vendor key, used to find this spec's environment overrides.
@@ -1817,6 +1894,19 @@ CODEX_SPEC = CLISpec(
     auth_ok_pattern=r"(?i)logged in",
     extract_diagnostics=_extract_codex_diagnostics,
     extract_tool_failures=_extract_codex_tool_failures,
+    # Qualified minimum (2026-10-21). Upstream rust-v0.154.0
+    # codex-api/src/api_bridge.rs maps every 429 but the usage-limit codes
+    # to a RetryLimit holding only the status and request id, discarding
+    # the turn_rate_limit_exceeded body and its Retry-After, so a capacity
+    # rejection ends the turn with a bare status after the client's own
+    # retries. rust-v0.162.0 carries Retry-After through the websocket
+    # TransportError (protocol/src/error.rs retry_delay) and waits inside
+    # the same sampling session under its retry budget and the call
+    # deadline (core/src/responses_retry.rs; suite retry_after.rs); 0.163.0
+    # is the first stable release with it, qualified live on 2026-10-21.
+    # The engine runs no outer retry: the client is where the wait belongs,
+    # and a run on a client that cannot wait is refused before any call.
+    minimum_client="0.163.0",
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
@@ -2367,6 +2457,13 @@ class CLIProvider(LLMProvider):
                 f"'{binary}' is not on PATH. Install the CLI and sign in "
                 f"with your subscription, or set this provider's backend to 'api'."
             )
+        # The installed client's version, for the status line, every
+        # invocation row and the run preflight (codex 0.154 discarded a
+        # 429's body and Retry-After inside its API bridge; 0.162 and later
+        # wait inside the same sampling session). Recorded here, never
+        # refused here: a seat is constructed and reported as it is.
+        self.client_version = client_version(path, self.spec.version_args)
+        self.minimum_client = self.spec.minimum_client or None
         if not self.spec.verified:
             log.warning(
                 "%s CLI flags are unverified against a live binary; if calls fail, "
@@ -2815,6 +2912,10 @@ class CLIProvider(LLMProvider):
             self.last_diagnostics = (
                 self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
             )
+            if getattr(self, "client_version", None):
+                # Which client answered: the row can then be read against
+                # the client's known behaviour (a 0.154 429 is a bare status).
+                self.last_diagnostics = dict(self.last_diagnostics or {}, client_version=self.client_version)
             try:
                 # Isolated: a malformed denial list must not cost the rest of
                 # the call's accounting (Codex review of 3a55d82).

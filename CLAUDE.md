@@ -866,6 +866,44 @@ Key design decisions already settled:
   draft on the capped route; a path breach, a reviewer's finding on
   unrelated bulk, an edited original test and the direct bound all still
   holding), harness pack case 02, `test_joint_scope_telemetry`.
+- **The installed vendor client is a recorded fact and a run precondition;
+  the engine never retries a capacity 429 itself** (Davis, 2026-10-21,
+  after the proof-planning and settings-migration runs both ended on
+  codex 429s). Root read the upstream source: codex 0.154's
+  `codex-api/src/api_bridge.rs` maps every 429 but the usage-limit codes
+  to a bare `RetryLimit` with status and request id, discarding the
+  `turn_rate_limit_exceeded` body and its Retry-After, so the JSONL
+  `turn.failed` carried only "exceeded retry limit, last status: 429" and
+  the attempt settled as unknown usage; 0.162 carries Retry-After through
+  the transport error and waits inside the same sampling session under
+  its own retry budget and the call deadline; 0.163.0 is the first stable
+  client with it, and root qualified it live. So the fix is the client,
+  not an outer replay (no `CapacityRejected` loop, no parallel retry
+  framework, no raw trace capture: rejected as scope). What the engine
+  does: `CLISpec.minimum_client` (`0.163.0` for codex; none for claude or
+  grok, which showed no such fault) and `version_args`; `_build_client`
+  reads `<binary> --version` once per path (`client_version`, bounded,
+  never raises) and records `client_version` and `minimum_client` on the
+  provider without refusing; `Fleet.status_lines` shows `client <v>,
+  qualified minimum <m>` with STALE or "version unreadable; not refused";
+  `Fleet.stale_clients` lists an available CLI vendor whose version parses
+  below the minimum, and `project_run` raises `StaleClient` before the
+  session is created, so a stale client runs nothing and the result names
+  both versions. Unreadable is unknown, not stale, and there is no
+  environment override: the remedy is updating the client. Diagnostics
+  are bounded and allowlisted: `_extract_codex_diagnostics` records a
+  `turn.failed` as `stop_reason` plus the HTTP `status` its message
+  names, nothing else (the message is vendor free text, kept only in the
+  ledger's stderr tail; no `retry_after` is invented, since a successful
+  0.163 call's JSONL carries no 429 body), and `_observe_output` stamps
+  `client_version` on every row. Native retry defaults, the deadline,
+  the budget's unknown-usage settlement, `_looks_exhausted` and every
+  review, usage and partial-work protection are unchanged. Controls:
+  `tests/test_client_version_preflight.py` (parse and semver pre-release
+  ordering, read-once, provider recording, failed and completed turn
+  diagnostics, the allowlist dropping free text, status lines, the
+  preflight refusing before any call at 0.154.0 and running at 0.163.0,
+  an environment variable lifting nothing).
 - **Historical: a revision past the size stop spent the remaining fix
   allowance coming back under it** (r11 on 136a3ec; retired 2026-10-20).
   t2's in-bound draft was revised past the hard stop by one line, though
