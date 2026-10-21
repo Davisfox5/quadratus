@@ -2439,18 +2439,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-21T15:08:19Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "066c060",
-        "at": "2026-10-21T15:37:47Z"
+        "sha": "5e4b815",
+        "at": "2026-10-21T15:56:47Z"
       },
       "reviews": [
         {
           "reviewer": "codex",
           "sha": "066c060",
-          "verdict": "cleared",
+          "verdict": "stale",
           "evidence": "Root diff review against 439d757; 153 focused controls passed with no skips, existing four raw failures and obsolete wording assertion retained. No model summary or closeout reserve, review/goal/audit and unknown-usage stop remain. Root render/context correction independently reviewed by Claude with 31 controls; actual live behavior remains unproved.",
           "scope": [
             "quadratus/session.py",
@@ -2458,13 +2458,15 @@
             "tests/test_closeout.py",
             "tests/lifecycle/test_factual_closeout.py"
           ],
-          "at": "2026-10-21T15:38:20Z"
+          "at": "2026-10-21T15:38:20Z",
+          "stale_reason": "delivery moved from 066c060 to 5e4b815"
         }
       ],
       "blockers": [],
       "decisions": [
         "claude: SAME: delivered c12fc0f (checkpoint 8bc9805 first, NOT ADMITTED, for root's parallel read-only review). Every task's record is the harness's own (_task_close_out: mechanical for the direct tier, _factual_close_out otherwise); the model close-out, its refusal record and the SUMMARY/DECISIONS/DEAD ENDS/MAP NOTES parser are deleted; _closes_factually is always true so no plan stage, remainder or exposure reserves a close-out; the planner's allowance note and the direct-tier text no longer budget one. Root's four record corrections on 8bc9805 applied: unknown measurement never reads no files, design evidence from the contract or live applicability with MISSING and disabled stated, approvals current only on this source fingerprint, bounded per-field summary with omission counts pointing at the full record artifact. With no stage to drop the terminal route can no longer fire; the lifecycle scenarios written on it now show the same protections on the last slot or as mandatory-deficit refusals, and the token scenarios are re-tuned by the removed reserve. Measured with explicit args, raw logs kept: unit-level files 714 passed (p-series logs); lifecycle set A (matrix, finish_capacity, dependency_identity, explicit_tasks, direct_tier, workflow_outcomes, workflow_contract, capped_drafts, truth_canaries, j39, delivery_controller, factual_closeout) 268 passed with the 11 scenario corrections then applied; set B (test_repair, step1_reliability, step2_recovery, proof_binding, proof_declaration_feedback, advisory_sizing, harness_pack, canary_series, finish_reservation, requirements_ledger) 351 passed with pack case 02 then corrected; re-tuned scenarios 74 passed then the last three corrected; final focused set 382 passed; ruff clean. No full suite, no provider calls.",
-        "claude: SAME scoped review of root's final record-truth patch, integrated at 066c060: source equality alone no longer claims a current design approval; _design_state_for_record reuses review_stale, _design_review_drift and _design_context_drift (the same checks the design review records at delivery) and says 'validity unverified' with the drift named; audit gates unchanged, record wording only. Applied from root's exact diff, no edits. Measured with explicit args: tests/test_closeout.py, tests/lifecycle/test_factual_closeout.py, tests/lifecycle/test_direct_tier.py 31 passed; ruff clean. Root's external four-boundary check keeps its raw 18 pass / 1 fail; the one obsolete wording assertion (it forbids even an explicitly historical approval) is root's to correct. Final head for root's one full suite: 066c060."
+        "claude: SAME scoped review of root's final record-truth patch, integrated at 066c060: source equality alone no longer claims a current design approval; _design_state_for_record reuses review_stale, _design_review_drift and _design_context_drift (the same checks the design review records at delivery) and says 'validity unverified' with the drift named; audit gates unchanged, record wording only. Applied from root's exact diff, no edits. Measured with explicit args: tests/test_closeout.py, tests/lifecycle/test_factual_closeout.py, tests/lifecycle/test_direct_tier.py 31 passed; ruff clean. Root's external four-boundary check keeps its raw 18 pass / 1 fail; the one obsolete wording assertion (it forbids even an explicitly historical approval) is root's to correct. Final head for root's one full suite: 066c060.",
+        "claude: SAME test-only correction at 5e4b815 for the three failures root's full suite found on dac3629 (production identical to 066c060): test_audit_findings refused-audit control made vendor-correct (a Claude refusal envelope fed to the Sol lead was unknown usage under root's stricter Codex accounting; complex difficulty now seats a Claude lead, one refusal, the refusal stop; parser not loosened); test_boundary_correction gate-repair route is the repair alone; test_judgment_integrity unpaid lead/review refusal at the measured eight-call boundary with the five spent calls asserted. Measured with explicit args, raw logs p54 to p57: the three cases 3 passed; test_audit_findings plus test_boundary_correction whole 68 passed; test_judgment_integrity whole 34 passed; ruff clean. No production edits, no broad suite, no provider calls."
       ]
     },
     {
