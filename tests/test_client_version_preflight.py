@@ -140,15 +140,18 @@ def test_every_vendor_carries_its_qualified_minimum(monkeypatch):
 
 def test_a_failed_turn_records_its_terminal_reason_status_and_class_only():
     assert _extract_codex_diagnostics(FAILED_STREAM) == {"stop_reason": "turn.failed", "status": 429,
-                                                         "failure_class": "rate_limited"}
+                                                         "failure_class": "rate_limited",
+                                                         "usage_completeness": "unresolved", "completed_turns": 0}
 
 
 def test_a_failed_turn_without_a_status_in_its_message_records_the_reason_alone():
     stream = '{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}'
-    assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed"}
+    assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed", "usage_completeness": "unresolved",
+                                                  "completed_turns": 0}
     stream = '{"type":"turn.failed","error":{"message":"rejected","status":503}}'
     assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed", "status": 503,
-                                                  "failure_class": "unavailable"}
+                                                  "failure_class": "unavailable",
+                                                  "usage_completeness": "unresolved", "completed_turns": 0}
 
 
 def test_a_completed_turn_reads_as_before():
@@ -161,7 +164,8 @@ def test_the_answering_client_is_on_every_observed_call(monkeypatch):
     provider = CodexCLIProvider(model="gpt-6-astra")
     provider._observe_output(FAILED_STREAM)
     assert provider.last_diagnostics == {"stop_reason": "turn.failed", "status": 429,
-                                         "failure_class": "rate_limited", "client_version": "0.163.0"}
+                                         "failure_class": "rate_limited", "usage_completeness": "unresolved",
+                                         "completed_turns": 0, "client_version": "0.163.0"}
     provider._observe_output(CODEX_STREAM)
     assert provider.last_diagnostics["client_version"] == "0.163.0"
     assert provider.last_diagnostics["stop_reason"] == "turn.completed"

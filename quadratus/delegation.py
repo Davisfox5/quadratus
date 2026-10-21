@@ -345,6 +345,25 @@ def safe_diagnostics(value) -> dict:
     reread = value.get('cached_input_tokens')
     if type(reread) is int and 0 <= reread <= 1_000_000_000:
         result['cached_input_tokens'] = reread
+    # Root's usage account (2026-10-21): whether the call's completed parent
+    # turns account for it in full, how many there were, and the observed
+    # lower bound an incomplete call leaves (never a total, never zero by
+    # default). The codex rollout's integer floor keeps its older spelling.
+    completeness = value.get('usage_completeness')
+    if completeness in ('complete', 'unresolved'):
+        result['usage_completeness'] = completeness
+    turns = value.get('completed_turns')
+    if type(turns) is int and 0 <= turns <= 1_000_000:
+        result['completed_turns'] = turns
+    bound = value.get('usage_lower_bound')
+    if type(bound) is int and 0 <= bound <= 1_000_000_000:
+        result['usage_lower_bound'] = bound
+    elif isinstance(bound, dict):
+        kept = {k: bound[k] for k in ('input_tokens', 'output_tokens')
+                if type(bound.get(k)) is int and 0 <= bound[k] <= 1_000_000_000}
+        source = bound.get('usage_source')
+        if kept and isinstance(source, str) and re.fullmatch(r"[A-Za-z0-9_ ;,.:-]{1,80}", source):
+            result['usage_lower_bound'] = dict(kept, usage_source=source)
     # What the vendor itself says this call cost, where it says. Kept beside
     # our own API-price counterfactual rather than replacing it: the two
     # answer different questions, and on attempt 8's lead they differed 7.4x

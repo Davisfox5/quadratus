@@ -296,6 +296,8 @@ class NativeExecution:
                          'QUADRATUS_MVP_OWNERSHIP')
             child_env = {k: v for k, v in (env or {}).items() if k in permitted}
             child_env['CODEX_HOME'] = str(state['home'])
+            from tools.native_call_diagnostics import LOG_FILTER, transport_facts
+            child_env['RUST_LOG'] = LOG_FILTER
             child_env['TMPDIR'] = str(state['scratch'])
             home = state['home']
             (home / 'native-input.txt').write_text(input or '')
@@ -305,15 +307,27 @@ class NativeExecution:
                     value = value.decode(errors='replace')
                 with (home / name).open('x') as stream:
                     stream.write(value or '')
+            def diagnose(errors, outcome):
+                if isinstance(errors, bytes):
+                    errors = errors.decode(errors='replace')
+                facts, clean = transport_facts(errors or '')
+                facts.update(outcome=outcome, deadline_seconds=timeout,
+                             elapsed_seconds=time.monotonic() - started)
+                save('native-transport.json', json.dumps(facts, indent=2) + '\n')
+                return clean
             try:
                 result = launch(argv, input=input, timeout=timeout, cwd=cwd, env=child_env)
             except subprocess.TimeoutExpired as exc:
                 save('native-output.jsonl', exc.output)
+                exc.stderr = diagnose(exc.stderr, 'local_deadline')
                 save('native-stderr.log', exc.stderr)
                 raise
             else:
                 save('native-output.jsonl', getattr(result, 'stdout', ''))
-                save('native-stderr.log', getattr(result, 'stderr', ''))
+                clean = diagnose(getattr(result, 'stderr', ''), 'process_exit')
+                if hasattr(result, 'stderr'):
+                    result.stderr = clean
+                save('native-stderr.log', clean)
                 return result
             finally:
                 state['native_seconds'] = time.monotonic() - started

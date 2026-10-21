@@ -166,7 +166,7 @@ def test_failed_cheap_gate_stops_before_collaborators(tmp_path):
     s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 0)
     s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
     assert s.open_findings
-    assert len(calls) == 2, 'Only draft and closeout, no paid review of a failed check'
+    assert len(calls) == 1, 'Only the draft: no paid review of a failed check, and no summary call'
 
 
 def test_an_unattributable_cheap_gate_failure_is_handed_off_before_collaborators(tmp_path):

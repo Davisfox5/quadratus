@@ -177,10 +177,10 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
     assert _read(replay, "app.py") == FIXED and "test_negative" in _read(replay, "tests/test_app.py")
     assert "returns the sum" in _read(replay, "README.md")
     assert len(replay.of("worker")) == 1
-    # t2 is the last wave: no planning call reads its record, so the harness
-    # writes it from facts instead of a model close-out (Davis, 2026-10-16).
-    assert [c.task for c in replay.of("closeout")] == ["t1"]
-    assert [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t2"]
+    # Every task's record is the harness's own (Davis, 2026-10-21): no model
+    # close-out for t1 either, and the next planning call read t1's record.
+    assert replay.of("closeout") == []
+    assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
     assert len(replay.of("recheck")) == 1
     assert not replay.result.completed, "a task cap is an incomplete outcome, never completion"
 
@@ -479,16 +479,16 @@ def test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchange
 
 # -- 5. vendor refusal is preserved, never retried or rerouted ------------------------
 
-def test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues(tmp_path, monkeypatch):
+def test_no_task_record_is_ever_asked_of_a_model_so_none_can_be_refused(tmp_path, monkeypatch):
+    """The model close-out and its refusal path are gone (Davis, 2026-10-21):
+    a scripted refusal for the closeout role is never reached."""
     def closeout(call, replay):
         return H.claude_refusal() if call.task == "t1" else CLOSEOUT
 
     replay = _run(tmp_path, monkeypatch, Script(closeout=closeout), max_tasks=2)
     assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
-    assert [c.task for c in replay.of("closeout")] == ["t1"], "one close-out call, no retry; t2 is the last wave"
-    assert [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t2"]
-    refused = replay.artifact_texts("closeout-refused")
-    assert len(refused) == 1 and "declined" in refused[0]
+    assert replay.of("closeout") == [] and not replay.artifact_texts("closeout-refused")
+    assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
 
 
 def test_a_refused_lead_is_not_retried_or_rerouted(tmp_path, monkeypatch):

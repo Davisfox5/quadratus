@@ -126,7 +126,7 @@ def test_only_the_summary_reaches_the_ledger_not_the_working_turns(store, rec):
     s = _session(store, rec)
     s.run_task(TaskSpec("t1", "implement string escaping", complexity=Complexity.SIMPLE))
     rendered = s.memory.render()
-    assert "built it" in rendered
+    assert "Recorded by the harness, not a model" in rendered
     assert "implement string escaping" not in rendered
 
 
@@ -144,10 +144,10 @@ def test_collaborator_contributions_are_stored_as_artifacts(store, rec):
     assert any(k.startswith("review:") for k in kinds)
 
 
-def test_dead_ends_survive_into_the_ledger(store, rec):
+def test_the_record_states_that_no_model_wrote_decisions_or_dead_ends(store, rec):
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert "Tried X" in s.memory.render()
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert got.dead_ends == [] and "No decisions or dead ends were written by a model" in s.memory.render()
 
 
 def test_goal_is_verbatim_in_every_orchestrator_prompt(store, rec):
@@ -555,7 +555,7 @@ def test_the_security_outcome_still_reaches_the_ledger(store, rec):
     outcome from there when it resumes."""
     s = _session(store, rec)
     s.run_task(TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY))
-    assert "built it" in s.memory.render()
+    assert "Recorded by the harness, not a model" in s.memory.render()
 
 
 def test_security_routing_ignores_the_ladder_entirely(store, rec):
@@ -606,33 +606,16 @@ def test_worker_budget_is_shared_with_the_pool(store, rec):
 # -- close-out parsing -------------------------------------------------------
 
 
-def test_closeout_parses_all_three_sections(store):
-    rec = Recorder(closeout=(
-        "SUMMARY: did the thing\n"
-        "REASONING: because of the constraint\n"
-        "DEAD ENDS:\n- Tried A; it deadlocked.\n- Tried B; too slow."
-    ))
+def test_a_task_closes_on_the_harness_record_and_asks_no_summary_of_a_model(store):
+    """Davis, 2026-10-21: the close-out summary call is gone. The record is
+    the harness's own, the ledger gets a non-empty reasoning line, and a
+    scripted summary reply is never requested."""
+    rec = Recorder(closeout="SUMMARY: did the thing\nREASONING: because\nDEAD ENDS:\n- Tried A.")
     s = _session(store, rec)
     got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert got.summary == "did the thing"
-    assert got.reasoning == "because of the constraint"
-    assert len(got.dead_ends) == 2
-
-
-def test_closeout_without_sections_still_produces_a_usable_record(store):
-    """Degrade to a usable record rather than losing the task; the raw work is
-    stored either way."""
-    rec = Recorder(closeout="I just wrote some prose with no headings at all.")
-    s = _session(store, rec)
-    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert "prose" in got.summary
-    assert got.reasoning  # ledger refuses an empty one
-
-
-def test_closeout_with_no_dead_ends_is_fine(store):
-    rec = Recorder(closeout="SUMMARY: clean run\nREASONING: nothing went wrong")
-    s = _session(store, rec)
-    assert s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE)).dead_ends == []
+    assert not any("The task is finished" in c["prompt"] for c in rec.calls)
+    assert got.summary.startswith("Recorded by the harness, not a model")
+    assert got.reasoning.startswith("No model-written decision record") and got.dead_ends == []
 
 
 # -- an exhausted seat re-seats instead of ending the run --------------------

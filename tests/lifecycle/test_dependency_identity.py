@@ -182,15 +182,13 @@ def test_a_gate_fix_denied_the_harness_command_at_the_cap_is_a_capability_stop(t
     assert len(replay.of("gate-fix")) == 1 and H.gate_results(replay) == []
 
 
-def test_review_seats_share_the_cap_and_closeout_and_the_orchestrator_do_not(tmp_path, monkeypatch):
-    # Two tasks: t1's close-out is a model call (the next planning call reads
-    # it); the last wave's is the harness's factual record (Davis, 2026-10-16).
+def test_review_seats_share_the_cap_and_the_orchestrator_does_not(tmp_path, monkeypatch):
+    # Two tasks: both records are the harness's own (Davis, 2026-10-21); no
+    # close-out call exists to cap or to exempt.
     replay = _run(tmp_path, monkeypatch, Script(), files=FILES, max_tasks=2)
-    assert H.ended_at_cap(replay, 2) and [c.task for c in replay.of("closeout")] == ["t1"]
+    assert H.ended_at_cap(replay, 2) and replay.of("closeout") == []
     assert all(_turns_flag(c) is None for c in replay.of("orchestrator"))
-    # The close-out keeps its own one-turn, tool-less summary form.
-    assert all(_turns_flag(c) == "1" for c in replay.of("closeout"))
-    assert replay.of("collaborator") and replay.of("closeout")
+    assert replay.of("collaborator")
     # Review seats joined the capped set after series rule-2ffa7f6 f3 and f5
     # (runtime.REVIEW_CAPPED_ROLES): the same cap as the lead's editing calls.
     for role in ("lead", "revision", "collaborator", "recheck"):

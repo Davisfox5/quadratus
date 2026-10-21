@@ -164,7 +164,7 @@ def test_a_capped_review_alone_buys_no_revision_round(store):
 
 def test_a_capped_recheck_buys_no_fix_round_and_keeps_the_named_blocker(store):
     rec = CappedSeat("recheck")
-    session, _ = _run(store, rec)
+    session, got = _run(store, rec)
     assert rec.capped == 1
     fixes = [c for c in rec.calls if "blocking findings remain unresolved" in c["prompt"].lower()]
     assert fixes == []
@@ -173,8 +173,10 @@ def test_a_capped_recheck_buys_no_fix_round_and_keeps_the_named_blocker(store):
     # defect; the cap fact alone would retire it from the record.
     assert any("not re-checked" in f and "BLOCKING: the escaping drops surrogate pairs" in f
                for f in session.open_findings)
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "not re-checked against the revision" in closeout and "surrogate pairs" in closeout
+    # The harness record carries the open finding to the planner (no model
+    # close-out since 2026-10-21): the named blocker, not only the cap fact.
+    assert "not re-checked after the revision" in got.summary and "surrogate pairs" in got.summary
+    assert not any("The task is finished" in c["prompt"] for c in rec.calls)
 
 
 class WordyReviewer(Recorder):

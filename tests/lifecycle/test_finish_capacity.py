@@ -85,10 +85,10 @@ def test_serial_the_last_wave_closes_factually_and_the_finish_runs_inside_the_li
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=2,
                    limits=_limits(12), record_complete=False)
     assert _roles(replay)[-2:] == [("run", "orchestrator"), ("audit", "auditor")]
-    assert [c.task for c in replay.of("closeout")] == ["t1"]
+    assert replay.of("closeout") == []
     assert replay.result.completed, replay.result.error
     budget = _budget(replay)
-    assert budget["reserved_attempts"] == 12 and budget["finish_protection"]["started"] == ["goal", "audit"]
+    assert budget["reserved_attempts"] == 11 and budget["finish_protection"]["started"] == ["goal", "audit"]
     assert budget["finish_protection"]["refusals"] == []
     record = json.loads(replay.artifact_texts("factual-closeout")[0])
     assert record["task"] == "t2" and "last dispatched wave" in record["why"]
@@ -132,9 +132,9 @@ def test_serial_a_route_the_finish_cannot_afford_whole_runs_terminal_and_a_block
     assert (terminal["task"], terminal["slots_used"], terminal["relinquished"], terminal["max_tasks"]) == ("t2", 2, 1, 3)
     assert "short by calls 1" in terminal["reason"] and "close-out" not in terminal["selected"]
     assert json.loads(replay.artifact_texts("terminal-route")[0]) == terminal
-    assert result["not_started"] == [] and [c.task for c in replay.of("closeout")] == ["t1"]
-    assert [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t2"]
-    assert "terminal route" in json.loads(replay.artifact_texts("factual-closeout")[0])["why"]
+    assert result["not_started"] == [] and replay.of("closeout") == []
+    records = {json.loads(t)["task"]: json.loads(t) for t in replay.artifact_texts("factual-closeout")}
+    assert sorted(records) == ["t1", "t2"] and "terminal route" in records["t2"]["why"]
     assert result["finish_refusals"][-1]["what"] == "fix round"
     assert replay.result.error.startswith("FindingsOpen"), replay.result.error
     assert (replay.project / "README.md").read_text() != FILES["README.md"], "t2's lead wrote"
@@ -352,8 +352,8 @@ def test_a_route_the_finish_cannot_afford_whole_runs_on_its_terminal_route_and_t
     assert (terminal["task"], terminal["slots_used"], terminal["relinquished"], terminal["max_tasks"]) == ("t2", 2, 1, 3)
     assert "short by tokens 260" in terminal["reason"] and "2 call(s), 4,000 tokens" in terminal["selected"]
     assert json.loads(replay.artifact_texts("terminal-route")[0]) == terminal
-    assert result["not_started"] == [] and [c.task for c in replay.of("closeout")] == ["t1"]
-    assert [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t2"]
+    assert result["not_started"] == [] and replay.of("closeout") == []
+    assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
     assert '"""Return a + b."""' in (replay.project / "app.py").read_text(), "t2 wrote within its scope"
     planning = replay.of("orchestrator")[1].prompt
     assert ("Allowance after the held finish (2 stage(s) held): 33 ordinary call(s), 4,850 tokens" in planning
@@ -574,14 +574,17 @@ def test_a_task_closing_into_a_failed_check_stop_gets_no_model_close_out(tmp_pat
 
 
 @pytest.mark.requirements_ledger
-def test_a_finding_the_run_holds_as_debt_keeps_the_model_close_out(tmp_path, monkeypatch):
+def test_a_finding_the_run_holds_as_debt_still_reaches_the_planner_through_the_record(tmp_path, monkeypatch):
     """Ledger on, COVERS, a configured check and a slot left: t1's open
-    review finding is held as debt and the orchestrator plans again, so it
-    reads t1's model close-out. That close-out still runs."""
+    review finding is held as debt and the orchestrator plans again, and
+    reads t1's harness record, which carries the unresolved finding (no
+    model close-out since 2026-10-21)."""
     script = _script([PLAN_1, PLAN_2], recheck="UNRESOLVED: negative sums are not shown")
     script.overrides["collaborator"] = lambda call, replay: (
         _BLOCKING if call.task == "t1" else "NO FINDINGS\nR2: MET - README.md")
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
-    assert [c.task for c in replay.of("closeout")] == ["t1"]
+    assert replay.of("closeout") == []
     assert len(replay.of("orchestrator")) >= 2, "the run planned again after t1"
-    assert not [json.loads(t) for t in replay.artifact_texts("factual-closeout") if json.loads(t)["task"] == "t1"]
+    (t1,) = [json.loads(t) for t in replay.artifact_texts("factual-closeout") if json.loads(t)["task"] == "t1"]
+    assert "negative" in " ".join(t1["unresolved"] + t1["open"]), t1
+    assert "Recorded by the harness" in replay.of("orchestrator")[1].prompt

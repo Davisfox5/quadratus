@@ -90,7 +90,8 @@ def test_listed_tasks_run_in_order_with_no_planner_call(tmp_path, monkeypatch):
     assert record["goal_judged"] is False and record["invalid"] is None and record["not_run"] == 0
     assert (replay.project / "README.md").read_text().startswith("# app\n\nadd(")
     assert _task(replay)["contract"]["required"]["tier"] == "normal"
-    assert {c.role.split(":")[0] for c in replay.calls} >= {"lead", "collaborator", "closeout"}
+    assert {c.role.split(":")[0] for c in replay.calls} >= {"lead", "collaborator"}
+    assert not replay.of("closeout"), "a task's record is the harness's own (2026-10-21)"
 
 
 def test_a_listed_task_may_carry_the_direct_tier_label(tmp_path, monkeypatch):
@@ -101,7 +102,11 @@ def test_a_listed_task_may_carry_the_direct_tier_label(tmp_path, monkeypatch):
     assert replay.result.completed, replay.result.error
     by_task = replay.workflow["calls_by_task"]
     assert "collaborator" not in by_task["t1"] and "closeout" not in by_task["t1"]
-    assert "closeout" in by_task["t2"]
+    assert "collaborator" in by_task["t2"] and "closeout" not in by_task["t2"]
+
+
+def replay_kinds(replay):
+    return sorted({k for k in replay._kinds_all() if k in ("factual-closeout", "direct-closeout", "closeout-refused")})
 
 
 @pytest.mark.parametrize("text,reason", [
@@ -213,4 +218,5 @@ def test_the_direct_and_normal_tiers_deliver_the_same_checked_readme(tmp_path, m
     assert H.gate_results(direct)[-1] == H.gate_results(normal)[-1] == "PASSED"
     assert _task(direct)["contract"]["required"]["tier"] == "direct"
     assert "closeout" not in direct.workflow["calls_by_task"]["t1"]
-    assert "closeout" in normal.workflow["calls_by_task"]["t1"]
+    assert "closeout" not in normal.workflow["calls_by_task"]["t1"]
+    assert "collaborator" in normal.workflow["calls_by_task"]["t1"] and replay_kinds(normal) == ["factual-closeout"]

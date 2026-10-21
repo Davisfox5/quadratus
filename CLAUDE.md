@@ -977,6 +977,62 @@ Key design decisions already settled:
   vacuous or over-forbidding case as a BLOCKING finding on that test.
   Nothing task-specific is graded. Controls:
   `tests/lifecycle/test_proof_declaration_feedback.py`.
+- **A task's record is written by the harness; no model summary call
+  exists** (Davis, 2026-10-21, after the ticket-workflow run on 439d757:
+  t1's lead, review, revision and recheck all returned, then the close-out
+  summary call on Sol timed out at the 60 s clamp with only thread.started
+  and turn.started in its stream, the run ended with the task's work
+  measured but unrecorded, and the budget latched unknown usage; the
+  backend cause stays unknown). `_task_close_out` now returns the direct
+  tier's mechanical record or `_factual_close_out` for every other task,
+  reviewed or not, whether or not a later planning call reads it; the
+  model close-out, its refusal record and the SUMMARY/DECISIONS/DEAD
+  ENDS/MAP NOTES parser are deleted, and `_closes_factually` is always
+  true, so no plan stage, remainder or exposure reserves a close-out call
+  (`runtime.Fleet._closeout`, root's file, stays as the bounded summary
+  view and is called by nothing in the session). The record carries the
+  task's measured changes and source fingerprint, the last check with
+  whether it ran on this source (a check on another source or a failed
+  one is named as such, never promoted), each review's disposition and
+  recheck, design evidence, every proof scenario's binding and execution,
+  open facts, unresolved and deferred findings, NOT RUN reports, scratch
+  proofs and finish refusals, bounded (eight items of 300 characters per
+  list) with the whole transcript and diff kept as artifacts and the
+  index on the task; it states that no decision, dead end or map note was
+  written by a model. Reviews, the goal question, the final audit, the
+  budget policy and the unknown-usage stop are unchanged; a stale or
+  failed check is never promoted. The harness stage edge `closeout` and
+  the monitor's stage names are kept. Controls:
+  `tests/test_closeout.py` (the record's contents, bounds, gate-command
+  privacy, no map amendment, no model asked), `tests/lifecycle/
+  test_factual_closeout.py` (a reviewed t1 closes on the record, the
+  planner reads it and dispatches t2, reviews and the audit still run,
+  zero summary calls, a failed check recorded FAILED, a scripted refusal
+  never reached) and the lifecycle files that asserted a close-out call.
+- **Codex usage is the sum of completed parent turns and an unaccounted
+  turn is never hidden** (root, 2026-10-21, `_codex_usage_account`). The
+  saved failed call's thread state read tokens_used=0 only as a default,
+  with no token_count or completed event in the rollout, so nothing could
+  say what it spent. The extractor now sums every `turn.completed`
+  parent usage (cached input a subset, never above input), and leaves the
+  call unknown when a turn is open, failed, started twice before
+  completing, or malformed; a later `turn.completed` does not clear an
+  earlier `turn.failed`, `error` or double start. The answer semantics are
+  separate: `_extract_codex_result` still honours a completed turn after
+  a failed one as the client's recovery. Diagnostics carry
+  `usage_completeness` (complete or unresolved), `completed_turns`,
+  `cached_input_tokens` when any, and `usage_lower_bound` (the completed
+  turns' totals with their source named) on an incomplete call;
+  `safe_diagnostics` allowlists exactly those, beside the rollout's
+  integer floor. No zero is fabricated, no estimate is made. Root's native
+  adapter (`tools/step2_native_execution.py`) sets a call-local `RUST_LOG`
+  selecting `codex_otel.trace_safe=info` and `responses_retry=warn`, and
+  `tools/native_call_diagnostics.transport_facts` keeps only allowlisted
+  event names, numbers, booleans, the failure class and a stated backoff
+  (never a message, header, prompt or identity) in
+  `native-transport.json`, removing the selected trace lines from ordinary
+  stderr; `usage_total` is always None there. Diagnostic observation only:
+  no retry, model, permission or config change.
 - **Historical: a revision past the size stop spent the remaining fix
   allowance coming back under it** (r11 on 136a3ec; retired 2026-10-20).
   t2's in-bound draft was revised past the hard stop by one line, though

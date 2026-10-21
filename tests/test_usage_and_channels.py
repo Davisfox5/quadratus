@@ -174,15 +174,18 @@ def test_uncritiqued_work_pays_for_no_revision(store):
     assert not any("Revise your work" in c["prompt"] for c in rec.calls)
 
 
-def test_the_revision_lands_before_the_closeout(store):
-    """The close-out must summarise the revised work, not the first draft."""
+def test_the_record_is_written_after_the_revision_and_names_the_review(store):
+    """The record covers the revised work, not the first draft: it is the
+    last thing the task does, after the revision, and no summary call
+    follows it (Davis, 2026-10-21)."""
     rec = Recorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
     order = [c["prompt"] for c in rec.calls]
-    revise_at = next(i for i, p in enumerate(order) if "Revise your work" in p)
-    close_at = next(i for i, p in enumerate(order) if "The task is finished" in p)
-    assert revise_at < close_at
+    assert any("Revise your work" in p for p in order)
+    assert not any("The task is finished" in p for p in order)
+    assert got.summary.startswith("Recorded by the harness") and "Reviews: " in got.summary
+    assert "no reviewer was invoked" not in got.summary
 
 
 # -- the fix->verify cycle ----------------------------------------------------
@@ -225,11 +228,10 @@ def test_an_unresolved_verdict_buys_exactly_one_more_revision(store):
 def test_the_cycle_is_capped_and_leftovers_reach_the_closeout(store):
     rec = BlockingRecorder(["UNRESOLVED: no", "UNRESOLVED: still no"])
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
     rechecks = [c for c in rec.calls if "Check only your BLOCKING" in c["prompt"]]
     assert len(rechecks) == 2  # capped by max_fix_cycles=2
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "still unresolved at close" in closeout
+    assert "Unresolved review findings: " in got.summary and "Unresolved review findings: none" not in got.summary
 
 
 def test_non_blocking_critiques_get_no_recheck(store):

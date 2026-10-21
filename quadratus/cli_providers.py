@@ -903,9 +903,19 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             continue
         if event.get("type") != "turn.completed":
             continue
-        # The last completed turn wins, matching _extract_codex_usage.
         diagnostics = {"stop_reason": "turn.completed"}
-        diagnostics.update(_reread_and_cost(event.get("usage")))
+    account = _codex_usage_account(stdout)
+    if account["completed_turns"] or account["pending"] or account["invalid"]:
+        diagnostics["usage_completeness"] = "complete" if account["complete"] else "unresolved"
+        diagnostics["completed_turns"] = account["completed_turns"]
+        if account["cached_input_tokens"]:
+            # A measured subset of completed turns' input, as the reread
+            # fact was always written: only when there is one (integration
+            # review: zero completed turns have no cache figure to report).
+            diagnostics["cached_input_tokens"] = account["cached_input_tokens"]
+        if not account["complete"] and account["completed_turns"]:
+            diagnostics["usage_lower_bound"] = dict(account["reported"],
+                usage_source="completed parent turns; incomplete call")
     return diagnostics or None
 
 
@@ -974,44 +984,67 @@ def _extract_plain(stdout: str) -> str:
     return stdout.strip()
 
 
-def _extract_codex_usage(stdout: str) -> Optional[Dict[str, int]]:
-    """Token counts from ``codex exec --json``'s ``turn.completed`` event.
+def _codex_usage_account(stdout: str) -> dict:
+    """Completed-turn counts, never estimates or a partial stream as a total.
 
-    Observed on codex-cli 0.154.0::
-
-        {"type":"turn.completed","usage":{"input_tokens":20114,
-         "cached_input_tokens":12928,"cache_write_input_tokens":0,
-         "output_tokens":5,"reasoning_output_tokens":0}}
-
-    ``cached_input_tokens`` is read as a *subset* of ``input_tokens`` rather
-    than an addition to it, so it is not folded in -- unlike the Claude
-    envelope, where cache reads are reported separately and are folded. The
-    two vendors report cache differently and guessing wrong in the additive
-    direction would inflate the counterfactual bill. The last turn wins: a
-    multi-turn run reports per turn, and the meter records one call.
+    Codex reports parent usage once per turn; cached input is a subset.
+    A failed/open or malformed turn leaves the call's total unknown even
+    when earlier completed turns supply a useful observed lower bound. An
+    unaccounted turn stays unaccounted: a turn.failed or error event, or a
+    turn.started while a turn is still open, is not cleared by a later
+    turn.completed (root, 2026-10-21), so a recovered call's answer stands
+    (``_extract_codex_result``) while its usage is unresolved, never the
+    good turns alone presented as the whole.
     """
-    best: Optional[Dict[str, int]] = None
+    totals = {"input_tokens": 0, "output_tokens": 0}
+    completed, cached, invalid = 0, 0, False
+    open_turn, unaccounted = False, False
     for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
+        if not line.lstrip().startswith("{"):
             continue
         try:
             event = json.loads(line)
         except ValueError:
+            invalid = True
             continue
+        if not isinstance(event, dict):
+            invalid = True
+            continue
+        kind = event.get("type")
+        if kind == "turn.started":
+            unaccounted = unaccounted or open_turn
+            open_turn = True
+        elif kind in ("turn.failed", "error"):
+            unaccounted = True
+            open_turn = False
+        if kind != "turn.completed":
+            continue
+        open_turn = False
         usage = event.get("usage")
         if not isinstance(usage, dict):
+            invalid = True
             continue
-        try:
-            found = {
-                "input_tokens": int(usage.get("input_tokens", 0)),
-                "output_tokens": int(usage.get("output_tokens", 0)),
-            }
-        except (TypeError, ValueError):
+        values = {key: _strict_count(usage, key, missing_ok=False) for key in totals}
+        cache = _strict_count(usage, "cached_input_tokens", missing_ok=True)
+        if any(value is None for value in values.values()) or cache is None:
+            invalid = True
             continue
-        if found["input_tokens"] or found["output_tokens"]:
-            best = found
-    return best
+        if cache > values["input_tokens"]:
+            invalid = True
+            continue
+        for key, value in values.items():
+            totals[key] += value
+        cached += cache
+        completed += 1
+    pending = open_turn or unaccounted
+    return {"complete": bool(completed) and not pending and not invalid,
+            "completed_turns": completed, "reported": totals,
+            "cached_input_tokens": cached, "invalid": invalid, "pending": pending}
+
+
+def _extract_codex_usage(stdout: str) -> Optional[Dict[str, int]]:
+    account = _codex_usage_account(stdout)
+    return account["reported"] if account["complete"] else None
 
 
 def _extract_native_children(stdout: str) -> List[NativeChild]:

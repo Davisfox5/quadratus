@@ -172,15 +172,17 @@ def test_j17_a_refused_lead_is_a_refusal_never_rerouted(tmp_path, monkeypatch):
     assert t1["primary"] == "refusal" and _stop(replay)["legacy"] == "ProviderRefusal"
 
 
-def test_j17_a_refused_closeout_is_a_harness_record_not_a_stop(tmp_path, monkeypatch):
+def test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused(tmp_path, monkeypatch):
+    """The closeout stage closes on the harness record (Davis, 2026-10-21):
+    a model that would refuse a summary is never asked, so no refusal fact
+    exists on the task and the run completes."""
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_then_done(DECL_T1),
                                                 closeout=lambda call, replay: H.claude_refusal("cyber")),
                   max_tasks=3)
     t1 = _task(replay, "t1")
     assert t1["closed_as"] == "closed" and t1["primary"] == "clean"
-    (refused,) = [f for f in t1["facts"] if f["kind"] == "refusal"]
-    assert refused["stage"] == "closeout" and refused["terminal"] is False and "cyber" in refused["detail"]
-    assert "artifact" in refused["detail"] and replay.result.completed
+    assert [f for f in t1["facts"] if f["kind"] == "refusal"] == [] and t1["edges"]["closeout"] is True
+    assert replay.of("closeout") == [] and replay.result.completed
 
 
 def test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap(tmp_path, monkeypatch):

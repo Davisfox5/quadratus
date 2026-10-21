@@ -104,7 +104,7 @@ def test_the_same_task_on_the_normal_tier_keeps_the_full_call_graph(tmp_path, mo
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "normal"
     roles = _roles(replay)
-    assert roles["collaborator"] >= 1 and roles["revision"] == 1 and roles["closeout"] == 1
+    assert roles["collaborator"] >= 1 and roles["revision"] == 1 and roles.get("closeout", 0) == 0
     assert roles["design-review"] == 1 and "review" in t1["stages"]
     assert replay.result.completed, replay.result.error
 
@@ -137,7 +137,7 @@ def test_without_the_flag_a_label_is_refused_and_recorded(tmp_path, monkeypatch)
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "normal"
     assert t1["contract"]["required"]["tier_refused"] == "the direct tier is not enabled on this run"
-    assert _roles(replay)["closeout"] == 1
+    assert _roles(replay).get("closeout", 0) == 0 and replay.artifacts("factual-closeout")
 
 
 def _unit_session(tmp_path, **config):

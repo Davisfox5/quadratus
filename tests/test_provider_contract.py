@@ -20,6 +20,7 @@ from quadratus.cli_providers import (
     _extract_claude_result,
     _extract_codex_diagnostics,
     _extract_codex_result,
+    _extract_codex_usage,
     _extract_grok_diagnostics,
     _extract_grok_result,
     failure_facts,
@@ -43,14 +44,52 @@ def test_a_failed_turn_after_a_progress_message_is_a_failure_with_the_text_as_ev
     assert "codex turn failed" in str(caught.value) and "429" in str(caught.value)
     assert caught.value.partial_text == "Implemented the first half."
     assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed", "status": 429,
-                                                  "failure_class": "rate_limited"}
+                                                  "failure_class": "rate_limited",
+                                                  "usage_completeness": "unresolved", "completed_turns": 0}
 
 
 def test_a_completed_turn_after_a_failed_one_is_the_clients_recovery_and_a_real_success():
+    """The answer stands; the usage does not: the failed turn is an
+    unaccounted turn a later success never hides (root, 2026-10-21), so the
+    call's usage is unknown with the completed turn kept as a lower bound."""
     stream = "\n".join(['{"type":"turn.started"}', FAILED_429, '{"type":"turn.started"}', MESSAGE, COMPLETED])
     assert _extract_codex_result(stream) == "Implemented the first half."
-    assert _extract_codex_diagnostics(stream)["stop_reason"] == "turn.completed"
-    assert "status" not in _extract_codex_diagnostics(stream)
+    got = _extract_codex_diagnostics(stream)
+    assert got["stop_reason"] == "turn.completed" and "status" not in got
+    assert got["usage_completeness"] == "unresolved" and got["completed_turns"] == 1
+    assert got["usage_lower_bound"] == {"input_tokens": 20, "output_tokens": 5,
+                                        "usage_source": "completed parent turns; incomplete call"}
+    assert _extract_codex_usage(stream) is None
+
+
+def test_a_second_start_before_the_first_turn_completes_is_an_unaccounted_turn():
+    stream = "\n".join(['{"type":"turn.started"}', '{"type":"turn.started"}', MESSAGE, COMPLETED])
+    assert _extract_codex_result(stream) == "Implemented the first half."
+    got = _extract_codex_diagnostics(stream)
+    assert got["usage_completeness"] == "unresolved" and got["completed_turns"] == 1
+    assert _extract_codex_usage(stream) is None
+
+
+def test_one_started_and_completed_turn_is_complete_and_a_transport_retry_in_stderr_is_not_a_turn():
+    stream = "\n".join(['{"type":"turn.started"}', MESSAGE, COMPLETED])
+    got = _extract_codex_diagnostics(stream)
+    assert got["usage_completeness"] == "complete" and got["completed_turns"] == 1
+    assert "usage_lower_bound" not in got and "cached_input_tokens" not in got
+    assert _extract_codex_usage(stream) == {"input_tokens": 20, "output_tokens": 5}
+
+
+def test_the_ledger_keeps_the_usage_account_facts_bounded():
+    kept = safe_diagnostics({"usage_completeness": "unresolved", "completed_turns": 1,
+                             "usage_lower_bound": {"input_tokens": 20, "output_tokens": 5,
+                                                   "usage_source": "completed parent turns; incomplete call"}})
+    assert kept == {"usage_completeness": "unresolved", "completed_turns": 1,
+                    "usage_lower_bound": {"input_tokens": 20, "output_tokens": 5,
+                                          "usage_source": "completed parent turns; incomplete call"}}
+    assert safe_diagnostics({"usage_lower_bound": 1234})["usage_lower_bound"] == 1234
+    for bad in ({"usage_completeness": "partial"}, {"completed_turns": -1}, {"usage_lower_bound": "20"},
+                {"usage_lower_bound": {"input_tokens": 20, "usage_source": "x" * 81}},
+                {"usage_lower_bound": {"usage_source": "completed parent turns"}}):
+        assert not safe_diagnostics(bad)
 
 
 def test_a_failed_turn_after_a_completed_one_is_still_the_last_word():
@@ -74,7 +113,7 @@ def test_an_explicit_failed_turn_with_no_usable_detail_still_fails(error):
     assert str(caught.value).startswith("codex turn failed: ")
     assert caught.value.partial_text == "Implemented the first half."
     got = _extract_codex_diagnostics(stream)
-    assert got["stop_reason"] == "turn.failed"
+    assert got["stop_reason"] == "turn.failed" and got["usage_completeness"] == "unresolved"
     assert (got.get("status"), got.get("failure_class")) == ((503, "unavailable") if error == {"status": 503} else (None, None))
 
 
@@ -91,7 +130,8 @@ def test_a_codex_sign_in_rejection_is_auth_and_still_takes_the_vendor_out():
     with pytest.raises(ProviderError) as caught:
         _extract_codex_result(stream)
     assert caught.value.auth_invalid
-    assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed", "status": 401, "failure_class": "auth"}
+    assert _extract_codex_diagnostics(stream) == {"stop_reason": "turn.failed", "status": 401, "failure_class": "auth",
+                                                  "usage_completeness": "unresolved", "completed_turns": 0}
 
 
 # -- claude -----------------------------------------------------------------

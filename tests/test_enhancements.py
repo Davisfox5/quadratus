@@ -136,24 +136,24 @@ def test_the_goal_still_leads_and_the_question_still_closes(store, tmp_path):
     assert prompt.index("MAP-MARKER") < prompt.index("Name the single next task")
 
 
-def test_closeouts_teach_the_map(store, tmp_path):
+def test_a_task_record_never_amends_the_map(store, tmp_path):
+    """The model close-out that used to carry MAP NOTES is gone (Davis,
+    2026-10-21); the map is amended from orientation and close-out
+    requests elsewhere, never by a task's record."""
     m = CodebaseMap(tmp_path / "map.jsonl")
     rec = Recorder(closeout=(
         "SUMMARY: built it\nREASONING: simplest\n"
         "MAP NOTES:\n- conventions: errors are wrapped in AppError\n"
-        "- not-a-note-without-content:"
     ))
     s = _session(store, rec, config=SessionConfig(codebase_map=m))
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert len(m) == 1
-    assert "AppError" in m.render()
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert len(m) == 0 and "the codebase map was not amended by this task" in got.summary
 
 
-def test_without_a_map_closeouts_do_not_ask_for_notes(store, rec):
+def test_no_summary_prompt_is_ever_sent_for_a_task(store, rec):
     s = _session(store, rec)
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "MAP NOTES" not in closeout
+    assert not any("The task is finished" in c["prompt"] or "MAP NOTES" in c["prompt"] for c in rec.calls)
 
 
 # -- 4: the failure-loop breaker ----------------------------------------------
@@ -490,14 +490,12 @@ def test_a_persistent_failure_is_carried_loudly_to_the_closeout(store):
     rec = Recorder()
     gate = StubGate([False, False])
     s = _session(store, rec, config=SessionConfig(integration_gate=gate))
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "still failing at close" in closeout
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert "Checks: last check FAILED" in got.summary and "PASSED" not in got.summary
 
 
 def test_no_gate_configured_means_no_gate_runs(store):
     rec = Recorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert not any("Integration gate" in c["prompt"] for c in rec.calls
-                   if "The task is finished" in c["prompt"])
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert "Checks: no check recorded" in got.summary

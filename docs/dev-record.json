@@ -2426,6 +2426,47 @@
         "claude: SAME: Claimed with --resolve as coordinator on f1d9ba2 (record candidate still reads 627468d; root advances it). Delivered ace40f8. Davis's batched follow-up of 2026-10-21 plus root's offline-control findings on f1d9ba2: (1) claude 2.1.304 and grok 1.0.62 minimums beside codex 0.163.0, shared failure_facts (status, class in cap/auth/rate_limited/unavailable) from error envelopes only, codex error dominates partial text with a later turn.completed honoured as recovery, claude max_tokens and row-less error envelopes keep ending facts, grok error status kept; (2) scope.PROVES_RULE and _proves_problem measured reasons to lead, revision (_binding_feedback) and reviewer, declaration fault alone asks for corrected lines; (3) scope.TEST_SUBSTANCE_RULE to lead, revision, reviewer. No outer retry, override, normalization, extra model round or audit change. Fixtures: workflow fake vendor 99.0.0, preflight run control per-vendor versions, claude limit-envelope diagnostics assertion now the kept ending facts. Measured with explicit args, raw logs kept: provider-side files (cli_providers, claude_auxiliary_usage, grok_diagnostics, client_version_preflight, runtime, project_workflow, reread_visibility) 222 passed; test_provider_contract plus scope_declaration_lint 76 passed; session-side files (proof_declaration_feedback, proof_binding, session, requirements_ledger, joint_review_verdicts, acceptance_repairs, design_debt_binding, review_seat_cap, usage_and_channels, gate_suite, advisory_sizing, capture_scope_guidance, scope_declaration_lint) 344 passed; ruff clean. No native, provider or full-suite run on my side; root's independent review, full suite, fresh pinned runtime, exact CI and fresh freeze wait on ace40f8.",
         "claude: SAME: root's scoped review of ace40f8 (9 PASS, 1 FAIL offline, no models) found the last false-success boundary: a turn.failed with error {status: 503} and no message left the message-as-boolean empty and returned the earlier agent_message. Fixed at f4af6dd: the failed flag is independent of its detail (missing, empty or malformed error gets a default detail), last terminal event in stream order still decides, diagnostics record a turn.failed with a malformed error field; failure_facts reads a status from text only behind status, HTTP or error wording (last status: 429, API Error: 429, HTTP 503, status code 502), a bare number in prose (file429.py, line 503) is not a status. Negative coverage retained in tests/test_provider_contract.py. Measured with explicit args: provider-side files 246 passed, ruff clean. Reviews and proof grammar unchanged; no full suite or provider run on my side."
       ]
+    },
+    {
+      "id": "T-factual-closeout",
+      "purpose": "deterministic task close-out (Davis, 2026-10-21): every task's record is written by the harness from what it holds, the model summary call and its refusal path are removed, the route planners reserve no close-out stage; reviews, goal confirmation, final audit, budget policy and the unknown-usage stop unchanged",
+      "base": "439d757",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/delegation.py",
+        "tests/test_closeout.py",
+        "tests/lifecycle/test_factual_closeout.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-21T15:08:19Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-native-call-diagnostics",
+      "purpose": "root's usage account and native transport diagnostics (2026-10-21): codex usage summed over completed parent turns with any unaccounted prior turn leaving the call unresolved and a lower bound recorded, call-local RUST_LOG trace selection in the native adapter with allowlisted transport facts; diagnostic observation only, no retry, model, permission or usage fabrication",
+      "base": "439d757",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "tools/native_call_diagnostics.py",
+        "tools/step2_native_execution.py",
+        "tests/test_call_usage_diagnostics.py",
+        "tests/test_step2_native_execution.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "claimed",
+      "claimed_at": "2026-10-21T15:08:19Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [

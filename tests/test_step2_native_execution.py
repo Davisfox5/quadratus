@@ -225,6 +225,28 @@ def test_actual_timeout_output_preserved_and_seed_removed(boundary, monkeypatch)
     assert not (home / 'auth.json').exists()
 
 
+def test_transport_timeout_receipt_is_private_sanitized_and_keeps_unknown_usage(boundary, monkeypatch):
+    adapter, provider = boundary
+    from tools.native_call_diagnostics import LOG_FILTER
+    def launch(argv, **kwargs):
+        assert kwargs['env']['RUST_LOG'] == LOG_FILTER
+        raw = ('INFO codex_otel.trace_safe: event.name="codex.websocket_connect" '
+               'http.response.status_code=429 error.message="SECRET"\nnormal error\n')
+        raise subprocess.TimeoutExpired(argv, 12, output='{"type":"turn.started"}', stderr=raw)
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    with adapter.installed(), pytest.raises(subprocess.TimeoutExpired) as failure:
+        provider._call('original request', '', [])
+    home = Path(adapter.receipts[0]['home'])
+    receipt = json.loads((home / 'native-transport.json').read_text())
+    assert receipt['outcome'] == 'local_deadline' and receipt['deadline_seconds'] == 12
+    assert receipt['events'][0]['http.response.status_code'] == 429
+    assert receipt['usage_total'] is None
+    assert failure.value.stderr == 'normal error\n'
+    assert 'SECRET' not in (home / 'native-transport.json').read_text()
+    assert not (home / 'auth.json').exists()
+
+
 @pytest.mark.parametrize('disposable', [False, True])
 def test_temp_files_do_not_enter_measured_source_and_scratch_is_removed(boundary, monkeypatch, disposable):
     adapter, provider = boundary
