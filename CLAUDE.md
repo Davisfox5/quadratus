@@ -2617,6 +2617,45 @@ Key design decisions already settled:
   its Project tab can run commands. The page has no controls at all, which
   is what makes it the thing that may be reached from another device.
 
+- **A reviewer judges evidence the harness has already shown on the exact
+  source** (workflow repair, 2026-10-24, after the ticket run stopped on
+  open findings). `_observe_checks` already ran the task's gate before
+  every review and recheck, but only `self.checks` could discharge a proof
+  row, so reviewers read "execution missing" on cases the harness had just
+  run and passed, and spent rounds on it. `_obligation_receipt` now reads
+  the observations too (receipt ids `observed-N`, same identity rules,
+  only a passing run discharges, a failed one is named in the rows);
+  `_observe_checks` skips a source a task check or merge gate already ran
+  under the same gate; the rows are refreshed before any judgment binding
+  is taken; the post-merge recheck is handed the child's rows under the
+  merge gate's receipt. A parallel child runs no checks in its copy
+  (snapshots carry no dependency tree, the r08 lesson), so its rows say
+  so and settle after the merge. The task's own gate still runs after the
+  fix cycles: the observation is evidence, never the mandatory check.
+- **Two typed findings leave the editor out of it** (same batch).
+  `BLOCKING: SCENARIO P<n> - <contradiction> | proposal: <operation|state|
+  expect>: <text>` goes to the seated planner once per task
+  (`_correct_scenarios`): it may change that one field, KEEP the text, or
+  say the REQUIREMENT itself would have to change, which raises the
+  operator's question (`OperatorInputNeeded` with no channel) and changes
+  nothing. The goal, requirement texts, scope, the scenario's requirements,
+  location, evidence kind and id never move; the row keeps its prior text,
+  execution and judgment as `scenario_lineage` and starts again; the
+  reviewer who raised it re-checks the corrected scenario. `BLOCKING:
+  EVIDENCE P<n> - <what is not shown>` goes to the harness (an observation
+  if none exists on this source) and back to the same reviewer; in a child
+  it is held for the post-merge recheck. A round whose every blocking line
+  was routed makes no editing call and the planner stage is costed in the
+  fix-cycle admission. A kept, unanswered or stray SCENARIO finding, and
+  every UNRESOLVED verdict, takes the ordinary editor round: the plan
+  channel cannot make a finding disappear, and nothing closes one but its
+  reviewer. Records: `scenario_corrections`, `evidence_routes`.
+- **A requirement no task took on is said at the stop.** The ledger and
+  the planner's obligation view already held it ("taken on by no task
+  yet"; DONE refused until covered); `report.md` now names it when a run
+  stops incomplete, because the ticket run's report did not say R23 had
+  never been scheduled.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

@@ -685,6 +685,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                       *[f'- {name}' for name in changed], '']
     if not completed and not error:
         lines += ['The plan was declined, the task limit was reached, or findings/checks remain open.', '']
+    for line in _unfulfilled_requirements(session, completed):
+        lines += [line, '']
     for repair in (getattr(session, 'test_repairs', None) or []) if session else []:
         seen = repair.get('checks') or []
         lines += [f"Authorized test repair: {repair['path']} (run-start bytes kept as artifact "
@@ -747,6 +749,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'plan_admissions': list(getattr(session, 'plan_admissions', []) or []) if session else [],
         'open_findings': list(getattr(session, 'open_findings', []) or []) if session else [],
         'proof_binding_problems': list(getattr(session, 'proof_binding_problems', []) or []) if session else [],
+        # The planner's scenario corrections and the EVIDENCE findings the
+        # harness answered before any editor call (workflow repair).
+        'scenario_corrections': list(getattr(session, 'scenario_corrections', []) or []) if session else [],
+        'evidence_routes': list(getattr(session, 'evidence_routes', []) or []) if session else [],
         'terminal_route': dict(getattr(session, '_terminal_route', None) or {}) or None if session else None,
         'operations': list(getattr(session, 'operations', []) or []) if session else [],
         'job_store': dict(generation=(job_store.current().number if job_store.current() else None),
@@ -1077,6 +1083,23 @@ def _budget_fields(budget) -> dict:
         'remaining_reported_tokens': remaining, 'ordinary_call_reserve': reserve,
         'summary_call_reserve': shaped, 'stop_reason': snapshot.get('stop_reason') or '',
         'unknown_usage_attempts': unknown, 'text': text}}
+
+
+def _unfulfilled_requirements(session, completed) -> list:
+    """One report line naming the listed requirements no finished task
+    covers when the run did not complete (workflow repair, 2026-10-24: the
+    ticket run stopped on open findings with R23, the README, listed and
+    reviewed but never scheduled; the ledger held that fact and the report
+    did not say it). Read from the ledger as it stands; nothing is judged."""
+    if completed or session is None:
+        return []
+    ledger = session.memory.ledger
+    status = ledger.requirement_status
+    left = [rid for rid in ledger.requirements if not str(status.get(rid, '')).startswith(('covered', 'met'))]
+    if not left:
+        return []
+    return ['Requirements no finished task covers when the run stopped: '
+            + '; '.join(f"{rid}: {str(ledger.requirements[rid])[:120]}" for rid in left)]
 
 
 def _requirements_record(session):

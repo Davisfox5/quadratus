@@ -165,9 +165,9 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
         delivery.PlanStage(f"recheck {n}", "reserve") for n in range(300)]
     asked = []
 
-    def second_unpayable(self, spec, unresolved):
+    def second_unpayable(self, spec, unresolved, **kw):
         asked.append(spec.task_id)
-        return real(self, spec, unresolved) if asked.count(spec.task_id) == 1 else unpayable
+        return real(self, spec, unresolved, **kw) if asked.count(spec.task_id) == 1 else unpayable
     (tmp_path / "short").mkdir()
     monkeypatch.setattr(Session, "_fix_cycle_stages", second_unpayable)
     short = H.run(tmp_path / "short", monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2,
@@ -184,7 +184,7 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
     # selected is refused before its editor writes, no revision call is
     # made, the findings stay open as the reviewer wrote them, and the run
     # ends with them open; no review was dropped to fit.
-    monkeypatch.setattr(Session, "_fix_cycle_stages", lambda self, spec, unresolved: unpayable)
+    monkeypatch.setattr(Session, "_fix_cycle_stages", lambda self, spec, unresolved, **kw: unpayable)
     (tmp_path / "first").mkdir()
     first = H.run(tmp_path / "first", monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2,
                   record_complete=False)

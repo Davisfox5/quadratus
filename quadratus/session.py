@@ -1714,6 +1714,54 @@ _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.
 
 #: How a finding is stated, for reviewers and the auditor alike: what the
 #: orchestrator needs to test it (evidence loop, 2026-10-15).
+#: The two typed finding forms a reviewer may use for a defect no editor
+#: fixes (workflow repair, 2026-10-24): the plan's scenario text, and
+#: execution evidence the harness has not shown. Stated once, in the proof
+#: rows every reviewer and recheck reads.
+_TYPED_FINDING_FORMS = (
+    "A scenario whose own text is wrong (an expectation that contradicts its stated prior state, or a "
+    "condition the requirement does not state) is a defect of the plan, not of the code: report it as "
+    "'BLOCKING: SCENARIO P<n> - <the contradiction> | proposal: <operation|state|expect>: <the corrected text> "
+    "| basis: R<n> | impact: contract'. The planner corrects that one field or keeps it, you re-check the "
+    "corrected scenario, and no code is rewritten for it. A bound case the harness has not shown executed "
+    "on this exact source, with nothing else wrong with it, is an evidence gap, not a code finding: report "
+    "it as 'BLOCKING: EVIDENCE P<n> - <what is not shown> | basis: P<n> | impact: contract'; the harness runs "
+    "the checks it can and you re-check the row.")
+_SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(P\d+)\s*[-:]\s*(.+?)\s*\|\s*proposal\s*:\s*"
+                             r"(operation|state|expect)\s*:\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+_EVIDENCE_CLAIM = re.compile(r"^\s*EVIDENCE\s+(P\d+)\s*[-:]\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+_SCENARIO_REPLY = re.compile(r"^\s*SCENARIO\s+(P\d+)\s*:\s*(operation|state|expect|KEEP|REQUIREMENT)\b\s*[-:]?\s*(.*?)\s*$",
+                             re.IGNORECASE | re.MULTILINE)
+
+
+def _typed_finding(claim: str):
+    """``("scenario", fields)``, ``("evidence", fields)`` or ``(None, None)``
+    for one registered finding's claim (the line before its basis and
+    impact segments). Strict: a SCENARIO claim needs the scenario id, the
+    contradiction and a one-field proposal; anything looser is an ordinary
+    finding, never routed away from the editor."""
+    match = _SCENARIO_CLAIM.match(claim or "")
+    if match:
+        return "scenario", dict(proof_id=match.group(1).upper(), reason=match.group(2).strip(),
+                                field=match.group(3).lower(), proposal=match.group(4).strip())
+    match = _EVIDENCE_CLAIM.match(claim or "")
+    if match:
+        return "evidence", dict(proof_id=match.group(1).upper(), reason=match.group(2).strip())
+    return None, None
+
+
+def _scenario_text_problem(text: str, current: str) -> str:
+    """Why a planner's corrected scenario text cannot stand, or ""."""
+    text = (text or "").strip()
+    if not text or text.lower() in ("none", "n/a", "-"):
+        return "the corrected text is empty"
+    if "\n" in text or len(text) > 400:
+        return "the corrected text is not one bounded line"
+    if text == (current or "").strip():
+        return "the corrected text equals the declared text"
+    return ""
+
+
 _FINDING_SHAPE = (
     "State each finding with the requirement or condition it breaks, where it is (file and "
     "function), and a concrete failing example (an input or call and the wrong result it gives) "
@@ -2649,6 +2697,12 @@ class Session:
         #: or recheck judges, or a capped task left: evidence for the seats,
         #: never a task check (Session._observe_checks).
         self.review_checks: List[dict] = []
+        #: The planner's scenario corrections and the EVIDENCE findings the
+        #: harness answered (workflow repair, 2026-10-24), as records; and
+        #: the tasks whose one correction call is spent.
+        self.scenario_corrections: List[dict] = []
+        self.evidence_routes: List[dict] = []
+        self._scenario_corrected: set = set()
         #: This session's own operation ids are per owner (``OP<OWNER>-<n>``):
         #: a parallel child publishes its own record, never a sibling's, and
         #: a resumed episode is a new owner beside the parent's record.
@@ -4761,6 +4815,9 @@ class Session:
         self._hold_unreviewed_goal_work(spec, lead, collaborators)
         if collaborators:
             self._observe_checks(spec, "review")
+            # Settled before any reviewer is handed the rows or a binding is
+            # taken: what ran on this source is on the row the seat judges.
+            self._refresh_obligations()
         labels = {peer: f"Reviewer {chr(65 + i)}"
                   for i, peer in enumerate(collaborators)}
         notes: List[tuple] = []
@@ -4850,8 +4907,15 @@ class Session:
             blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
             for peer, note in blocking:
                 self._register_review_findings(spec, peer, note)
+            # Findings about the plan's scenario text or about evidence the
+            # harness has not shown are answered by the planner and the
+            # harness, then re-checked by the reviewer who raised them; the
+            # editor is asked only for what is left (workflow repair,
+            # 2026-10-24: the ticket run spent its code-writer rounds on a
+            # scenario defect no editor could fix).
+            plan = self._plan_findings(spec, blocking, notes)
             retried = 0
-            revision_prompt = self._revision_prompt(spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes])
+            revision_prompt = self._revision_prompt(spec, draft, [f"[{labels[p]}]\n{n}" for p, n in plan["notes"]])
             mark = self._source_fingerprint()
             admitted = True
             if self._budget() is not None:
@@ -4859,10 +4923,13 @@ class Session:
                 # revision with the write grant and one recheck per reviewer
                 # whose blocking finding it answers, admitted whole before
                 # the editor writes; unpayable, nothing is written and the
-                # findings stay open as the reviewers wrote them.
+                # findings stay open as the reviewers wrote them. A planner
+                # correction is a costed stage of the same route.
                 wall_extra, wall_known = self._route_wall(spec)
-                cycle = self._admit_plan(spec.task_id, self._fix_cycle_stages(spec, blocking), scope="fix-cycle",
-                                         wall_extra=wall_extra, wall_known=wall_known)
+                cycle = self._admit_plan(spec.task_id,
+                                         self._fix_cycle_stages(spec, blocking, editor=plan["editor"],
+                                                                correction=bool(plan["scenario"])),
+                                         scope="fix-cycle", wall_extra=wall_extra, wall_known=wall_known)
                 admitted = cycle.feasible
                 if not admitted:
                     self._finish_refused(spec, "fix round", FinishReserved(
@@ -4872,18 +4939,24 @@ class Session:
                     refused = FinishReserved(f"{spec.task_id}: the correction the review selected cannot be paid whole")
                     refused.recorded = True
                     raise refused
-                try:
-                    revision = self._edit(lead, revision_prompt)
-                except TurnLimitReached as exc:
-                    # R15: a capped revision that changed nothing, with a
-                    # blocking finding open and a cycle left, is told what was
-                    # measured and asked once more from that cycle.
-                    note = self._no_edit_cap_note(spec, task, exc, mark, blocking, spent=1)
-                    if not note:
-                        raise
-                    retried = 1
-                    self._count("revision")
-                    revision = self._edit(lead, revision_prompt + note)
+                spec = self._serve_plan_findings(spec, task, plan, labels)
+                if not plan["editor"]:
+                    # Every finding went to the planner or the harness: no
+                    # editing call; the reviewers re-check what is now shown.
+                    revision = draft
+                else:
+                    try:
+                        revision = self._edit(lead, revision_prompt)
+                    except TurnLimitReached as exc:
+                        # R15: a capped revision that changed nothing, with a
+                        # blocking finding open and a cycle left, is told what was
+                        # measured and asked once more from that cycle.
+                        note = self._no_edit_cap_note(spec, task, exc, mark, blocking, spent=1)
+                        if not note:
+                            raise
+                        retried = 1
+                        self._count("revision")
+                        revision = self._edit(lead, revision_prompt + note)
             except TurnLimitReached as exc:
                 # A capped revision takes the capped-task path: kept,
                 # measured, unreviewed and ungated, re-planned by name --
@@ -4902,13 +4975,16 @@ class Session:
                     self._finish_refused(spec, "revision", exc)
                 revision, unresolved, capped_writer = draft, list(blocking), True
             else:
-                task.record("assistant", revision)
-                task.keep(revision, kind="revision")
+                if plan["editor"]:
+                    task.record("assistant", revision)
+                    task.keep(revision, kind="revision")
                 unresolved = self._recheck_blocking(
                     spec, blocking, revision, task, labels=labels
                 )
             cycles = 1 + retried
-            while unresolved and cycles < self.config.max_fix_cycles and not capped_writer:
+            # A finding held for the post-merge recheck buys no editor round
+            # here; everything else left open does, as before.
+            while self._actionable(unresolved) and cycles < self.config.max_fix_cycles and not capped_writer:
                 if self._budget() is not None:
                     # Beyond the admitted route: one more cycle only when
                     # what is left pays it whole, decided before its call.
@@ -4921,10 +4997,11 @@ class Session:
                         capped_writer = True
                         break
                 self._count("revision")
-                pending = [(p, n) for p, n in blocking if any(p == up for up, _ in unresolved)]
+                actionable = self._actionable(unresolved)
+                pending = [(p, n) for p, n in blocking if any(p == up for up, _ in actionable)]
                 try:
                     revision = self._edit(lead, self._fix_prompt(spec, revision,
-                                                                 [(labels[p], v) for p, v in unresolved]))
+                                                                 [(labels[p], v) for p, v in actionable]))
                 except TurnLimitReached as exc:
                     handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
                     if handoff is None:
@@ -4939,7 +5016,8 @@ class Session:
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
                 cycles += 1
-                unresolved = self._recheck_blocking(
+                held = [u for u in unresolved if u not in actionable]
+                unresolved = held + self._recheck_blocking(
                     spec, pending, revision, task, labels=labels,
                 )
             if unresolved:
@@ -6636,7 +6714,9 @@ class Session:
         # Reused only for the same source AND the same gate: a cheap subset,
         # another task's gate or a check of an earlier source is not this run.
         if not current or any(c.get("source") == current and c.get("gate") == identity
-                              for c in self.review_checks):
+                              for c in list(self.review_checks) + list(self.checks)):
+            # A task check or a merge gate on these bytes under this gate is
+            # already the harness's run of them (workflow repair, 2026-10-24).
             return
         from .project import Project
         project = Project(self.project, exclude=self.config.project_excludes)
@@ -7769,7 +7849,13 @@ class Session:
                 # id (unique per task), its obligations (re-based like its
                 # execution facts: only a parent check discharges them), its
                 # plan admissions and its own effects.
+                for finding in child.review_findings:
+                    # An EVIDENCE finding a child held for the merge is the
+                    # parent's to recheck now (workflow repair, 2026-10-24).
+                    finding.pop("held", None)
                 self.review_findings.extend(child.review_findings)
+                self.scenario_corrections.extend(child.scenario_corrections)
+                self.evidence_routes.extend(child.evidence_routes)
                 for obligation in child.evidence_obligations:
                     # Re-based to the parent: the child had no gate of its
                     # own, so its runner is what the parent's gate can run
@@ -7786,7 +7872,8 @@ class Session:
                         base_gate=_gate_identity(self.config.integration_gate), environment=self._environment_id(),
                         execution="missing" if obligation["execution"] in ("ran", "failed") else obligation["execution"],
                         receipts=[], source_digest=None, sufficiency="unjudged", judged_by="", judged_binding="",
-                        entry=dict(obligation.get("entry") or {}, after_check=len(self.checks))))
+                        entry=dict(obligation.get("entry") or {}, after_check=len(self.checks),
+                                   after_observed=len(self.review_checks))))
                 self.plan_admissions.extend(child.plan_admissions)
                 self.proof_binding_problems.extend(child.proof_binding_problems)
                 self.operations.extend(child.operations)
@@ -7910,6 +7997,10 @@ class Session:
         else, a capped recheck or an unavailable reviewer keeps them open. No
         lead call, no fix round, no slot, recovery or grant."""
         result = dict(task=spec.task_id, rechecked=[])
+        # The merge gate's run on the merged source is the receipt the
+        # child's rows were re-based to wait for: settled before the
+        # reviewer is handed them (workflow repair, 2026-10-24).
+        self._refresh_obligations()
         by_peer: Dict[str, List[dict]] = {}
         for entry in entries:
             by_peer.setdefault(entry["peer"], []).append(entry)
@@ -7935,6 +8026,9 @@ class Session:
                 row["verdict"] = "kept: no open finding to recheck"
                 continue
             ids = [r["fid"] for r in records]
+            # The child's own proof rows, as the merged source and the merge
+            # gate's receipt now hold them (the active spec is not this task).
+            instructions = self._recheck_instructions(ids, spec=spec)
             binding = self._judgment_binding(spec, peer, "recheck")
             prompt = (self._role_packet(spec, "reviewer") + "\n\n"
                       f"Task: {spec.description}\n\n"
@@ -7942,7 +8036,7 @@ class Session:
                       f"findings were left open:\n{self._finding_lines(records)}\n\n"
                       "All the tasks are now merged, and your working directory holds the merged source; "
                       "'the revision' below is the source as it now stands. "
-                      + self._recheck_instructions(ids) + self._review_turn_budget_note(peer))
+                      + instructions + self._review_turn_budget_note(peer))
             try:
                 with invocation(spec.task_id, "recheck"):
                     verdict = self._invoke_model(peer, prompt)
@@ -8817,7 +8911,8 @@ class Session:
         if self._resolve_citations(text):
             return True
         known = ({r["fid"] for r in self.review_findings} | {o["oid"] for o in self.evidence_obligations}
-                 | set(self.memory.ledger.requirements) | {f"check-{i + 1}" for i in range(len(self.checks))})
+                 | set(self.memory.ledger.requirements) | {f"check-{i + 1}" for i in range(len(self.checks))}
+                 | {f"observed-{i + 1}" for i in range(len(self.review_checks))})
         if set(self._EVIDENCE_ID.findall(text or "")) & known:
             return True
         for check in list(self.checks) + list(self.review_checks):
@@ -10241,7 +10336,11 @@ class Session:
             task=str(entry.get("task") or "run"), modality=modality, location=str(entry.get("location") or ""),
             scenario=tuple(sorted((str(k), str(v)) for k, v in (entry.get("scenario") or {}).items())))
         record = dict(obligation.to_dict(), kind=kind, entry=dict(item=entry.get("item"), receipt=entry.get("receipt"),
-                                                                  after_check=entry.get("after_check")),
+                                                                  after_check=entry.get("after_check"),
+                                                                  # The observations recorded before this row
+                                                                  # existed discharge nothing of it (workflow
+                                                                  # repair, 2026-10-24).
+                                                                  after_observed=entry.get("after_observed")),
                       # The configured gate the task gate derives from, so a
                       # later refresh can tell a reconfigured gate from a
                       # task's own narrowing (_obligation_current_gate).
@@ -10298,6 +10397,28 @@ class Session:
             if set(cases) <= self._check_passed_cases(check):
                 return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
                             runner="gate", **self._receipt_identity(check, record), completed=True, passed=True,
+                            passed_cases=list(cases), skipped_cases=[])
+        # The harness's own run of the task's checks on this exact source
+        # before a review or a recheck (_observe_checks) is the same
+        # execution under the same identity: it discharges the row the same
+        # way, so the seat judging the evidence sees what ran (workflow
+        # repair, 2026-10-24: the ticket run's reviewers read "execution
+        # missing" on rows whose cases the harness had just run and passed,
+        # because only self.checks was read here). A failed run discharges
+        # nothing, as with a check; the proof rows name it.
+        observed = entry.get("after_observed")
+        first = int(observed) if observed is not None else len(self.review_checks)
+        for index in range(len(self.review_checks) - 1, first - 1, -1):
+            seen = self.review_checks[index]
+            if (not seen.get("passed") or seen.get("source") != current
+                    or (seen.get("gate") or "") != (record.get("gate") or "")
+                    or (seen.get("environment") or "") != (environment or "")):
+                continue
+            if set(cases) <= self._check_passed_cases(seen):
+                return dict(id=f"observed-{index + 1}", source=seen.get("source"), gate=seen.get("gate"),
+                            runner="gate", provenance=f"harness run of the task's checks on this source before "
+                                                      f"{seen.get('stage')}",
+                            **self._receipt_identity(seen, record), completed=True, passed=True,
                             passed_cases=list(cases), skipped_cases=[])
         return self._evidence_receipt(record) or self._scratch_receipt(record)
 
@@ -10738,7 +10859,8 @@ class Session:
                 record = self._register_obligation(
                     dict(task=spec.task_id, requirements=[r for r in proof["requirements"] if r in (covers or [])],
                          item=f"{proof['id']}: {proof['operation']}; given {proof['state']}; expect {proof['expect']}; "
-                              f"in {proof['location']}", after_check=len(self.checks), modality=modality,
+                              f"in {proof['location']}", after_check=len(self.checks),
+                         after_observed=len(self.review_checks), modality=modality,
                          location=proof["location"], scenario=scenario),
                     kind="acceptance")
                 if record is not None:
@@ -10765,7 +10887,8 @@ class Session:
             return
         for item in (getattr(scope, "acceptance", None) or ()):
             record = self._register_obligation(dict(task=spec.task_id, item=str(item), requirements=list(covers or []),
-                                                    after_check=len(self.checks)),
+                                                    after_check=len(self.checks),
+                                                    after_observed=len(self.review_checks)),
                                                kind="acceptance")
             if record is not None and "binding" not in record:
                 # A legacy acceptance string names no scenario and no case:
@@ -11258,13 +11381,20 @@ class Session:
         is a ceiling, not a cost, and an unknown is reported, not guessed."""
         return float((getattr(self, "_check_walls", None) or {}).get(_gate_identity(gate), 0.0))
 
-    def _fix_cycle_stages(self, spec, unresolved) -> list:
+    def _fix_cycle_stages(self, spec, unresolved, *, editor: bool = True, correction: bool = False) -> list:
         """One fix cycle: a revision with the write grant, one recheck per
         reviewer whose findings it answers, and what the task still owes
         after its reviews (the required design review, the model close-out:
-        ``_known_remainder``)."""
+        ``_known_remainder``). ``correction`` adds the planner's one
+        scenario-correction call; ``editor`` False is a round whose every
+        finding was routed to the planner or the harness, so no editing
+        call is costed or made (workflow repair, 2026-10-24)."""
         writes = bool(self._writes())
-        rows = [delivery.PlanStage("fix revision", "editing" if writes else "reserve", editing=writes)]
+        rows = []
+        if correction:
+            rows.append(delivery.PlanStage("scenario correction", "reserve"))
+        if editor:
+            rows.append(delivery.PlanStage("fix revision", "editing" if writes else "reserve", editing=writes))
         rows.extend(delivery.PlanStage(f"recheck by {peer}", "reserve")
                     for peer in sorted({peer for peer, _ in unresolved}))
         rows.extend(self._known_remainder(spec, after="review"))
@@ -12983,11 +13113,18 @@ class Session:
         lines = []
         for r in rows:
             cases = ", ".join(r.get("cases") or ()) or "no case bound"
+            receipts = [str(x) for x in (r.get("receipts") or ())]
             lines.append(f"- {r.get('proof_id') or r['oid']} [{', '.join(x[0] for x in r['requirements'])}]: "
                          f"{r['behavior'][:220]}; binding {r.get('binding', 'unknown')}: {cases}; execution "
-                         f"{r['execution']}" + (f" ({r['reason'][:80]})" if r.get("reason") else ""))
+                         f"{r['execution']}" + (f" (receipt {receipts[-1]})" if receipts and r["execution"] == "ran" else "")
+                         + (f" ({r['reason'][:80]})" if r.get("reason") else ""))
+            for entry in (r.get("scenario_lineage") or [])[-1:]:
+                lines.append(f"  corrected by the planner on finding {entry.get('finding')}: {entry.get('field')} was "
+                             f"'{str(entry.get('before'))[:160]}'; the scenario above is the one in force")
         legacy = all(r.get("binding", "").startswith("unknown") for r in rows)
+        facts = self._observation_facts(task)
         return ("\n\n## Proof scenarios this task declared, as the harness holds them\n" + "\n".join(lines)
+                + (f"\n{facts}" if facts else "")
                 + ("\nThis task declared no scenario mapping (legacy acceptance): treat the mapping as unknown, "
                    "not complete; no check discharges these rows and only the final audit's explicit per-id "
                    "line judges them." if legacy else "")
@@ -13004,7 +13141,32 @@ class Session:
                 "declaration' is a measured fault of the PROVES line, with its reason shown: report it as a "
                 "BLOCKING finding that asks for the corrected PROVES line(s), one exact case per line, and "
                 "nothing more; it calls for no code or test rewrite by itself. Ask for code or test changes "
-                "only where the code or the cases themselves are wrong.")
+                "only where the code or the cases themselves are wrong. " + _TYPED_FINDING_FORMS)
+
+    def _observation_facts(self, task) -> str:
+        """What the harness's own run of the task's checks on exactly the
+        current source showed, for the seat reading the proof rows: a
+        passing run is on the rows as their receipt; a failing one, or a
+        parallel child's inability to run, is said in words so a row that
+        reads 'missing' is read with its cause (workflow repair,
+        2026-10-24)."""
+        if not self.project:
+            return ""
+        if self._batch_child and self.config.integration_gate is None:
+            return ("Execution in a parallel child: the harness runs no checks in a child's copy; every row above "
+                    "is measured on the whole project once the batch is merged, and a row left open for it is "
+                    "re-checked by you then. A case not shown executed here, with nothing else wrong, is an "
+                    "EVIDENCE gap, not a code finding.")
+        current = self._source_fingerprint()
+        gate = self._current_gate()
+        identity = _gate_identity(gate) if gate is not None else None
+        seen = next((c for c in reversed(self.review_checks)
+                     if current and c.get("source") == current and c.get("gate") == identity), None)
+        if seen is None or seen.get("passed"):
+            return ""
+        return (f"The harness ran the task's checks on this exact source before {seen.get('stage')} and they did not "
+                "pass; a failed run discharges no row, so a row reading 'missing' here is a failure to show, not "
+                "an unrun check.")
 
     def _goal_block(self) -> str:
         """The original goal and the covered requirements' original text,
@@ -13499,7 +13661,17 @@ class Session:
                                        source_digest=self._source_fingerprint() or "unavailable", call=call,
                                        prefix=self._finding_prefix(spec), task=getattr(spec, "task_id", "run"),
                                        resolve=self._evidence_resolves)
-        self.review_findings = [dict(f.to_dict(), text=before.get(f.fid, {}).get("text", f.claim)) for f in after]
+        # The typed fields come from the judged record; the session's own
+        # marks on a finding (its text as written, its route, a hold for
+        # the post-merge recheck) survive the rebuild (workflow repair,
+        # 2026-10-24: a rebuild dropped them).
+        rebuilt = []
+        for f in after:
+            prior = before.get(f.fid, {})
+            row = dict(prior, **f.to_dict())
+            row["text"] = prior.get("text", f.claim)
+            rebuilt.append(row)
+        self.review_findings = rebuilt
         new = [r for r in self.review_findings if r["fid"] not in before]
         for record in new:
             record["text"] = f"BLOCKING: {record['claim']}"
@@ -13507,8 +13679,8 @@ class Session:
                        f"{record['claim'][:120]}")
         return new
 
-    def _recheck_instructions(self, ids: List[str]) -> str:
-        spec = getattr(self, "_active_spec", None)
+    def _recheck_instructions(self, ids: List[str], *, spec=None) -> str:
+        spec = spec if spec is not None else getattr(self, "_active_spec", None)
         return (self._proof_rows(spec) + "\n\n" if spec is not None else "") + (
                 "Check only your BLOCKING findings against the revision, one line per finding and nothing "
                 "else about them: '<id>: RESOLVED <how the revision addresses it>', '<id>: UNRESOLVED "
@@ -13544,20 +13716,32 @@ class Session:
         unresolved: List[tuple] = []
         if blocking:
             self._observe_checks(spec, "recheck")
+            self._refresh_obligations()
         for peer, note in blocking:
             shown = (labels or {}).get(peer, peer)
             mine = self._finding_records(task=spec.task_id, peer=peer)
             if not mine:
                 mine = self._register_review_findings(spec, peer, note)
+            # A finding held for the post-merge recheck (a parallel child
+            # measures no execution) is not re-asked here: nothing new can
+            # be shown for it until the merge gate runs.
+            held = [r for r in mine if r.get("held")]
+            mine = [r for r in mine if not r.get("held")]
+            for record in held:
+                unresolved.append((peer, f"{record['fid']}: UNRESOLVED: {record['held']}"))
+                self._dispose(spec, peer, f"recheck: {record['fid']} held: {record['held'][:160]}")
             if not mine:
                 continue
             ids = [r["fid"] for r in mine]
+            # The rows are rendered (and refreshed) before the binding is
+            # taken, so the identity the judge is handed is the one compared.
+            instructions = self._recheck_instructions(ids)
             binding = self._judgment_binding(spec, peer, "recheck")
             prompt = (self._role_packet(spec, 'reviewer') + '\n\n' +
                       f"Task: {spec.description}\n\n"
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       f"The revised work:\n{revision}\n\n"
-                      + self._recheck_instructions(ids) + self._review_turn_budget_note(peer))
+                      + instructions + self._review_turn_budget_note(peer))
             try:
                 verdict = self._invoke_model(peer, prompt)
             except FinishReserved as exc:
@@ -13674,6 +13858,255 @@ class Session:
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
             + _NO_REQUESTS_IN_FIX
         )
+
+    @staticmethod
+    def _actionable(unresolved: List[tuple]) -> List[tuple]:
+        """The open findings an editor round answers: every one except a
+        finding held for the post-merge recheck."""
+        return [u for u in unresolved if ": UNRESOLVED: held for the post-merge recheck" not in u[1]]
+
+    def _plan_findings(self, spec, blocking: List[tuple], notes: List[tuple]) -> dict:
+        """Split one review round's blocking findings by what answers them,
+        without a call: a typed SCENARIO finding (the plan's scenario text,
+        one field, with the reviewer's proposal) goes to the planner's one
+        correction per task; a typed EVIDENCE finding (a bound case the
+        harness has not shown executed on this source) goes to the harness,
+        or is held for the post-merge recheck in a parallel child, which
+        can run nothing; everything else is the editor's. The reviewers'
+        notes reach the editor with the routed lines replaced by the fact of
+        their routing, and a round whose every blocking line was routed
+        makes no editing call. A SCENARIO finding after the task's
+        correction allowance is spent is an ordinary finding: the plan
+        channel cannot hide a code finding twice."""
+        mine = {r.get("proof_id") for r in self.evidence_obligations
+                if r.get("task") == spec.task_id and r.get("kind") == "acceptance" and r.get("proof_id")
+                and not r.get("superseded_by")}
+        plan = dict(scenario=[], evidence=[], held=[], notes=[], editor=True)
+        allowance = spec.task_id not in self._scenario_corrected
+        routed_texts = set()
+        for peer, _ in blocking:
+            for record in self._finding_records(task=spec.task_id, peer=peer):
+                if record.get("route"):
+                    continue
+                kind, detail = _typed_finding(record.get("claim") or "")
+                if kind == "scenario" and detail["proof_id"] in mine and allowance:
+                    record.update(route="scenario", typed=detail)
+                    plan["scenario"].append(record)
+                elif kind == "scenario":
+                    record.update(route="editor", typed=detail,
+                                  route_note=("not a scenario of this task" if detail["proof_id"] not in mine
+                                              else "the task's scenario correction is spent"))
+                    continue
+                elif kind == "evidence" and detail["proof_id"] in mine:
+                    if self._batch_child and self.config.integration_gate is None:
+                        record.update(route="held", typed=detail,
+                                      held="held for the post-merge recheck (a parallel child measures no execution)")
+                        plan["held"].append(record)
+                    else:
+                        record.update(route="evidence", typed=detail)
+                        plan["evidence"].append(record)
+                else:
+                    continue
+                routed_texts.add(record.get("text"))
+        if not routed_texts:
+            plan["notes"] = list(notes)
+            return plan
+        filtered = []
+        for peer, note in notes:
+            kept, routed = [], []
+            for raw in note.splitlines():
+                record = next((r for r in plan["scenario"] + plan["evidence"] + plan["held"]
+                               if r.get("text") == raw.strip() and r["author"] == peer), None)
+                (routed if record is not None else kept).append(record["fid"] if record is not None else raw)
+            if routed:
+                kept.append(f"(findings {', '.join(routed)} were routed to the planner or the harness and are not "
+                            "yours to answer; do not rewrite code or tests for them)")
+            filtered.append((peer, "\n".join(kept)))
+        plan["notes"] = filtered
+        plan["editor"] = any(_has_blocking_finding(n) for _, n in filtered)
+        return plan
+
+    def _serve_plan_findings(self, spec, task, plan: dict, labels: dict):
+        """Answer the routed findings before any editor call: the harness
+        runs the task's checks on the current source if it has not (the
+        same observation a review gets; a run already recorded on these
+        bytes is not repeated) and re-settles the rows, and the planner is
+        asked once for the scenario corrections. Returns the spec, with its
+        scenarios as corrected. Nothing here closes a finding: the reviewer
+        who raised it re-checks it against what is now shown."""
+        if plan["evidence"]:
+            before = {r["oid"]: r.get("execution") for r in self.evidence_obligations}
+            runs = len(self.review_checks)
+            self._observe_checks(spec, "evidence")
+            self._refresh_obligations()
+            after = {r["oid"]: r for r in self.evidence_obligations}
+            for record in plan["evidence"]:
+                pid = record["typed"]["proof_id"]
+                rows = [r for r in self.evidence_obligations if r.get("task") == spec.task_id
+                        and r.get("proof_id") == pid and r.get("kind") == "acceptance"]
+                self.evidence_routes.append(dict(
+                    task=spec.task_id, finding=record["fid"], proof_id=pid, reviewer=record["author"],
+                    action=("harness ran the task's checks on the current source" if len(self.review_checks) > runs
+                            else "no new run: a harness run on this exact source is already recorded"),
+                    execution_before=[before.get(r["oid"]) for r in rows],
+                    execution_after=[after[r["oid"]].get("execution") for r in rows],
+                    source=self._source_fingerprint()))
+                self._note(f"task {spec.task_id}: {record['fid']} (EVIDENCE {pid}) routed to the harness and "
+                           f"{record['author']}'s recheck; no editor call for it")
+        for record in plan["held"]:
+            self.evidence_routes.append(dict(task=spec.task_id, finding=record["fid"], proof_id=record["typed"]["proof_id"],
+                                             reviewer=record["author"], action=record["held"], execution_before=None,
+                                             execution_after=None, source=self._source_fingerprint()))
+            self._note(f"task {spec.task_id}: {record['fid']} (EVIDENCE) {record['held']}")
+        if plan["scenario"]:
+            spec = self._correct_scenarios(spec, task, plan["scenario"], labels)
+        return spec
+
+    def _correct_scenarios(self, spec, task, records: List[dict], labels: dict):
+        """The planner's one correction of this task's contested scenario
+        text (workflow repair, 2026-10-24). One call for every SCENARIO
+        finding of the round, through the seated orchestrator. The reply
+        may change exactly one declared field (operation, state or expect)
+        of each named scenario, keep it, or say the requirement itself is
+        what would have to change, which is the operator's question and
+        nobody's reinterpretation. The original goal and requirement texts,
+        the task's scope, the scenario's requirements, location, evidence
+        kind and id never move. Every outcome is recorded; the reviewer who
+        raised the finding re-checks it against the corrected scenario, so
+        the correction is independently reviewed, and a kept or unanswered
+        scenario leaves the finding standing as an ordinary one."""
+        self._scenario_corrected.add(spec.task_id)
+        scope = spec.scope
+        proofs = {p["id"]: p for p in (getattr(scope, "proofs", None) or ())}
+        texts = self.memory.ledger.requirements
+        by_pid: Dict[str, List[dict]] = {}
+        for record in records:
+            by_pid.setdefault(record["typed"]["proof_id"], []).append(record)
+        asked = sorted(pid for pid in by_pid if pid in proofs)
+        if not asked:
+            return spec
+        blocks = []
+        for pid in asked:
+            proof = proofs[pid]
+            blocks.append(f"Scenario {pid} as declared: operation: {proof['operation']}; state: {proof['state']}; "
+                          f"expect: {proof['expect']}; in {proof['location']}; evidence: {proof.get('evidence', 'test')}")
+            blocks.append("Requirements it shows (verbatim, not open to change here):\n"
+                          + "\n".join(f"{rid}: {texts.get(rid, '')}" for rid in proof["requirements"]))
+            for record in by_pid[pid]:
+                typed = record["typed"]
+                blocks.append(f"Finding {record['fid']} by {labels.get(record['author'], record['author'])}: "
+                              f"{typed['reason']} | proposal: {typed['field']}: {typed['proposal']}")
+        prompt = (f"--- SCENARIO CORRECTION ({spec.task_id}) ---\n"
+                  "An independent reviewer found a defect in a proof scenario you declared for this task. Only the "
+                  "scenario's own text is in question: the original goal and the numbered requirements are not "
+                  "yours or the reviewer's to change, and the task's scope and permitted paths, the scenario's "
+                  "requirements, location, evidence kind and id stay as declared.\n\n"
+                  "## Original goal (verbatim)\n" + self.memory.goal.strip() + "\n\n"
+                  + "\n\n".join(blocks)
+                  + "\n\nReply with exactly one line per scenario named above and nothing else:\n"
+                  "SCENARIO P<n>: <operation|state|expect>: <the corrected text> -- adopt the proposal or write a "
+                  "narrower correct text; one field per scenario\n"
+                  "SCENARIO P<n>: KEEP - <why the declared text is right> -- the finding then stands as an ordinary "
+                  "finding for the reviewer and the lead\n"
+                  "SCENARIO P<n>: REQUIREMENT - <what in R<n> would have to change> -- the operator is asked; "
+                  "nothing is reinterpreted and nothing becomes met")
+        self._count("scenario_correction")
+        try:
+            seat, reply = self._ask_seat(self.seat(), lambda fetched: prompt + ("\n\n" + _render_fetches(fetched)
+                                                                                 if fetched else ""))
+        except FinishReserved as exc:
+            self._finish_refused(spec, "scenario correction", exc)
+            for pid in asked:
+                self._record_scenario_correction(spec, pid, by_pid[pid], status="refused: the call was refused to "
+                                                                                 "keep the finish", reply="")
+            return spec
+        task.record("assistant", f"[planner, scenario correction] {reply}")
+        task.keep(reply, kind="scenario-correction", author=seat.key)
+        lines = {m.group(1).upper(): (m.group(2).lower(), m.group(3).strip())
+                 for m in _SCENARIO_REPLY.finditer(reply or "")}
+        for pid in asked:
+            verb, text = lines.get(pid, (None, ""))
+            proof = proofs[pid]
+            if verb in ("operation", "state", "expect"):
+                problem = _scenario_text_problem(text, proof[verb])
+                if problem:
+                    self._record_scenario_correction(spec, pid, by_pid[pid], status=f"refused: {problem}", reply=reply,
+                                                     by=seat.key, field=verb, proposal=text)
+                    continue
+                spec = self._apply_scenario_correction(spec, pid, verb, text, findings=[r["fid"] for r in by_pid[pid]],
+                                                       by=seat.key)
+                self._record_scenario_correction(spec, pid, by_pid[pid], status="corrected", reply=reply, by=seat.key,
+                                                 field=verb, before=proof[verb], after=text)
+            elif verb == "requirement":
+                rids = list(proof["requirements"])
+                question = (f"Scenario {pid} of task {spec.task_id} is contested ({by_pid[pid][0]['typed']['reason'][:300]}) "
+                            f"and the planner says it cannot be made right without changing "
+                            f"{', '.join(rids)} ({text[:300]}). "
+                            + " ".join(f"{rid} reads: {texts.get(rid, '')}" for rid in rids)
+                            + " Does it stand as written? Answer 'stands' to keep it, or state the ruling.")
+                if self.config.ask_operator is None:
+                    self._record_scenario_correction(spec, pid, by_pid[pid], status="requirement question: no operator "
+                                                                                     "channel", reply=reply, by=seat.key)
+                    raise OperatorInputNeeded(question)
+                answer = self.config.ask_operator(question)
+                self.memory.ledger.rulings.append(f"Q: {question} -- A: {answer}")
+                self._record_scenario_correction(spec, pid, by_pid[pid], status="requirement question asked; the "
+                                                                                 "scenario stays as declared",
+                                                 reply=reply, by=seat.key, answer=str(answer)[:600])
+            elif verb == "keep":
+                self._record_scenario_correction(spec, pid, by_pid[pid], status="kept by the planner", reply=reply,
+                                                 by=seat.key, why=text[:300])
+            else:
+                self._record_scenario_correction(spec, pid, by_pid[pid], status="no valid line for it in the reply; "
+                                                                                 "the scenario stays as declared",
+                                                 reply=reply, by=seat.key)
+        return spec
+
+    def _record_scenario_correction(self, spec, pid: str, records: List[dict], *, status: str, reply: str, **detail) -> None:
+        entry = dict(task=spec.task_id, proof_id=pid, findings=[r["fid"] for r in records],
+                     reviewers=sorted({r["author"] for r in records}), status=status,
+                     reply_artifact=(self.store.put(reply, kind="scenario-correction-reply", author=detail.get("by") or "harness").id
+                                     if reply else None), source=self._source_fingerprint(), **detail)
+        self.scenario_corrections.append(entry)
+        for record in records:
+            record["route"] = f"scenario: {status}"
+        self._note(f"task {spec.task_id}: scenario {pid}: {status}")
+
+    def _apply_scenario_correction(self, spec, pid: str, field: str, text: str, *, findings: List[str], by: str):
+        """Put the corrected text in force: on the task's scope (so every
+        later prompt of this task carries it) and on its acceptance rows,
+        whose prior text, execution and judgment are kept as lineage and
+        start again (as a capture redeclaration does): nothing judged under
+        the old text is relabelled as a judgment of the new one. The
+        existing receipts on this source re-discharge the row at once when
+        its cases still match; a sufficiency judgment never carries over."""
+        scope = spec.scope
+        proofs = [dict(p, **{field: text}) if p["id"] == pid else p for p in scope.proofs]
+        new = next(p for p in proofs if p["id"] == pid)
+        spec = replace(spec, scope=replace(scope, proofs=tuple(proofs)))
+        if getattr(self._active_spec, "task_id", None) == spec.task_id:
+            self._active_spec = spec
+        item = f"{pid}: {new['operation']}; given {new['state']}; expect {new['expect']}; in {new['location']}"
+        for row in self.evidence_obligations:
+            if (row.get("task") != spec.task_id or row.get("proof_id") != pid or row.get("kind") != "acceptance"
+                    or row.get("superseded_by")):
+                continue
+            scenario = dict((str(k), str(v)) for k, v in (row.get("scenario") or []))
+            lineage = list(row.get("scenario_lineage") or [])
+            lineage.append(dict(field=field, before=scenario.get(field), after=text, findings=list(findings),
+                                finding=findings[0] if findings else None, by=by, behavior=row.get("behavior"),
+                                scenario=[list(s) for s in row.get("scenario") or []], execution=row.get("execution"),
+                                sufficiency=row.get("sufficiency"), judged_by=row.get("judged_by", ""),
+                                receipts=list(row.get("receipts") or [])))
+            scenario[field] = text
+            row.update(scenario=sorted(scenario.items()), behavior=item[:300],
+                       entry=dict(row.get("entry") or {}, item=item), scenario_lineage=lineage,
+                       execution="missing", sufficiency="unjudged", judged_by="", judged_binding="", receipts=[],
+                       source_digest=None, discharged_cases=None,
+                       reason="scenario corrected by the planner; executed and judged afresh")
+            self._sync_obligation(row)
+        self._refresh_obligations()
+        return spec
 
     def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory, *,
                               gate=None, max_fixes=None) -> str:
