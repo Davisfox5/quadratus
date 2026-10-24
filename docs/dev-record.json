@@ -2530,7 +2530,9 @@
       "delivery": null,
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Delivered fff4e99 on c694660. Production: session.py (observed receipts discharge proof rows; no repeat run of a source a check already ran; rows refreshed before judgment bindings; post-merge recheck handed the child's rows; typed SCENARIO finding to one planner correction per task with KEEP/REQUIREMENT paths; typed EVIDENCE finding to harness action and the original reviewer, held in a parallel child; routed-only rounds make no editing call; planner stage costed in fix-cycle admission; finding marks survive the per-id rebuild), project_run.py (result.json scenario_corrections and evidence_routes; report.md names requirements no finished task covers at an incomplete stop), checkpoint.py (new records carried). Tests: tests/lifecycle/test_workflow_repair.py 18 controls; two fix-cycle patchers in test_boundary_correction accept the new keywords. Focused runs green: proof_declaration_feedback+proof_binding 38, finish_capacity 15, delivery_controller+judgment_integrity 47, lifecycle_matrix+step2_recovery+boundary_records+boundary_correction 319, requirements_ledger+project_workflow+factual_closeout+session+jobstore_faults 122. No full suite on this side. Open tradeoff for root and Davis: a parallel child cannot run the gate in its snapshot (no dependency tree), so pre-review receipts exist only serially; in parallel the reviewer sees the fact stated and the same reviewer settles after the merge gate."
+      ]
     }
   ],
   "receipts": [
