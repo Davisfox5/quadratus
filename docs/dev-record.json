@@ -2581,6 +2581,28 @@
         "claude: Corrected delivery a72fb6a (on aab4fe7): root's factory isolation regression. Fleet builds each vendor's transport with build_provider(resolve_family=False) and binds the seat's family per call, so a catalogue without the settings' default family (Sol) no longer takes Luna or Astra down; the bare factory still resolves the configured family, now after construction so the installed client's version reaches the minimal_client_version check, and still reports an unresolvable family as unavailable. A held resolution survives a catalogue that later drops the family, in parent and fork. Three controls added to tests/test_dispatch_durability.py (root's reproduction, held family, client-gated bare factory). Focused runs green on a72fb6a: dispatch_durability+runtime+model_resolution+cli_providers+probe+latest+client_version_preflight 212; effort_and_families 7. No broad suite rerun, no provider calls.",
         "claude: Test-only commit eac0f1e on b2e71f4 for root's two full-suite failures (engine a72fb6a unchanged): test_workflow_contract resolves the delivery's reviewer seat key through result.json models to the native wire model and asserts the called vendor; test_run_budget's fake factory asserts and consumes the Fleet's resolve_family=False instead of forwarding it to the provider constructor. Both files green focused (68). Delivery stays a72fb6a; root carries the completed full regression on the unchanged engine plus these corrections and requires exact-head CI."
       ]
+    },
+    {
+      "id": "T-recovery-handoff",
+      "purpose": "Grok max_turn_requests typed as the cap; capped revisions reach the planner serially and in a parallel child; raised children leave a durable failed handoff beside the preserved stop; offline controls",
+      "base": "8225a52879fb4ab97242fe9834944318f1b25a7d",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "quadratus/session.py",
+        "quadratus/project_run.py",
+        "tests/test_grok_cap_stops.py",
+        "tests/lifecycle/test_recovery_handoff.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-25T04:25:48Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [

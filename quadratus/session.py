@@ -7954,6 +7954,20 @@ class Session:
                                   stage="merge")
                         mine.closed_as = mine.closed_as if exc is not None else "stopped:unmerged"
                     self._partial_tasks.add(spec.task_id)
+                    if isinstance(exc, ProviderError):
+                        # A child whose call failed after it ran (proof-workflow-01
+                        # t4, 2026-10-25) keeps the same durable handoff a scope
+                        # conflict gets: its failed record names the kept artifact
+                        # and its baselines, so the record, result.json and a
+                        # later episode see a failed task, not only a finding.
+                        # The finding above stays and so does the stop it
+                        # causes: a failure that is not the typed cap is not
+                        # continued by this run (root boundary evidence: a
+                        # refusal, a cancellation below the cap, an unknown
+                        # stop and a cap carrying an error all stop here).
+                        self._record_unmerged_failure(spec, mine, changed, base, kept,
+                                                      cause=classify(exc), reason=reason,
+                                                      role=str(child._active_call.get("role") or "lead"))
                     self._note(f"{spec.task_id} not merged: {reason[:160]}")
                     if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
                         fatal = fatal or exc
@@ -8240,6 +8254,30 @@ class Session:
         finally:
             self._current_covers = saved
 
+    def _record_unmerged_failure(self, spec, outcome, changed, base, kept, *, cause, reason, lead=None,
+                                 listed=True, role="lead") -> dict:
+        """The durable handoff of a parallel child whose files were kept
+        unmerged: a failed record naming the artifact, the base bytes of the
+        files it changed as the continuation's baseline, and the task on
+        the failed list. Shared by the scope conflict (which goes on to
+        close the task as a failed summary the planner may continue) and
+        the raised child (whose finding and stop stay). ``listed`` adds the
+        task to ``failed``; the conflict's caller does that itself. ``role``
+        is the call that failed as the child recorded it (a cycle-2 revision
+        is not a lead draft); the scope conflict's edits are the lead's."""
+        from .project_files import MAX_INSPECT_BYTES
+        record = dict(task=spec.task_id, lead=lead or spec.lead or (getattr(outcome, "lead", "") or ""),
+                      cause=cause, error=f"not merged: {reason}; its files are kept in artifact {kept.id}",
+                      changed=list(changed), changed_lines=0, note="parallel batch: nothing was merged",
+                      role=role, content=self._content_fingerprint([]), unmerged_artifact=kept.id,
+                      **self._attempt_identity(spec))
+        self.failed_records[spec.task_id] = record
+        self._cap_baselines[spec.task_id] = {p: base.get(p, b"") for p in changed
+                                             if len(base.get(p, b"")) <= MAX_INSPECT_BYTES}
+        if listed and spec.task_id not in self.failed:
+            self.failed.append(spec.task_id)
+        return record
+
     def _unmerged_conflict(self, spec, summary, outcome, changed, outside, after, base) -> None:
         """Record a parallel child whose edits left its scope as a failed,
         unmerged task the orchestrator may continue: its files are kept as an
@@ -8251,15 +8289,8 @@ class Session:
         if outcome is not None:
             outcome.note("failed", f"scope: not merged: {reason}", stage="merge")
             outcome.closed_as = "failed"
-        from .project_files import MAX_INSPECT_BYTES
-        record = dict(task=spec.task_id, lead=getattr(summary, "author", spec.lead), cause="scope",
-                      error=f"not merged: {reason}; its files are kept in artifact {kept.id}",
-                      changed=list(changed), changed_lines=0, note="parallel batch: nothing was merged",
-                      role="lead", content=self._content_fingerprint([]), unmerged_artifact=kept.id,
-                      **self._attempt_identity(spec))
-        self.failed_records[spec.task_id] = record
-        self._cap_baselines[spec.task_id] = {p: base.get(p, b"") for p in changed
-                                             if len(base.get(p, b"")) <= MAX_INSPECT_BYTES}
+        self._record_unmerged_failure(spec, outcome, changed, base, kept, cause="scope", reason=reason,
+                                      lead=getattr(summary, "author", spec.lead), listed=False)
         from dataclasses import replace
         text = (f"FAILED before finishing: its edits left its declared scope ({', '.join(outside)}) and "
                 f"nothing it changed was merged; its files are kept in artifact {kept.id}. This task is "

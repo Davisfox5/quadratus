@@ -371,6 +371,20 @@ def _extract_codex_result(stdout: str) -> str:
 #: never inferred from prose or from any other stop.
 _GROK_REFUSAL_STOPS = ("refusal", "content_filter")
 
+#: Grok stop reasons that are the agent loop's own cap, not a failure: the
+#: call ran, its usage is real, and a writable call may have changed files.
+#: ``max_turn_requests`` is the installed CLI's name for it (grok 1.0.62,
+#: stop vocabulary end_turn / max_tokens / max_turn_requests / refusal /
+#: cancelled, confirmed by the operator against the binary on 2026-10-25;
+#: the published headless runner maps StopReason::MaxTurnRequests to it).
+#: Demonstrated live: proof-workflow-01 t4's second revision stopped there
+#: after 8 turns and was read as a failed, unmerged task instead of a cap.
+#: ``max_turns`` is kept as the older spelling. ``max_turns_reached`` is an
+#: event name in the same binary, not a stop reason, and is not read here;
+#: a bare ``cancelled`` at the configured count stays with the count rule
+#: below (``_is_cap_shaped``), and every other incomplete stop is a failure.
+_GROK_CAP_STOPS = ("max_turns", "max_turn_requests")
+
 
 def _is_cap_shaped(payload: dict) -> bool:
     """Whether an incomplete envelope has the one shape a count-read cap takes.
@@ -427,10 +441,10 @@ def _extract_grok_result(stdout: str) -> str:
     # completed turn is therefore an error, including a stop reason this code
     # has never seen: guessing that an unknown one is benign is how the
     # narration got mistaken for an answer in the first place.
-    if stop == "max_turns":
+    if stop in _GROK_CAP_STOPS:
         # Capped, not failed: the call ran and may have written. The text is
         # where the loop had got to, kept as evidence and never as an answer.
-        raise TurnLimitReached("grok stopped at its turn limit before finishing",
+        raise TurnLimitReached(f"grok stopped at its turn limit before finishing (stopReason {stop!r})",
                                partial_text=text, turns=_envelope_turns(payload))
     if stop != "end_turn":
         diagnostics = _extract_grok_diagnostics(stdout) or {}

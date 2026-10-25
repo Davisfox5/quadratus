@@ -657,7 +657,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     else:
         _record_models(session, fleet)
         terminal_committed = checkpoint.seal(run_dir, error or ('completed' if completed else 'incomplete'),
-                                             state_patch=dict(model_resolution=dict(getattr(session, 'model_resolution', {}) or {})) if session else None,
+                                             state_patch=_terminal_state_patch(session) if session else None,
                                              store=job_store, extra={'terminal': terminal})
     if not terminal_committed and not interrupted:
         completed = False
@@ -1119,6 +1119,34 @@ def _unfulfilled_requirements(session, completed) -> list:
         return []
     return ['Requirements no finished task covers when the run stopped: '
             + '; '.join(f"{rid}: {str(ledger.requirements[rid])[:120]}" for rid in left)]
+
+
+def _terminal_state_patch(session) -> dict:
+    """Terminal facts the last quiescent checkpoint could not hold: the models
+    the job resolved after it (root's control on bcd2b52) and the unfinished
+    work as the session held it when the run ended (recovery handoff repair,
+    2026-10-25: a parallel child whose call failed left its kept artifact and
+    baselines in memory only, so the sealed record named a finding and no
+    handoff). Carried keys only; a sealed run is never resumed, so this is
+    the record of what was owed, not a resume point. Every present key is
+    copied as it is now, an empty value included (root's provisional review:
+    a continuation in the last slot clears the partial debt after the last
+    quiescent point, and an omitted empty set would leave the sealed state
+    saying the debt was still owed); the task lists travel with the records
+    so the handoff and its lists agree."""
+    patch = dict(model_resolution=dict(getattr(session, 'model_resolution', {}) or {}))
+    for name in ('failed', 'turn_limited', 'failed_records', 'turn_limited_records', '_cap_baselines',
+                 '_partial_tasks'):
+        if not hasattr(session, name):
+            continue
+        value = getattr(session, name)
+        if isinstance(value, dict):
+            patch[name] = dict(value)
+        elif isinstance(value, (set, frozenset)):
+            patch[name] = set(value)
+        else:
+            patch[name] = list(value or [])
+    return patch
 
 
 def _record_models(session, fleet) -> None:

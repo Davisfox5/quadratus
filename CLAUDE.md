@@ -2485,6 +2485,32 @@ Key design decisions already settled:
   stands as found: the finding open, the overrun failed, the cap capped.
   Hypothetical later repairs stay conditional; known judgments never
   leave the cost.
+- **A cap is a stop reason the vendor names, not a failure the count happens
+  to fit** (recovery handoff repair, 2026-10-25, after proof-workflow-01 ended
+  FindingsOpen with slots unspent). The installed grok CLI (1.0.62) ends an
+  agent loop with `max_turn_requests`; the extractor knew only `max_turns`
+  and the `cancelled`-at-the-count rule, so t4's second revision became a
+  `ProviderError`, the parallel child was "not merged", a legacy open
+  finding stopped the batch, and no planning call could continue t3 or t4.
+  `_GROK_CAP_STOPS` now names both spellings; the typed cap takes the same
+  path serially and in a child (`TurnLimitReached`, kept, merged,
+  `turn_limited_records`, exact usage and turns on the row, the planner told
+  what is owed and allowed to CONTINUES within the recovery allowance). What
+  did **not** change, by root's boundary evidence on the old source: a
+  refusal, a `cancelled` below the configured count, a stop this code has
+  never seen, a cap stop that also carries an `error` (permission denied,
+  authentication required), a pre-turn authentication failure, a refused
+  budget and unknown usage are none of them a cap and none of them a
+  continuation; each still stops after that one revision with the files
+  preserved and no further writer or planning call. A generic
+  `ProviderError` is never made recoverable because a turn began or a tree
+  changed. The one record change beside the cap: a raised parallel child
+  now leaves the durable handoff a scope conflict leaves (a `failed_records`
+  entry naming its kept `parallel-unmerged` artifact, its cap baselines,
+  `failed_tasks`), and the sealed terminal state carries the unfinished-work
+  records, so the stop names a failed task with a handoff and not only a
+  finding. `max_turns_reached` is an event name in that binary, not a stop
+  reason, and is not read.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
