@@ -2596,13 +2596,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-25T04:25:48Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "629b18a4f825c9413391d45d14dc14d401bdcd81",
+        "at": "2026-10-25T04:42:02Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: 629b18a: grok max_turn_requests typed as the cap (TurnLimitReached, partial text, turns, exact usage); no generic ProviderError recovery (root boundary evidence); raised parallel child leaves failed_records with the unmerged artifact, cap baselines and the failed call's role; sealed terminal carries current failed/turn_limited/records/baselines/_partial_tasks including empty values. Focused: 385 passed (new 14 unit + 12 lifecycle with adjacent suites). Root owns the final-source controls, the one full suite, CI, install, freeze."
+      ]
     }
   ],
   "receipts": [
