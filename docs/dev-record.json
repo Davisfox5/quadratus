@@ -2566,13 +2566,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-25T00:04:31Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "bcd2b52524bd8f2afaeb2dd4cefd684c478d7182",
+        "at": "2026-10-25T00:27:27Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Delivered bcd2b52 on 302e832 (production source fff4e99 plus this commit). New modules quadratus/catalog.py (codex models_cache.json reader with schema, freshness and client checks; grok models parser) and quadratus/effort.py (policy effort/1). latest.py rewritten around Resolution/resolve_model; registry family rows with legacy_keys and canonical_key; Fleet resolves once per job, shares to forks, freezes from checkpoints, decides and validates effort per call (UnsupportedEffort), records effort/reasons/policy/resolution_source on every ledger row; result.json models; checkpoint carries model_resolution; probe calls the one resolved slug; QUADRATUS_GROK_MODELS=0 disables the listing (tests default off). Root findings on fff4e99 folded in: identity-bound receipt reuse across tasks (plus revision-shadowing fix) and the child scenario correction's requirement text. Focused runs green on bcd2b52: workflow_repair+proof_declaration+proof_binding 59; finish_capacity+delivery_controller+judgment_integrity 62; error_receipts+step2_evidence+harness_pack 94; effort_and_families 7; catalog+effort_policy+model_resolution 53; whole non-lifecycle unit suite 3384 passed with 20 failures of which 12 are playwright (no browser here) and 1 is test_policy wheel build (fails identically on the origin head in this container); the remaining 7 were rename fallout fixed before this commit. No full suite on this side; root owns it. Limitations: the codex catalogue schema is inferred from the client source and root's description of the Mac file, not read from that file here; the grok listing format is parsed from root's sample; neither CLI was run from this container."
+      ]
     }
   ],
   "receipts": [
