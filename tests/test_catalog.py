@@ -110,7 +110,10 @@ def test_ultra_is_read_but_never_usable_and_a_missing_ladder_is_empty(tmp_path):
                                installed_client="0.163.0", now=NOW)
     sol, astra = cat.by_slug("gpt-6.1-sol"), cat.by_slug("gpt-6-astra")
     assert "ultra" in sol.efforts and "ultra" not in sol.usable_efforts
-    assert astra.efforts == () and astra.usable_efforts == ()
+    assert astra.efforts is None and astra.usable_efforts is None, "no ladder listed is unknown, not empty"
+    empty = C.read_codex_catalog(write(tmp_path, [model("gpt-6.1-sol", efforts=("ultra", "future-unknown"))], name="e.json"),
+                                 installed_client="0.163.0", now=NOW).by_slug("gpt-6.1-sol")
+    assert empty.efforts == ("ultra", "future-unknown") and empty.usable_efforts == ()
 
 
 GROK_LISTING = """Available models:

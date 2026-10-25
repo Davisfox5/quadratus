@@ -373,12 +373,15 @@ def write(run_dir, body: dict, *, store=None, budget_snapshot=None, extra=None) 
     return True
 
 
-def seal(run_dir, reason: str, *, store=None, extra=None) -> bool:
+def seal(run_dir, reason: str, *, store=None, extra=None, state_patch=None) -> bool:
     """Mark a finished run's checkpoint sealed: a run that ended on its own
     terms (complete, stopped, refused) is never resumed. ``extra`` records
-    (the terminal record) are committed in the same generation. Returns
-    whether the sealed state was committed; a caller that cannot commit it
-    has not finished, whatever it computed in memory."""
+    (the terminal record) are committed in the same generation.
+    ``state_patch`` carries terminal facts the last quiescent point could
+    not have (the models the job resolved after it, root's control on
+    bcd2b52) into the sealed state; it never touches an uncarried state.
+    Returns whether the sealed state was committed; a caller that cannot
+    commit it has not finished, whatever it computed in memory."""
     try:
         body = load(run_dir)
     except CheckpointRefused:
@@ -389,6 +392,12 @@ def seal(run_dir, reason: str, *, store=None, extra=None) -> bool:
             return True
         except Exception:  # noqa: BLE001 -- latched
             return False
+    state = body.get("state")
+    if state_patch and isinstance(state, dict) and "uncarried" not in state:
+        try:
+            body = dict(body, state=dict(state, **_encode(dict(state_patch))))
+        except TypeError:
+            pass
     return write(run_dir, dict(body, sealed=True, resumable=False, sealed_reason=str(reason)[:400]), store=store,
                  extra=extra)
 

@@ -2703,6 +2703,30 @@ Key design decisions already settled:
   `resolution_source`; no call inherits a CLI default (the installed Sol
   defaults to `low` where its API documents `medium`). The budget never
   reads effort.
+- **Root's seven dispatch corrections on bcd2b52** (2026-10-25). An
+  unknown effort ladder is not permission: a catalogue entry that lists no
+  ladder, or only levels this engine cannot send (`ultra`, names it does
+  not know), makes the family *unavailable* before any call, and a pinned
+  slug outside the catalogue needs its ladder declared in
+  `QUADRATUS_EFFORT_LADDER_<VENDOR>_<FAMILY>` (recorded as the operator's
+  assertion; never overriding a catalogued ladder). The job's resolution
+  state is one shared object (`runtime._JobResolution`) across the parent
+  and every forked child, keyed by family, under one lock, so a family
+  first resolved in a worker is the parent's resolution and its record;
+  legacy spellings share it and the ledger keeps the requested spelling.
+  Exhaustion is marked and read by family (`canonical_key`), so an alias
+  cannot retry a spent seat. Risk outranks the size label: a `security
+  rote` task runs its lead at high. The sealed checkpoint carries the
+  terminal `model_resolution` (`checkpoint.seal(state_patch=...)`) and
+  every quiescent point refreshes it first; a resumed episode freezes the
+  job's resolutions before any seat or availability decision. The bare
+  factory (`providers.build_provider`) resolves a configured family through
+  `latest.resolve_model` before building a CLI provider, and reports an
+  unresolvable family as unavailable instead of sending its name as a
+  model id. A view that sets its own effort (the retained closeout view,
+  a probe at low) records the effort it sends, with the seat's policy
+  decision named beside it. The effort inputs a recheck sets are cleared
+  on every exit of the call, and a task entry resets them.
 
 ## How development is coordinated
 

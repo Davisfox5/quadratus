@@ -80,16 +80,23 @@ class CatalogModel:
     family: str
     version: Tuple[int, ...]
     visible: bool
-    efforts: Tuple[str, ...]
+    #: The efforts the entry lists; None when the entry does not say (an
+    #: unknown ladder is not an empty one, and neither is a vendor default).
+    efforts: Optional[Tuple[str, ...]]
     default_effort: Optional[str] = None
     minimal_client: Optional[str] = None
     priority: Optional[int] = None
     display_name: str = ""
 
     @property
-    def usable_efforts(self) -> Tuple[str, ...]:
-        """The efforts an explicit call may ask for: never ``ultra``."""
-        return tuple(e for e in self.efforts if e != "ultra")
+    def usable_efforts(self) -> Optional[Tuple[str, ...]]:
+        """The efforts an explicit call may ask for: the listed levels this
+        policy knows, never ``ultra``; ``()`` when the entry lists nothing
+        usable (empty, ultra-only, names this engine does not know); None
+        when the entry lists no ladder at all."""
+        if self.efforts is None:
+            return None
+        return tuple(e for e in self.efforts if e != "ultra" and e in ("low", "medium", "high", "xhigh", "max"))
 
 
 @dataclass(frozen=True)
@@ -205,7 +212,7 @@ def _model(raw) -> Optional[CatalogModel]:
     priority = raw.get("priority")
     return CatalogModel(
         slug=slug, family=parsed[1] if parsed else "", version=parsed[0] if parsed else (),
-        visible=visible, efforts=efforts if efforts is not None else (),
+        visible=visible, efforts=efforts,
         default_effort=default.strip().lower() if isinstance(default, str) and default.strip() else None,
         minimal_client=str(raw["minimal_client_version"]).strip()
         if isinstance(raw.get("minimal_client_version"), str) and raw["minimal_client_version"].strip() else None,

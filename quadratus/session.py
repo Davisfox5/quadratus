@@ -4658,6 +4658,8 @@ class Session:
     def _run_task_recorded(self, spec: TaskSpec) -> TaskSummary:
         self._gate_fixes_used = 0
         self._task_edits_admitted = 0
+        # Transient effort inputs never outlive the task that set them.
+        self._fix_cycle_now, self._recheck_impact = 0, None
         self._active_spec = spec
         self._task_before = self._capture_source()
         if self.project and self.config.allow_writes and self._task_before is None:
@@ -13798,7 +13800,6 @@ class Session:
             if not mine:
                 continue
             ids = [r["fid"] for r in mine]
-            self._recheck_impact = _worst_impact(mine)
             # The rows are rendered (and refreshed) before the binding is
             # taken, so the identity the judge is handed is the one compared.
             instructions = self._recheck_instructions(ids)
@@ -13808,6 +13809,10 @@ class Session:
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       f"The revised work:\n{revision}\n\n"
                       + instructions + self._review_turn_budget_note(peer))
+            # The worst impact among this peer's findings is this call's
+            # effort input and nothing else's: set for the call, cleared on
+            # every exit (root's source observation on bcd2b52).
+            self._recheck_impact = _worst_impact(mine)
             try:
                 verdict = self._invoke_model(peer, prompt)
             except FinishReserved as exc:
@@ -13828,7 +13833,6 @@ class Session:
                                     f"summary as an open question:\n[{shown}] {standing}")
                 continue
             except TurnLimitReached as exc:
-                self._recheck_impact = None
                 # No verdict either way: the finding is neither resolved nor
                 # confirmed, so it does not buy another fix round. The
                 # reviewer's original finding stays on the record as the
@@ -13844,7 +13848,8 @@ class Session:
                                     "(the reviewer stopped at its turn cap) -- carry it into the "
                                     f"summary as an open question:\n[{shown}] {standing}")
                 continue
-            self._recheck_impact = None
+            finally:
+                self._recheck_impact = None
             task.record("assistant", f"[{shown} recheck] {verdict}")
             reading = judgment.recheck_verdicts(verdict, ids)
             if not reading.judged_any:

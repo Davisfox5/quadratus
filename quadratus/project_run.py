@@ -491,6 +491,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     )
 
     def on_quiescent(session):
+        # The models the job has resolved so far, anywhere in it, go into
+        # this point's state before it is captured (root's checkpoint
+        # control on bcd2b52: the field was copied once before the run and
+        # the quiescent record carried an empty mapping).
+        _record_models(session, fleet)
         # One snapshot, published as the budget record and into the
         # checkpoint's own record of the same generation, so the two agree
         # to the second (root review of aaa06a6).
@@ -535,6 +540,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     fleet = fleet_type(settings, project=project, allow_writes=allow_writes,
                        usage_meter=meter, delegation_ledger=delegation,
                        **({'run_budget': budget} if budget else {}))
+    if parent is not None and hasattr(fleet, 'freeze'):
+        # Before any seat or availability decision: the resumed episode
+        # addresses the models the job already resolved; the current
+        # catalogue is recorded beside them, never followed mid-job.
+        frozen = ((body.get('state') or {}).get('model_resolution') or {}).get('resolutions')
+        if frozen:
+            fleet.freeze(frozen)
     try:
         fleet.progress = progress  # one live line per call as it ends
         # The checks are the commands a granted editing call may run
@@ -573,11 +585,6 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         )
         if parent is not None:
             checkpoint.restore_state(session, body['state'])
-            # The resumed episode addresses the models the job already
-            # resolved; the current catalogue is recorded beside them.
-            frozen = (getattr(session, 'model_resolution', None) or {}).get('resolutions')
-            if frozen and hasattr(fleet, 'freeze'):
-                fleet.freeze(frozen)
         _record_models(session, fleet)
         session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
@@ -648,7 +655,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         except Exception:  # noqa: BLE001 -- latched: an interrupted run's terminal is best effort
             terminal_committed = False
     else:
+        _record_models(session, fleet)
         terminal_committed = checkpoint.seal(run_dir, error or ('completed' if completed else 'incomplete'),
+                                             state_patch=dict(model_resolution=dict(getattr(session, 'model_resolution', {}) or {})) if session else None,
                                              store=job_store, extra={'terminal': terminal})
     if not terminal_committed and not interrupted:
         completed = False

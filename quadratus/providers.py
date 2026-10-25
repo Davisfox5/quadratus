@@ -654,8 +654,9 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
         if cli_cls is None:
             log.warning("No CLI backend for %r; falling back to the API backend.", name)
         else:
-            return cli_cls(
-                model=settings.model_for(name),
+            wire, unavailable = _cli_wire_model(name, settings)
+            provider = cli_cls(
+                model=wire,
                 allow_writes=allow_writes,
                 workdir=workdir,
                 max_tokens=settings.max_tokens,
@@ -664,6 +665,12 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
                 retry_base_delay=settings.retry_base_delay,
                 refusal_fallback_model=settings.refusal_fallback_for(name),
             )
+            if unavailable:
+                # A family the installed client cannot resolve: the provider
+                # is built so the status line can say why, and makes no call.
+                provider._client = None
+                provider._init_error = unavailable
+            return provider
 
     return cls(
         model=getattr(settings, model_attr),
@@ -674,6 +681,23 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
         retry_base_delay=settings.retry_base_delay,
         refusal_fallback_model=settings.refusal_fallback_for(name),
     )
+
+
+def _cli_wire_model(name: str, settings):
+    """``(wire model, why unavailable)`` for the bare CLI path: the
+    configured tier name is a family (``sol``, ``opus``) or the vendor
+    default (``""``), resolved through quadratus.latest exactly as a Fleet
+    seat is, so no path hands a family name to a client as a model id
+    (root's factory control on bcd2b52). An explicit operator override
+    stays visible through the same resolution."""
+    alias = settings.model_for(name)
+    if not alias:
+        return alias, None
+    from .latest import resolve_model  # lazy: latest imports this module
+    found = resolve_model(f"{name}:{alias}")
+    if found.available:
+        return found.wire or "", None
+    return alias, f"{name}:{alias} is not usable: {found.reason}"
 
 
 def build_providers(settings) -> List[LLMProvider]:

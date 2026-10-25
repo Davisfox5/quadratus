@@ -56,6 +56,7 @@ __all__ = [
     "ModelUnavailable",
     "Resolution",
     "alias_env_var",
+    "ladder_env_var",
     "alias_for",
     "cache_path",
     "load_cache",
@@ -136,6 +137,22 @@ def alias_env_var(key: str) -> str:
     return "QUADRATUS_ALIAS_" + _SANITISE.sub("_", f"{provider}_{alias}".upper()).strip("_")
 
 
+def ladder_env_var(key: str) -> str:
+    """The variable an operator declares a pinned model's effort ladder in
+    (``QUADRATUS_EFFORT_LADDER_OPENAI_SOL=low,medium,high``) when the pinned
+    slug is outside the installed catalogue: an explicit, recorded
+    assertion; without it the pin cannot be validated and is unavailable."""
+    return alias_env_var(key).replace("QUADRATUS_ALIAS_", "QUADRATUS_EFFORT_LADDER_", 1)
+
+
+def _declared_ladder(environ, key: str) -> Optional[Tuple[str, ...]]:
+    raw = str(environ.get(ladder_env_var(key), "") or "").strip()
+    if not raw:
+        return None
+    levels = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    return tuple(level for level in ("low", "medium", "high", "xhigh", "max") if level in levels)
+
+
 def load_cache(path: Optional[Path] = None) -> Dict[str, dict]:
     """Read the probe record. A missing or corrupt file is simply empty."""
     target = path or cache_path()
@@ -183,8 +200,9 @@ def resolve_model(key: str, *, env: Optional[Mapping[str, str]] = None, catalog=
     family = spec.family or spec.alias if spec is not None else key.partition(":")[2]
     override = str(environ.get(alias_env_var(key), "") or "").strip()
     if override:
-        supported = None
         provenance = dict(source="operator override", variable=alias_env_var(key))
+        supported = _ladder(spec, vendor)
+        declared = _declared_ladder(environ, key)
         if spec is not None and vendor == "openai":
             read = catalog if catalog is not None else _catalog.read_codex_catalog(installed_client=installed_client,
                                                                                    now=now, env=environ)
@@ -192,7 +210,24 @@ def resolve_model(key: str, *, env: Optional[Mapping[str, str]] = None, catalog=
             supported = entry.usable_efforts if entry is not None else None
             provenance.update(catalog=read.provenance(),
                               note=("pinned slug is in the catalogue" if entry is not None
-                                    else "pinned slug is not in the catalogue; its effort ladder is unknown"))
+                                    else "pinned slug is not in the catalogue"))
+            if declared is not None:
+                # The operator's own assertion of the pinned slug's ladder,
+                # recorded as such; it never overrides a ladder the
+                # catalogue lists.
+                provenance.update(declared_ladder=list(declared), declared_in=ladder_env_var(key))
+                if supported is None:
+                    supported = declared
+            if supported is None:
+                return Resolution(key, family_key, vendor, family, None, "operator override", "unavailable",
+                                  reason=(f"pinned slug {override!r} is not in the installed client's catalogue and "
+                                          f"its effort ladder is unknown; declare it in {ladder_env_var(key)} "
+                                          "(for example low,medium,high) or pin a catalogued slug"),
+                                  provenance=provenance)
+            if not supported:
+                return Resolution(key, family_key, vendor, family, None, "operator override", "unavailable",
+                                  reason=f"pinned slug {override!r} lists no usable effort; nothing can be sent "
+                                         "at an explicit effort", provenance=provenance)
         return Resolution(key, family_key, vendor, family, override, "operator override", "resolved",
                           supported=supported, provenance=provenance)
     if spec is None:
@@ -212,11 +247,24 @@ def resolve_model(key: str, *, env: Optional[Mapping[str, str]] = None, catalog=
             return Resolution(key, family_key, vendor, family, None, "codex catalogue", "unavailable", reason=why,
                               provenance=provenance)
         provenance.update(slug=found.slug, display_name=found.display_name, default_effort=found.default_effort,
-                          listed_efforts=list(found.efforts),
+                          listed_efforts=list(found.efforts) if found.efforts is not None else None,
                           listed=[m.slug for m in read.models if m.family == family])
+        usable = found.usable_efforts
+        if usable is None:
+            # An unknown ladder is not permission to use the documented one:
+            # no explicit effort can be validated, so nothing is sent.
+            return Resolution(key, family_key, vendor, family, None, "codex catalogue", "unavailable",
+                              reason=f"the catalogue lists no effort ladder for {found.slug}; no explicit effort can "
+                                     "be validated (run the codex client once to refresh the catalogue)",
+                              provenance=provenance)
+        if not usable:
+            return Resolution(key, family_key, vendor, family, None, "codex catalogue", "unavailable",
+                              reason=f"the catalogue lists no usable effort for {found.slug} (listed: "
+                                     f"{', '.join(found.efforts) or 'nothing'}); nothing can be sent at an explicit "
+                                     "effort", provenance=provenance)
         return Resolution(key, family_key, vendor, family, found.slug,
                           f"latest {family} in the installed client's catalogue", "resolved",
-                          supported=found.usable_efforts, provenance=provenance)
+                          supported=usable, provenance=provenance)
     if spec.floating:
         return Resolution(key, family_key, vendor, family, spec.alias, "family alias; the CLI resolves it",
                           "resolved", supported=_ladder(spec, vendor),

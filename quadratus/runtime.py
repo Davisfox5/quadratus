@@ -85,6 +85,20 @@ log = logging.getLogger(__name__)
 __all__ = ["Fleet", "WindowExhausted", "UnknownModel", "new_session"]
 
 
+class _JobResolution:
+    """One job's resolution state, shared by a Fleet and every Fleet forked
+    from it: the families resolved so far (by family key), the records a
+    checkpoint froze, and the catalogue and grok listing read once. One
+    lock, because forks resolve from worker threads."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.resolutions: Dict[str, Resolution] = {}
+        self.frozen: Dict[str, dict] = {}
+        self.codex_catalog = None
+        self.grok_listing = None
+
+
 class UnsupportedEffort(ProviderError):
     """The effort the policy selected is not on the resolved model's ladder.
     Refused before the call, named in full; never lowered in silence."""
@@ -193,14 +207,12 @@ class Fleet:
         resolutions=None,
     ) -> None:
         self.settings = settings or Settings.from_env()
-        #: Each family's resolution, decided once per job at first use and
-        #: held (quadratus.latest); ``resolutions`` pre-seeds it from a
-        #: checkpoint so a resumed episode keeps the same wire models.
-        self._resolutions: Dict[str, Resolution] = {}
-        self._frozen: Dict[str, dict] = {}
+        #: The job's one resolution state (quadratus.latest): each family
+        #: decided once at first use anywhere in the job (a forked child
+        #: shares this very object) and held; ``resolutions`` pre-seeds it
+        #: from a checkpoint so a resumed episode keeps the same wire models.
+        self._job = _JobResolution()
         self.freeze(resolutions)
-        self._codex_catalog = None
-        self._grok_listing = None
         self.allow_writes = allow_writes
         self.project = project if isinstance(project, Project) else Project(project) if project else None
         self.usage_meter = usage_meter
@@ -277,76 +289,91 @@ class Fleet:
     # -- resolution ----------------------------------------------------------
     def freeze(self, records) -> None:
         """Pre-seed this job's resolutions from a checkpoint's record (a
-        mapping of key -> resolution dict). Only keys not yet resolved in
-        this Fleet are taken; a resumed episode keeps the wire models the
+        mapping of key -> resolution dict). Only families not yet resolved
+        in this job are taken; a resumed episode keeps the wire models the
         job already used, and the current catalogue is compared beside
         them (``provenance.drift``), never substituted."""
-        for key, record in dict(records or {}).items():
-            if isinstance(record, dict) and record.get("status") == "resolved" and key not in self._resolutions:
-                self._frozen[str(key)] = dict(record)
+        with self._job.lock:
+            for key, record in dict(records or {}).items():
+                family = canonical_key(str(key))
+                if (isinstance(record, dict) and record.get("status") == "resolved"
+                        and family not in self._job.resolutions):
+                    self._job.frozen[family] = dict(record)
 
     def _installed_client(self, vendor: str) -> Optional[str]:
         provider = self._providers.get(vendor)
         return getattr(provider, "client_version", None) if provider is not None else None
 
     def _catalog(self):
-        if self._codex_catalog is None:
-            self._codex_catalog = _catalog.read_codex_catalog(installed_client=self._installed_client("openai"))
-        return self._codex_catalog
+        job = self._job
+        if job.codex_catalog is None:
+            job.codex_catalog = _catalog.read_codex_catalog(installed_client=self._installed_client("openai"))
+        return job.codex_catalog
 
     def _grok_catalog(self):
         """The ``grok models`` listing, read once per job when the binary is
         on PATH (no prompt, no generation); its default is recorded beside
         every grok call. A listing that cannot be read is a status."""
-        if self._grok_listing is None:
+        job = self._job
+        if job.grok_listing is None:
             provider = self._providers.get("grok")
             client = getattr(provider, "_client", None)
             switch = os.getenv("QUADRATUS_GROK_MODELS", "").strip().lower()
             if switch in ("0", "off", "false", "no"):
-                self._grok_listing = _catalog.GrokCatalog("not read", reason="disabled by QUADRATUS_GROK_MODELS")
+                job.grok_listing = _catalog.GrokCatalog("not read", reason="disabled by QUADRATUS_GROK_MODELS")
             elif isinstance(client, str) and client:
-                self._grok_listing = _catalog.grok_catalog(client)
+                job.grok_listing = _catalog.grok_catalog(client)
             else:
-                self._grok_listing = _catalog.GrokCatalog("not read", reason="no grok binary path to run")
-        return self._grok_listing
+                job.grok_listing = _catalog.GrokCatalog("not read", reason="no grok binary path to run")
+        return job.grok_listing
 
     def _resolution(self, key: str) -> Resolution:
-        """This job's resolution for ``key``: decided once, then held."""
-        found = self._resolutions.get(key)
-        if found is not None:
-            return found
-        vendor = key.partition(":")[0]
-        if vendor == "grok":
-            self._vendor_provider(vendor)
-        live = resolve_model(key, catalog=self._catalog() if vendor == "openai" else None,
-                             installed_client=self._installed_client(vendor),
-                             grok=self._grok_catalog() if vendor == "grok" else None)
-        frozen = self._frozen.get(key) or self._frozen.get(canonical_key(key))
-        if frozen is not None:
-            held = Resolution.from_dict(dict(frozen, requested=key))
-            provenance = dict(held.provenance, frozen="kept from the job's earlier episode")
-            if live.available and live.wire != held.wire:
-                provenance["drift"] = (f"the installed client now resolves {held.family or key} to {live.wire!r}; "
-                                       f"this job keeps {held.wire!r}")
-            elif not live.available:
-                provenance["drift"] = f"the installed client cannot resolve it now ({live.reason}); this job keeps its own"
-            found = Resolution(key, held.key, held.vendor, held.family, held.wire, held.source + " (frozen)",
-                               "resolved", supported=held.supported, provenance=provenance,
-                               observed_default=live.observed_default or held.observed_default)
-        else:
-            found = live
-        self._resolutions[key] = found
-        return found
+        """This job's resolution for ``key``: decided once for the family,
+        anywhere in the job (parent or any fork, under one lock), then held.
+        A legacy spelling shares its family's resolution; the record keeps
+        the family key and each call's requested spelling."""
+        job = self._job
+        family = canonical_key(key)
+        with job.lock:
+            found = job.resolutions.get(family)
+            if found is not None:
+                return found if found.requested == key else replace(found, requested=key)
+            vendor = key.partition(":")[0]
+            if vendor == "grok":
+                self._vendor_provider(vendor)
+            live = resolve_model(family, catalog=self._catalog() if vendor == "openai" else None,
+                                 installed_client=self._installed_client(vendor),
+                                 grok=self._grok_catalog() if vendor == "grok" else None)
+            frozen = job.frozen.get(family)
+            if frozen is not None:
+                held = Resolution.from_dict(dict(frozen, requested=family))
+                provenance = dict(held.provenance, frozen="kept from the job's earlier episode")
+                if live.available and live.wire != held.wire:
+                    provenance["drift"] = (f"the installed client now resolves {held.family or family} to "
+                                           f"{live.wire!r}; this job keeps {held.wire!r}")
+                elif not live.available:
+                    provenance["drift"] = (f"the installed client cannot resolve it now ({live.reason}); "
+                                           "this job keeps its own")
+                found = Resolution(family, held.key, held.vendor, held.family, held.wire, held.source + " (frozen)",
+                                   "resolved", supported=held.supported, provenance=provenance,
+                                   observed_default=live.observed_default or held.observed_default)
+            else:
+                found = live
+            job.resolutions[family] = found
+        return found if found.requested == key else replace(found, requested=key)
 
     def resolution_record(self) -> dict:
-        """Every family this job resolved, with its provenance, plus the
-        catalogue and the grok listing as read: result.json ``models``."""
-        record = {key: res.to_dict() for key, res in sorted(self._resolutions.items())}
-        extras = {}
-        if self._codex_catalog is not None:
-            extras["codex_catalog"] = self._codex_catalog.provenance()
-        if self._grok_listing is not None:
-            extras["grok_models"] = self._grok_listing.record()
+        """Every family this job resolved so far, anywhere in the job, with
+        its provenance, plus the catalogue and the grok listing as read:
+        result.json ``models`` and the checkpoint's ``model_resolution``."""
+        job = self._job
+        with job.lock:
+            record = {key: res.to_dict() for key, res in sorted(job.resolutions.items())}
+            extras = {}
+            if job.codex_catalog is not None:
+                extras["codex_catalog"] = job.codex_catalog.provenance()
+            if job.grok_listing is not None:
+                extras["grok_models"] = job.grok_listing.record()
         return dict(resolutions=record, **extras)
 
     def _effort_for(self, key: str, spec) -> "_effort.EffortDecision":
@@ -419,12 +446,9 @@ class Fleet:
                 setattr(child, name, getattr(self, name, None if name == "progress" else ()))
             except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
                 pass
-        # One job, one resolution: the child addresses exactly the models
-        # the parent resolved, and reads no catalogue of its own.
-        child._resolutions = dict(self._resolutions)
-        child._frozen = dict(self._frozen)
-        child._codex_catalog = self._codex_catalog
-        child._grok_listing = self._grok_listing
+        # One job, one resolution state: a family first resolved in a child
+        # is the parent's resolution too, and no fork reads its own catalogue.
+        child._job = self._job
         return child
 
     # -- liveness ------------------------------------------------------------
@@ -456,7 +480,7 @@ class Fleet:
             return False
         if self.project and self.settings.backend_for(vendor) != 'cli':
             return False
-        if key in self._exhausted:
+        if canonical_key(key) in self._exhausted:
             return False
         provider = self._vendor_provider(vendor)
         if provider is None or not provider.available():
@@ -481,6 +505,8 @@ class Fleet:
         model -- exactly the failure the orchestrator fallback exists to avoid,
         caused by the code meant to detect it.
         """
+        # By family: a legacy spelling of a spent seat is the same seat.
+        key = canonical_key(key)
         if key not in self._exhausted:
             log.warning(
                 "%s reports its window exhausted; routing around it for the "
@@ -806,6 +832,9 @@ class Fleet:
         if len(prompt.encode('utf-8')) > 32_000:
             raise ProviderError("Closeout evidence exceeds its 32,000-byte prompt bound.")
         view = copy.copy(provider.for_seat(provider.model, effort="low", restricted=True))
+        # The record says what this view sends: low, fixed by the view, not
+        # the policy decision the seat was bound with.
+        view.effort_decision = _effort.EffortDecision("low", ("closeout summary view: fixed at low",), seat_fixed=True)
         view.summary_only = True
         view.max_tokens = min(view.max_tokens, 1024)
         view.timeout = min(view.timeout, 60.0) if view.timeout is not None else 60.0
@@ -895,6 +924,14 @@ class Fleet:
         try:
             usage = usage or {}
             raw = getattr(provider, "last_diagnostics", None) or {}
+            decision = getattr(provider, "effort_decision", None)
+            sent_effort = (getattr(provider, "effort", None) or None) or getattr(decision, "level", None)
+            if decision is not None and sent_effort == decision.level:
+                effort_reasons = list(decision.reasons)
+            elif decision is not None:
+                effort_reasons = [f"explicit view effort {sent_effort}; the seat's policy decision was {decision.level}"]
+            else:
+                effort_reasons = []
             # One cache figure per row: the usage dict's when the extractor
             # gives one (codex), else the envelope's re-read count (claude,
             # grok), which is the same subset of input_tokens.
@@ -933,11 +970,14 @@ class Fleet:
                 detail=detail,
                 stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),
                 tool_failures=bounded_tool_failures(getattr(provider, "last_tool_failures", None)),
-                effort=getattr(getattr(provider, "effort_decision", None), "level", None)
-                or (getattr(provider, "effort", None) or None),
-                effort_reasons=list(getattr(getattr(provider, "effort_decision", None), "reasons", ()) or ()),
-                effort_policy=getattr(getattr(provider, "effort_decision", None), "policy", "") or "",
-                resolution_source=(self._resolutions[key].source if key in self._resolutions else ""),
+                # The effort the argv carried (``provider.effort``) is the
+                # fact; the decision explains it only when they agree, and
+                # a view that set its own level says so.
+                effort=sent_effort,
+                effort_reasons=effort_reasons,
+                effort_policy=getattr(decision, "policy", "") or "",
+                resolution_source=(self._job.resolutions[canonical_key(key)].source
+                                   if canonical_key(key) in self._job.resolutions else ""),
             )
             record_invocation(self.delegation_ledger, event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run

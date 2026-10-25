@@ -79,14 +79,15 @@ class EffortDecision:
 
 
 def ladder_for(vendor: str, supported: Optional[Sequence[str]] = None) -> Tuple[str, ...]:
-    """The levels a call may ask for: the resolution's own ladder when the
-    catalogue gave one (``ultra`` removed), else the vendor's documented
-    scale, in the policy's order."""
-    if supported:
-        known = [level for level in LEVELS if level in {str(s).lower() for s in supported}]
-        if known:
-            return tuple(known)
-    return tuple(VENDOR_LADDERS.get(str(vendor or "").lower(), ("low", "medium", "high")))
+    """The levels a call may ask for. ``supported`` None means the
+    resolution carries no ladder: the vendor's documented scale shapes the
+    policy's choice, and :func:`validate` then refuses the call, because an
+    unknown ladder is not permission. A listed ladder (``ultra`` removed) is
+    used as listed, and a listed-but-empty one stays empty."""
+    if supported is None:
+        return tuple(VENDOR_LADDERS.get(str(vendor or "").lower(), ("low", "medium", "high")))
+    listed = {str(s).lower() for s in supported}
+    return tuple(level for level in LEVELS if level in listed)
 
 
 def validate(level: str, vendor: str, supported: Optional[Sequence[str]] = None) -> str:
@@ -97,7 +98,11 @@ def validate(level: str, vendor: str, supported: Optional[Sequence[str]] = None)
         return "no effort level selected"
     if want == "ultra":
         return "ultra is never sent: the catalogue describes it as automatic task delegation"
+    if supported is None and str(vendor or "").lower() not in VENDOR_LADDERS:
+        return f"the {vendor} effort ladder is unknown; nothing can be validated"
     ladder = ladder_for(vendor, supported)
+    if not ladder:
+        return f"the resolved {vendor} model lists no usable effort; nothing can be sent at an explicit effort"
     if want not in ladder:
         return f"{want} is not on the {vendor} ladder ({', '.join(ladder)})"
     return ""
@@ -168,10 +173,12 @@ def select(*, role: str, vendor: str, complexity: Optional[str] = None, kind: Op
             level = max(level, "high", key=ORDER.get)
             why += "; a repeated or immediate-risk recheck rises to high"
     elif role in _EDITING_ROLES or role == "lead":
-        if str(complexity or "").lower() == "rote":
-            level, why = "low", "rote task: mechanical, lead alone"
-        elif complex_ or hard:
+        # Risk outranks the size label: a rote task on security-grade work
+        # is security-grade work.
+        if complex_ or hard:
             level, why = "high", "complex or security-grade implementation"
+        elif str(complexity or "").lower() == "rote":
+            level, why = "low", "rote task: mechanical, lead alone"
         else:
             level, why = "medium", "ordinary implementation"
         if role != "lead" and cycle >= 2 and level != "high":

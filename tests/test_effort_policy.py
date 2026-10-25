@@ -98,7 +98,10 @@ def test_validation_names_the_ladder_and_an_empty_level_is_refused():
     assert E.validate("", "openai") == "no effort level selected"
     assert E.validate("high", "openai", ("low", "medium")) == "high is not on the openai ladder (low, medium)"
     assert E.ladder_for("openai", ("high", "low", "medium")) == ("low", "medium", "high")
-    assert E.ladder_for("openai", ()) == E.VENDOR_LADDERS["openai"]
+    assert E.ladder_for("openai", None) == E.VENDOR_LADDERS["openai"], "unknown shapes the choice; validate refuses"
+    assert E.ladder_for("openai", ()) == () and E.ladder_for("openai", ("ultra",)) == ()
+    assert E.validate("high", "openai", ()).startswith("the resolved openai model lists no usable effort")
+    assert E.validate("high", "openai", ("ultra", "nonsense")).startswith("the resolved openai model lists no usable effort")
 
 
 def test_a_base_level_the_ladder_lacks_is_never_lowered_only_refused():

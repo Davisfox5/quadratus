@@ -50,9 +50,15 @@ def test_an_operator_override_beats_everything():
     pinned = resolve_model(SOL, env=_env(**{alias_env_var(SOL): "gpt-6-sol"}))
     assert pinned.wire == "gpt-6-sol" and pinned.supported == ("low", "medium", "high", "xhigh")
     assert pinned.provenance["note"] == "pinned slug is in the catalogue"
+    # A pinned slug outside the catalogue has no ladder to validate against:
+    # unavailable, naming the variable that declares one; declared, it resolves
+    # with exactly the declared levels (ultra dropped), recorded as declared.
     outside = resolve_model(SOL, env=_env(**{alias_env_var(SOL): "gpt-9-sol-preview"}))
-    assert outside.wire == "gpt-9-sol-preview" and outside.supported is None
-    assert "not in the catalogue" in outside.provenance["note"]
+    assert not outside.available and outside.wire is None and "QUADRATUS_EFFORT_LADDER_OPENAI_SOL" in outside.reason
+    declared = resolve_model(SOL, env=_env(**{alias_env_var(SOL): "gpt-9-sol-preview",
+                                             "QUADRATUS_EFFORT_LADDER_OPENAI_SOL": "high, medium, ultra"}))
+    assert declared.wire == "gpt-9-sol-preview" and declared.supported == ("medium", "high")
+    assert declared.provenance["declared_ladder"] == ["medium", "high"] and "not in the catalogue" in declared.provenance["note"]
 
 
 def test_a_stale_probe_record_never_defeats_a_family_alias():
@@ -172,6 +178,9 @@ def test_every_orchestrator_seat_can_be_overridden_without_a_code_change():
     required editing Python, it would not get done."""
     for key in ORCHESTRATOR_CHAIN:
         env = _env(**{alias_env_var(key): "whatever-ships-next"})
+        if key.startswith("openai:"):
+            # A codex pin outside the catalogue carries its ladder with it.
+            env[alias_env_var(key).replace("QUADRATUS_ALIAS_", "QUADRATUS_EFFORT_LADDER_")] = "low,medium,high"
         assert alias_for(key, env=env) == "whatever-ships-next"
 
 
