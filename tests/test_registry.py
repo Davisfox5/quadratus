@@ -75,7 +75,7 @@ def test_models_for_filters_by_provider():
 
 def test_min_context_filter_selects_the_widest_windows():
     wide = {m.key for m in models_for(Capability.LONG_CONTEXT, min_context=1000 * 1024)}
-    assert wide == {"openai:gpt-5.6-sol"}
+    assert wide == {"openai:sol"}
 
 
 def test_every_roster_model_is_one_the_transport_can_actually_invoke():
@@ -97,14 +97,14 @@ def test_the_unverified_window_rule_outlives_the_row_it_was_written_on():
     quietly retire the reasoning."""
     retired = {m.key: m for m in RETIRED_ROSTER}
     assert Capability.LONG_CONTEXT not in retired["grok:grok-4.20"].caps
-    assert "Grok 4.20" in resolve("openai:gpt-6-astra").notes
+    assert "Grok 4.20" in resolve("openai:astra").notes
 
 
 def test_the_fallback_orchestrators_window_claim_is_held_to_the_same_rule():
     """A new row with no verification does not get the tag its neighbours had
     to earn -- least of all the row least able to survive the claim being
     wrong."""
-    assert Capability.LONG_CONTEXT not in resolve("openai:gpt-6-astra").caps
+    assert Capability.LONG_CONTEXT not in resolve("openai:astra").caps
 
 
 def test_long_context_candidates_are_all_independently_plausible():
@@ -139,8 +139,8 @@ def test_review_and_debug_are_distinct_capabilities():
     debuggers = {m.key for m in models_for(Capability.DEBUG)}
     assert reviewers != debuggers
     assert "claude:opus" in debuggers
-    assert "openai:gpt-5.6-sol" in reviewers
-    assert "openai:gpt-5.6-sol" not in debuggers
+    assert "openai:sol" in reviewers
+    assert "openai:sol" not in debuggers
 
 
 # -- refusal chain -----------------------------------------------------------
@@ -167,7 +167,7 @@ def test_refusal_chain_prefers_anthropic_before_undocumented_vendors():
 def test_the_refusal_chain_carries_no_worker_tier_model():
     """A model that will not refuse is not thereby a model to hand the work
     to, and re-routing a declined request is where that matters most."""
-    for worker_tier in ("claude:sonnet", "claude:haiku", "openai:gpt-5.6-luna",
+    for worker_tier in ("claude:sonnet", "claude:haiku", "openai:luna",
                         "grok:grok-4.5"):
         assert worker_tier not in REFUSAL_CHAIN
 
@@ -184,7 +184,7 @@ def test_mode_rosters_reference_real_models():
 
 def test_adversarial_pairs_the_precision_and_recall_reviewers():
     reviewers = set(MODE_ROSTERS["adversarial"]["reviewers"])
-    assert reviewers == {"claude:opus", "openai:gpt-5.6-sol"}
+    assert reviewers == {"claude:opus", "openai:sol"}
 
 
 def test_planning_is_never_narrower_than_the_brain_trust():

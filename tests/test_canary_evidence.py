@@ -35,7 +35,7 @@ from quadratus.scope import TaskScope
 from quadratus.session import _BLOCKED_REPORT_RULE, Session, SessionConfig, TaskSpec
 from quadratus.task_kinds import TaskKind
 
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 SECURITY_TASK = TaskSpec("t1", "close the tenant leak", kind=TaskKind.SECURITY,
                          scope=TaskScope(permitted_paths=["app.py"], max_lines=10))
 

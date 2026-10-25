@@ -116,8 +116,14 @@ def record_invocation(ledger, event):
 
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
-               evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None, authority=None):
+               evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None, authority=None,
+               effort_inputs=None):
     context = dict(task=task, role=role, origin=origin)
+    if effort_inputs:
+        # The task facts the effort policy reads at dispatch (quadratus.effort):
+        # complexity, kind, work class, security, fix cycle, recheck impact.
+        # Fleet decides the level against the resolved model's ladder.
+        context["effort_inputs"] = dict(effort_inputs)
     if authority:
         # The committed approval authority (requirements, rulings, decisions)
         # the call runs under; the provider names it on the reservation.
@@ -242,6 +248,13 @@ class InvocationEvent:
     #: anyone reading the record. Older records lack these and read as empty.
     stderr_tail: str = ""
     tool_failures: list = field(default_factory=list)
+    #: The reasoning effort the call was made at, why, and under which
+    #: policy version (quadratus.effort); where the wire model came from
+    #: (quadratus.latest). Explicit on every row; never the CLI's default.
+    effort: Optional[str] = None
+    effort_reasons: list = field(default_factory=list)
+    effort_policy: str = ""
+    resolution_source: str = ""
 
     @property
     def tokens_known(self) -> bool:

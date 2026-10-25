@@ -298,7 +298,7 @@ def test_time_between_calls_reaches_the_record_the_checkpoint_is_written_against
     holding settled operations is not resumed."""
     clock = [0.0]
     budget = RunBudget(LIMITS, path=tmp_path / "budget.json", clock=lambda: clock[0])
-    ticket, _ = budget.reserve(transport="cli", price_key="openai:gpt-5.6-sol")
+    ticket, _ = budget.reserve(transport="cli", price_key="openai:sol")
     clock[0] = 10.0
     budget.finish(ticket, {"input_tokens": 100, "output_tokens": 10})
     clock[0] = 30.0                          # checks and merge work between calls
@@ -314,7 +314,7 @@ def test_time_between_calls_reaches_the_record_the_checkpoint_is_written_against
 def test_a_stale_budget_record_is_refused_rather_than_read_as_free_time(tmp_path):
     clock = [0.0]
     budget = RunBudget(LIMITS, path=tmp_path / "budget.json", clock=lambda: clock[0])
-    ticket, _ = budget.reserve(transport="cli", price_key="openai:gpt-5.6-sol")
+    ticket, _ = budget.reserve(transport="cli", price_key="openai:sol")
     clock[0] = 10.0
     budget.finish(ticket, {"input_tokens": 100, "output_tokens": 10})   # persisted at 10
     clock[0] = 30.0
@@ -575,7 +575,7 @@ def test_goal_bearing_work_is_reviewed_or_held_never_closed_unreviewed(tmp_path,
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     monkeypatch.setenv("QUADRATUS_REQUIREMENTS_LEDGER", "1" if goal else "0")
     if route == "unavailable":
-        gone = {"claude:opus", "openai:gpt-5.6-sol"}
+        gone = {"claude:opus", "openai:sol"}
         real = runtime.Fleet.available
         monkeypatch.setattr(runtime.Fleet, "available", lambda self, key: key not in gone and real(self, key))
     declared = (("REQUIREMENTS:\nR1: add(a, b) returns the sum\n" if goal else "") + DECL_SIMPLE
@@ -733,7 +733,7 @@ def test_a_not_met_verdict_is_never_erased_by_a_later_met_line(tmp_path, lines, 
     session = _unit_session(tmp_path)
     session.memory.ledger.requirements = {"R1": "add(a, b) returns the sum"}
     session._current_covers = ["R1"]
-    note = session._judge_goal_review(_spec(), "openai:gpt-5.6-sol", "\n".join(["NO FINDINGS", *lines]))
+    note = session._judge_goal_review(_spec(), "openai:sol", "\n".join(["NO FINDINGS", *lines]))
     assert ("BLOCKING: R1 is NOT MET" in note) is blocked
     assert _clean_goal_review(note, ["R1"]) is (not blocked)
     assert not session.open_findings, "every R1 has a verdict line, so the review is not unfinished"
@@ -806,17 +806,17 @@ def _gate(tmp_path, *argvs):
 
 
 @pytest.mark.parametrize("argvs,seat,applies", [
-    ((), "openai:gpt-5.6-sol", False),
-    ((("python", "-m", "pytest", "-q", "tests/test_existing.py"),), "openai:gpt-5.6-sol", False),
-    ((("python", "-m", "pytest", "-q", "tests", "-k", "add"),), "openai:gpt-5.6-sol", False),
-    ((("python", "-m", "pytest", "-q", "tests", "--quadratus-report={report}"),), "openai:gpt-5.6-sol", True),
-    ((("python3", "-m", "unittest", "discover", "-s", "tests"),), "openai:gpt-5.6-sol", True),
+    ((), "openai:sol", False),
+    ((("python", "-m", "pytest", "-q", "tests/test_existing.py"),), "openai:sol", False),
+    ((("python", "-m", "pytest", "-q", "tests", "-k", "add"),), "openai:sol", False),
+    ((("python", "-m", "pytest", "-q", "tests", "--quadratus-report={report}"),), "openai:sol", True),
+    ((("python3", "-m", "unittest", "discover", "-s", "tests"),), "openai:sol", True),
     ((("python", "-m", "pytest", "-q", "tests"),), "claude:opus", False),
-    ((("python3", "-m", "pytest", "-q", "/private/operator/PRIVATE-GRADING-SENTINEL"),), "openai:gpt-5.6-sol", False),
-    ((("python", "-m", "pytest", "-q", "../outside"),), "openai:gpt-5.6-sol", False),
-    ((("python", "-m", "pytest", "-q", "-c", "other.ini", "tests"),), "openai:gpt-5.6-sol", False),
-    ((("python", "-m", "pytest", "-q", "missing"),), "openai:gpt-5.6-sol", False),
-    ((("python3", "-m", "unittest", "discover", "-s", "/private/operator"),), "openai:gpt-5.6-sol", False),
+    ((("python3", "-m", "pytest", "-q", "/private/operator/PRIVATE-GRADING-SENTINEL"),), "openai:sol", False),
+    ((("python", "-m", "pytest", "-q", "../outside"),), "openai:sol", False),
+    ((("python", "-m", "pytest", "-q", "-c", "other.ini", "tests"),), "openai:sol", False),
+    ((("python", "-m", "pytest", "-q", "missing"),), "openai:sol", False),
+    ((("python3", "-m", "unittest", "discover", "-s", "/private/operator"),), "openai:sol", False),
 ], ids=["empty-suite", "explicit-file", "filtered", "discovering-pytest", "unittest-discover", "no-scratch-seat",
         "absolute-private", "traversal", "config-flag", "missing-dir", "unittest-absolute"])
 def test_a_scratch_demonstration_is_asked_only_where_an_approved_command_would_run_it(
@@ -848,7 +848,7 @@ def _role_for(tmp_path, monkeypatch, *, role, checks, facts, probe):
     fleet = Fleet(Settings(backend="cli"), project=tmp_path)
     fleet.check_commands = tuple(checks)
     with invocation("t1", role, harness_checks=facts, probe=probe):
-        fleet.invoke("openai:gpt-5.6-sol", "review this")
+        fleet.invoke("openai:sol", "review this")
     return seen["role"]
 
 
@@ -1013,7 +1013,7 @@ def test_a_scratch_demonstration_is_measured_from_the_copy_not_read_from_the_rep
     seen = {}
     for label, prompt in (("wrote", "write a scratch test"), ("claimed", "only claim it")):
         with invocation("t1", "collaborator", probe=True):
-            fleet.invoke("openai:gpt-5.6-sol", prompt)
+            fleet.invoke("openai:sol", prompt)
             seen[label] = (invocation_context.get() or {}).get("scratch_tests")
     assert seen["wrote"] == ["tests/test_scratch_refusal.py"]
     assert seen["claimed"] == [], "a claimed run with no new file in the copy is measured as none"
@@ -1122,7 +1122,7 @@ def test_a_scratch_run_that_rewrites_handed_source_proves_nothing(tmp_path, monk
     seen = {}
     for label in rewrote:
         with invocation("t1", "collaborator", probe=True, probe_checks=(check,)):
-            fleet.invoke("openai:gpt-5.6-sol", label)
+            fleet.invoke("openai:sol", label)
             seen[label] = (invocation_context.get() or {}).get("scratch_proof")
     assert seen["clean"]["status"] == ("passed" if _sandboxed() else "not run")
     assert seen["rewrites"]["status"] == "not run"
@@ -1175,7 +1175,7 @@ def _scratch_fleet(tmp_path, monkeypatch, checks):
 
     def run(source):
         with invocation("t1", "collaborator", probe=True, probe_checks=(check,)):
-            fleet.invoke("openai:gpt-5.6-sol", source)
+            fleet.invoke("openai:sol", source)
             return (invocation_context.get() or {}).get("scratch_proof")
     return project, run
 
@@ -1581,7 +1581,7 @@ def test_a_capped_writing_call_after_the_draft_is_told_its_real_round_budget(tmp
 @pytest.mark.parametrize("role,key,writes,told", [
     ("design-fix", "claude:opus", True, True),
     ("security-fix", "claude:opus", True, False),
-    ("design-fix", "openai:gpt-5.6-sol", True, False),
+    ("design-fix", "openai:sol", True, False),
     ("design-fix", "claude:opus", False, False),
 ])
 def test_the_writer_budget_note_follows_the_cap_the_fleet_applies(tmp_path, role, key, writes, told):

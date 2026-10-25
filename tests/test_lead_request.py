@@ -18,7 +18,7 @@ from quadratus.workers import WorkerPool
 
 OPUS = 'claude:opus'
 FABLE = 'claude:fable'
-LUNA = 'openai:gpt-5.6-luna'
+LUNA = 'openai:luna'
 ERRAND = {"errand": "format", "instruction": "Create a.py with the helper", "write": True}
 LINE = json.dumps(ERRAND)
 #: The shape of run 9's t8 reply: a short preface, WORKER alone, the object below.

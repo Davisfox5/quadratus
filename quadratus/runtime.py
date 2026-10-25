@@ -59,6 +59,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from . import catalog as _catalog
+from . import effort as _effort
 from .cli_providers import EXHAUSTION_MARKERS, SANDBOX_REFUSAL, client_version_at_least
 from .config import Settings
 from .delegation import (
@@ -72,15 +74,20 @@ from .delegation import (
     record_invocation,
     safe_diagnostics,
 )
-from .latest import alias_for, resolution_source
+from .latest import Resolution, resolve_model
 from .project import Project
 from .providers import LLMProvider, ProviderError, TurnLimitReached, build_provider
-from .registry import VENDORS, resolve
+from .registry import VENDORS, canonical_key, resolve
 from .usage import UsageMeter
 
 log = logging.getLogger(__name__)
 
 __all__ = ["Fleet", "WindowExhausted", "UnknownModel", "new_session"]
+
+
+class UnsupportedEffort(ProviderError):
+    """The effort the policy selected is not on the resolved model's ladder.
+    Refused before the call, named in full; never lowered in silence."""
 
 
 class UnknownModel(ProviderError):
@@ -183,8 +190,17 @@ class Fleet:
         delegation_ledger: Optional[DelegationLedger] = None,
         run_budget=None,
         system: str = "You are collaborating on a software engineering task.",
+        resolutions=None,
     ) -> None:
         self.settings = settings or Settings.from_env()
+        #: Each family's resolution, decided once per job at first use and
+        #: held (quadratus.latest); ``resolutions`` pre-seeds it from a
+        #: checkpoint so a resumed episode keeps the same wire models.
+        self._resolutions: Dict[str, Resolution] = {}
+        self._frozen: Dict[str, dict] = {}
+        self.freeze(resolutions)
+        self._codex_catalog = None
+        self._grok_listing = None
         self.allow_writes = allow_writes
         self.project = project if isinstance(project, Project) else Project(project) if project else None
         self.usage_meter = usage_meter
@@ -218,7 +234,11 @@ class Fleet:
             return self._providers[vendor]
 
     def provider_for(self, key: str) -> LLMProvider:
-        """The provider for ``key``, bound to the alias it resolves to today."""
+        """The provider for ``key``, bound to the wire model its family
+        resolves to for this job and to the effort the policy selects for
+        this call (quadratus.effort), validated against the resolved
+        model's ladder. Never an empty effort: the CLI's own default is
+        not a choice this engine makes."""
         vendor = key.partition(":")[0]
         provider = self._vendor_provider(vendor)
         if provider is None:
@@ -231,11 +251,12 @@ class Fleet:
         spec = resolve(key)
         if spec is None:
             raise UnknownModel(f"{key} is outside the active roster")
-        bound = provider.for_seat(
-            self._alias(key),
-            effort=spec.effort if spec else "",
-            restricted=spec.restricted if spec else False,
-        )
+        wire = self._alias(key)
+        decision = self._effort_for(key, spec)
+        bound = provider.for_seat(wire, effort=decision.level, restricted=spec.restricted)
+        if bound is provider:
+            bound = copy.copy(bound)
+        bound.effort_decision = decision
         if getattr(self.settings, "neutral_preferences", False) and hasattr(bound, "neutral"):
             bound = copy.copy(bound)
             bound.neutral = True
@@ -253,12 +274,106 @@ class Fleet:
             bound.refusal_fallback_model = None
         return bound
 
+    # -- resolution ----------------------------------------------------------
+    def freeze(self, records) -> None:
+        """Pre-seed this job's resolutions from a checkpoint's record (a
+        mapping of key -> resolution dict). Only keys not yet resolved in
+        this Fleet are taken; a resumed episode keeps the wire models the
+        job already used, and the current catalogue is compared beside
+        them (``provenance.drift``), never substituted."""
+        for key, record in dict(records or {}).items():
+            if isinstance(record, dict) and record.get("status") == "resolved" and key not in self._resolutions:
+                self._frozen[str(key)] = dict(record)
+
+    def _installed_client(self, vendor: str) -> Optional[str]:
+        provider = self._providers.get(vendor)
+        return getattr(provider, "client_version", None) if provider is not None else None
+
+    def _catalog(self):
+        if self._codex_catalog is None:
+            self._codex_catalog = _catalog.read_codex_catalog(installed_client=self._installed_client("openai"))
+        return self._codex_catalog
+
+    def _grok_catalog(self):
+        """The ``grok models`` listing, read once per job when the binary is
+        on PATH (no prompt, no generation); its default is recorded beside
+        every grok call. A listing that cannot be read is a status."""
+        if self._grok_listing is None:
+            provider = self._providers.get("grok")
+            client = getattr(provider, "_client", None)
+            switch = os.getenv("QUADRATUS_GROK_MODELS", "").strip().lower()
+            if switch in ("0", "off", "false", "no"):
+                self._grok_listing = _catalog.GrokCatalog("not read", reason="disabled by QUADRATUS_GROK_MODELS")
+            elif isinstance(client, str) and client:
+                self._grok_listing = _catalog.grok_catalog(client)
+            else:
+                self._grok_listing = _catalog.GrokCatalog("not read", reason="no grok binary path to run")
+        return self._grok_listing
+
+    def _resolution(self, key: str) -> Resolution:
+        """This job's resolution for ``key``: decided once, then held."""
+        found = self._resolutions.get(key)
+        if found is not None:
+            return found
+        vendor = key.partition(":")[0]
+        if vendor == "grok":
+            self._vendor_provider(vendor)
+        live = resolve_model(key, catalog=self._catalog() if vendor == "openai" else None,
+                             installed_client=self._installed_client(vendor),
+                             grok=self._grok_catalog() if vendor == "grok" else None)
+        frozen = self._frozen.get(key) or self._frozen.get(canonical_key(key))
+        if frozen is not None:
+            held = Resolution.from_dict(dict(frozen, requested=key))
+            provenance = dict(held.provenance, frozen="kept from the job's earlier episode")
+            if live.available and live.wire != held.wire:
+                provenance["drift"] = (f"the installed client now resolves {held.family or key} to {live.wire!r}; "
+                                       f"this job keeps {held.wire!r}")
+            elif not live.available:
+                provenance["drift"] = f"the installed client cannot resolve it now ({live.reason}); this job keeps its own"
+            found = Resolution(key, held.key, held.vendor, held.family, held.wire, held.source + " (frozen)",
+                               "resolved", supported=held.supported, provenance=provenance,
+                               observed_default=live.observed_default or held.observed_default)
+        else:
+            found = live
+        self._resolutions[key] = found
+        return found
+
+    def resolution_record(self) -> dict:
+        """Every family this job resolved, with its provenance, plus the
+        catalogue and the grok listing as read: result.json ``models``."""
+        record = {key: res.to_dict() for key, res in sorted(self._resolutions.items())}
+        extras = {}
+        if self._codex_catalog is not None:
+            extras["codex_catalog"] = self._codex_catalog.provenance()
+        if self._grok_listing is not None:
+            extras["grok_models"] = self._grok_listing.record()
+        return dict(resolutions=record, **extras)
+
+    def _effort_for(self, key: str, spec) -> "_effort.EffortDecision":
+        """The effort for the call being made: the policy's decision from the
+        context the session passed (role and task facts), on the resolved
+        model's ladder; a bounded seat keeps its roster effort. An
+        unsupported level is refused here, never lowered in silence."""
+        context = invocation_context.get() or {}
+        inputs = dict(context.get("effort_inputs") or {})
+        role = str(inputs.pop("role", None) or context.get("role") or "direct")
+        vendor = key.partition(":")[0]
+        supported = self._resolution(key).supported if self.settings.backend_for(vendor) == "cli" else None
+        decision = _effort.select(role=role, vendor=vendor, restricted=bool(spec.restricted),
+                                  seat_effort=spec.effort or "", supported=supported,
+                                  **{k: v for k, v in inputs.items()
+                                     if k in ("complexity", "kind", "work_class", "security", "cycle", "impact")})
+        problem = _effort.validate(decision.level, vendor, supported)
+        if problem:
+            raise UnsupportedEffort(f"{key}: {problem}")
+        return decision
+
     def _alias(self, key: str) -> str:
         """What to call this model on the wire today.
 
-        On the CLI backend that is the line or release alias the binary
-        accepts; on the API backend it is the configured dated model ID, since
-        an API takes no aliases.
+        On the CLI backend that is the family's resolution for this job
+        (quadratus.latest); on the API backend it is the configured dated
+        model ID, since an API takes no aliases.
         """
         vendor = key.partition(":")[0]
         if self.settings.backend_for(vendor) != "cli":
@@ -267,14 +382,23 @@ class Fleet:
                 return override
             spec = resolve(key)
             if vendor == "openai":
-                return spec.alias
+                # An API takes a dated id, never a family: the configured
+                # OpenAI model stands for Sol; every other family needs its
+                # explicit id, as the Claude seats do.
+                if spec is not None and spec.key == "openai:sol":
+                    return self.settings.openai_model
+                raise UnknownModel(f"Set QUADRATUS_API_MODEL_{re.sub(r'[^A-Z0-9]+', '_', key.upper())} "
+                                   "to the exact API model ID for this seat.")
             if vendor == "grok":
                 return self.settings.model_for(vendor)
             if key == "claude:opus":
                 return self.settings.claude_model
             raise UnknownModel(f"Set QUADRATUS_API_MODEL_{re.sub(r'[^A-Z0-9]+', '_', key.upper())} "
                                "to the exact API model ID for this seat.")
-        return alias_for(key)
+        found = self._resolution(key)
+        if not found.available:
+            raise ProviderError(f"{key} is not usable: {found.reason}")
+        return found.wire or ""
 
     def fork(self, root) -> "Fleet":
         """A Fleet for one parallel task's copy of the project at ``root``,
@@ -295,6 +419,12 @@ class Fleet:
                 setattr(child, name, getattr(self, name, None if name == "progress" else ()))
             except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
                 pass
+        # One job, one resolution: the child addresses exactly the models
+        # the parent resolved, and reads no catalogue of its own.
+        child._resolutions = dict(self._resolutions)
+        child._frozen = dict(self._frozen)
+        child._codex_catalog = self._codex_catalog
+        child._grok_listing = self._grok_listing
         return child
 
     # -- liveness ------------------------------------------------------------
@@ -328,12 +458,17 @@ class Fleet:
             return False
         if key in self._exhausted:
             return False
+        provider = self._vendor_provider(vendor)
+        if provider is None or not provider.available():
+            return False
         try:
             self._alias(key)
-        except UnknownModel:
+        except (UnknownModel, ProviderError):
+            # A family the installed client cannot resolve now (no, stale
+            # or mismatched catalogue) is not usable; the reason is on the
+            # status line and in the run record, and nothing older is sent.
             return False
-        provider = self._vendor_provider(vendor)
-        return provider is not None and provider.available()
+        return True
 
     def mark_exhausted(self, key: str, detail: str = "") -> None:
         """Record that one model's window is spent for the rest of this run.
@@ -771,7 +906,7 @@ class Fleet:
                 role=role or "-",
                 origin=origin or Origin.SEAT,
                 requested_model=key,
-                canonical_model=key,
+                canonical_model=canonical_key(key),
                 wire_model=getattr(provider, "model", None),
                 resolved_model=getattr(provider, "resolved_model", None),
                 invocation_id=uuid.uuid4().hex,
@@ -798,6 +933,11 @@ class Fleet:
                 detail=detail,
                 stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),
                 tool_failures=bounded_tool_failures(getattr(provider, "last_tool_failures", None)),
+                effort=getattr(getattr(provider, "effort_decision", None), "level", None)
+                or (getattr(provider, "effort", None) or None),
+                effort_reasons=list(getattr(getattr(provider, "effort_decision", None), "reasons", ()) or ()),
+                effort_policy=getattr(getattr(provider, "effort_decision", None), "policy", "") or "",
+                resolution_source=(self._resolutions[key].source if key in self._resolutions else ""),
             )
             record_invocation(self.delegation_ledger, event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
@@ -878,6 +1018,14 @@ class Fleet:
                     state += f", qualified minimum {minimum}"
                     state += {True: "", False: " (STALE: refused before any call)",
                               None: " (version unreadable; not refused)"}[client_version_at_least(version, minimum)]
+            if vendor == "openai" and backend == "cli" and provider.available():
+                read = self._catalog()
+                state += (f"; catalogue {read.status}" + (f" ({read.reason})" if read.reason else "")
+                          + (f", fetched {read.fetched_at} by client {read.client_version}" if read.fetched_at else ""))
+            if vendor == "grok" and backend == "cli" and provider.available():
+                listing = self._grok_catalog()
+                state += (f"; grok models: {listing.status}" + (f", default {listing.default}" if listing.default else "")
+                          + (f" ({listing.reason})" if listing.reason else ""))
             lines.append(f"{vendor} [{backend}]: {state}")
         return lines
 
@@ -905,8 +1053,12 @@ class Fleet:
         out = []
         for vendor in VENDORS:
             for key in (m.key for m in _roster_for(vendor)):
-                alias, source = resolution_source(key)
-                out.append(f"{key} -> {alias} ({source})")
+                found = self._resolution(key)
+                if found.available:
+                    out.append(f"{key} -> {found.wire!r} ({found.source})"
+                               + (f"; vendor default now {found.observed_default}" if found.observed_default else ""))
+                else:
+                    out.append(f"{key} -> unavailable ({found.reason})")
         return out
 
     def close(self) -> None:

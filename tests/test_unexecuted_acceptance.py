@@ -36,7 +36,7 @@ def _session(tmp_path, reply):
     session.memory.ledger.requirements.update({
         "R1": "typing filters the cards", "R5": "the list logs no console errors while typing"})
     prompts = []
-    session._auditor = lambda: "openai:gpt-5.6-sol"
+    session._auditor = lambda: "openai:sol"
     session._invoke_model = lambda key, prompt, **kw: prompts.append(prompt) or reply
     return session, prompts
 
@@ -51,7 +51,7 @@ def _identity(session):
 def _not_run(session, task, covers, reply, role="revision"):
     session._active_spec = SimpleNamespace(task_id=task)
     session._current_covers = list(covers)
-    session._record_not_run("openai:gpt-5.6-sol", role, reply)
+    session._record_not_run("openai:sol", role, reply)
     session._active_spec, session._current_covers = None, []
 
 
@@ -138,7 +138,7 @@ def test_editing_calls_record_their_not_run_lines(tmp_path):
     session._writes = lambda: False
     session._active_spec = SimpleNamespace(task_id="t3")
     session._current_covers = ["R5"]
-    session._edit("openai:gpt-5.6-sol", "prompt", role="lead")
+    session._edit("openai:sol", "prompt", role="lead")
     assert [(e["task"], e["role"], e["item"], e["requirements"]) for e in session.unexecuted_acceptance] == [
         ("t3", "lead", "node tests/browser/run.js", ["R5"])]
 
@@ -259,7 +259,7 @@ def _node_session(tmp_path, commands=None, snapshot=False):
                       config=SessionConfig(project=root, allow_writes=True, requirements_ledger=True,
                                            integration_gate=gate, max_gate_fixes=0))
     session.memory.ledger.requirements.update({"R1": "unit", "R5": "browser acceptance executes"})
-    session._auditor = lambda: "openai:gpt-5.6-sol"
+    session._auditor = lambda: "openai:sol"
     session._invoke_model = lambda key, prompt, **kw: (
         f"R1: MET - {NODE_UNIT}\nR5: MET - {NODE_UNIT} and {NODE_BROWSER}\n")
     if snapshot:
@@ -272,7 +272,7 @@ def _gate(session, task, covers):
     from quadratus.session import TaskSpec
     spec = TaskSpec(task, "check")
     session._active_spec, session._current_covers = spec, list(covers)
-    session._run_integration_gate("openai:gpt-5.6-sol", spec, TaskMemory(task, "x", session.store))
+    session._run_integration_gate("openai:sol", spec, TaskMemory(task, "x", session.store))
     session._active_spec, session._current_covers = None, []
     return session.checks[-1]
 

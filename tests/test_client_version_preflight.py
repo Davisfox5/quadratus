@@ -215,7 +215,7 @@ def test_a_stale_client_is_named_on_the_status_line_and_listed_for_the_preflight
 def test_a_qualified_client_passes_and_is_still_shown(monkeypatch):
     fleet, _ = _fleet(monkeypatch, "0.163.0")
     line = next(line for line in fleet.status_lines() if line.startswith("openai"))
-    assert line.endswith("client 0.163.0, qualified minimum 0.163.0")
+    assert "client 0.163.0, qualified minimum 0.163.0" in line and "STALE" not in line
     assert fleet.stale_clients() == []
 
 

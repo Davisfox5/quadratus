@@ -265,7 +265,7 @@ def test_reviewers_are_told_their_round_budget_only_where_a_cap_applies(store):
 
 def test_the_round_budget_is_silent_for_a_cli_without_a_turn_flag(store):
     session = Session("goal", store, lambda *a, **k: "", config=SessionConfig(lead_max_turns=20))
-    assert session._review_turn_budget_note("openai:gpt-5.6-sol") == ""
+    assert session._review_turn_budget_note("openai:sol") == ""
     assert "at most 20 tool rounds" in session._review_turn_budget_note("claude:opus")
 
 

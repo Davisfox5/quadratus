@@ -52,7 +52,7 @@ def _gate(session, task, covers):
 
 def _not_run(session, item, task="t1", covers=("R5",)):
     session._active_spec, session._current_covers = TaskSpec(task, "offline"), list(covers)
-    session._record_not_run("openai:gpt-5.6-sol", "lead", f"NOT RUN: {item} - unavailable\nCHANGED: []")
+    session._record_not_run("openai:sol", "lead", f"NOT RUN: {item} - unavailable\nCHANGED: []")
 
 
 def _node_project(tmp_path, browser):

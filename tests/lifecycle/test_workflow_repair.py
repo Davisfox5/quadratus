@@ -354,7 +354,7 @@ def test_an_evidence_finding_takes_no_editor_call_and_is_rechecked_against_the_h
     assert routes[0]["execution_before"] == ["ran"] and routes[0]["execution_after"] == ["ran"]
     assert [c["stage"] for c in record["review_checks"]] == ["review"]
     finding = record["review_findings"][0]
-    assert finding["state"] == "resolved" and finding["history"][-1]["author"] == "openai:gpt-5.6-sol" or \
+    assert finding["state"] == "resolved" and finding["history"][-1]["author"] == "openai:sol" or \
         finding["state"] == "resolved"
     assert replay.result.completed, replay.result.error
 
@@ -501,4 +501,154 @@ def test_the_planner_is_shown_the_requirement_nobody_took_on_and_done_is_refused
     assert str(record["requirements"]["status"]["R2"]).startswith("met")
     report = Path(replay.result.run_dir, "report.md").read_text()
     assert "Requirements no finished task covers" not in report
+    assert replay.result.completed, replay.result.error
+
+
+# -- 5. the receipt is the source's, not the task's (root's two-task control on fff4e99) -----------
+
+@pytest.mark.requirements_ledger
+def test_a_later_task_on_unchanged_source_is_shown_the_run_that_already_passed_on_it(tmp_path, monkeypatch):
+    """Two tasks, the second leaving the bytes as the first left them: no
+    second run (the harness already ran this source under this gate), and
+    the second task's reviewer is handed that run as its receipt."""
+    seen = Seen()
+    requirements = "R1: add(1, 2) returns 3\nR2: add(2, 1) returns 3"
+    first = _plan(_scope(proofs=_proofs("R1")), covers="R1", requirements=requirements)
+    second = _plan(_scope(proofs=_proofs("R2")), covers="R2", requirements=requirements)
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        return first if n == 1 else second if n == 2 else "DONE"
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return _lead()(call, replay)
+        return f"Nothing to change: add already meets R2.\nPROVES: P1 - {CASE}\nCHANGED: []"
+    prompts = []
+
+    def collaborator(call, replay):
+        prompts.append((call.task, _rows(call.prompt)))
+        return "NO FINDINGS\nR1: MET - app.py\nR2: MET - app.py"
+    replay = H.run(_at(tmp_path, "twice"), monkeypatch,
+                   _script(seen, orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+                           auditor=lambda c, r: f"R1: MET - {CASE}\nR2: MET - {CASE}"),
+                   files=FILES, max_tasks=2, record_complete=False)
+    assert [task for task, _ in prompts] == ["t1", "t2"]
+    assert "execution ran (receipt observed-1)" in prompts[0][1]
+    assert "execution ran (receipt check-1)" in prompts[1][1], prompts[1][1]
+    record = H.result_json(replay)
+    assert [c["stage"] for c in record["review_checks"]] == ["review"], "no second run of unchanged bytes"
+    rows = {o["task"]: o for o in record["evidence_obligations"] if o["kind"] == "acceptance"}
+    assert rows["t2"]["execution"] == "ran" and rows["t2"]["receipts"] == ["check-1"]
+    assert rows["t2"]["source_digest"] == rows["t1"]["source_digest"] == record["source_fingerprint"]
+    assert replay.result.completed, replay.result.error
+
+
+def test_a_receipt_is_refused_on_any_identity_mismatch_whatever_its_age(tmp_path):
+    """The identity, not the index: an older passing run on exactly this
+    source, gate, environment and revisions is the receipt; a failed run, a
+    run on other bytes, under another gate, in another environment, or
+    binding other revisions discharges nothing however recent."""
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "app.py").write_text("x = 1\n")
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "", config=SessionConfig(project=project))
+    session.memory.ledger.requirements.update({"R1": "one", "R2": "two"})
+    session._requirement_texts = {}
+    current = session._source_fingerprint()
+    env = session._environment_id()
+    revisions = session._requirement_revisions()
+    base = dict(passed=True, source=current, gate="G", environment=env, requirements=dict(revisions), receipts=[])
+    session.checks = [
+        dict(base),                                                        # check-1: the old passing run
+        dict(base, passed=False),                                          # check-2: failed on this source
+        dict(base, source="other"),                                        # check-3: other bytes
+        dict(base, gate="H"),                                              # check-4: other gate
+        dict(base, environment="elsewhere"),                               # check-5: other environment
+        dict(base, requirements={"R1": revisions["R1"] + 1, "R2": revisions["R2"]}),  # check-6: other revision
+    ]
+    session._check_passed_cases = lambda check: {"tests/test_app.py::test_add"}
+    row = dict(oid="O1", kind="acceptance", task="t9", gate="G", cases=["tests/test_app.py::test_add"],
+               requirements=[["R1", revisions["R1"]]], entry=dict(after_check=6, after_observed=0), modality="test")
+    receipt = session._obligation_receipt(row)
+    assert receipt is not None and receipt["id"] == "check-1", receipt
+    # Every newer record was refused for its own reason; drop the old one and nothing discharges.
+    session.checks = session.checks[1:]
+    assert session._obligation_receipt(row) is None
+    # A bound case the run did not show: refused even on the right identity.
+    session.checks = [dict(base)]
+    session._check_passed_cases = lambda check: {"tests/test_app.py::test_other"}
+    assert session._obligation_receipt(row) is None
+    # The same rules for a review observation on this source.
+    session.checks = []
+    session.review_checks = [dict(base, stage="review", task="t1")]
+    session._check_passed_cases = lambda check: {"tests/test_app.py::test_add"}
+    assert session._obligation_receipt(row)["id"] == "observed-1"
+    session.review_checks = [dict(base, stage="review", task="t1", passed=False)]
+    assert session._obligation_receipt(row) is None
+
+
+# -- 6. a parallel child's scenario correction reads the original requirement text (root control) --
+
+@pytest.mark.requirements_ledger
+def test_a_parallel_child_scenario_correction_carries_the_verbatim_requirement(tmp_path, monkeypatch):
+    requirements = "REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: README documents add\n"
+    seen = Seen()
+
+    def block(path, covers, proofs):
+        scope = dict(permitted_paths=[path], intended_result=f"{path} written", acceptance=[f"{path} meets the task"],
+                     max_lines=20, proofs=proofs)
+        return f"KIND: backend simple\nSCOPE: {json.dumps(scope)}\nWrite {path}.\nCOVERS: {covers}"
+    batch = (requirements + "PARALLEL\n" + block("app.py", "R1", _proofs("R1")) + "\n---\n"
+             + block("README.md", "R2", _proofs("R2", location="README.md", evidence="reading")))
+
+    def orchestrator(call, replay):
+        if CORRECTION_HEAD in call.prompt:
+            seen.keep("correction", call)
+            return "SCENARIO P1: state: nothing is stored"
+        return batch if len(replay.of("orchestrator")) == 1 else "DONE"
+
+    def lead(call, replay):
+        if "Write README.md." in call.prompt:
+            H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+            return 'Documented add.\nCHANGED: ["README.md"]'
+        H.write(call, {"app.py": FIXED})
+        return f'Implemented add.\nPROVES: P1 - {CASE}\nCHANGED: ["app.py"]'
+
+    def collaborator(call, replay):
+        if call.task == "t1":
+            return SCENARIO_FINDING + "\nR1: MET - app.py"
+        return "NO FINDINGS\nR2: MET - README.md"
+
+    def recheck(call, replay):
+        seen.keep("recheck", call)
+        return "RFT1-1: RESOLVED the scenario now starts from nothing stored"
+
+    def auditor(call, replay):
+        docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
+        return (f"R1: MET - {CASE}\nR2: MET - README.md"
+                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
+    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator, auditor=auditor,
+                    **{"requirements-review": lambda c, r: "COMPLETE"})
+    script.overrides["recheck"] = recheck
+    script.overrides["revision"] = lambda c, r: pytest.fail("a scenario-only round makes no editing call")
+    replay = H.run(_at(tmp_path, "parallel-scenario"), monkeypatch, script, files=FILES, max_tasks=4,
+                   record_complete=False)
+    assert len(seen.prompts["correction"]) == 1
+    correction = seen.prompts["correction"][0]
+    assert "R1: add(a, b) returns the sum" in correction and "Reviewer A" in correction
+    calls = [c for c in replay.calls if CORRECTION_HEAD in c.prompt]
+    assert [(c.role, c.task) for c in calls] == [("orchestrator", "t1")]
+    # Re-checked in the child by the reviewer who raised it, on the corrected row.
+    assert len(seen.prompts["recheck"]) == 1 and "given nothing is stored" in _rows(seen.prompts["recheck"][0])
+    record = H.result_json(replay)
+    corrections = record["scenario_corrections"]
+    assert [c["status"] for c in corrections] == ["corrected"] and corrections[0]["task"] == "t1"
+    row = next(o for o in record["evidence_obligations"] if o["task"] == "t1" and o["kind"] == "acceptance")
+    assert dict(row["scenario"])["state"] == "nothing is stored" and len(row["scenario_lineage"]) == 1
+    assert row["execution"] == "ran" and row["receipts"] == ["check-1"], "merged, then shown by the merge gate"
+    assert record["requirements"]["listed"]["R1"] == "add(a, b) returns the sum"
+    assert next(f for f in record["review_findings"] if f["fid"] == "RFT1-1")["state"] == "resolved"
     assert replay.result.completed, replay.result.error

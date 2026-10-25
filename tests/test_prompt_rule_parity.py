@@ -230,8 +230,8 @@ def test_the_json_verdict_instruction_states_every_structured_rule(tmp_path):
     prompts = []
     session._invoke_model = lambda key, prompt, **kw: prompts.append(prompt) or "not json"
     spec = TaskSpec("t1", "harden it", scope=TaskScope(["a.py"], acceptance=["no secrets logged"]))
-    session._verify_security_json(spec, TaskMemory("t1", "openai:gpt-5.6-sol", session.store), "draft",
-                                  "openai:gpt-5.6-sol", "claude:opus")
+    session._verify_security_json(spec, TaskMemory("t1", "openai:sol", session.store), "draft",
+                                  "openai:sol", "claude:opus")
     text = prompts[0]
     for rule in ("This JSON replaces the BLOCKING: lines", "echoes the hash below exactly", "copied verbatim",
                  "A reject must name a blocking finding or a failed criterion", "no duplicate keys",

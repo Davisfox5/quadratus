@@ -12,11 +12,11 @@ from quadratus.task_kinds import TASK_SIZE_GUIDE, TaskKind
 from quadratus.workers import WorkerBudget
 
 FABLE = "claude:fable"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 OPUS = "claude:opus"
 GROK = "grok:default"
 GROK_WORKER = "grok:worker"
-ASTRA = "openai:gpt-6-astra"
+ASTRA = "openai:astra"
 
 
 class Recorder:

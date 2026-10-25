@@ -23,7 +23,7 @@ from tests._process_liveness import process_stopped
 
 FABLE = 'claude:fable'
 OPUS = 'claude:opus'
-LUNA = 'openai:gpt-5.6-luna'
+LUNA = 'openai:luna'
 SCOPE = dict(permitted_paths=['a.py'], intended_result='Implement a',
              acceptance=['a is correct'], max_lines=10)
 DECLARATION = 'KIND: backend standard\nSCOPE: ' + json.dumps(SCOPE) + '\nImplement a.'

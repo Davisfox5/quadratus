@@ -81,7 +81,7 @@ def test_a_mixed_recheck_closes_the_fixed_finding_keeps_the_other_and_opens_the_
     assert findings["RFT2-2"]["impact"] == "contract" and findings["RFT2-2"]["basis"]["kind"] == "none"
     assert findings["RFT2-3"]["basis"] == {"kind": "evidence", "ref": "README.md"} and findings["RFT2-3"]["role"] == "recheck"
     assert [h["state"] for h in findings["RFT2-2"]["history"]] == ["unresolved", "resolved"]
-    assert all(h["role"] == "recheck" and h["author"] == "openai:gpt-5.6-sol" for h in findings["RFT2-2"]["history"])
+    assert all(h["role"] == "recheck" and h["author"] == "openai:sol" for h in findings["RFT2-2"]["history"])
     prompts = [c.prompt for c in replay.of("recheck")]
     assert "Expected ids: RFT2-1, RFT2-2." in prompts[0] and "Expected ids: RFT2-2, RFT2-3." in prompts[1]
     assert len(replay.of("revision")) == 2, "the kept and the new finding bought exactly one fix round"
@@ -137,10 +137,10 @@ def test_a_basis_less_concern_is_carried_to_the_audit_by_id_and_judged_there(tmp
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     audit = replay.of("auditor")[-1].prompt
-    assert "Carried to you by id" in audit and "RFT2-1 (t2, raised by openai:gpt-5.6-sol, impact other)" in audit
+    assert "Carried to you by id" in audit and "RFT2-1 (t2, raised by openai:sol, impact other)" in audit
     finding = _findings(replay)["RFT2-1"]
     assert finding["state"] == "invalidated" and finding["history"][-1]["role"] == "audit"
-    assert finding["history"][-1]["author"] == "openai:gpt-5.6-sol"
+    assert finding["history"][-1]["author"] == "openai:sol"
 
 
 @pytest.mark.requirements_ledger
@@ -259,7 +259,7 @@ def test_a_not_run_http_test_is_an_obligation_the_gate_executes_and_the_audit_ju
     rows = {o["kind"]: o for o in _obligations(replay)}
     typed = rows["not_run"]
     assert typed["runner"] == "gate" and typed["execution"] == "ran" and typed["receipts"]
-    assert typed["sufficiency"] == "sufficient" and typed["judged_by"] == "openai:gpt-5.6-sol"
+    assert typed["sufficiency"] == "sufficient" and typed["judged_by"] == "openai:sol"
     assert typed["established"] and typed["sufficiency_current"]
     assert [list(r) for r in typed["requirements"]] == [["R1", 1], ["R2", 1]]
     assert typed["source_digest"] == H.result_json(replay)["checks"][-1]["source"]
@@ -357,7 +357,7 @@ def test_a_route_the_tokens_cannot_pay_refuses_the_task_before_its_first_call_an
     assert paid.result.completed, paid.result.error
     rows = {(a["task"], a["scope"]): a for a in H.result_json(paid)["plan_admissions"]}
     assert rows[("t1", "full")]["feasible"] and rows[("t2", "full")]["feasible"]
-    assert rows[("t2", "full")]["stages"] == ["lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)"]
+    assert rows[("t2", "full")]["stages"] == ["lead draft(editing/write)", "review by openai:sol(reserve)"]
     assert "Plan admission for" not in paid.of("auditor")[-1].prompt, "an admitted route is not a note"
 
     # With 1.0M total the 600k left after the two holds cannot pay even the

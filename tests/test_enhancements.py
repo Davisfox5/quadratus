@@ -22,7 +22,7 @@ from .test_session import Recorder  # reuse the scripted fake
 
 FABLE = "claude:fable"
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 TRUST = [OPUS, SOL, "grok:default"]
 
 
@@ -283,8 +283,8 @@ def test_the_tree_picks_by_errand_and_spreads_vendors():
 def test_demanding_errands_escalate_within_their_own_family():
     """The skill stays matched; the horsepower goes up one tier."""
     assert pick_worker("check", demanding=True) == "claude:sonnet"
-    assert pick_worker("read", demanding=True) == "openai:gpt-5.6-terra"
-    assert pick_worker("format", demanding=True) == "openai:gpt-5.6-terra"
+    assert pick_worker("read", demanding=True) == "openai:terra"
+    assert pick_worker("format", demanding=True) == "openai:terra"
     assert pick_worker("lookup", demanding=True) == "grok:expert"
 
 

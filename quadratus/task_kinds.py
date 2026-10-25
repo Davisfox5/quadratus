@@ -193,8 +193,8 @@ class KindPolicy:
 
 
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
-LUNA = "openai:gpt-5.6-luna"
+SOL = "openai:sol"            # the family; its release is the installed client's latest
+LUNA = "openai:luna"
 SONNET = "claude:sonnet"
 GROK = "grok:default"          # xAI's current default, whatever it is
 GROK_WORKER = "grok:worker"   # same line, bounded call, low effort

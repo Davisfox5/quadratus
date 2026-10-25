@@ -150,9 +150,9 @@ def test_fleet_records_denial_as_not_invoked_and_shares_budget_across_seats(tmp_
     monkeypatch.setattr('quadratus.runtime.build_provider', lambda *a, **kw: p)
     ledger = DelegationLedger(path=tmp_path / 'invocations.jsonl')
     fleet = Fleet(Settings(backend='cli'), run_budget=b, delegation_ledger=ledger)
-    fleet.invoke('openai:gpt-5.6-sol', 'first')
+    fleet.invoke('openai:sol', 'first')
     with pytest.raises(RunBudgetExceeded):
-        fleet.invoke('openai:gpt-5.6-luna', 'second')
+        fleet.invoke('openai:luna', 'second')
     assert len(p.calls) == 1
     assert [e.invoked for e in ledger.events] == [True, False]
 
@@ -233,7 +233,7 @@ def test_fleet_rejects_a_provider_that_skips_the_controlled_attempt_path(monkeyp
     monkeypatch.setattr('quadratus.runtime.build_provider', lambda *a, **kw: p)
     fleet = Fleet(Settings(backend='cli'), run_budget=RunBudget(RunLimits()))
     with pytest.raises(RunBudgetExceeded, match='observed provider attempt'):
-        fleet.invoke('openai:gpt-5.6-sol', 'must not bypass')
+        fleet.invoke('openai:sol', 'must not bypass')
 
 
 def test_unspecified_transport_timeout_is_bounded_and_restored():

@@ -123,11 +123,11 @@ def test_a_conflicting_sufficiency_reading_is_no_verdict_and_names_the_conflict(
 def test_the_audit_invalidates_or_keeps_a_carried_finding_and_never_resolves_it():
     carried = _finding("RF2", basis=("none", ""), impact="other")
     reading = judgment.recheck_verdicts("RF2: RESOLVED the revision fixed it", ["RF2"])
-    after = D.apply_reading((carried,), reading, author="openai:gpt-5.6-sol", role="audit", binding=B, judged_binding=B,
+    after = D.apply_reading((carried,), reading, author="openai:sol", role="audit", binding=B, judged_binding=B,
                             resolve=lambda why: True)
     assert after[0].state == "open" and "does not resolve" in after[0].history[-1].why
     kept = judgment.recheck_verdicts("RF2: UNRESOLVED it stands", ["RF2"])
-    assert D.apply_reading((carried,), kept, author="openai:gpt-5.6-sol", role="audit", binding=B,
+    assert D.apply_reading((carried,), kept, author="openai:sol", role="audit", binding=B,
                            judged_binding=B)[0].state == "unresolved"
 
 
@@ -221,11 +221,11 @@ def test_a_conflicting_sufficiency_line_leaves_the_obligation_unjudged_in_the_se
                                                                     output="# pass 3\n# fail 0\n# skipped 0\n",
                                                                     command=f"node {SCENARIO}")]))
     session._refresh_obligations()
-    session._judge_obligations("openai:gpt-5.6-sol", "O1: SUFFICIENT fine\nO1: INSUFFICIENT not fine",
+    session._judge_obligations("openai:sol", "O1: SUFFICIENT fine\nO1: INSUFFICIENT not fine",
                                {"R5": (True, UNIT)})
     typed = session.evidence_obligations[0]
     assert typed["sufficiency"] == "unjudged" and "2 sufficiency lines" in typed["sufficiency_note"]
-    session._judge_obligations("openai:gpt-5.6-sol", "O1: INSUFFICIENT misses the error path", {"R5": (True, UNIT)})
+    session._judge_obligations("openai:sol", "O1: INSUFFICIENT misses the error path", {"R5": (True, UNIT)})
     assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
     found = {"R5": (True, UNIT)}
     lowered = session._apply_acceptance(found, ["R5"])
@@ -570,7 +570,7 @@ def test_the_requirements_review_is_of_exactly_the_texts_its_prompt_sent(tmp_pat
     assert rows["R1"]["revision"] == 2 and rows["R1"]["review"] is None, "the reviewer never saw revision 2"
     assert rows["R2"]["review"] is None and rows["R2"]["proposal"] is None
     assert rows["R3"]["review"] is None, "its own proposal is not a review of it"
-    assert rows["R3"]["proposal"] == dict(reviewer="openai:gpt-5.6-sol", text_digest=review["proposed"]["R3"])
+    assert rows["R3"]["proposal"] == dict(reviewer="openai:sol", text_digest=review["proposed"]["R3"])
     assert all(r["approved"] is False and r["decision_receipt"] is None for r in rows.values())
     # Restoring the sent text makes revision 3 the reviewed bytes again.
     s.memory.ledger.requirements["R1"] = "old scope seen in prompt"
@@ -710,7 +710,7 @@ def test_the_acceptance_on_record_stays_current_as_it_consumes_each_served_evide
 
     def record(rid, **over):
         identity = s._evidence_identity()
-        body = dict(id=rid, target="R5", kind="audit", reviewer="openai:gpt-5.6-sol", task=None,
+        body = dict(id=rid, target="R5", kind="audit", reviewer="openai:sol", task=None,
                     finding="R5: NOT MET - no console check", original_disposition="NOT MET", claim="",
                     file="tests/test_e1.py", file_sha256="x", source=s._source_fingerprint(), identity=identity,
                     key=["audit", "R5", identity], receipt=dict(status="failed", reason="1 failed", cases=[]),
@@ -813,27 +813,27 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     spec = TaskSpec("t1", "Implement addition")
     gate = s.config.integration_gate
     s._max_tasks, s._slots_used = 4, 0
-    s._route_peers = ["openai:gpt-5.6-sol", "xai:grok:default"]
+    s._route_peers = ["openai:sol", "xai:grok:default"]
     names = [r.name for r in s._gate_repair_stages(spec, gate, "subset")]
     # The reviews ahead are known; the correction they may select is
     # admitted when they do (admission/2), never costed here.
-    assert names == ["gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default"]
+    assert names == ["gate fix", "review by openai:sol", "review by xai:grok:default"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix"]
     # Every repair carries the task's known remainder (root's control on
     # fef1e27): a required design review still ahead is on the fix cycle's,
     # the gate fix's and the render fix's routes; nothing is listed twice.
     # No route lists a close-out any more: every task's record is the
     # harness's and costs no call (Davis, 2026-10-21), on any slot.
-    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
-        "fix revision", "recheck by openai:gpt-5.6-sol"]
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:sol"]
     s._contract = SimpleNamespace(task_id="t1", required=SimpleNamespace(design_review=True))
-    assert s._mandatory_stages(spec, ["openai:gpt-5.6-sol"]) == ["lead draft", "review by openai:gpt-5.6-sol",
+    assert s._mandatory_stages(spec, ["openai:sol"]) == ["lead draft", "review by openai:sol",
                                                                   "design review"]
-    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
-        "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:sol", "design review"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "design review"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "subset")] == [
-        "gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "design review"]
+        "gate fix", "review by openai:sol", "review by xai:grok:default", "design review"]
     assert [r.name for r in s._design_repair_stages(spec, None)] == ["design fix", "design review"]
     assert [r.name for r in s._design_repair_stages(spec, "openai:independent")] == [
         "design fix", "design review by openai:independent"]
@@ -843,11 +843,11 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     # the security verification still, never a close-out.
     s._terminal_route = dict(task="t1", reason="r", selected="s", slots_used=1, relinquished=3, max_tasks=4)
     assert s._closes_factually(spec) and s._closes_factually(TaskSpec("t9", "other"))
-    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
-        "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:sol", "design review"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "design review"]
-    assert [r.name for r in s._security_repair_stages(spec, "openai:gpt-5.6-sol")] == [
-        "security fix", "security verification by openai:gpt-5.6-sol"]
+    assert [r.name for r in s._security_repair_stages(spec, "openai:sol")] == [
+        "security fix", "security verification by openai:sol"]
     assert [r.name for r in s._design_repair_stages(spec, None)] == ["design fix", "design review"]
     # One final-work boundary for the capped-source handoffs (Astra A2 on
     # 0ae5bb6): the committed task or the numeric last slot, never an
@@ -863,16 +863,16 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     assert not s._final_work_slot(spec)
     s._slots_used = 3
     assert s._final_work_slot(spec)
-    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
-        "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:sol", "design review"]
     s._slots_used = 0
     s._contract = None
-    s._route_after_merge = dict(rechecks=["openai:gpt-5.6-sol"], capped=["t2"])
+    s._route_after_merge = dict(rechecks=["openai:sol"], capped=["t2"])
     assert [r.name for r in s._gate_repair_stages(TaskSpec("t2-merge", "merge"), gate, "full")] == [
-        "gate fix", "post-merge recheck by openai:gpt-5.6-sol", "capped final review of t2"]
+        "gate fix", "post-merge recheck by openai:sol", "capped final review of t2"]
     s._route_after_merge = None
-    assert [r.name for r in s._security_repair_stages(spec, "openai:gpt-5.6-sol")] == [
-        "security fix", "security verification by openai:gpt-5.6-sol"]
+    assert [r.name for r in s._security_repair_stages(spec, "openai:sol")] == [
+        "security fix", "security verification by openai:sol"]
     assert [r.name for r in s._design_repair_stages(spec, "openai:independent")] == [
         "design fix", "design review by openai:independent"]
     # The subset route's wall counts the full gate after the revision only
@@ -1055,7 +1055,7 @@ def test_an_evidence_intent_a_resumed_job_never_runs_is_closed_and_consumed(tmp_
     s, prompts = _session(tmp_path, f"R1: MET - {UNIT}\nR5: NOT MET - no console check\n")
     s._audit_requirements(final=True)
     identity = s._evidence_identity()
-    record = dict(id="E1", target="R5", kind="audit", reviewer="openai:gpt-5.6-sol", task=None,
+    record = dict(id="E1", target="R5", kind="audit", reviewer="openai:sol", task=None,
                   finding="R5: NOT MET - no console check", original_disposition="NOT MET", claim="",
                   file="tests/test_e1.py", file_sha256="x", source=s._source_fingerprint(), identity=identity,
                   key=["audit", "R5", identity], receipt=None, execution=None, reassessment=None, stage="intent",
@@ -1124,7 +1124,7 @@ def test_the_harness_run_proof_of_a_challenge_is_an_executed_case_for_that_requi
     case = "tests/test_evidence_negative.py::test_negative_sum"
 
     def record(**over):
-        body = dict(id="E1", target="R1", kind="audit", reviewer="openai:gpt-5.6-sol", stage="done",
+        body = dict(id="E1", target="R1", kind="audit", reviewer="openai:sol", stage="done",
                     receipt=dict(status="passed", reason="1 passed", cases=[f"{case}: passed"]),
                     source=s._source_fingerprint(), identity=identity, disposition="held")
         body.update(over)
@@ -1155,7 +1155,7 @@ def test_pending_evidence_is_reconciled_on_the_final_path_before_coverage_is_rea
     s._audit_requirements(final=True)
     s._final_audit["status_before"] = {"R5": "covered by t1"}
     identity = s._evidence_identity()
-    record = dict(id="E1", target="R5", kind="audit", reviewer="openai:gpt-5.6-sol", task=None,
+    record = dict(id="E1", target="R5", kind="audit", reviewer="openai:sol", task=None,
                   finding="R5: NOT MET - no console check", original_disposition="NOT MET", claim="",
                   file="tests/test_e1.py", file_sha256="x", source=s._source_fingerprint(), identity=identity,
                   key=["audit", "R5", identity], receipt=None, execution=None, reassessment=None, stage="intent",

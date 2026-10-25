@@ -53,9 +53,9 @@ EVIDENCE = (
 )
 
 FABLE = "claude:fable"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 OPUS = "claude:opus"
-LUNA = "openai:gpt-5.6-luna"
+LUNA = "openai:luna"
 
 KNOWN_KINDS = {"general", "test", "security", "review", "frontend", "decompose"}
 KNOWN_DIFFICULTIES = {"rote", "simple", "standard", "complex"}

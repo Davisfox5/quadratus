@@ -95,4 +95,4 @@ def test_kind_prefixed_ask_is_answered_without_becoming_task(tmp_path):
 def test_project_api_seats_are_unavailable_instead_of_claiming_filesystem_access(tmp_path):
     from quadratus.runtime import Fleet
     fleet = Fleet(Settings(backend='api'), project=tmp_path)
-    assert not fleet.available('openai:gpt-6-astra')
+    assert not fleet.available('openai:astra')

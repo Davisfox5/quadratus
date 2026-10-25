@@ -107,15 +107,15 @@ def test_resolved_needs_no_source_change_but_is_bound_to_what_the_judge_saw():
 
 def test_only_the_designated_judge_settles_a_finding():
     independent = _finding("RF1", author="claude:opus")
-    by_lead = _apply((independent,), "RF1: RESOLVED", author="openai:gpt-5.6-sol", role="recheck")
+    by_lead = _apply((independent,), "RF1: RESOLVED", author="openai:sol", role="recheck")
     assert by_lead[0].state == "open" and "does not judge it" in by_lead[0].history[-1].why
     as_lead_role = _apply((independent,), "RF1: RESOLVED", author="claude:opus", role="lead")
     assert as_lead_role[0].state == "open" and "not a judging role" in as_lead_role[0].history[-1].why
     carried = _finding("RF2", basis=("none", ""), impact="other")
-    by_audit = _apply((carried,), "RF2: INVALIDATED tests/test_app.py covers the path", author="openai:gpt-5.6-sol",
+    by_audit = _apply((carried,), "RF2: INVALIDATED tests/test_app.py covers the path", author="openai:sol",
                       role="audit")
     assert by_audit[0].state == "invalidated"
-    not_carried = _apply((independent,), "RF1: INVALIDATED tests/test_app.py", author="openai:gpt-5.6-sol",
+    not_carried = _apply((independent,), "RF1: INVALIDATED tests/test_app.py", author="openai:sol",
                          role="audit")
     assert not_carried[0].state == "open" and "not carried to the audit" in not_carried[0].history[-1].why
 
@@ -248,7 +248,7 @@ def test_sufficiency_is_bound_to_exactly_the_evidence_it_judged():
                         current_requirements=CURRENT).obligation
     assert again.execution == "ran" and again.sufficiency == "sufficient"
     assert not again.sufficiency_current and not again.established, "a new execution needs a fresh judgment"
-    assert D.judge_sufficiency(_obligation(), "insufficient", judged_by="openai:gpt-5.6-sol").sufficiency == "insufficient"
+    assert D.judge_sufficiency(_obligation(), "insufficient", judged_by="openai:sol").sufficiency == "insufficient"
     back = D.EvidenceObligation.from_dict(judged.to_dict())
     assert back == judged and back.established
 
@@ -267,7 +267,7 @@ def test_obligation_rejects_malformed_rows():
 # --- operations -----------------------------------------------------------
 
 def _op(**over):
-    base = dict(opid="O-1", purpose="lead draft t2", owner="openai:gpt-5.6-sol",
+    base = dict(opid="O-1", purpose="lead draft t2", owner="openai:sol",
                 identity={"purpose": "draft", "role": "lead", "policy": "p1", "input": "d" * 8},
                 allowed_effects=("project-write",), reservation="ticket-13")
     base.update(over)

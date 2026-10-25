@@ -190,7 +190,7 @@ def test_unrelated_passing_scratch_does_not_discharge_an_explicit_error_review(t
         assert proofs and any(p.get('status')=='passed' for p in proofs),proofs
     else:
         assert proofs and all(_refused(p) for p in proofs),proofs
-    notes=replay.artifact_texts('review:openai:gpt-5.6-sol')+replay.artifact_texts('review:grok:grok-4.3')
+    notes=replay.artifact_texts('review:openai:sol')+replay.artifact_texts('review:grok:grok-4.3')
     print(json.dumps({'case':'unrelated-doc-scratch','notes':notes,'scratch':proofs,'revision_prompts':seen}))
     assert any('R1: UNVERIFIED' in n for n in notes), 'unrelated doc-only scratch was treated as proof of error handling'
 

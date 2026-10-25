@@ -13,7 +13,7 @@ from quadratus.session import Session
 from tests.test_parallel_tasks import BATCH, Orchestrated
 from tests.test_parallel_tasks import _session as parallel_session
 
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 
 
 def _parity(session, error=""):

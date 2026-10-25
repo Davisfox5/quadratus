@@ -82,6 +82,7 @@ __all__ = [
     "ControlPlaneRole",
     "control_plane_model",
     "assert_floating_orchestrators",
+    "canonical_key",
 ]
 
 
@@ -151,6 +152,14 @@ class ModelSpec:
     #: agent loop. The same weights serve both; on a subscription the
     #: difference between them is most of what a run spends.
     restricted: bool = False
+    #: The family name as the vendor's own catalogue spells it (``sol`` in
+    #: ``gpt-6.1-sol``), for rows whose release is read from that catalogue
+    #: at resolution (quadratus.latest). Empty where the alias is the family.
+    family: str = ""
+    #: Keys this row answered to before it was named by family
+    #: (``openai:gpt-5.6-sol``), kept so histories, receipts and operator
+    #: inputs written against them still resolve. Never a wire string.
+    legacy_keys: Tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
@@ -177,10 +186,10 @@ class ModelSpec:
 
 def _spec(provider, alias, label, context, latency, caps, notes="", verified=False,
           floating=False, alias_fallbacks=(), vendor_default=False, effort="",
-          restricted=False):
+          restricted=False, family="", legacy_keys=()):
     return ModelSpec(
         provider, alias, label, context, latency, frozenset(caps), notes, verified,
-        floating, tuple(alias_fallbacks), vendor_default, effort, restricted,
+        floating, tuple(alias_fallbacks), vendor_default, effort, restricted, family, tuple(legacy_keys),
     )
 
 
@@ -275,8 +284,12 @@ ROSTER: List[ModelSpec] = [
     ),
 
     # -- OpenAI. Second-hand specs; aliases unverified.
+    # -- OpenAI. Family rows (2026-10-24): the release each answers to is the
+    #    latest visible one in the installed codex client's own catalogue
+    #    (~/.codex/models_cache.json: Sol 6.1, Astra 6, Luna 6, Terra 5.6 on
+    #    the Mac that day), read at resolution, never compiled in here.
     _spec(
-        "openai", "gpt-6-astra", "GPT-6 Astra", 1100 * K, "slow",
+        "openai", "astra", "GPT Astra", 1100 * K, "slow",
         [Capability.REASON, Capability.CODE, Capability.AGENTIC,
          Capability.ORCHESTRATE],
         "The orchestrator's only fallback, by operator directive, and the "
@@ -294,10 +307,11 @@ ROSTER: List[ModelSpec] = [
         "check even the alias. Run `quadratus --probe` before a run depends "
         "on this seat: a fallback that has never been exercised is a guess.",
         floating=True,
-        alias_fallbacks=("gpt-6",),
+        family="astra",
+        legacy_keys=("openai:gpt-6-astra",),
     ),
     _spec(
-        "openai", "gpt-5.6-sol", "GPT-5.6 Sol", 1100 * K, "moderate",
+        "openai", "sol", "GPT Sol", 1100 * K, "moderate",
         [Capability.CODE, Capability.REVIEW, Capability.REASON,
          Capability.LONG_CONTEXT, Capability.AGENTIC],
         "Review is recall-leaning: ~70% of known issues caught but only ~32% "
@@ -308,17 +322,25 @@ ROSTER: List[ModelSpec] = [
         "(deleting infrastructure, fabricating results) and presenting "
         "unverified work as complete in a way CoT monitoring misses: never "
         "grant it writes outside a sandbox.",
+        floating=True,
+        family="sol",
+        legacy_keys=("openai:gpt-5.6-sol", "openai:gpt-6-sol", "openai:gpt-6.1-sol"),
     ),
     _spec(
-        "openai", "gpt-5.6-terra", "GPT-5.6 Terra", 1100 * K, "moderate",
+        "openai", "terra", "GPT Terra", 1100 * K, "moderate",
         [Capability.CODE, Capability.AGENTIC],
-        "The everyday mid-tier. Sits ~1 point behind Sol on SWE-bench Pro.",
+        "The everyday mid-tier. Sits ~1 point behind Sol on SWE-bench Pro "
+        "(measured on 5.6; the installed catalogue's latest Terra is still "
+        "5.6 on 2026-10-24, and no 6 is invented for it).",
         # Bounded worker call, not an agent loop: an escalation target only.
         effort="high",
         restricted=True,
+        floating=True,
+        family="terra",
+        legacy_keys=("openai:gpt-5.6-terra",),
     ),
     _spec(
-        "openai", "gpt-5.6-luna", "GPT-5.6 Luna", 1100 * K, "fast",
+        "openai", "luna", "GPT Luna", 1100 * K, "fast",
         [Capability.CODE, Capability.CHEAP],
         "The tier spread across 5.6 is small on coding (~1.9 pts SWE-bench Pro "
         "Sol->Luna) for roughly 5x the price, so Luna is a defensible default "
@@ -326,6 +348,9 @@ ROSTER: List[ModelSpec] = [
         # Bounded worker call, not an agent loop: the worker tier's base for read, format and draft errands.
         effort="low",
         restricted=True,
+        floating=True,
+        family="luna",
+        legacy_keys=("openai:gpt-5.6-luna",),
     ),
 
     # -- xAI. Second-hand specs; aliases unverified.
@@ -471,6 +496,17 @@ RETIRED_ROSTER: List[ModelSpec] = [
 ]
 
 _BY_KEY: Dict[str, ModelSpec] = {m.key: m for m in ROSTER}
+#: Legacy version keys -> the family row that now answers for them.
+_LEGACY: Dict[str, ModelSpec] = {legacy: m for m in ROSTER for legacy in m.legacy_keys}
+if set(_LEGACY) & set(_BY_KEY):  # pragma: no cover - a table edit, not a runtime path
+    raise ValueError(f"legacy keys collide with live keys: {sorted(set(_LEGACY) & set(_BY_KEY))}")
+
+
+def canonical_key(key: str) -> str:
+    """The family key a legacy version key names today; any other key as
+    given. ``openai:gpt-5.6-sol`` -> ``openai:sol``."""
+    spec = _LEGACY.get(key)
+    return spec.key if spec is not None else key
 
 _unknown_vendors = {m.provider for m in ROSTER} - set(VENDORS)
 if _unknown_vendors:  # pragma: no cover - a table edit, not a runtime path
@@ -525,7 +561,7 @@ def best_for(capability: str, **kwargs) -> Optional[ModelSpec]:
 #: them, and this chain is not a mechanism for evading a correct refusal.
 REFUSAL_CHAIN: List[str] = [
     "claude:opus",
-    "openai:gpt-5.6-sol",
+    "openai:sol",
     "grok:default",
 ]
 
@@ -546,17 +582,17 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
         # turns and 0.5B tokens against ~103 and 2.0B for the strongest coder
         # on comparable work -- not on peak quality, where it is the weakest
         # of the three.
-        "peers": ["claude:opus", "openai:gpt-5.6-sol", "grok:default"],
+        "peers": ["claude:opus", "openai:sol", "grok:default"],
         # A subset, not a shortfall. Review is the one role with measured
         # data, and it pins the two models that fail in opposite directions:
         # ~70% recall / ~32% precision against ~39% precision / ~55% recall.
         # Adding a third reviewer with no measured profile would cost an
         # invocation to dilute a pairing chosen precisely for its shape.
-        "reviewers": ["openai:gpt-5.6-sol", "claude:opus"],
+        "reviewers": ["openai:sol", "claude:opus"],
         # Planning runs once per run, so it is the cheapest place to be
         # inclusive. It happens to equal the brain trust today; that is a
         # coincidence of the roster size, not a constraint worth enforcing.
-        "planners": ["claude:opus", "openai:gpt-5.6-sol", "grok:default"],
+        "planners": ["claude:opus", "openai:sol", "grok:default"],
     },
     "collaborative": {
         "peers": ["claude:opus", "openai:gpt-5.6-terra"],
@@ -623,7 +659,7 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
 #: someone noticed the run was still using last quarter's model.
 ORCHESTRATOR_CHAIN: List[str] = [
     "claude:fable",
-    "openai:gpt-6-astra",
+    "openai:astra",
 ]
 
 
@@ -753,5 +789,6 @@ def control_plane_model(role: str) -> Optional[str]:
 
 
 def resolve(key: str) -> Optional[ModelSpec]:
-    """Look up a roster entry by ``provider:alias``."""
-    return _BY_KEY.get(key)
+    """Look up a roster entry by ``provider:alias``, or by a legacy version
+    key it answers for (``openai:gpt-5.6-sol`` -> the ``openai:sol`` row)."""
+    return _BY_KEY.get(key) or _LEGACY.get(key)

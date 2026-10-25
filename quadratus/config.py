@@ -91,7 +91,9 @@ DEFAULT_PROVIDER_ORDER = "claude,openai,grok"
 #     here. Put an ID here only to pin it against the vendor's choice.
 DEFAULT_CLI_MODELS = {
     "claude": {"high": "opus", "low": "haiku"},
-    "openai": {"high": "gpt-5.6-sol", "low": "gpt-5.6-luna"},
+    # Families, not editions: the CLI path resolves these through
+    # quadratus.latest (the installed client's catalogue), never this table.
+    "openai": {"high": "sol", "low": "luna"},
     "grok": {"high": "", "low": ""},
 }
 

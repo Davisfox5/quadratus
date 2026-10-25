@@ -49,10 +49,10 @@ def test_every_task_record_is_the_harness_s_own_and_asks_no_model(tmp_path):
     session.checks = [{'passed': True, 'command': 'pytest', 'output': '1 passed', 'source': digest,
                        'receipts': [{'id': 'unit', 'status': 'passed'}]}]
     session.review_dispositions['t1'] = [('claude:opus', 'reviewed: no findings')]
-    memory = TaskMemory('t1', 'openai:gpt-5.6-sol', store)
+    memory = TaskMemory('t1', 'openai:sol', store)
     memory.record('user', spec.description)
     memory.record('assistant', 'Changed app.py\nCHANGED: ["app.py", "new.py"]')
-    summary, reasoning, dead_ends = session._task_close_out('openai:gpt-5.6-sol', spec, memory)
+    summary, reasoning, dead_ends = session._task_close_out('openai:sol', spec, memory)
     assert summary.startswith('Recorded by the harness, not a model (every task closes on the harness')
     assert 'Changed: 2 file(s), 2 lines: app.py, new.py (measured' not in summary
     assert 'Changed: 2 file(s), ' in summary and 'app.py, new.py' in summary and f'source {digest[:12]}' in summary

@@ -87,7 +87,7 @@ def test_an_explicit_insufficient_or_a_conflicting_sufficiency_keeps_the_require
     audit = H.result_json(replay)["requirements"]["audits"][-1]
     assert audit["verdicts"]["R2"]["met"] is False and audit["acceptance"]["R2"]["met"] is False
     if shape == "insufficient":
-        assert typed["sufficiency"] == "insufficient" and typed["judged_by"] == "openai:gpt-5.6-sol"
+        assert typed["sufficiency"] == "insufficient" and typed["judged_by"] == "openai:sol"
         assert any("sufficiency insufficient" in r for r in audit["acceptance"]["R2"]["reasons"])
     else:
         assert typed["sufficiency"] == "unjudged" and "2 sufficiency lines" in typed["sufficiency_note"]
@@ -154,7 +154,7 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
     # and the second, selected by the recheck's.
     assert len(cycle) == 2 and all(a["feasible"] for a in cycle)
     assert cycle[0]["stages"] == cycle[1]["stages"] == ["fix revision(editing/write)",
-                                                         "recheck by openai:gpt-5.6-sol(reserve)"]
+                                                         "recheck by openai:sol(reserve)"]
 
     # The same job, with a second cycle that cannot be paid: it is refused
     # before its revision, recorded, and the findings it would have
@@ -198,7 +198,7 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
     assert [(f["state"], f["closed"]) for f in result["review_findings"] if f["fid"].startswith("RFT2")] == [
         ("open", False), ("open", False)]
     assert [a["stages"] for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "full"][0] == [
-        "lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)"]
+        "lead draft(editing/write)", "review by openai:sol(reserve)"]
 
 
 # -- boundary 2: the effect lifecycle --------------------------------------------------------
@@ -424,7 +424,7 @@ def test_the_approval_authority_is_committed_before_the_first_call_and_named_by_
     assert set(rows) == {"R1", "R2"} and record["policy"] == "authority/3"
     assert all(r["origin"] == "inferred" and r["decision_receipt"] is None and r["approved"] is False
                for r in rows.values()), "a model review is not the human's consent"
-    assert all(r["review"]["reviewer"] == "openai:gpt-5.6-sol" and r["review"]["text_digest"] == r["text_digest"]
+    assert all(r["review"]["reviewer"] == "openai:sol" and r["review"]["text_digest"] == r["text_digest"]
                for r in rows.values())
     run_dir = _run_dir(replay)
     budget = jobstore.read_budget(run_dir)[0]

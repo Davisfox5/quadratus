@@ -1734,6 +1734,15 @@ _SCENARIO_REPLY = re.compile(r"^\s*SCENARIO\s+(P\d+)\s*:\s*(operation|state|expe
                              re.IGNORECASE | re.MULTILINE)
 
 
+_IMPACT_RANK = ("other", "contract", "correctness", "irreversible", "security", "integrity", "data-loss")
+
+
+def _worst_impact(records) -> Optional[str]:
+    """The gravest impact among finding records, for the recheck's effort."""
+    impacts = [str(r.get("impact") or "") for r in records if r.get("impact") in _IMPACT_RANK]
+    return max(impacts, key=_IMPACT_RANK.index) if impacts else None
+
+
 def _typed_finding(claim: str):
     """``("scenario", fields)``, ``("evidence", fields)`` or ``(None, None)``
     for one registered finding's claim (the line before its basis and
@@ -2703,6 +2712,14 @@ class Session:
         self.scenario_corrections: List[dict] = []
         self.evidence_routes: List[dict] = []
         self._scenario_corrected: set = set()
+        #: The fix cycle an editing or recheck call belongs to and the worst
+        #: impact a recheck is about: inputs to the effort policy, set by the
+        #: round that makes the call and cleared after it.
+        self._fix_cycle_now: int = 0
+        self._recheck_impact: Optional[str] = None
+        #: This job's model resolutions as the Fleet recorded them
+        #: (project_run copies them here; result.json ``models``).
+        self.model_resolution: dict = {}
         #: This session's own operation ids are per owner (``OP<OWNER>-<n>``):
         #: a parallel child publishes its own record, never a sibling's, and
         #: a resumed episode is a new owner beside the parent's record.
@@ -2954,6 +2971,23 @@ class Session:
         if self.dependency_watch is not None:
             self.dependency_watch.verify(window)
 
+    def _effort_inputs(self, key: str, context: dict) -> dict:
+        """What the effort policy is told about this call: the role, the
+        active task's declared complexity, kind and work class, whether it
+        is security work, the fix cycle an editing or recheck call belongs
+        to, and the worst impact a recheck is about. Facts the session
+        holds; nothing is inferred from text."""
+        spec = self._active_spec
+        role = str(context.get("role") or "direct")
+        from .routing import WorkClass
+        from .task_kinds import TaskKind
+        security = bool(spec is not None and (getattr(spec, "work_class", "") == WorkClass.SECURITY
+                                              or getattr(spec, "kind", "") == TaskKind.SECURITY))
+        return dict(role=role, complexity=getattr(spec, "complexity", None), kind=getattr(spec, "kind", None),
+                    work_class=getattr(spec, "work_class", None), security=security,
+                    cycle=int(getattr(self, "_fix_cycle_now", 0) or 0),
+                    impact=getattr(self, "_recheck_impact", None))
+
     def _invoke_model(self, key, prompt, *, allow_writes=False):
         """One model call. An editing call on the selected project is
         bracketed by the dependency identity: checked before any vendor call
@@ -2990,6 +3024,9 @@ class Session:
         # the transport and the budget name.
         context = dict(context, authority=self._authority_before(f"{context.get('role', 'direct')} call"))
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
+        # The task facts the effort policy reads at dispatch, from what the
+        # session already knows: no classification call (quadratus.effort).
+        context = dict(context, effort_inputs=self._effort_inputs(key, context))
         spec = self._active_spec
         if (context.get("role") != "closeout" and context.get('origin') != 'worker'
                 and spec is not None and '## Role packet' not in prompt):
@@ -4940,6 +4977,7 @@ class Session:
                     refused.recorded = True
                     raise refused
                 spec = self._serve_plan_findings(spec, task, plan, labels)
+                self._fix_cycle_now = 1
                 if not plan["editor"]:
                     # Every finding went to the planner or the harness: no
                     # editing call; the reviewers re-check what is now shown.
@@ -4997,6 +5035,7 @@ class Session:
                         capped_writer = True
                         break
                 self._count("revision")
+                self._fix_cycle_now = cycles + 1
                 actionable = self._actionable(unresolved)
                 pending = [(p, n) for p, n in blocking if any(p == up for up, _ in actionable)]
                 try:
@@ -5053,6 +5092,7 @@ class Session:
                     + "\n".join(f"[{labels[p]}] {v}" for p, v in unresolved),
                 )
 
+        self._fix_cycle_now = 0
         # A capped writer gets no further call: the gate decides, unfixed.
         self._run_integration_gate(lead, spec, task, **({"max_fixes": 0} if capped_writer else {}))
         if self._tier(spec) == "direct" and not collaborators:
@@ -7593,7 +7633,7 @@ class Session:
         # authoritative text of the requirements they bind (root on
         # 4fac862: ids alone are no authority); a requirement whose text is
         # not on the ledger leaves the rows unjudgeable here.
-        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+        texts = self._requirement_texts_now()
         revisions = self._requirement_revisions()
         needed = sorted({r[0] for o in capture_rows for r in o.get("requirements") or ()})
         self._review_rows = [o["oid"] for o in capture_rows]
@@ -7856,6 +7896,8 @@ class Session:
                 self.review_findings.extend(child.review_findings)
                 self.scenario_corrections.extend(child.scenario_corrections)
                 self.evidence_routes.extend(child.evidence_routes)
+                # The child's one correction per task is spent in the parent too.
+                self._scenario_corrected |= set(child._scenario_corrected)
                 for obligation in child.evidence_obligations:
                     # Re-based to the parent: the child had no gate of its
                     # own, so its runner is what the parent's gate can run
@@ -8026,6 +8068,7 @@ class Session:
                 row["verdict"] = "kept: no open finding to recheck"
                 continue
             ids = [r["fid"] for r in records]
+            self._recheck_impact, self._fix_cycle_now = _worst_impact(records), 1
             # The child's own proof rows, as the merged source and the merge
             # gate's receipt now hold them (the active spec is not this task).
             instructions = self._recheck_instructions(ids, spec=spec)
@@ -8048,6 +8091,8 @@ class Session:
                 self._finish_refused(spec, f"post-merge recheck by {peer}", exc, outcome=outcome)
                 row["verdict"] = "kept: recheck refused to keep the finish"
                 continue
+            finally:
+                self._recheck_impact, self._fix_cycle_now = None, 0
             reading = judgment.recheck_verdicts(verdict, ids)
             if not reading.judged_any:
                 completed = self._complete_judgment(
@@ -10378,21 +10423,35 @@ class Session:
                                 skipped_cases=[])
             return None
         # A declared acceptance behavior: discharged only by a passing check
-        # recorded since the task was dispatched, on the current source,
-        # under the obligation's gate and environment, whose own complete
-        # runs name every bound case as passed. No bound case, no receipt: a
-        # green check that exercised something else discharges nothing.
+        # on exactly the current source, under the obligation's gate and
+        # environment, binding the requirement revisions the row binds
+        # (delivery.discharge), whose own complete runs name every bound
+        # case as passed. No bound case, no receipt: a green check that
+        # exercised something else discharges nothing. When the run happened
+        # is not part of that identity: a later task whose draft left the
+        # bytes unchanged is shown by the run that already passed on them
+        # (root's two-task control on fff4e99, where the row's registration
+        # index refused the receipt and the reviewer read "missing" on a
+        # source the harness had checked). A failed, filtered, other-source,
+        # other-gate or other-revision run is refused exactly as before.
         cases = [str(c) for c in (record.get("cases") or ())]
         if not cases:
             return None
-        start = int(entry.get("after_check") or 0)
         current = self._source_fingerprint() if self.project else None
         environment = self._environment_id()
-        for index in range(len(self.checks) - 1, start - 1, -1):
+        bound = [(str(rid), rev) for rid, rev in (record.get("requirements") or ())]
+
+        def binds(run: dict) -> bool:
+            # The revisions the run launched under are the row's: checked
+            # here as well as at discharge, so a newer run under another
+            # revision never shadows an older one that binds the right ones.
+            held = run.get("requirements") if isinstance(run.get("requirements"), dict) else {}
+            return all(held.get(rid) == rev for rid, rev in bound)
+        for index in range(len(self.checks) - 1, -1, -1):
             check = self.checks[index]
             if (not check.get("passed") or check.get("source") != current
                     or (check.get("gate") or "") != (record.get("gate") or "")
-                    or (check.get("environment") or "") != (environment or "")):
+                    or (check.get("environment") or "") != (environment or "") or not binds(check)):
                 continue
             if set(cases) <= self._check_passed_cases(check):
                 return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
@@ -10406,13 +10465,11 @@ class Session:
         # missing" on rows whose cases the harness had just run and passed,
         # because only self.checks was read here). A failed run discharges
         # nothing, as with a check; the proof rows name it.
-        observed = entry.get("after_observed")
-        first = int(observed) if observed is not None else len(self.review_checks)
-        for index in range(len(self.review_checks) - 1, first - 1, -1):
+        for index in range(len(self.review_checks) - 1, -1, -1):
             seen = self.review_checks[index]
             if (not seen.get("passed") or seen.get("source") != current
                     or (seen.get("gate") or "") != (record.get("gate") or "")
-                    or (seen.get("environment") or "") != (environment or "")):
+                    or (seen.get("environment") or "") != (environment or "") or not binds(seen)):
                 continue
             if set(cases) <= self._check_passed_cases(seen):
                 return dict(id=f"observed-{index + 1}", source=seen.get("source"), gate=seen.get("gate"),
@@ -10570,7 +10627,7 @@ class Session:
             return "the review carries no bound requirement and scenario context"
         if str(shown.get("goal", "")) != self.memory.goal.strip():
             return "the goal changed since the review"
-        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+        texts = self._requirement_texts_now()
         revisions = self._requirement_revisions()
         for rid, (revision, text) in sorted(shown["requirements"].items()):
             if rid not in texts or not str(text).strip():
@@ -13236,11 +13293,19 @@ class Session:
             return []
         return self._discovering_checks()
 
+    def _requirement_texts_now(self) -> dict:
+        """The original requirement texts every judgment and correction is
+        held to: the ledger's, or, in a parallel child (whose own ledger is
+        off), the texts its parent handed it. One lookup for every reader
+        (root's parallel scenario control on fff4e99: the child's correction
+        prompt rendered an empty requirement)."""
+        return self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+
     def _covered_texts(self) -> List[tuple]:
         """(rid, original text) for each requirement the current task covers.
         A parallel child has no ledger of its own; its parent hands it the
         requirement text with the ids it covers."""
-        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+        texts = self._requirement_texts_now()
         return [(rid, texts[rid]) for rid in getattr(self, "_current_covers", []) or [] if rid in texts]
 
     def _record_review_notes(self, spec, peer: str, note: str, rids: List[str]) -> None:
@@ -13572,7 +13637,7 @@ class Session:
         digest it was taken at (carried by the checkpoint), so an evidence
         obligation or a judgment bound to a revision can tell when the
         requirement it was about is no longer the one on the ledger."""
-        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+        texts = self._requirement_texts_now()
         record = self._requirement_revision_record
         for rid, text in texts.items():
             digest = hashlib.sha256((text or "").strip().encode()).hexdigest()
@@ -13733,6 +13798,7 @@ class Session:
             if not mine:
                 continue
             ids = [r["fid"] for r in mine]
+            self._recheck_impact = _worst_impact(mine)
             # The rows are rendered (and refreshed) before the binding is
             # taken, so the identity the judge is handed is the one compared.
             instructions = self._recheck_instructions(ids)
@@ -13762,6 +13828,7 @@ class Session:
                                     f"summary as an open question:\n[{shown}] {standing}")
                 continue
             except TurnLimitReached as exc:
+                self._recheck_impact = None
                 # No verdict either way: the finding is neither resolved nor
                 # confirmed, so it does not buy another fix round. The
                 # reviewer's original finding stays on the record as the
@@ -13777,6 +13844,7 @@ class Session:
                                     "(the reviewer stopped at its turn cap) -- carry it into the "
                                     f"summary as an open question:\n[{shown}] {standing}")
                 continue
+            self._recheck_impact = None
             task.record("assistant", f"[{shown} recheck] {verdict}")
             reading = judgment.recheck_verdicts(verdict, ids)
             if not reading.judged_any:
@@ -13978,7 +14046,7 @@ class Session:
         self._scenario_corrected.add(spec.task_id)
         scope = spec.scope
         proofs = {p["id"]: p for p in (getattr(scope, "proofs", None) or ())}
-        texts = self.memory.ledger.requirements
+        texts = self._requirement_texts_now()
         by_pid: Dict[str, List[dict]] = {}
         for record in records:
             by_pid.setdefault(record["typed"]["proof_id"], []).append(record)
@@ -14151,6 +14219,7 @@ class Session:
             if not self._admit_repair(spec, "gate fix", "gate-repair", self._gate_repair_stages(spec, gate, kind),
                                       after="check", wall_extra=wall_extra, wall_known=wall_known):
                 break
+            self._fix_cycle_now = getattr(self, "_gate_fixes_used", 0) + 1
             try:
                 fix = self._edit(
                     lead,
@@ -14168,6 +14237,8 @@ class Session:
                 # No fix call to keep the finish: the failed check stands.
                 self._finish_refused(spec, "gate fix", exc)
                 break
+            finally:
+                self._fix_cycle_now = 0
             task.record("assistant", fix)
             task.keep(fix, kind="gate-fix")
             latest_fix = fix

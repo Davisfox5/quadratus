@@ -152,7 +152,7 @@ WORKER_TREE: dict = {
     "lookup": "grok:worker",
     #: Read something long and digest it. The widest cheap window that is not
     #: an unverified vendor claim (1.1M against Haiku's 200K).
-    "read": "openai:gpt-5.6-luna",
+    "read": "openai:luna",
     #: Read a screenshot, PDF, or image. Picked for the capability rather than
     #: the window: the Claude CLI reads image files off disk directly.
     "visual": "claude:haiku",
@@ -163,8 +163,8 @@ WORKER_TREE: dict = {
     "code": "claude:haiku",
     #: Format, tag, sort, extract fields, draft boilerplate. Literal-minded
     #: is a feature here.
-    "format": "openai:gpt-5.6-luna",
-    "draft": "openai:gpt-5.6-luna",
+    "format": "openai:luna",
+    "draft": "openai:luna",
 }
 
 #: Escalation stays in the family: an errand the base worker could not do,
@@ -182,7 +182,7 @@ WORKER_TREE: dict = {
 #: cannot be invoked passes that check and fails at transport instead.
 WORKER_ESCALATION: dict = {
     "claude:haiku": "claude:sonnet",
-    "openai:gpt-5.6-luna": "openai:gpt-5.6-terra",
+    "openai:luna": "openai:terra",
     "grok:worker": "grok:expert",
 }
 

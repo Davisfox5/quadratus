@@ -573,6 +573,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         )
         if parent is not None:
             checkpoint.restore_state(session, body['state'])
+            # The resumed episode addresses the models the job already
+            # resolved; the current catalogue is recorded beside them.
+            frozen = (getattr(session, 'model_resolution', None) or {}).get('resolutions')
+            if frozen and hasattr(fleet, 'freeze'):
+                fleet.freeze(frozen)
+        _record_models(session, fleet)
         session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
         interrupted = isinstance(exc, KeyboardInterrupt)
@@ -719,6 +725,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'changes.diff').write_text(diff, encoding='utf-8')
     (run_dir / 'ledger.md').write_text(ledger, encoding='utf-8')
     (run_dir / 'report.md').write_text(report, encoding='utf-8')
+    _record_models(session, fleet)
     (run_dir / 'result.json').write_text(json.dumps({
         'project': str(project.root), 'goal': goal, 'completed': completed,
         'allow_writes': allow_writes, 'error': error, 'checks': checks,
@@ -740,6 +747,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'judgment_gaps': list(getattr(session, 'judgment_gaps', []) or []) if session else [],
         # The last obligations view the planner or the audit read (quadratus.obligations).
         'obligations': dict(getattr(session, 'obligation_view', {}) or {}) if session else {},
+        # Each family's resolution for this job and its provenance (the
+        # codex catalogue as read, the grok listing), quadratus.latest.
+        'models': dict(getattr(session, 'model_resolution', {}) or {}) if session else {},
         # Typed delivery records (quadratus.delivery): review findings with
         # per-id dispositions, evidence obligations with execution and
         # sufficiency apart, the plan admissions decided before each wave,
@@ -1100,6 +1110,17 @@ def _unfulfilled_requirements(session, completed) -> list:
         return []
     return ['Requirements no finished task covers when the run stopped: '
             + '; '.join(f"{rid}: {str(ledger.requirements[rid])[:120]}" for rid in left)]
+
+
+def _record_models(session, fleet) -> None:
+    """Copy the Fleet's resolution record onto the session (result.json
+    ``models``, the checkpoint). Never raises: a fake fleet has none."""
+    try:
+        record = fleet.resolution_record()
+    except Exception:  # noqa: BLE001 -- a fake fleet without resolutions (tests)
+        return
+    if session is not None and isinstance(record, dict):
+        session.model_resolution = record
 
 
 def _requirements_record(session):

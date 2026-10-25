@@ -56,7 +56,7 @@ def test_recheck_requires_unambiguous_boundary_verdict(tmp_path, reply, resolved
     session = Session('fix', store, lambda *a: reply)
     unresolved = session._recheck_blocking(
         TaskSpec('t1', 'fix'), [('claude:opus', 'BLOCKING: focus escapes')],
-        'Fixed focus', TaskMemory('t1', 'openai:gpt-5.6-sol', store),
+        'Fixed focus', TaskMemory('t1', 'openai:sol', store),
     )
     # Not resolved is either a genuine finding (UNRESOLVED, BLOCKING, NOT
     # RESOLVED: it buys the fix round) or no verdict at all (INVALID: an open

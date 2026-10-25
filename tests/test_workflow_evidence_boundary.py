@@ -198,7 +198,8 @@ def test_the_recorded_delivery_is_the_bytes_the_reviewer_read_and_the_bytes_kept
     t1 = _task(replay, "t1")
     assert replay.result.completed, replay.result.error
     reviewer = replay.of("design-review")[0]
-    assert t1["delivery"]["reviewer"].endswith(reviewer.model) and reviewer.vendor != "claude"
+    resolved = H.result_json(replay)["models"]["resolutions"][t1["delivery"]["reviewer"]]["wire"]
+    assert resolved == reviewer.model and reviewer.vendor != "claude"
     assert sorted(seen) == EVIDENCE, "every mandatory file reached the reviewer"
     assert t1["delivery"]["files"] == seen, "the record names exactly what the reviewer read"
     assert {rel: _sha(replay.project / rel) for rel in EVIDENCE} == seen, "and what the project keeps"

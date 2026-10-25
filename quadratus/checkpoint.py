@@ -60,14 +60,14 @@ _CARRIED = (
     "review_dispositions", "not_started", "judgment_completions", "judgment_gaps",
     "review_findings", "evidence_obligations", "plan_admissions", "operations", "_requirement_revision_record",
     "_plan_gate_receipt", "_route_forfeit", "_terminal_route", "proof_binding_problems",
-    "scenario_corrections", "evidence_routes", "_scenario_corrected",
+    "scenario_corrections", "evidence_routes", "_scenario_corrected", "model_resolution",
 )
 #: Carried state added by the A+B batch (2026-10-18): absent from earlier
 #: checkpoints, which are still readable and resumable with these empty.
 _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admissions", "operations",
                           "_requirement_revision_record", "_plan_gate_receipt", "_route_forfeit",
                           "_terminal_route", "proof_binding_problems", "scenario_corrections",
-                          "evidence_routes", "_scenario_corrected"})
+                          "evidence_routes", "_scenario_corrected", "model_resolution"})
 #: Carried state the engine no longer holds, with what a non-empty value
 #: means. A checkpoint written before 2026-10-20 may carry size-trim
 #: records whose independent preservation judgment was still pending; the

@@ -24,9 +24,9 @@ from quadratus.registry import MODE_ROSTERS, ORCHESTRATOR_CHAIN, VENDORS
 from quadratus.runtime import Fleet
 from tests.test_runtime import FakeCLIProvider
 
-ASTRA = "openai:gpt-6-astra"
+ASTRA = "openai:astra"
 FABLE = "claude:fable"
-PINNED_ROW = "openai:gpt-5.6-terra"   # a genuinely pinned row
+PINNED_ROW = "openai:terra"   # resolves to exactly one slug (gpt-5.6-terra in the fixture catalogue)
 GROK_DEFAULT = "grok:default"
 
 
@@ -118,15 +118,20 @@ def test_binary_probe_uses_operator_binary_override(monkeypatch):
     assert grok.ok and grok.path == '/custom/grok'
 
 
-def test_a_floating_model_falls_through_to_its_next_candidate(monkeypatch, cache):
-    """Where a vendor will not take a bare line name, the probe is what finds
-    the name it will take."""
-    providers = {"openai": PickyProvider("openai", accepts={"gpt-6"})}
+def test_a_family_is_probed_on_the_one_slug_the_catalogue_resolves_and_never_walked(monkeypatch, cache):
+    """A family has exactly one answer on this machine: the installed
+    client's latest release of it. The probe calls that slug and no other;
+    a family the catalogue cannot resolve is reported, not guessed at."""
+    providers = {"openai": PickyProvider("openai", accepts={"gpt-6-astra"})}
     fleet = _fleet(monkeypatch, providers)
     (result,) = probe_models([ASTRA], fleet=fleet)
-    assert result.ok and result.alias == "gpt-6"
-    assert result.rejected == ("gpt-6-astra",)
-    assert providers["openai"].tried == ["gpt-6-astra", "gpt-6"]
+    assert result.ok and result.alias == "gpt-6-astra" and result.rejected == ()
+    assert providers["openai"].tried == ["gpt-6-astra"]
+    monkeypatch.setenv("QUADRATUS_CODEX_CATALOG", str(cache.parent / "absent.json"))
+    providers = {"openai": PickyProvider("openai", accepts={"gpt-6-astra"})}
+    (result,) = probe_models([ASTRA], fleet=_fleet(monkeypatch, providers))
+    assert not result.ok and result.detail.startswith("unavailable: catalogue missing")
+    assert providers["openai"].tried == [], "nothing is tried on a guess"
 
 
 def test_a_pinned_model_is_tried_once_and_never_walked(monkeypatch, cache):

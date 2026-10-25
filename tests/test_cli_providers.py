@@ -769,8 +769,10 @@ def _seat_argv(monkeypatch, cls, key):
     from quadratus.latest import alias_for
     from quadratus.registry import resolve
     monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/x")
+    import os
     spec = resolve(key)
-    alias = alias_for(key, env={}, cache={})
+    # No operator override, the test session's catalogue.
+    alias = alias_for(key, env={"QUADRATUS_CODEX_CATALOG": os.environ["QUADRATUS_CODEX_CATALOG"]}, cache={})
     provider = cls(model=alias).for_seat(
         alias, effort=spec.effort, restricted=spec.restricted
     )
@@ -783,7 +785,7 @@ def test_every_vendor_can_express_a_bounded_worker(monkeypatch):
     grok only made it visible by reporting 120K tokens for a one-line
     function."""
     claude = _seat_argv(monkeypatch, ClaudeCLIProvider, "claude:haiku")
-    codex = _seat_argv(monkeypatch, CodexCLIProvider, "openai:gpt-5.6-luna")
+    codex = _seat_argv(monkeypatch, CodexCLIProvider, "openai:luna")
     grok = _seat_argv(monkeypatch, GrokCLIProvider, "grok:worker")
     # Each vendor spells the dial differently; the roster row says only "low".
     assert claude[claude.index("--effort") + 1] == "low"
@@ -805,7 +807,7 @@ def test_a_restricted_codex_keeps_its_mandatory_flag(monkeypatch):
     scratch directory that is not a repository. always_args is unconditional
     for exactly this reason, which is why grok's --always-approve had to move
     out of it to agentic_args rather than be skipped along with it."""
-    argv = _seat_argv(monkeypatch, CodexCLIProvider, "openai:gpt-5.6-luna")
+    argv = _seat_argv(monkeypatch, CodexCLIProvider, "openai:luna")
     assert "--skip-git-repo-check" in argv
 
 

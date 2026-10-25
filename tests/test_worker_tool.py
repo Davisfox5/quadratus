@@ -393,9 +393,9 @@ def test_fleet_takes_the_whole_vendor_out_on_a_rejected_sign_in(monkeypatch):
         raise error
     monkeypatch.setattr(provider, "generate", boom)
     with pytest.raises(WindowExhausted):
-        fleet._generate("openai:gpt-5.6-sol", provider, "p", "")
+        fleet._generate("openai:sol", provider, "p", "")
     spent = fleet.exhausted if isinstance(fleet.exhausted, dict) else fleet.exhausted()
-    assert "openai:gpt-6-astra" in spent and "openai:gpt-5.6-sol" in spent
+    assert "openai:astra" in spent and "openai:sol" in spent
 
 
 def test_a_request_after_a_short_preface_is_still_a_request():

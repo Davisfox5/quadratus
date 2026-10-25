@@ -23,7 +23,7 @@ from quadratus.task_kinds import (
 
 TRUST = MODE_ROSTERS["adversarial"]["peers"]
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 GROK = "grok:default"
 GROK_WORKER = "grok:worker"
 FABLE = "claude:fable"

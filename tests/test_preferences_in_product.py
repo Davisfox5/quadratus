@@ -79,7 +79,7 @@ def test_neutral_mode_travels_in_settings_not_the_process(monkeypatch):
     from quadratus.runtime import Fleet
     fleet = Fleet(Settings(neutral_preferences=True))
     monkeypatch.setattr("quadratus.cli_providers.CLIProvider.available", lambda self: True)
-    view = fleet.provider_for("openai:gpt-5.6-sol")
+    view = fleet.provider_for("openai:sol")
     assert "--ignore-user-config" in view._build_argv("p", "")
     import os
     assert "QUADRATUS_NEUTRAL_PREFERENCES" not in os.environ

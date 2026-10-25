@@ -2536,6 +2536,43 @@
       "decisions": [
         "claude: Delivered fff4e99 on c694660. Production: session.py (observed receipts discharge proof rows; no repeat run of a source a check already ran; rows refreshed before judgment bindings; post-merge recheck handed the child's rows; typed SCENARIO finding to one planner correction per task with KEEP/REQUIREMENT paths; typed EVIDENCE finding to harness action and the original reviewer, held in a parallel child; routed-only rounds make no editing call; planner stage costed in fix-cycle admission; finding marks survive the per-id rebuild), project_run.py (result.json scenario_corrections and evidence_routes; report.md names requirements no finished task covers at an incomplete stop), checkpoint.py (new records carried). Tests: tests/lifecycle/test_workflow_repair.py 18 controls; two fix-cycle patchers in test_boundary_correction accept the new keywords. Focused runs green: proof_declaration_feedback+proof_binding 38, finish_capacity 15, delivery_controller+judgment_integrity 47, lifecycle_matrix+step2_recovery+boundary_records+boundary_correction 319, requirements_ledger+project_workflow+factual_closeout+session+jobstore_faults 122. No full suite on this side. Open tradeoff for root and Davis: a parallel child cannot run the gate in its snapshot (no dependency tree), so pre-review receipts exist only serially; in parallel the reviewer sees the fact stated and the same reviewer settles after the merge gate."
       ]
+    },
+    {
+      "id": "T-effort-families",
+      "purpose": "Family identifiers with latest-release resolution from the installed clients (codex models_cache.json, claude family aliases, grok models default), frozen per job with provenance and drift recorded; deterministic per-call reasoning effort from role, difficulty, kind, security, fix cycle and recheck impact, validated against the resolved model's ladder and recorded on every invocation; same-source receipt reuse across tasks and the child scenario correction's requirement text (root findings on fff4e99)",
+      "base": "302e832",
+      "owns": [
+        "quadratus/catalog.py",
+        "quadratus/effort.py",
+        "quadratus/latest.py",
+        "quadratus/registry.py",
+        "quadratus/runtime.py",
+        "quadratus/delegation.py",
+        "quadratus/session.py",
+        "quadratus/project_run.py",
+        "quadratus/checkpoint.py",
+        "quadratus/probe.py",
+        "quadratus/task_kinds.py",
+        "quadratus/workers.py",
+        "quadratus/routing.py",
+        "quadratus/usage.py",
+        "quadratus/config.py",
+        "tests/test_catalog.py",
+        "tests/test_effort_policy.py",
+        "tests/test_model_resolution.py",
+        "tests/test_latest.py",
+        "tests/lifecycle/test_effort_and_families.py",
+        "tests/conftest.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-25T00:04:31Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [

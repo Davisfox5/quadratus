@@ -237,7 +237,7 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
     assert roles.count("revision") == 1 and roles.count("recheck") == 2, roles
     admitted = [a for a in H.result_json(calibration)["plan_admissions"] if a["task"] == "t1" and a["scope"] == "full"]
     assert admitted[0]["stages"] == ["lead draft(editing/write)",
-                                    "review by openai:gpt-5.6-sol(reserve)", "review by grok:default(reserve)"]
+                                    "review by openai:sol(reserve)", "review by grok:default(reserve)"]
     assert before + 1 - admitted[0]["at_attempt"] - 2 >= 3, (admitted, before)
     # The reassessment follows the DONE audit, which has started; the cap's
     # goal question is still held one call (Davis, 2026-10-16), so with one

@@ -401,6 +401,6 @@ def test_the_round_budget_is_stated_only_where_a_cap_applies(tmp_path):
     note = capped._turn_budget_note("grok:default")
     assert "at most 12 tool rounds" in note and "about round 4" in note and "about round 8" in note
     assert capped._turn_budget_note("claude:opus")
-    assert capped._turn_budget_note("openai:gpt-5.6-sol") == "", "codex has no round cap"
+    assert capped._turn_budget_note("openai:sol") == "", "codex has no round cap"
     assert session(allow_writes=True)._turn_budget_note("grok:default") == ""
     assert session(allow_writes=False, lead_max_turns=12)._turn_budget_note("grok:default") == ""

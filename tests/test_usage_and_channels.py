@@ -21,7 +21,7 @@ from .test_session import Recorder
 
 FABLE = "claude:fable"
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 
 
 @pytest.fixture

@@ -2656,6 +2656,54 @@ Key design decisions already settled:
   stops incomplete, because the ticket run's report did not say R23 had
   never been scheduled.
 
+- **A seat names a family; the installed client names the release**
+  (2026-10-24). Roster keys are families: `claude:opus`, `openai:sol`,
+  `openai:astra`, `openai:luna`, `openai:terra`, `grok:default`. Legacy
+  version keys (`openai:gpt-5.6-sol`) still resolve through
+  `registry.resolve`/`canonical_key` so histories and operator inputs keep
+  reading; they are never wire strings. `latest.resolve_model` answers per
+  vendor: Claude's family alias goes on the wire as written (the CLI
+  resolves it; the probe's alias cache is a record, never a source, so a
+  dated id probed months ago cannot pin the seat); Codex takes the family's
+  latest visible, client-compatible slug from the installed client's own
+  `~/.codex/models_cache.json` (`catalog.read_codex_catalog`: schema,
+  freshness within `QUADRATUS_CATALOG_MAX_AGE_HOURS`, default 168, and the
+  writing client compared to the installed one), ordered numerically
+  (6.10 above 6.9, a 7 above any 6.x); Grok sends no flag and the
+  `grok models` default is recorded beside the call. A missing, stale,
+  malformed or mismatched catalogue makes the family *unavailable*, with
+  the reason on the status line and in `result.json` `models`; nothing
+  older is selected from memory and no slug is invented (the installed
+  Terra is 5.6; no 6 exists). `QUADRATUS_ALIAS_<VENDOR>_<FAMILY>` is the one
+  visible exception. A job resolves each family once (`Fleet._resolution`),
+  a parallel child shares the parent's answers, a resumed episode keeps
+  the job's (`model_resolution` rides the checkpoint; the current
+  catalogue's drift is recorded, never followed). The API backend still
+  needs dated ids: the configured OpenAI model stands for Sol, every other
+  family an explicit `QUADRATUS_API_MODEL_*`.
+- **Effort is decided from facts the harness holds, on every call**
+  (`effort.select`, policy `effort/1`). Inputs: role, the task's declared
+  complexity and kind, work class, security, the fix cycle, the worst
+  impact a recheck is about. Planner `high` and held for the session
+  (the cache survives); `decide` and declarations `low`; implementation
+  `medium`, `low` for rote, `high` for complex or security-grade work
+  (security, concurrency, perf, architect, iac); every judging seat floors
+  at `medium`, `high` for complex, security-grade or review-kind work, a
+  repeated or immediate-risk recheck, the verifier and the final audit; a
+  second fix cycle raises the editor one step; `xhigh`/`max` only for
+  complex, risk-bearing work still open at cycle 2 on a ladder that has
+  the level, and `ultra` never (the catalogue calls it automatic task
+  delegation). Bounded seats keep their roster effort. The session passes
+  the inputs on the invocation context (`effort_inputs`); the Fleet decides
+  against the resolved model's ladder (codex per slug, claude
+  low/medium/high/max, grok low/medium/high/xhigh), validates, and refuses
+  a level the ladder lacks (`UnsupportedEffort`) instead of lowering a
+  floor; only an elevated level is bounded, to high, with the reason. Every
+  ledger row carries `effort`, `effort_reasons`, `effort_policy` and
+  `resolution_source`; no call inherits a CLI default (the installed Sol
+  defaults to `low` where its API documents `medium`). The budget never
+  reads effort.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

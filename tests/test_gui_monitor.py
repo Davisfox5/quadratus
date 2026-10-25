@@ -26,14 +26,14 @@ def test_the_view_renders_status_and_history_from_the_run_directory(tmp_path):
     run_dir = tmp_path / ".quadratus" / "runs" / "20261007T120000Z-0badcafe"
     run_dir.mkdir(parents=True)
     (run_dir / "invocations.jsonl").write_text(json.dumps(dict(
-        task="T2", role="verifier", canonical_model="openai:gpt-5.6-sol", invoked=True, outcome="ok",
+        task="T2", role="verifier", canonical_model="openai:sol", invoked=True, outcome="ok",
         seconds=3.0, input_tokens=10, output_tokens=5)) + "\n")
-    (run_dir / "usage.jsonl").write_text(json.dumps(dict(model="openai:gpt-5.6-sol", input_tokens=10,
+    (run_dir / "usage.jsonl").write_text(json.dumps(dict(model="openai:sol", input_tokens=10,
                                                          output_tokens=5)) + "\n")
     before = _tree(tmp_path)
     markdown, rows = gui.monitor_view(str(tmp_path))
     assert "**Task:** T2 (stage review)" in markdown
-    assert "**Seat:** openai:gpt-5.6-sol" in markdown
+    assert "**Seat:** openai:sol" in markdown
     assert "### Run: unknown" in markdown  # a project run records no pid
     assert len(rows) == 1 and len(rows[0]) == len(HISTORY_COLUMNS)
     assert rows[0][0] == "20261007T120000Z-0badcafe" and rows[0][3] == "unfinished" and rows[0][4] == 15

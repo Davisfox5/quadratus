@@ -92,8 +92,8 @@ def test_serial_the_last_wave_closes_factually_and_the_finish_runs_inside_the_li
     assert budget["finish_protection"]["refusals"] == []
     record = json.loads(replay.artifact_texts("factual-closeout")[0])
     assert record["task"] == "t2" and "last dispatched wave" in record["why"]
-    assert record["reviews"] == [["openai:gpt-5.6-sol", "reviewed: blocking findings"],
-                                 ["openai:gpt-5.6-sol", "recheck: RFT2-1 resolved"]]
+    assert record["reviews"] == [["openai:sol", "reviewed: blocking findings"],
+                                 ["openai:sol", "recheck: RFT2-1 resolved"]]
     assert record["check"] == "last check PASSED on the current source"
     assert record["changed"] == ["README.md"] and len(record["evidence"]) == 2
     summary = H.result_json(replay)
