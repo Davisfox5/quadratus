@@ -182,8 +182,13 @@ def test_project_budget_stop_preserves_actual_edit_and_provider_success(tmp_path
             'result': 'saved', 'usage': {'input_tokens': 4, 'output_tokens': 2},
         }), '')
     monkeypatch.setattr('quadratus.cli_providers._launch', launch)
-    monkeypatch.setattr('quadratus.runtime.build_provider',
-                        lambda *a, **kw: ClaudeCLIProvider('fable', **kw))
+    def build(name, settings, **kw):
+        # The Fleet asks the factory for the vendor's transport only and
+        # binds the seat's family itself; the flag is the factory's, never
+        # the provider's.
+        assert kw.pop('resolve_family', None) is False
+        return ClaudeCLIProvider('fable', **kw)
+    monkeypatch.setattr('quadratus.runtime.build_provider', build)
     def run(self, **kwargs):
         assert self.config.worker_budget.max_concurrent == 2
         self.invoke('claude:fable', 'edit', allow_writes=True)

@@ -161,7 +161,12 @@ def test_an_approved_design_task_records_what_was_delivered_and_the_response(tmp
     assert t1["contract"]["required"]["design_evidence"] == "self" and t1["contract"]["required"]["design_review"]
     assert t1["edges"]["delivered"] is True and t1["edges"]["reviewer"] is True
     reviewer = replay.of("design-review")[0]
-    assert t1["delivery"]["reviewer"].endswith(reviewer.model), "the reviewer actually called"
+    # The delivery names the reviewer seat by its stable family key; the job's
+    # model record resolves that key to the release the native call carried.
+    seat = t1["delivery"]["reviewer"]
+    assert seat == "openai:sol" and reviewer.vendor == "codex", "the cross-vendor reviewer actually called"
+    resolved = H.result_json(replay)["models"]["resolutions"][seat]
+    assert resolved["wire"] == reviewer.model and resolved["status"] == "resolved", (resolved, reviewer.model)
     assert sorted(t1["delivery"]["files"]) == [".quadratus/design-evidence/t1/desktop/evidence.json",
                                                ".quadratus/design-evidence/t1/desktop/page.png",
                                                ".quadratus/design-evidence/t1/mobile/evidence.json",
