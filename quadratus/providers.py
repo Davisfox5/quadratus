@@ -621,7 +621,8 @@ _REGISTRY = {
 }
 
 
-def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None) -> Optional[LLMProvider]:
+def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None,
+                   resolve_family: bool = True) -> Optional[LLMProvider]:
     """Build a single provider by name from settings, or ``None`` if unknown.
 
     The transport is chosen per provider by ``settings.backend_for(name)``:
@@ -638,6 +639,14 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
     coding agent asked merely to critique will edit the working tree, and
     several of them at once is write-thrash. The API backends have no file
     access to grant.
+
+    ``resolve_family``: the bare path (``build_providers``, the four-phase
+    pipeline) binds the provider to the configured tier's family, resolved
+    through quadratus.latest once the installed client is known. A Fleet
+    passes False: it binds each seat's own family per call, and the
+    vendor's transport availability must not depend on whether the
+    settings' default family resolves (root's isolation control on
+    aab4fe7: a catalogue without Sol took Luna and Astra down with it).
     """
     entry = _REGISTRY.get(name)
     if entry is None:
@@ -654,9 +663,8 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
         if cli_cls is None:
             log.warning("No CLI backend for %r; falling back to the API backend.", name)
         else:
-            wire, unavailable = _cli_wire_model(name, settings)
             provider = cli_cls(
-                model=wire,
+                model=settings.model_for(name),
                 allow_writes=allow_writes,
                 workdir=workdir,
                 max_tokens=settings.max_tokens,
@@ -665,11 +673,19 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
                 retry_base_delay=settings.retry_base_delay,
                 refusal_fallback_model=settings.refusal_fallback_for(name),
             )
-            if unavailable:
-                # A family the installed client cannot resolve: the provider
-                # is built so the status line can say why, and makes no call.
-                provider._client = None
-                provider._init_error = unavailable
+            if resolve_family and provider.available():
+                # After construction, so the installed client's version is
+                # known to the catalogue check (minimal_client_version).
+                wire, unavailable = _cli_wire_model(name, settings,
+                                                    installed_client=getattr(provider, "client_version", None))
+                if unavailable:
+                    # A family the installed client cannot resolve: the
+                    # provider is kept so the status line can say why, and
+                    # makes no call. The transport itself is untouched.
+                    provider._client = None
+                    provider._init_error = unavailable
+                else:
+                    provider.model = wire
             return provider
 
     return cls(
@@ -683,7 +699,7 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
     )
 
 
-def _cli_wire_model(name: str, settings):
+def _cli_wire_model(name: str, settings, *, installed_client=None):
     """``(wire model, why unavailable)`` for the bare CLI path: the
     configured tier name is a family (``sol``, ``opus``) or the vendor
     default (``""``), resolved through quadratus.latest exactly as a Fleet
@@ -694,7 +710,7 @@ def _cli_wire_model(name: str, settings):
     if not alias:
         return alias, None
     from .latest import resolve_model  # lazy: latest imports this module
-    found = resolve_model(f"{name}:{alias}")
+    found = resolve_model(f"{name}:{alias}", installed_client=installed_client)
     if found.available:
         return found.wire or "", None
     return alias, f"{name}:{alias} is not usable: {found.reason}"

@@ -196,3 +196,65 @@ def test_a_probe_view_at_low_records_low(tmp_path, built):
     row = ledger.events[-1]
     assert row.effort == 'low'
     assert row.effort_reasons == ["explicit view effort low; the seat's policy decision was high"]
+
+
+# -- 8. the factory's family resolution never decides a vendor's transport availability ------------
+
+def _fake_codex(monkeypatch):
+    monkeypatch.setattr('quadratus.cli_providers.shutil.which', lambda _: '/fake/codex')
+    monkeypatch.setattr('quadratus.cli_providers.client_version', lambda *a: '0.163.0')
+
+
+def test_a_catalogue_without_the_default_family_leaves_the_other_families_usable(tmp_path, monkeypatch):
+    """Root's isolation control on aab4fe7: real build_provider under the
+    Fleet, a catalogue listing only Luna. Luna is usable, Sol is not, and
+    the vendor's transport is available either way."""
+    _fake_codex(monkeypatch)
+    p = write_codex_catalog(tmp_path / 'catalog.json',
+                            models=[{'slug': 'gpt-6-luna', 'supported_reasoning_levels': ['low', 'medium', 'high']}])
+    monkeypatch.setenv('QUADRATUS_CODEX_CATALOG', str(p))
+    fleet = Fleet(Settings(backend='cli'), project=tmp_path)
+    try:
+        assert fleet.available('openai:luna')
+        assert not fleet.available('openai:sol')
+        sol = fleet.resolution_record()['resolutions']['openai:sol']
+        assert sol['status'] == 'unavailable' and sol['reason'] == 'no sol model in the catalogue'
+        status = [line for line in fleet.status_lines() if line.startswith('openai')][0]
+        assert 'unavailable' not in status.split(';')[0], status
+        assert fleet._vendor_provider('openai').model in ('sol', 'luna'), 'the transport carries the tier name, never a resolved default'
+    finally:
+        fleet.close()
+
+
+def test_a_held_family_survives_a_catalogue_that_later_drops_it(tmp_path, monkeypatch):
+    _fake_codex(monkeypatch)
+    p = write_codex_catalog(tmp_path / 'catalog.json')
+    monkeypatch.setenv('QUADRATUS_CODEX_CATALOG', str(p))
+    fleet = Fleet(Settings(backend='cli'), project=tmp_path)
+    try:
+        assert fleet.available('openai:luna') and fleet._resolution('openai:luna').wire == 'gpt-6-luna'
+        p.unlink()
+        child = fleet.fork(tmp_path)
+        assert fleet.available('openai:luna') and child.available('openai:luna')
+        assert child.provider_for('openai:luna').model == 'gpt-6-luna'
+    finally:
+        fleet.close()
+
+
+def test_the_bare_factory_checks_the_catalogue_against_the_installed_client(tmp_path, monkeypatch):
+    from quadratus.providers import build_provider
+    _fake_codex(monkeypatch)
+    p = write_codex_catalog(tmp_path / 'catalog.json', models=[
+        {'slug': 'gpt-6.1-sol', 'supported_reasoning_levels': ['low', 'medium', 'high'], 'minimal_client_version': '0.170.0'},
+        {'slug': 'gpt-6-sol', 'supported_reasoning_levels': ['low', 'medium', 'high']}])
+    monkeypatch.setenv('QUADRATUS_CODEX_CATALOG', str(p))
+    provider = build_provider('openai', Settings(backend='cli'), workdir=tmp_path)
+    try:
+        assert provider.available() and provider.model == 'gpt-6-sol', 'the release the installed client may use'
+    finally:
+        provider.cleanup()
+    gated = build_provider('openai', Settings(backend='cli'), workdir=tmp_path, resolve_family=False)
+    try:
+        assert gated.available() and gated.model == 'sol', 'a Fleet binds the family itself'
+    finally:
+        gated.cleanup()

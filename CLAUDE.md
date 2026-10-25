@@ -2721,9 +2721,13 @@ Key design decisions already settled:
   every quiescent point refreshes it first; a resumed episode freezes the
   job's resolutions before any seat or availability decision. The bare
   factory (`providers.build_provider`) resolves a configured family through
-  `latest.resolve_model` before building a CLI provider, and reports an
-  unresolvable family as unavailable instead of sending its name as a
-  model id. A view that sets its own effort (the retained closeout view,
+  `latest.resolve_model` after the provider is built (so the installed
+  client's version is known) and reports an unresolvable family as
+  unavailable instead of sending its name as a model id; a Fleet passes
+  `resolve_family=False`, because it binds each seat's family per call and
+  a vendor's transport must not depend on the settings' default family
+  (root's isolation control on aab4fe7: a catalogue without Sol took Luna
+  and Astra down with it). A view that sets its own effort (the retained closeout view,
   a probe at low) records the effort it sends, with the seat's policy
   decision named beside it. The effort inputs a recheck sets are cleared
   on every exit of the call, and a task entry resets them.

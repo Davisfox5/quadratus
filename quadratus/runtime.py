@@ -236,9 +236,13 @@ class Fleet:
                 if vendor not in VENDORS:
                     self._providers[vendor] = None
                 else:
+                    # The vendor's transport only: each seat's family is
+                    # bound per call (provider_for), so no default family's
+                    # resolution decides whether the vendor is usable.
                     provider = build_provider(
                         vendor, self.settings, allow_writes=False,
                         workdir=self.project.root if self.project else None,
+                        resolve_family=False,
                     )
                     if provider is not None and not provider.available():
                         log.warning("%s is not available: %s", vendor, provider.status)
