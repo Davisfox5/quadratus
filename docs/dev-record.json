@@ -2623,13 +2623,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-26T02:53:00Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "b9926154b4e976b08df7572fc803a227f4716fb4",
+        "at": "2026-10-26T03:33:52Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: bf30f82 provisional, b992615 final (engine: session.py, judgment.py, checkpoint.py, project_run.py). Typed claims type with hyphen/en dash/em dash/minus/colon and full semantics only; near-miss, unbound and repeated-scenario claims held unroutable, never the editor's; recheck restatements routed before editor rounds; one correction per scenario, ambiguous or blank reply lines change nothing, replies read line by line; one close policy for serial and batch closes with a fail-closed two-way review-debt hold, held debt in the last slot goes to the cap's decision; close_decisions carried, sealed and published; DEFERRED shares separators; judgment's no-finding sentinel anchored. Receipts: broad focused 533 passed (pre-correction bytes); affected files 340 passed (final bytes); matrix 43 + sentinel 16 new cases. Root owns full suite, CI, install, freeze, one diagnostic run."
+      ]
     }
   ],
   "receipts": [
