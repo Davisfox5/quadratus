@@ -2204,11 +2204,27 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "reviewed",
       "claimed_at": "2026-10-26T02:57:28Z",
       "acknowledged": true,
-      "delivery": null,
-      "reviews": [],
+      "delivery": {
+        "sha": "4409119c4db52776317f8741527ee5c612af31c8",
+        "at": "2026-10-26T03:05:04Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "4409119c4db52776317f8741527ee5c612af31c8",
+          "verdict": "cleared",
+          "evidence": "Independent Codex source review: exact Git archive bytes verified against9dca3b1 and pinned SHA; fixed R1/R2/R3 rubric unchanged across predecessor/current; actual expected R3 failure asserted without skip/xfail; positive synthetic-audited controls pass; inherited input hashes stable before/after current-tool substitution; integrity helper rejects altered snapshots and incomplete rubric IDs rejected.53focusedPASS0skip (9new+44existing), full Ruff PASS. One real reporting defect only; duplicate metadata-only snapshot discarded. No engine/provider calls, runtime edits, PR73 ownership changes or live recovery claims. Full CI pending.",
+          "scope": [
+            "tests/test_research_handoff_pairs.py",
+            "tests/fixtures/research_handoff/",
+            "docs/RESEARCH_HANDOFF_REGRESSIONS.md"
+          ],
+          "at": "2026-10-26T03:05:04Z"
+        }
+      ],
       "blockers": [],
       "decisions": [],
       "acknowledged_at": "2026-10-26T02:57:28Z"
