@@ -2192,6 +2192,26 @@
         "candidate": "5746057fcf7c5555327e5e25b8c51912a1df8b20",
         "at": "2026-10-18T18:19:11Z"
       }
+    },
+    {
+      "id": "T-research-failed-handoff",
+      "purpose": "User-authorized PR82 side task: standalone failed-handoff and broken/fixed regression pairs; avoid active PR73 runtime ownership",
+      "base": "10880af1c1289447d64956488965febd0d35ab70",
+      "owns": [
+        "tests/test_research_handoff_pairs.py",
+        "tests/fixtures/research_handoff/",
+        "docs/RESEARCH_HANDOFF_REGRESSIONS.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-26T02:57:28Z",
+      "acknowledged": true,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [],
+      "acknowledged_at": "2026-10-26T02:57:28Z"
     }
   ],
   "receipts": [
