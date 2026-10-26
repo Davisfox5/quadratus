@@ -1,0 +1,15 @@
+{
+  "kind": "archived_real_source_for_offline_regression",
+  "predecessors": [
+    {
+      "name": "early_report",
+      "path": "early_report.py.txt",
+      "commit": "9dca3b10e21ca96566b7a60cf6431b2a01d1ab0c",
+      "source_path": "tools/research_usage_report.py",
+      "sha256": "5c5fb6d0b111f6c5dc002326da412985a2e318e732b0f448dbe704e2fb839a2c"
+    }
+  ],
+  "live_agent_claims": "none; these are archived implementation states, not evidence of an agent continuation trial",
+  "engine_invocations": 0,
+  "note": "One unique archived implementation. cfb7eb3 was a metadata-only commit with identical source and is deliberately not counted as another predecessor."
+}
