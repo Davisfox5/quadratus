@@ -2608,6 +2608,28 @@
       "decisions": [
         "claude: 629b18a: grok max_turn_requests typed as the cap (TurnLimitReached, partial text, turns, exact usage); no generic ProviderError recovery (root boundary evidence); raised parallel child leaves failed_records with the unmerged artifact, cap baselines and the failed call's role; sealed terminal carries current failed/turn_limited/records/baselines/_partial_tasks including empty values. Focused: 385 passed (new 14 unit + 12 lifecycle with adjacent suites). Root owns the final-source controls, the one full suite, CI, install, freeze."
       ]
+    },
+    {
+      "id": "T-close-family",
+      "purpose": "Close family: typed claims with normal punctuation and full semantics, unroutable claims held not edited, per-scenario corrections with unambiguous replies, one close policy for serial and batch closes with a fail-closed review-debt hold, durable close decisions",
+      "base": "c59e19c56f89169e7b1eda561cac40d9a36ea37a",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tests/lifecycle/test_close_family.py",
+        "tests/lifecycle/test_workflow_repair.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-26T02:53:00Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [

@@ -1727,11 +1727,23 @@ _TYPED_FINDING_FORMS = (
     "on this exact source, with nothing else wrong with it, is an evidence gap, not a code finding: report "
     "it as 'BLOCKING: EVIDENCE P<n> - <what is not shown> | basis: P<n> | impact: contract'; the harness runs "
     "the checks it can and you re-check the row.")
-_SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(P\d+)\s*[-:]\s*(.+?)\s*\|\s*proposal\s*:\s*"
-                             r"(operation|state|expect)\s*:\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL)
-_EVIDENCE_CLAIM = re.compile(r"^\s*EVIDENCE\s+(P\d+)\s*[-:]\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL)
-_SCENARIO_REPLY = re.compile(r"^\s*SCENARIO\s+(P\d+)\s*:\s*(operation|state|expect|KEEP|REQUIREMENT)\b\s*[-:]?\s*(.*?)\s*$",
-                             re.IGNORECASE | re.MULTILINE)
+#: The separator a reviewer or planner writes between a scenario id and
+#: the text after it: a hyphen, an en dash, an em dash, a minus sign or a
+#: colon (close family, 2026-10-26: Sol's SCENARIO claim on
+#: recovery-handoff-01 t3 used an em dash, did not type, and became the
+#: code finding that ended the run). Punctuation is not semantics: the
+#: fields after it are still required in full (``_typed_finding``).
+_TYPED_SEP = r"(?:-|\u2013|\u2014|\u2212|:)"
+#: Scenario ids are ASCII ``P`` plus ASCII digits only: ``\d`` would read
+#: other scripts' digits, and an id the task never declared is unbound.
+_SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*\|\s*proposal\s*:\s*"
+                             r"(operation|state|expect)\s*:\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
+_EVIDENCE_CLAIM = re.compile(r"^\s*EVIDENCE\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
+_SCENARIO_REPLY = re.compile(r"^\s*SCENARIO\s+(P[0-9]+)\s*:\s*(operation|state|expect|KEEP|REQUIREMENT)\b\s*"
+                             + _TYPED_SEP + r"?\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
+#: A claim that opens like a typed one. Read only to say why it did not
+#: type, never to route it.
+_TYPED_HEAD = re.compile(r"^\s*(SCENARIO|EVIDENCE)\s+(P\S*)", re.IGNORECASE)
 
 
 _IMPACT_RANK = ("other", "contract", "correctness", "irreversible", "security", "integrity", "data-loss")
@@ -1747,16 +1759,48 @@ def _typed_finding(claim: str):
     """``("scenario", fields)``, ``("evidence", fields)`` or ``(None, None)``
     for one registered finding's claim (the line before its basis and
     impact segments). Strict: a SCENARIO claim needs the scenario id, the
-    contradiction and a one-field proposal; anything looser is an ordinary
-    finding, never routed away from the editor."""
+    contradiction and a one-field proposal with text; an EVIDENCE claim
+    needs the id and what is not shown. A blank field is no field (root's
+    old-source control, 2026-10-26: ``SCENARIO P1 -   | proposal: state:
+    nothing stored`` typed with an empty reason), so anything looser is
+    ``(None, None)``: an ordinary finding, never a planner or harness route
+    without its semantics. Whether such a claim is a near miss that must
+    not reach the editor either is ``_typed_near_miss``."""
     match = _SCENARIO_CLAIM.match(claim or "")
     if match:
-        return "scenario", dict(proof_id=match.group(1).upper(), reason=match.group(2).strip(),
-                                field=match.group(3).lower(), proposal=match.group(4).strip())
+        fields = dict(proof_id=match.group(1).upper(), reason=match.group(2).strip(),
+                      field=match.group(3).lower(), proposal=match.group(4).strip())
+        if fields["reason"] and fields["proposal"]:
+            return "scenario", fields
+        return None, None
     match = _EVIDENCE_CLAIM.match(claim or "")
     if match:
-        return "evidence", dict(proof_id=match.group(1).upper(), reason=match.group(2).strip())
+        fields = dict(proof_id=match.group(1).upper(), reason=match.group(2).strip())
+        if fields["reason"]:
+            return "evidence", fields
+        return None, None
     return None, None
+
+
+def _typed_near_miss(claim: str) -> str:
+    """Why a claim that opens as a typed one (``SCENARIO P<n>`` or
+    ``EVIDENCE P<n>``) did not type, or "" for a claim that is complete or
+    not typed at all. Such a claim is about the plan or the evidence, not
+    the code: it is held for its reviewer to restate, and it is never the
+    editor's instruction (Davis, 2026-10-26)."""
+    head = _TYPED_HEAD.match(claim or "")
+    if not head or _typed_finding(claim)[0] is not None:
+        return ""
+    kind = head.group(1).upper()
+    if not re.fullmatch(r"(?i)P[0-9]+", head.group(2).rstrip(":.,;")):
+        return f"a {kind} claim whose scenario id ({head.group(2)[:20]}) is not P followed by digits"
+    if kind == "SCENARIO":
+        if "|" not in (claim or "") or not re.search(r"(?i)\|\s*proposal\s*:", claim or ""):
+            return "a SCENARIO claim without its '| proposal: <operation|state|expect>: <text>' segment"
+        if not re.search(r"(?i)\|\s*proposal\s*:\s*(operation|state|expect)\s*:", claim or ""):
+            return "a SCENARIO claim whose proposal names no scenario field (operation, state or expect)"
+        return "a SCENARIO claim with a blank contradiction or a blank proposed text"
+    return "an EVIDENCE claim without saying what is not shown"
 
 
 def _scenario_text_problem(text: str, current: str) -> str:
@@ -2712,6 +2756,9 @@ class Session:
         self.scenario_corrections: List[dict] = []
         self.evidence_routes: List[dict] = []
         self._scenario_corrected: set = set()
+        #: One record per close decision (close/1): what closed, what held,
+        #: what stopped; carried, sealed and published (close family, 2026-10-26).
+        self.close_decisions: list = []
         #: The fix cycle an editing or recheck call belongs to and the worst
         #: impact a recheck is about: inputs to the effort policy, set by the
         #: round that makes the call and cleared after it.
@@ -5022,14 +5069,25 @@ class Session:
                     spec, blocking, revision, task, labels=labels
                 )
             cycles = 1 + retried
-            # A finding held for the post-merge recheck buys no editor round
-            # here; everything else left open does, as before.
-            while self._actionable(unresolved) and cycles < self.config.max_fix_cycles and not capped_writer:
+            # A finding held for the post-merge recheck, routed to the planner
+            # or the harness, or held as an unroutable typed claim buys no
+            # editor round; an ordinary finding left open does, as before. A
+            # recheck that restated a finding as a complete typed claim is
+            # routed here, before any editor round, the same way the first
+            # round routes (close family, 2026-10-26: a scenario defect Sol
+            # restated at every recheck kept buying code rounds instead).
+            while (cycles < self.config.max_fix_cycles and not capped_writer
+                   and (self._editor_lines(spec, unresolved) or self._restated(spec, unresolved))):
+                plan = self._plan_findings(spec, blocking, [(p, v) for p, v in unresolved])
+                actionable = self._editor_lines(spec, unresolved)
+                routed_now = {r["fid"] for r in plan["scenario"] + plan["evidence"] + plan["held"] + plan["unroutable"]}
                 if self._budget() is not None:
                     # Beyond the admitted route: one more cycle only when
                     # what is left pays it whole, decided before its call.
                     wall_extra, wall_known = self._route_wall(spec)
-                    extra = self._admit_plan(spec.task_id, self._fix_cycle_stages(spec, unresolved),
+                    extra = self._admit_plan(spec.task_id,
+                                             self._fix_cycle_stages(spec, unresolved, editor=bool(actionable),
+                                                                    correction=bool(plan["scenario"])),
                                              scope="fix-cycle", wall_extra=wall_extra, wall_known=wall_known)
                     if not extra.feasible:
                         self._finish_refused(spec, "fix round", FinishReserved(
@@ -5038,26 +5096,30 @@ class Session:
                         break
                 self._count("revision")
                 self._fix_cycle_now = cycles + 1
-                actionable = self._actionable(unresolved)
-                pending = [(p, n) for p, n in blocking if any(p == up for up, _ in actionable)]
-                try:
-                    revision = self._edit(lead, self._fix_prompt(spec, revision,
-                                                                 [(labels[p], v) for p, v in actionable]))
-                except TurnLimitReached as exc:
-                    handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
-                    if handoff is None:
-                        return self._close_turn_limited(lead, spec, task, exc, before)
-                    revision, unresolved, capped_writer = handoff[0], handoff[1], True
-                    break
-                except FinishReserved as exc:
-                    # The findings the last recheck left open stay open.
-                    self._finish_refused(spec, "fix round", exc)
-                    capped_writer = True
-                    break
-                task.record("assistant", revision)
-                task.keep(revision, kind="revision")
+                spec = self._serve_plan_findings(spec, task, plan, labels)
+                pending = [(p, n) for p, n in blocking
+                           if any(up == p and ((up, v) in actionable or _finding_id(v) in routed_now)
+                                  for up, v in unresolved)]
+                if actionable:
+                    try:
+                        revision = self._edit(lead, self._fix_prompt(spec, revision,
+                                                                     [(labels[p], v) for p, v in actionable]))
+                    except TurnLimitReached as exc:
+                        handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
+                        if handoff is None:
+                            return self._close_turn_limited(lead, spec, task, exc, before)
+                        revision, unresolved, capped_writer = handoff[0], handoff[1], True
+                        break
+                    except FinishReserved as exc:
+                        # The findings the last recheck left open stay open.
+                        self._finish_refused(spec, "fix round", exc)
+                        capped_writer = True
+                        break
+                    task.record("assistant", revision)
+                    task.keep(revision, kind="revision")
                 cycles += 1
-                held = [u for u in unresolved if u not in actionable]
+                pending_peers = {p for p, _ in pending}
+                held = [u for u in unresolved if u[0] not in pending_peers]
                 unresolved = held + self._recheck_blocking(
                     spec, pending, revision, task, labels=labels,
                 )
@@ -6443,7 +6505,13 @@ class Session:
                                          .strip()[:300])
                     continue
                 merge_debt = (self.parallel_batches[-1].get("merge_debt") if self.parallel_batches else None)
-                if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed'] and not merge_debt):
+                # The same close policy as a serial task's (close family,
+                # 2026-10-26): held review debt, inherited or the batch's own,
+                # does not end the run after a batch; an unmerged child's
+                # finding or a failed merge gate without debt still does.
+                stop = self._close_decision("batch", {s.task_id for s in batch} | {f"{batch[-1].task_id}-merge"},
+                                            slot_left=used < max_tasks, debt_recorded=bool(merge_debt))
+                if stop is not None:
                     self._name_findings_stop({s.task_id for s in batch} | {f"{batch[-1].task_id}-merge"})
                     break
                 continue
@@ -6679,13 +6747,13 @@ class Session:
             check_debt = self._record_check_debt(spec, covers)
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
-            review_debt = self._review_debt_continues(covers, used if not self._terminal_committed() else max_tasks,
-                                                      max_tasks)
-            if ((self._findings_stop_due() and not review_debt)
-                    or (self.checks and not self.checks[-1]['passed'] and not check_debt)):
+            stop = self._close_decision("task", {spec.task_id},
+                                        slot_left=(used if not self._terminal_committed() else max_tasks) < max_tasks,
+                                        debt_recorded=bool(check_debt), unresolved=list(unresolved))
+            if stop in ("CheckFailing", "FindingsOpen"):
                 self._name_findings_stop({spec.task_id})
                 break
-            if unresolved:
+            if stop == "FindingsUnresolved":
                 # An explicit attempt that did not establish its acceptance is
                 # a stop, never an automatic second repair (contract v3).
                 self._stop_with("unverified", (f"FindingsUnresolved: task {spec.task_id} named RESOLVES "
@@ -6710,6 +6778,14 @@ class Session:
             # only with no capped or audit debt, requirements only after a
             # confirmed goal.
             self._recheck_resolved_findings()
+            partial = sorted(self._partial_from_outcomes() | set(self._partial_tasks))
+            self.close_decisions.append(dict(
+                site="cap", closed=[], slot_left=False, debt_recorded=False, stop=None,
+                holds=[self._review_debt_hold()] if self.open_findings and self._review_debt_hold() else [],
+                reasons=[("the goal question is not asked: capped or failed task(s) "
+                          f"{', '.join(partial)} not continued (the cap's completion decision asks it only "
+                          "with no capped or audit debt)") if partial
+                         else "every slot is spent: the cap's completion decision decides"]))
             self._apply_completion(self._completion_decision(CAP, max_tasks))
         return list(self.history)
 
@@ -12660,55 +12736,107 @@ class Session:
             if finding["id"] in self._current_resolves and "last_attempt" not in finding:
                 finding["last_attempt"] = f"the resolving task stopped before it closed: {reason}"
 
-    def _review_debt_continues(self, covers, used: int, max_tasks: int) -> bool:
-        """Whether open review findings are held as debt instead of stopping
-        the run, as a failed check is (_record_check_debt): only when every
-        open finding is a held review finding the evidence loop can test, the
-        ledger holds the task's COVERS, the orchestrator plans (no explicit
-        list), a slot is left, and a configured check can run evidence. The
-        findings stay open and block completion; only their own reviewer's
-        reassessment on executed evidence closes one (Session._reassess)."""
-        if not self._review_debt_holds(covers, slot_left=used < max_tasks):
-            return False
-        self._note("held review findings are debt: the orchestrator may test or repair them while slots remain")
-        return True
-
-    def _review_debt_holds(self, covers, *, slot_left: bool) -> bool:
-        """The rule ``_review_debt_continues`` applies, read only: no note,
-        no record changed, so it may also be asked before the task's stop
-        decision (``_stop_follows_close``)."""
-        if not (self.config.requirements_ledger and covers and self._explicit_tasks is None
-                and slot_left and self.open_findings and self._discovering_checks()):
-            return False
+    def _review_debt_hold(self) -> str:
+        """Why every open finding is held review debt the evidence loop can
+        test, or "" (close/1). Read only. The rule the serial close applied
+        and the batch close did not (close family, 2026-10-26;
+        recovery-handoff-01 stopped FindingsOpen after a batch on a finding
+        t3 had left held): the requirements ledger is on, the orchestrator
+        plans (no explicit list), a configured check can run evidence, and
+        every open finding is a held review finding, in both directions. The
+        typed record must say the same as the legacy list: a legacy finding
+        with no active typed finding behind it, or a typed record with
+        problems, is a lost record and fails closed (root's probe, 2026-10-26:
+        an empty typed set passed a vacuous all()). The closing task's COVERS
+        are not required: inherited debt is still debt. Whether a slot is
+        left is the close policy's question, not this rule's."""
+        if not (self.config.requirements_ledger and self._explicit_tasks is None and self.open_findings
+                and self._discovering_checks()):
+            return ""
         from .finding_state import from_session
         held = {e["entry"]["text"] for e in self._disputable().values() if e["kind"] == "review"}
         state = from_session(self)
-        if state.problems or not all(text in held for text in self.open_findings):
-            return False
-        return all(any(item.whole == text or text.startswith(item.whole) for text in held)
-                   for item in state.findings())
+        typed = list(state.findings())
+        if state.problems or not typed:
+            return ""
+        if not all(text in held for text in self.open_findings):
+            return ""
+        if not all(any(item.whole == text or text.startswith(item.whole) for text in held) for item in typed):
+            return ""
+        if not all(any(item.whole == text or text.startswith(item.whole) for item in typed)
+                   for text in self.open_findings):
+            return ""
+        return f"{len(self.open_findings)} open finding(s) are held review findings the evidence loop can test"
+
+    def _review_debt_holds(self, covers, *, slot_left: bool) -> bool:
+        """Compatibility reading of ``_review_debt_hold``: the rule applies
+        and a slot is left. ``covers`` is no longer required."""
+        return bool(slot_left and self._review_debt_hold())
+
+    def _close_policy(self, closed, *, slot_left: bool, debt_recorded: bool, unresolved=()) -> dict:
+        """The one close decision, serial task or merged batch (close/1), as
+        a record and without a side effect: ``stop`` names the stop or is
+        None. A failing last check with no recorded debt stops CheckFailing.
+        Open findings stop FindingsOpen unless every one is held review debt
+        (``_review_debt_hold``): with a slot left the orchestrator may test
+        or repair them; with none left they go to the cap's completion
+        decision, which asks the goal question and the audit as the finish
+        reservation held capacity for and never completes over them. A
+        RESOLVES that established nothing stops FindingsUnresolved. A capped
+        or failed task never reaches this policy: its close continues to the
+        planner by its own rule."""
+        record = dict(closed=sorted(closed), slot_left=bool(slot_left), debt_recorded=bool(debt_recorded),
+                      stop=None, holds=[], reasons=[])
+        check_failed = bool(self.checks) and not self.checks[-1].get("passed")
+        if check_failed and not debt_recorded:
+            record.update(stop="CheckFailing")
+            record["reasons"].append("the last check failed and no check or merge debt was recorded")
+        elif self._findings_stop_due():
+            hold = self._review_debt_hold()
+            if hold:
+                record["holds"].append(hold)
+                record["reasons"].append("held review debt: the orchestrator may test or repair it" if slot_left
+                                         else "held review debt with no slot left: it goes to the cap's completion "
+                                              "decision (goal question, audit), which never completes over it")
+            else:
+                record.update(stop="FindingsOpen")
+                record["reasons"].append("open findings nothing holds: " + "; ".join(self._open_work())[:400])
+        if record["stop"] is None and unresolved:
+            record.update(stop="FindingsUnresolved")
+            record["reasons"].append(f"RESOLVES {', '.join(unresolved)} did not establish acceptance")
+        return record
+
+    def _close_decision(self, site: str, closed, *, slot_left: bool, debt_recorded: bool, unresolved=()) -> Optional[str]:
+        """``_close_policy`` applied and recorded for ``site`` (``task``,
+        ``batch``); returns the stop name or None."""
+        record = dict(site=site, **self._close_policy(closed, slot_left=slot_left, debt_recorded=debt_recorded,
+                                                      unresolved=unresolved))
+        self.close_decisions.append(record)
+        if record["holds"]:
+            self._note("held review findings are debt: " + record["reasons"][-1])
+        return record["stop"]
 
     def _stop_follows_close(self) -> str:
         """Why the serial loop is certain to stop right after this task
         closes, or "" (R24 on 54d729: t1 closed with open review findings, a
         model close-out was written, and the run stopped FindingsOpen before
         any planning call could read it). Read only, from the record the
-        stop decision in ``_run_tasks`` reads: nothing between this close-out
-        and that decision removes a legacy open finding (check debt only adds
-        one, settlement only resolves design and check findings), so a legacy
-        open finding the review debt cannot hold stops the run; so does a
-        failed last check when no check debt can be recorded (no ledger or no
-        COVERS). Anything less certain keeps the model close-out. Only a task the serial loop dispatched is asked: a task run
-        any other way has no such decision after it, and a parallel child's
-        batch decides."""
+        close policy reads (``_close_policy``): nothing between this
+        close-out and that decision removes a legacy open finding (check
+        debt only adds one, settlement only resolves design and check
+        findings). Anything less certain keeps the model close-out. Only a
+        task the serial loop dispatched is asked: a task run any other way
+        has no such decision after it, and a parallel child's batch decides."""
         if self._batch_child or not self._serial_dispatch:
             return ""
         covers = list(getattr(self, "_current_covers", []) or [])
         slot_left = not getattr(self, "_last_wave", False)
-        if self.open_findings and not self._review_debt_holds(covers, slot_left=slot_left):
+        debt_possible = bool(self.config.requirements_ledger and covers)
+        policy = self._close_policy({getattr(self._active_spec, "task_id", "")}, slot_left=slot_left,
+                                    debt_recorded=debt_possible)
+        if policy["stop"] == "FindingsOpen":
             return "the run stops on its open findings right after this task: no planning call reads it"
-        if (self.checks and not self.checks[-1].get("passed")
-                and not (self.config.requirements_ledger and covers)):
+        if policy["stop"] == "CheckFailing":
             return "the run stops on its failed check right after this task: no planning call reads it"
         return ""
 
@@ -13508,10 +13636,15 @@ class Session:
         siblings = {tid for tid, _, _ in (getattr(self, "_batch_siblings", None) or [])}
         if not siblings:
             return
-        for match in re.finditer(r"^\s*(?:[-*+]\s+)?DEFERRED\s*:\s*(\S+)\s*[-:]\s*(.+)$", note or "",
-                                 re.IGNORECASE | re.MULTILINE):
+        # The same bounded separators as a typed claim (``_TYPED_SEP``; root's
+        # probe, 2026-10-26: an em dash after the sibling id dropped the
+        # deferred condition in silence). The sibling must be one of this
+        # batch and the condition must say something; otherwise the line is
+        # not a deferral and is read as the ordinary review text it is in.
+        for match in re.finditer(r"^\s*(?:[-*+]\s+)?DEFERRED\s*:\s*(\S+)\s*" + _TYPED_SEP + r"\s*(.*)$",
+                                 note or "", re.IGNORECASE | re.MULTILINE):
             sibling, condition = match.group(1).strip(" .,:"), match.group(2).strip()
-            if sibling not in siblings:
+            if sibling not in siblings or not condition:
                 continue
             text = (f"Task {spec.task_id}: deferred by {peer} to parallel task {sibling}, unverified until "
                     f"rechecked on the merged source: {condition}")
@@ -13784,7 +13917,12 @@ class Session:
                 "else about them: '<id>: RESOLVED <how the revision addresses it>', '<id>: UNRESOLVED "
                 "<what specifically remains>', or '<id>: INVALIDATED <the test, file, receipt or "
                 "command showing the finding never held>'. A missing, duplicated or contradictory "
-                "line settles nothing. A defect you find that is not one of these goes on its own "
+                "line settles nothing. A finding that is a defect of a declared proof scenario's own text, "
+                "or a bound case the harness has not shown executed, is restated in full on its line: "
+                "'<id>: UNRESOLVED SCENARIO P<n> - <the contradiction> | proposal: <operation|state|expect>: "
+                "<the corrected text>' or '<id>: UNRESOLVED EVIDENCE P<n> - <what is not shown>'; the harness "
+                "routes it to the planner or runs the checks and asks you again, and no code is rewritten "
+                "for it. A defect you find that is not one of these goes on its own "
                 "line 'NEW: <finding> | basis: <requirement id, command or file> | impact: "
                 "<data-loss|integrity|security|irreversible|correctness|contract|other>'; a remark that "
                 "is not a defect goes on 'NOTE: <remark>'. Do not reopen the review of anything else. "
@@ -13838,7 +13976,8 @@ class Session:
             prompt = (self._role_packet(spec, 'reviewer') + '\n\n' +
                       f"Task: {spec.description}\n\n"
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
-                      f"The revised work:\n{revision}\n\n"
+                      + self._routing_facts(mine)
+                      + f"The revised work:\n{revision}\n\n"
                       + instructions + self._review_turn_budget_note(peer))
             # The worst impact among this peer's findings is this call's
             # effort input and nothing else's: set for the call, cleared on
@@ -13904,6 +14043,7 @@ class Session:
                 if state == judgment.UNRESOLVED:
                     unresolved.append((peer, f"{fid}: UNRESOLVED: {why}".strip()))
                     self._dispose(spec, peer, f"recheck: {fid} unresolved: {why[:160]}")
+                    self._read_restatement(spec, record, why)
                 elif record["closed"]:
                     self._dispose(spec, peer, f"recheck: {fid} {state}")
                 else:
@@ -13919,6 +14059,50 @@ class Session:
                 unresolved.append((peer, f"{record['fid']}: NEW: {record['claim']}"))
                 self._dispose(spec, peer, f"recheck: new finding {record['fid']}: {record['claim'][:160]}")
         return unresolved
+
+    def _routing_facts(self, records: List[dict]) -> str:
+        """What the harness did with a reviewer's typed claims, for its
+        recheck: a claim held unroutable says why and how to restate it; a
+        claim the planner answered says the disposition and the planner's
+        reason, so the reviewer judges the declared text against it rather
+        than re-sending the same line. Facts only; nothing here is a
+        verdict."""
+        lines = []
+        for record in records:
+            route = str(record.get("route") or "")
+            if route == "unroutable":
+                lines.append(f"- {record['fid']}: held, not routed and not given to the editor: {record['route_note']}. "
+                             "Restate it in full as '<id>: UNRESOLVED SCENARIO P<n> - <contradiction> | proposal: "
+                             "<operation|state|expect>: <text>' or '<id>: UNRESOLVED EVIDENCE P<n> - <what is not "
+                             "shown>' against a scenario this task declares, or as an ordinary code finding, or "
+                             "settle it RESOLVED or INVALIDATED.")
+            elif route.startswith("scenario:"):
+                entry = next((c for c in reversed(self.scenario_corrections) if record["fid"] in c.get("findings", [])),
+                             None)
+                why = (entry or {}).get("why") or (entry or {}).get("answer") or ""
+                lines.append(f"- {record['fid']}: the planner's answer was: {route[len('scenario:'):].strip()}"
+                             + (f" ({why[:300]})" if why else "") + ". The proof rows above show the scenario as it "
+                             "now stands; judge the declared text, not the code, for this finding.")
+        return ("Harness routing facts for your findings:\n" + "\n".join(lines) + "\n\n") if lines else ""
+
+    def _read_restatement(self, spec, record: dict, why: str) -> None:
+        """A recheck's UNRESOLVED text that is a complete typed claim is the
+        finding's restatement: kept on the record beside the original claim
+        and read by the next routing before any editor round. A held
+        unroutable claim restated in full is released for that routing; a
+        claim the planner already answered keeps its disposition. Nothing
+        is cleared here."""
+        kind, _ = _typed_finding(why or "")
+        if kind is None:
+            return
+        record["restated"] = (why or "").strip()
+        history = list(record.get("route_history") or [])
+        if record.get("route") == "unroutable":
+            history.append(dict(route=record["route"], note=record.get("route_note")))
+            record["route"] = None
+            record["route_note"] = ""
+            record["route_history"] = history
+        self._note(f"task {spec.task_id}: {record['fid']} restated at the recheck as a typed {kind} claim")
 
     def _capped_review(self, spec: TaskSpec, peer: str, what: str, exc: TurnLimitReached) -> str:
         """A review seat that hit its turn cap gave no verdict.
@@ -13973,62 +14157,116 @@ class Session:
         """Split one review round's blocking findings by what answers them,
         without a call: a typed SCENARIO finding (the plan's scenario text,
         one field, with the reviewer's proposal) goes to the planner's one
-        correction per task; a typed EVIDENCE finding (a bound case the
+        correction per scenario; a typed EVIDENCE finding (a bound case the
         harness has not shown executed on this source) goes to the harness,
         or is held for the post-merge recheck in a parallel child, which
-        can run nothing; everything else is the editor's. The reviewers'
-        notes reach the editor with the routed lines replaced by the fact of
-        their routing, and a round whose every blocking line was routed
-        makes no editing call. A SCENARIO finding after the task's
-        correction allowance is spent is an ordinary finding: the plan
-        channel cannot hide a code finding twice."""
+        can run nothing; an ordinary finding is the editor's. A claim that
+        opens as a typed one but is incomplete, names a scenario this task
+        does not declare, or names a scenario already corrected once, is
+        about the plan or the evidence and not the code: it is held
+        ``unroutable`` for its reviewer to restate at the recheck and is
+        never the editor's instruction (close family, 2026-10-26; before,
+        an unbound id went to the editor as code work). The reviewers' notes
+        reach the editor with the routed and held lines replaced by the fact
+        of their routing, and a round whose every blocking line was routed
+        or held makes no editing call. A finding's latest complete typed
+        restatement (``restated``, from a recheck) is read before its
+        original claim."""
         mine = {r.get("proof_id") for r in self.evidence_obligations
                 if r.get("task") == spec.task_id and r.get("kind") == "acceptance" and r.get("proof_id")
                 and not r.get("superseded_by")}
-        plan = dict(scenario=[], evidence=[], held=[], notes=[], editor=True)
-        allowance = spec.task_id not in self._scenario_corrected
+        plan = dict(scenario=[], evidence=[], held=[], unroutable=[], notes=[], editor=True)
         routed_texts = set()
         for peer, _ in blocking:
             for record in self._finding_records(task=spec.task_id, peer=peer):
                 if record.get("route"):
                     continue
-                kind, detail = _typed_finding(record.get("claim") or "")
-                if kind == "scenario" and detail["proof_id"] in mine and allowance:
+                claim = record.get("restated") or record.get("claim") or ""
+                kind, detail = _typed_finding(claim)
+                if kind is None:
+                    miss = _typed_near_miss(claim)
+                    if not miss:
+                        continue
+                    record.update(route="unroutable", route_note=miss)
+                    plan["unroutable"].append(record)
+                elif detail["proof_id"] not in mine:
+                    record.update(route="unroutable", typed=detail,
+                                  route_note=f"names scenario {detail['proof_id']}, which this task does not declare")
+                    plan["unroutable"].append(record)
+                elif kind == "scenario" and not self._scenario_allowance(spec, detail["proof_id"]):
+                    record.update(route="unroutable", typed=detail,
+                                  route_note=f"scenario {detail['proof_id']} was already corrected once for this "
+                                             "task; a second correction is not routed")
+                    plan["unroutable"].append(record)
+                elif kind == "scenario":
                     record.update(route="scenario", typed=detail)
                     plan["scenario"].append(record)
-                elif kind == "scenario":
-                    record.update(route="editor", typed=detail,
-                                  route_note=("not a scenario of this task" if detail["proof_id"] not in mine
-                                              else "the task's scenario correction is spent"))
-                    continue
-                elif kind == "evidence" and detail["proof_id"] in mine:
-                    if self._batch_child and self.config.integration_gate is None:
-                        record.update(route="held", typed=detail,
-                                      held="held for the post-merge recheck (a parallel child measures no execution)")
-                        plan["held"].append(record)
-                    else:
-                        record.update(route="evidence", typed=detail)
-                        plan["evidence"].append(record)
+                elif self._batch_child and self.config.integration_gate is None:
+                    record.update(route="held", typed=detail,
+                                  held="held for the post-merge recheck (a parallel child measures no execution)")
+                    plan["held"].append(record)
                 else:
-                    continue
+                    record.update(route="evidence", typed=detail)
+                    plan["evidence"].append(record)
                 routed_texts.add(record.get("text"))
         if not routed_texts:
             plan["notes"] = list(notes)
             return plan
         filtered = []
         for peer, note in notes:
-            kept, routed = [], []
+            kept, routed, held = [], [], []
             for raw in note.splitlines():
-                record = next((r for r in plan["scenario"] + plan["evidence"] + plan["held"]
+                record = next((r for r in plan["scenario"] + plan["evidence"] + plan["held"] + plan["unroutable"]
                                if r.get("text") == raw.strip() and r["author"] == peer), None)
-                (routed if record is not None else kept).append(record["fid"] if record is not None else raw)
+                if record is None:
+                    kept.append(raw)
+                elif record["route"] == "unroutable":
+                    held.append(f"{record['fid']} ({record['route_note']})")
+                else:
+                    routed.append(record["fid"])
             if routed:
                 kept.append(f"(findings {', '.join(routed)} were routed to the planner or the harness and are not "
                             "yours to answer; do not rewrite code or tests for them)")
+            if held:
+                kept.append(f"(findings {'; '.join(held)} are typed claims about the plan or the evidence that the "
+                            "harness could not route; they are held for the reviewer's re-check and are not yours "
+                            "to answer; do not rewrite code or tests for them)")
             filtered.append((peer, "\n".join(kept)))
         plan["notes"] = filtered
         plan["editor"] = any(_has_blocking_finding(n) for _, n in filtered)
         return plan
+
+    def _scenario_allowance(self, spec, pid: str) -> bool:
+        """Whether the planner may still be asked to correct scenario ``pid``
+        of this task: once per scenario (close family, 2026-10-26; before,
+        once per task, so a second reviewer's finding on another scenario
+        went to the editor). A bare task id in the record is an older
+        checkpoint's whole-task spend and still counts for every scenario."""
+        return spec.task_id not in self._scenario_corrected and f"{spec.task_id}:{pid}" not in self._scenario_corrected
+
+    def _routed_ids(self, spec) -> set:
+        """Ids of this task's open findings the editor never answers: routed
+        to the planner or the harness, held for a recheck, or held as
+        typed claims the harness could not route."""
+        return {r["fid"] for r in self._finding_records(task=spec.task_id)
+                if r.get("route") and r.get("route") != "editor"}
+
+    def _editor_lines(self, spec, unresolved: List[tuple]) -> List[tuple]:
+        """The open findings an editor round answers: every one except a
+        finding held for the post-merge recheck or routed or held by id."""
+        routed = self._routed_ids(spec)
+        return [u for u in self._actionable(unresolved) if _finding_id(u[1]) not in routed]
+
+    def _restated(self, spec, unresolved: List[tuple]) -> List[dict]:
+        """Open findings whose reviewer restated them at a recheck as a
+        complete typed claim and that are not yet routed: read by the next
+        ``_plan_findings`` before any editor round."""
+        out = []
+        for _, verdict in unresolved:
+            record = next((r for r in self._finding_records(task=spec.task_id) if r["fid"] == _finding_id(verdict)), None)
+            if record is not None and record.get("restated") and not record.get("route"):
+                out.append(record)
+        return out
 
     def _serve_plan_findings(self, spec, task, plan: dict, labels: dict):
         """Answer the routed findings before any editor call: the harness
@@ -14062,6 +14300,17 @@ class Session:
                                              reviewer=record["author"], action=record["held"], execution_before=None,
                                              execution_after=None, source=self._source_fingerprint()))
             self._note(f"task {spec.task_id}: {record['fid']} (EVIDENCE) {record['held']}")
+        for record in plan.get("unroutable") or []:
+            # Recorded where the routes are: a typed claim the harness could
+            # not route is held for its reviewer, not answered by anyone.
+            self.evidence_routes.append(dict(task=spec.task_id, finding=record["fid"],
+                                             proof_id=(record.get("typed") or {}).get("proof_id"),
+                                             reviewer=record["author"],
+                                             action=f"held unroutable: {record['route_note']}; the reviewer is asked to "
+                                                    "restate it at the recheck",
+                                             execution_before=None, execution_after=None,
+                                             source=self._source_fingerprint()))
+            self._note(f"task {spec.task_id}: {record['fid']} held unroutable: {record['route_note']}")
         if plan["scenario"]:
             spec = self._correct_scenarios(spec, task, plan["scenario"], labels)
         return spec
@@ -14079,7 +14328,6 @@ class Session:
         raised the finding re-checks it against the corrected scenario, so
         the correction is independently reviewed, and a kept or unanswered
         scenario leaves the finding standing as an ordinary one."""
-        self._scenario_corrected.add(spec.task_id)
         scope = spec.scope
         proofs = {p["id"]: p for p in (getattr(scope, "proofs", None) or ())}
         texts = self._requirement_texts_now()
@@ -14089,6 +14337,10 @@ class Session:
         asked = sorted(pid for pid in by_pid if pid in proofs)
         if not asked:
             return spec
+        # The allowance is spent per scenario, by the asking: a reply that
+        # keeps, refuses or garbles it is still the one correction it got.
+        for pid in asked:
+            self._scenario_corrected.add(f"{spec.task_id}:{pid}")
         blocks = []
         for pid in asked:
             proof = proofs[pid]
@@ -14126,11 +14378,24 @@ class Session:
             return spec
         task.record("assistant", f"[planner, scenario correction] {reply}")
         task.keep(reply, kind="scenario-correction", author=seat.key)
-        lines = {m.group(1).upper(): (m.group(2).lower(), m.group(3).strip())
-                 for m in _SCENARIO_REPLY.finditer(reply or "")}
+        # Every line per scenario is read, not the last one: two lines that
+        # say different things are an ambiguous reply, and an ambiguous
+        # reply changes nothing (root's old-source control, 2026-10-26: a
+        # dict comprehension silently applied the last line).
+        lines: Dict[str, List[tuple]] = {}
+        for m in _SCENARIO_REPLY.finditer(reply or ""):
+            lines.setdefault(m.group(1).upper(), []).append((m.group(2).lower(), m.group(3).strip()))
         for pid in asked:
-            verb, text = lines.get(pid, (None, ""))
+            distinct = list(dict.fromkeys(lines.get(pid, [])))
             proof = proofs[pid]
+            if len(distinct) > 1:
+                self._record_scenario_correction(
+                    spec, pid, by_pid[pid], reply=reply, by=seat.key,
+                    status=f"refused: ambiguous reply ({len(distinct)} conflicting lines for {pid}); the scenario "
+                           "stays as declared",
+                    lines=[f"{verb}: {text[:200]}" for verb, text in distinct])
+                continue
+            verb, text = distinct[0] if distinct else (None, "")
             if verb in ("operation", "state", "expect"):
                 problem = _scenario_text_problem(text, proof[verb])
                 if problem:

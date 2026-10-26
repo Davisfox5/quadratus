@@ -287,13 +287,17 @@ def test_a_correction_that_is_not_one_scenario_field_changes_nothing_and_the_fin
     row = _acceptance(replay)[0]
     assert dict(row["scenario"])["state"] == "two tickets exist" and "scenario_lineage" not in row
     assert record["requirements"]["listed"] == {"R1": "add(a, b) returns the sum"}
-    # Kept or unanswered, the finding is the reviewer's to judge; it held it
-    # open, so the ordinary editor round followed and the run ends on it:
-    # the plan channel cannot make a finding disappear.
-    assert "RFT1-1" in rechecks[0] and "revision" in _roles(replay)
-    assert "RFT1-1: UNRESOLVED" in seen.prompts["revision"][0], "the ordinary fix round carried it to the editor"
+    # Kept or unanswered, the finding stays the reviewer's to judge against
+    # the declared text, with the planner's answer in front of it. It is a
+    # claim about the plan, so no editor round is bought for it (close
+    # family, 2026-10-26; before, the ordinary fix round carried it to the
+    # editor as code work). It held it open, so the run ends on it: the plan
+    # channel cannot make a finding disappear, and nothing becomes met.
+    assert "RFT1-1" in rechecks[0] and "the planner's answer was: " in rechecks[0]
+    assert "revision" not in _roles(replay), "no editor round for a finding about the plan's text"
     assert not replay.result.completed and "RFT1-1" in str(replay.result.error)
-    assert len([c for c in replay.calls if CORRECTION_HEAD in c.prompt]) == 1, "one correction per task"
+    assert record["review_findings"][0]["state"] == "unresolved"
+    assert len([c for c in replay.calls if CORRECTION_HEAD in c.prompt]) == 1, "one correction per scenario"
 
 
 @pytest.mark.requirements_ledger
@@ -321,18 +325,27 @@ def test_a_planner_that_would_change_the_requirement_raises_the_operator_questio
 
 
 @pytest.mark.requirements_ledger
-def test_a_scenario_claim_naming_no_scenario_of_the_task_is_an_ordinary_finding(tmp_path, monkeypatch):
+def test_a_scenario_claim_naming_no_scenario_of_the_task_is_held_and_never_the_editors(tmp_path, monkeypatch):
+    """Close family, 2026-10-26: an unbound scenario id used to go to the
+    editor as code work. A typed claim the harness cannot route is held for
+    its reviewer, who is told why at the recheck; no correction, no edit."""
     seen = Seen()
     stray = SCENARIO_FINDING.replace("SCENARIO P1", "SCENARIO P7")
     replay = H.run(_at(tmp_path, "stray"), monkeypatch,
-                   _script(seen, collaborator=lambda c, r: stray + MET),
+                   _script(seen, collaborator=lambda c, r: stray + MET,
+                           recheck=lambda c, r: "RFT1-1: UNRESOLVED the scenario is still wrong"),
                    files=FILES, max_tasks=1, record_complete=False)
     assert not any(CORRECTION_HEAD in c.prompt for c in replay.calls)
-    assert "SCENARIO P7" in seen.prompts["revision"][0]
+    assert "revision" not in _roles(replay), "an unbound typed claim is not permission to edit"
+    assert "held, not routed and not given to the editor: names scenario P7, which this task does not declare" \
+        in seen.prompts["recheck"][0]
     record = H.result_json(replay)
     assert record["scenario_corrections"] == []
-    assert record["review_findings"][0]["route"] == "editor" and record["review_findings"][0]["route_note"] == \
-        "not a scenario of this task"
+    finding = record["review_findings"][0]
+    assert finding["route"] == "unroutable" and finding["route_note"] == \
+        "names scenario P7, which this task does not declare"
+    assert finding["state"] == "unresolved" and not replay.result.completed
+    assert any(r["action"].startswith("held unroutable") for r in record["evidence_routes"])
 
 
 # -- 3. an evidence gap settles through the harness and the original reviewer, serial and parallel
@@ -450,8 +463,13 @@ def test_a_listed_requirement_no_task_took_on_is_named_at_a_findings_open_stop(t
                    files=FILES, max_tasks=1, record_complete=False)
     # The ticket run's shape: the last slot closes on an open finding and
     # the run stops there, with R2 listed, reviewed and never scheduled.
-    assert not replay.result.completed and str(replay.result.error).startswith("FindingsOpen")
-    assert "RFT1-1" in str(replay.result.error)
+    # The last slot's held review finding no longer stops the run before the
+    # finish (close family, 2026-10-26): the cap's completion decision runs,
+    # the goal is confirmed, and the requirements check names R2 as never
+    # covered; the finding stays open on the record.
+    assert not replay.result.completed and str(replay.result.error).startswith("RequirementsUnmet")
+    assert "R2" in str(replay.result.error)
+    assert any("RFT1-1" in text for text in H.result_json(replay)["open_findings"])
     record = H.result_json(replay)
     assert record["requirements"]["listed"]["R2"] == "README documents add"
     assert not str(record["requirements"]["status"].get("R2", "")).startswith(("covered", "met"))

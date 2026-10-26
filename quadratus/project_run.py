@@ -772,6 +772,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # harness answered before any editor call (workflow repair).
         'scenario_corrections': list(getattr(session, 'scenario_corrections', []) or []) if session else [],
         'evidence_routes': list(getattr(session, 'evidence_routes', []) or []) if session else [],
+        'close_decisions': list(getattr(session, 'close_decisions', []) or []) if session else [],
         'terminal_route': dict(getattr(session, '_terminal_route', None) or {}) or None if session else None,
         'operations': list(getattr(session, 'operations', []) or []) if session else [],
         'job_store': dict(generation=(job_store.current().number if job_store.current() else None),
@@ -1136,7 +1137,7 @@ def _terminal_state_patch(session) -> dict:
     so the handoff and its lists agree."""
     patch = dict(model_resolution=dict(getattr(session, 'model_resolution', {}) or {}))
     for name in ('failed', 'turn_limited', 'failed_records', 'turn_limited_records', '_cap_baselines',
-                 '_partial_tasks'):
+                 '_partial_tasks', 'close_decisions'):
         if not hasattr(session, name):
             continue
         value = getattr(session, name)

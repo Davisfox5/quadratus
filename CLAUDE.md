@@ -2485,6 +2485,45 @@ Key design decisions already settled:
   stands as found: the finding open, the overrun failed, the cap capped.
   Hypothetical later repairs stay conditional; known judgments never
   leave the cost.
+- **The close family** (Davis, 2026-10-26; one cohesive batch, not one
+  fix per live run). recovery-handoff-01 ended FindingsOpen with slots
+  unspent: Sol's SCENARIO claim on t3 used an em dash, `_SCENARIO_CLAIM`
+  took only `[-:]`, the claim went to the editor as code work, stayed open
+  as held review debt, and the batch close after t4 and t5 (both rechecked
+  clean after the merge) stopped on it because the batch close never
+  consulted the hold the serial close applies. Five rules now, all pinned
+  by `tests/lifecycle/test_close_family.py`: (1) a typed claim types with
+  any normal separator (`_TYPED_SEP`: hyphen, en dash, em dash, minus,
+  colon) and only with its full semantics; a blank field is no field
+  (root's old-source control) and `_typed_finding` stays `(None, None)`
+  for it. (2) A claim that opens as typed but is incomplete, names a
+  scenario the task does not declare, uses an id that is not `P` plus
+  digits, or repeats a corrected scenario is held `unroutable`
+  (`_typed_near_miss`, `_plan_findings`): the reviewer is told why at the
+  recheck (`_routing_facts`) and may restate it in full, which the next
+  routing reads before any editor round (`_read_restatement`,
+  `_restated`); it is never the editor's instruction, and a kept or
+  refused correction leaves it the reviewer's to judge against the planner's
+  answer, not the editor's. (3) The planner's correction is one per
+  scenario (`_scenario_allowance`, recorded as `task:pid`), and a reply
+  with conflicting lines for one scenario changes nothing (`refused:
+  ambiguous reply`). (4) One close policy (`_close_policy`,
+  `_close_decision`) decides every close, serial task or merged batch, and
+  `_stop_follows_close` predicts with it: a failing check without debt
+  stops; open findings stop unless every one is held review debt
+  (`_review_debt_hold`: ledger on, planner mode, a discovering check, and
+  the legacy list and the typed record in positive correspondence both
+  ways, an empty typed record failing closed, root's probe); held debt
+  continues to the planner while a slot is left and goes to the cap's
+  completion decision when none is (the goal question and the audit run;
+  nothing completes over it). The closing task's COVERS are not required:
+  inherited debt is debt. (5) Every close decision is a record
+  (`close_decisions`), carried, sealed into the terminal state and published
+  in result.json; the cap records why the goal question was or was not
+  asked. `_record_deferred` shares the separators (root's probe: an em dash
+  dropped a deferred condition). Unchanged on purpose: a generic provider
+  failure, an unmerged child, a failing merge gate without debt, missing
+  usage, budgets, and the independent reviews and audit.
 - **A cap is a stop reason the vendor names, not a failure the count happens
   to fit** (recovery handoff repair, 2026-10-25, after proof-workflow-01 ended
   FindingsOpen with slots unspent). The installed grok CLI (1.0.62) ends an
