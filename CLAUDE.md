@@ -2521,9 +2521,17 @@ Key design decisions already settled:
   (`close_decisions`), carried, sealed into the terminal state and published
   in result.json; the cap records why the goal question was or was not
   asked. `_record_deferred` shares the separators (root's probe: an em dash
-  dropped a deferred condition). Unchanged on purpose: a generic provider
-  failure, an unmerged child, a failing merge gate without debt, missing
-  usage, budgets, and the independent reviews and audit.
+  dropped a deferred condition); a deferred entry kept after the post-merge
+  recheck is still not disputable debt (`_disputable`) and ends the batch
+  as before. Unchanged on purpose: a generic provider failure, an unmerged
+  child, a failing merge gate without debt, missing usage, budgets, and the
+  independent reviews and audit. A judge's `NEW:` line is no finding only
+  when its whole claim is the standalone sentinel (`judgment._empty_claim`;
+  `re.match("(none|n/?a|nothing)\b")` dropped "Nothing rejects nonnumeric
+  inputs…" in silence). Five older controls that pinned a
+  FindingsOpen end in the last slot now pin the cap's `RequirementsUnmet`
+  naming the finding its judge never closed, with the goal question and the
+  audit spent from the capacity the finish reservation held for them.
 - **A cap is a stop reason the vendor names, not a failure the count happens
   to fit** (recovery handoff repair, 2026-10-25, after proof-workflow-01 ended
   FindingsOpen with slots unspent). The installed grok CLI (1.0.62) ends an

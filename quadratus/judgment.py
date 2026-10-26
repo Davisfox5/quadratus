@@ -103,6 +103,24 @@ _ID_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?P<fid>[A-Z][A-Z0-9]*-?\d+)
                       r"(?P<state>RESOLVED|UNRESOLVED|NOT\s+RESOLVED|INVALIDATED)\b\s*[-:,]?\s*(?P<why>.*)$",
                       re.IGNORECASE)
 _NEW_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NEW|BLOCKING)\s*:\s*(?P<claim>.+)$", re.IGNORECASE)
+#: A NEW or BLOCKING line whose whole claim is the standalone sentinel for
+#: "no finding": none, n/a or nothing, alone or with a bounded tail (found,
+#: identified, to report, further, ...) and punctuation. Anchored on purpose
+#: (close family, 2026-10-26): ``re.match("(none|n/?a|nothing)\\b")`` read a
+#: concrete finding that began "Nothing rejects nonnumeric inputs in
+#: app.py:add; add("a", "b") returns "ab"" as no finding and dropped it in
+#: silence. Negative language that goes on to say something is a finding.
+_EMPTY_CLAIM = re.compile(r"(?:none|n/?a|nothing)(?:\s+(?:found|identified|observed|noted|detected|"
+                          r"remain(?:s|ing)?|to\s+report|further|else|new|more|here))?[\s.!]*$", re.IGNORECASE)
+
+
+def _empty_claim(claim: str) -> bool:
+    """Whether a NEW/BLOCKING claim is the standalone no-finding sentinel,
+    read on the claim before its ``| basis:`` / ``| impact:`` segments."""
+    head = (claim or "").split("|", 1)[0].strip()
+    return bool(_EMPTY_CLAIM.match(head))
+
+
 _NOTE_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NOTE|SUGGESTION)\s*:\s*(?P<text>.+)$", re.IGNORECASE)
 _COVERAGE_LINE = re.compile(r"\s*COVERAGE\s*:\s*(?P<state>COMPLETE|PARTIAL)\b\s*[-:,]?\s*(?P<why>.*)$",
                             re.IGNORECASE)
@@ -204,7 +222,7 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
         hit = _NEW_LINE.match(line)
         if hit:
             claim = hit.group("claim").strip()
-            if claim and not re.match(r"(?i)(none|n/?a|nothing)\b", claim):
+            if claim and not _empty_claim(claim):
                 new.append(NewFinding(claim))
             continue
         hit = _NOTE_LINE.match(line)

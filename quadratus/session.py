@@ -1739,8 +1739,12 @@ _TYPED_SEP = r"(?:-|\u2013|\u2014|\u2212|:)"
 _SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*\|\s*proposal\s*:\s*"
                              r"(operation|state|expect)\s*:\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
 _EVIDENCE_CLAIM = re.compile(r"^\s*EVIDENCE\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
-_SCENARIO_REPLY = re.compile(r"^\s*SCENARIO\s+(P[0-9]+)\s*:\s*(operation|state|expect|KEEP|REQUIREMENT)\b\s*"
-                             + _TYPED_SEP + r"?\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
+#: Line-bounded on purpose: ``\s*`` would cross the newline after a blank
+#: field and read the next line as the corrected text (root's control,
+#: 2026-10-26: ``SCENARIO P1: state:`` followed by a P2 line or by prose
+#: was recorded as corrected with that next line as P1's state).
+_SCENARIO_REPLY = re.compile(r"^[ \t]*SCENARIO[ \t]+(P[0-9]+)[ \t]*:[ \t]*(operation|state|expect|KEEP|REQUIREMENT)\b"
+                             r"[ \t]*" + _TYPED_SEP + r"?[ \t]*(.*?)[ \t]*$", re.IGNORECASE | re.MULTILINE)
 #: A claim that opens like a typed one. Read only to say why it did not
 #: type, never to route it.
 _TYPED_HEAD = re.compile(r"^\s*(SCENARIO|EVIDENCE)\s+(P\S*)", re.IGNORECASE)
@@ -12788,10 +12792,9 @@ class Session:
         record = dict(closed=sorted(closed), slot_left=bool(slot_left), debt_recorded=bool(debt_recorded),
                       stop=None, holds=[], reasons=[])
         check_failed = bool(self.checks) and not self.checks[-1].get("passed")
-        if check_failed and not debt_recorded:
-            record.update(stop="CheckFailing")
-            record["reasons"].append("the last check failed and no check or merge debt was recorded")
-        elif self._findings_stop_due():
+        # Findings first, then the check, as the serial close always read
+        # them (the close-out's prediction names the same reason).
+        if self._findings_stop_due():
             hold = self._review_debt_hold()
             if hold:
                 record["holds"].append(hold)
@@ -12801,6 +12804,9 @@ class Session:
             else:
                 record.update(stop="FindingsOpen")
                 record["reasons"].append("open findings nothing holds: " + "; ".join(self._open_work())[:400])
+        if record["stop"] is None and check_failed and not debt_recorded:
+            record.update(stop="CheckFailing")
+            record["reasons"].append("the last check failed and no check or merge debt was recorded")
         if record["stop"] is None and unresolved:
             record.update(stop="FindingsUnresolved")
             record["reasons"].append(f"RESOLVES {', '.join(unresolved)} did not establish acceptance")
@@ -14074,8 +14080,11 @@ class Session:
                 lines.append(f"- {record['fid']}: held, not routed and not given to the editor: {record['route_note']}. "
                              "Restate it in full as '<id>: UNRESOLVED SCENARIO P<n> - <contradiction> | proposal: "
                              "<operation|state|expect>: <text>' or '<id>: UNRESOLVED EVIDENCE P<n> - <what is not "
-                             "shown>' against a scenario this task declares, or as an ordinary code finding, or "
-                             "settle it RESOLVED or INVALIDATED.")
+                             "shown>' against a scenario this task declares, or settle it RESOLVED or INVALIDATED. "
+                             "It stays held until then. A code defect you want the editor to answer is its own "
+                             "new finding on its own line, 'NEW: <defect> | basis: <requirement id, command or "
+                             "file> | impact: <impact>', which takes the ordinary editor and recheck route; "
+                             "UNRESOLVED prose on this id never does.")
             elif route.startswith("scenario:"):
                 entry = next((c for c in reversed(self.scenario_corrections) if record["fid"] in c.get("findings", [])),
                              None)
@@ -14090,8 +14099,12 @@ class Session:
         finding's restatement: kept on the record beside the original claim
         and read by the next routing before any editor round. A held
         unroutable claim restated in full is released for that routing; a
-        claim the planner already answered keeps its disposition. Nothing
-        is cleared here."""
+        claim the planner already answered keeps its disposition. Anything
+        else leaves the record as it is: UNRESOLVED prose on a held id is
+        never editing authority (root's consistency note, 2026-10-26); a code
+        defect reaches the editor only as the reviewer's own ``NEW:`` line,
+        which registers as a distinct finding with the ordinary route.
+        Nothing is cleared here."""
         kind, _ = _typed_finding(why or "")
         if kind is None:
             return

@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 from quadratus import checkpoint
-from quadratus.session import TaskSpec, _typed_finding, _typed_near_miss
+from quadratus.session import _SCENARIO_REPLY, TaskSpec, _typed_finding, _typed_near_miss
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import FILES
 from tests.lifecycle.test_proof_binding import CASE, _acceptance, _at, _lead, _plan, _proofs, _scope
@@ -95,6 +95,20 @@ def test_an_incomplete_typed_claim_is_no_route_and_is_named_as_a_near_miss(claim
     assert miss in _typed_near_miss(claim)
 
 
+@pytest.mark.parametrize("reply, lines", [
+    ("SCENARIO P1: state:   \nSCENARIO P2: state: another case", [("P1", "state", ""), ("P2", "state", "another case")]),
+    ("SCENARIO P1: state:   \nThe operation stays as declared.", [("P1", "state", "")]),
+    ("SCENARIO P1: state — nothing is stored\nSCENARIO P2: KEEP - right as declared",
+     [("P1", "state", "nothing is stored"), ("P2", "keep", "right as declared")]),
+    ("SCENARIO P1: state: nothing is stored", [("P1", "state", "nothing is stored")]),
+])
+def test_a_correction_reply_is_read_line_by_line(reply, lines):
+    """Root's control, 2026-10-26: a blank field followed by the next line
+    used to read that line as the corrected text. A field with no colon
+    after it is no line at all."""
+    assert [(m.group(1), m.group(2).lower(), m.group(3)) for m in _SCENARIO_REPLY.finditer(reply)] == lines
+
+
 def test_an_ordinary_code_finding_is_neither_typed_nor_a_near_miss():
     for claim in ("nothing tests negative numbers", "the CLI prints usage text instead of JSON", ""):
         assert _typed_finding(claim) == (None, None) and _typed_near_miss(claim) == ""
@@ -150,6 +164,7 @@ def test_a_blank_typed_claim_is_held_and_its_full_restatement_at_the_recheck_is_
     assert _roles(replay)["recheck"] == 2
     first = seen.prompts["recheck"][0]
     assert "held, not routed and not given to the editor" in first and "Restate it in full" in first
+    assert "UNRESOLVED prose on this id never does" in first and "'NEW: <defect> | basis:" in first
     record = H.result_json(replay)
     finding = record["review_findings"][0]
     assert finding["restated"].startswith("SCENARIO P1 -" if kind == "scenario" else "EVIDENCE P1 -")
@@ -165,12 +180,61 @@ def test_a_blank_typed_claim_is_held_and_its_full_restatement_at_the_recheck_is_
     assert finding["state"] == "resolved" and replay.result.completed, replay.result.error
 
 
+NEW_CLAIMS = {
+    "nothing-tests": "nothing tests negative numbers",
+    "root-nothing-rejects": 'Nothing rejects nonnumeric inputs in app.py:add; add("a", "b") returns "ab"',
+    "root-none-checked": "None of the arguments are checked for type in app.py:add",
+}
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("claim", sorted(NEW_CLAIMS), ids=sorted(NEW_CLAIMS))
+def test_unresolved_prose_on_a_held_id_stays_held_while_a_new_line_takes_the_editor_route(tmp_path, monkeypatch,
+                                                                                         claim):
+    """Root's consistency note: prose on a held id is not editing authority.
+    The reviewer's own NEW line is a distinct finding with the ordinary
+    route; the held one stays held and independently judged. The three
+    claims open with negative language: on bf30f82 each was read as the
+    no-finding sentinel and dropped in silence (root's two controls), so
+    the original wording is kept here as the defect's evidence."""
+    seen = Seen()
+    blank = "BLOCKING: SCENARIO P1 -   | proposal: state: nothing stored" + TAIL
+    edits = []
+
+    def revision(call, replay):
+        edits.append(call.prompt)
+        return "Nothing to change.\nCHANGED: []"
+
+    def recheck(call, replay):
+        n = len(replay.of("recheck"))
+        if n == 1:
+            return ("RFT1-1: UNRESOLVED the scenario is still wrong in prose\n"
+                    f"NEW: {NEW_CLAIMS[claim]} | basis: R1 | impact: correctness")
+        return "RFT1-1: UNRESOLVED still prose\nRFT1-2: RESOLVED a negative case now exists"
+    replay = H.run(_at(tmp_path, claim), monkeypatch,
+                   _script(seen, collaborator=lambda c, r: blank + MET, recheck=recheck, revision=revision),
+                   files=FILES, max_tasks=1, record_complete=False)
+    record = H.result_json(replay)
+    held = next(f for f in record["review_findings"] if f["fid"] == "RFT1-1")
+    new = next(f for f in record["review_findings"] if f["fid"] == "RFT1-2")
+    assert held["route"] == "unroutable" and held["state"] == "unresolved" and "restated" not in held
+    assert new.get("route") in (None, "editor") and new["state"] == "resolved"
+    assert new["claim"].startswith(NEW_CLAIMS[claim][:30])
+    assert len(edits) == 1 and "RFT1-2" in edits[0] and "RFT1-1" not in edits[0].split("These blocking findings remain unresolved:")[-1]
+    assert not any(CORRECTION_HEAD in c.prompt for c in replay.calls)
+    assert not replay.result.completed
+
+
 @pytest.mark.requirements_ledger
 @pytest.mark.parametrize("lines, status, state", [
     ("SCENARIO P1: state: nothing is stored\nSCENARIO P1: state: one ticket exists",
      "refused: ambiguous reply (2 conflicting lines for P1); the scenario stays as declared", "two tickets exist"),
     ("SCENARIO P1: state: nothing is stored\nSCENARIO P1: state: nothing is stored", "corrected", "nothing is stored"),
-], ids=["conflicting", "repeated"])
+    ("SCENARIO P1: state:   \nThe operation stays as declared.", "refused: the corrected text is empty",
+     "two tickets exist"),
+    ("SCENARIO P1: state:   \nSCENARIO P2: state: another case", "refused: the corrected text is empty",
+     "two tickets exist"),
+], ids=["conflicting", "repeated", "blank-then-prose", "blank-then-next-row"])
 def test_conflicting_correction_lines_change_nothing_and_repeated_ones_are_one_line(tmp_path, monkeypatch, lines,
                                                                                     status, state):
     seen = Seen()
@@ -189,8 +253,9 @@ def test_conflicting_correction_lines_change_nothing_and_repeated_ones_are_one_l
     assert dict(_acceptance(replay)[0]["scenario"])["state"] == state
     assert "revision" not in _roles(replay)
     if status.startswith("refused"):
-        assert record["scenario_corrections"][0]["lines"] == ["state: nothing is stored", "state: one ticket exists"]
-        assert "the planner's answer was: refused: ambiguous reply" in seen.prompts["recheck"][0]
+        if "ambiguous" in status:
+            assert record["scenario_corrections"][0]["lines"] == ["state: nothing is stored", "state: one ticket exists"]
+        assert f"the planner's answer was: {status}" in seen.prompts["recheck"][0]
         assert record["review_findings"][0]["state"] == "unresolved" and not replay.result.completed
     else:
         assert replay.result.completed, replay.result.error
@@ -331,6 +396,7 @@ def test_held_debt_in_the_last_slot_goes_to_the_caps_completion_decision(tmp_pat
     assert "goes to the cap's completion decision" in closes[0]["reasons"][0]
     assert closes[-1]["site"] == "cap" and closes[-1]["holds"]
     assert len(replay.of("orchestrator")) == 2, "the goal question was asked"
+    assert len(replay.of("auditor")) == 1, "the audit ran on the confirmed goal"
     assert not replay.result.completed and "RFT1-1" in replay.result.error, replay.result.error
     # The goal was confirmed; the requirements check then refuses MET over
     # the review finding its designated judge never closed.

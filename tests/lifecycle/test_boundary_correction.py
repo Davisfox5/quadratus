@@ -172,7 +172,8 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
     monkeypatch.setattr(Session, "_fix_cycle_stages", second_unpayable)
     short = H.run(tmp_path / "short", monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2,
                   record_complete=False)
-    assert not short.result.completed and short.result.error.startswith("FindingsOpen")
+    assert not short.result.completed and short.result.error.startswith("RequirementsUnmet"), short.result.error
+    assert "RFT2-1" in short.result.error, "the held finding reaches the cap's decision, which refuses MET over it"
     assert len(short.of("revision")) == 1
     result = H.result_json(short)
     refusal = [r for r in result["finish_refusals"] if r["what"] == "fix round"][-1]
@@ -188,7 +189,7 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
     (tmp_path / "first").mkdir()
     first = H.run(tmp_path / "first", monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2,
                   record_complete=False)
-    assert not first.result.completed and first.result.error.startswith("FindingsOpen")
+    assert not first.result.completed and first.result.error.startswith("RequirementsUnmet"), first.result.error
     assert not first.of("revision") and not first.of("recheck")
     result = H.result_json(first)
     refusal = [r for r in result["finish_refusals"] if r["what"] == "fix round"][-1]

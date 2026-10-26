@@ -159,10 +159,14 @@ def test_an_immediate_risk_holds_the_close_whatever_its_basis(tmp_path, monkeypa
     review = "BLOCKING: the import drops rows on a retry | impact: data-loss\nR2: MET - README.md"
     replay = H.run(tmp_path, monkeypatch, _recheck_script(["RFT2-1: UNRESOLVED still drops rows"], t2_review=review),
                    files=FILES, max_tasks=2, record_complete=False)
-    assert not replay.result.completed and replay.result.error.startswith("FindingsOpen")
+    # Held in the last slot, the finding goes to the cap's completion
+    # decision (close family, 2026-10-26); the requirements check refuses
+    # MET over it, and no judge but its own can close it.
+    assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
+    assert "RFT2-1" in replay.result.error
     finding = _findings(replay)["RFT2-1"]
     assert finding["holds_effects"] and not finding["audit_carried"] and finding["basis"]["kind"] == "none"
-    assert not replay.of("auditor")
+    assert finding["state"] == "unresolved" and not finding["closed"]
 
 
 @pytest.mark.requirements_ledger

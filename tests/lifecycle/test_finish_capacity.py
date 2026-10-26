@@ -113,13 +113,17 @@ def test_serial_a_route_the_finish_cannot_afford_whole_runs_terminal_and_a_block
     its review) is two and is admitted whole; there is no terminal route
     to fall to, since no stage can be dropped. t2's review blocks; the
     correction it selects (revision, recheck) cannot be paid and is
-    refused whole, so the finding stays open as written, t2 (the last
-    slot) closes on the harness's record with it, and the run ends
-    FindingsOpen with the goal question and the audit never asked."""
+    refused whole, so the finding stays open as written and t2 (the last
+    slot) closes on the harness's record with it. The held finding then
+    goes to the cap's completion decision (close family, 2026-10-26; before,
+    the run ended FindingsOpen with the goal question and the audit never
+    asked): the two held calls are spent on exactly those, the requirements
+    check refuses MET over the finding its judge never closed, and the run
+    ends RequirementsUnmet."""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=2,
                    limits=_limits(9), record_complete=False)
-    assert _roles(replay)[-2:] == [("t2", "lead"), ("t2", "collaborator")]
-    assert not replay.of("auditor") and not replay.result.completed
+    assert _roles(replay)[-4:] == [("t2", "lead"), ("t2", "collaborator"), ("run", "orchestrator"), ("audit", "auditor")]
+    assert len(replay.of("auditor")) == 1 and not replay.result.completed
     result = H.result_json(replay)
     rows = [(a["scope"], a["feasible"], a["short"]) for a in result["plan_admissions"] if a["task"] == "t2"]
     assert rows == [("mandatory", True, {}), ("full", True, {}), ("fix-cycle", False, {"calls": 2})]
@@ -128,10 +132,12 @@ def test_serial_a_route_the_finish_cannot_afford_whole_runs_terminal_and_a_block
     records = {json.loads(t)["task"]: json.loads(t) for t in replay.artifact_texts("factual-closeout")}
     assert sorted(records) == ["t1", "t2"] and "last dispatched wave" in records["t2"]["why"]
     assert result["finish_refusals"][-1]["what"] == "fix round"
-    assert replay.result.error.startswith("FindingsOpen"), replay.result.error
+    assert replay.result.error.startswith("RequirementsUnmet"), replay.result.error
+    assert "not closed by their designated judge" in replay.result.error
     assert (replay.project / "README.md").read_text() != FILES["README.md"], "t2's lead wrote"
     budget = _budget(replay)
-    assert budget["finish_protection"]["pending"] == ["goal", "audit"] and budget["finish_protection"]["refusals"] == []
+    assert budget["finish_protection"]["pending"] == [] and budget["finish_protection"]["refusals"] == []
+    assert sorted(budget["finish_protection"]["started"]) == ["audit", "goal"]
     assert budget["stop_reason"] == ""
 
 

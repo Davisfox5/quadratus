@@ -980,11 +980,22 @@ def test_a_parallel_finding_on_sibling_work_is_rechecked_once_on_the_merged_sour
     assert "This task runs in parallel with" in t2_review.prompt and "- t1: may change only app.py" in t2_review.prompt
     rechecks = (H.result_json(replay).get("parallel_batches") or [{}])[0].get("post_merge_rechecks")
     assert rechecks and rechecks[0]["task"] == "t2"
-    still_open = "FindingsOpen" in (replay.result.error or "")
+    # A finding the post-merge recheck keeps is held review debt; in the last
+    # slot it goes to the cap's completion decision, which never completes
+    # over it (close family, 2026-10-26; before, FindingsOpen ended the run).
+    still_open = (not replay.result.completed
+                  and any("RFT2-1" in text or "add" in text for text in H.result_json(replay)["open_findings"]))
     if after_merge == "RESOLVED":
         assert rechecks[0]["rechecked"][0]["verdict"] == "resolved" and not still_open
     else:
         assert rechecks[0]["rechecked"][0]["verdict"].startswith("kept") and still_open
+        if shape == "blocking":
+            # A kept BLOCKING finding is held review debt: no FindingsOpen.
+            assert "FindingsOpen" not in (replay.result.error or ""), replay.result.error
+        else:
+            # A deferred entry is not disputable review debt (Session._disputable),
+            # so a kept deferral still ends the batch as before.
+            assert (replay.result.error or "").startswith("FindingsOpen"), replay.result.error
     assert [c.task for c in replay.of("lead")].count("t2") == 1
     after = replay.calls[replay.calls.index(merged[0]) + 1:]
     assert not [c for c in after if c.role.startswith(("lead", "revision"))], "no editing call after the merge recheck"
