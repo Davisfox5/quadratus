@@ -1807,13 +1807,38 @@ def _typed_near_miss(claim: str) -> str:
     return "an EVIDENCE claim without saying what is not shown"
 
 
+#: The bound on one corrected scenario field, stated to the planner in the
+#: correction prompt in the same number (scenario correction, 2026-10-28:
+#: controller-continuation-01's correction was refused at 869 characters
+#: with the explanation inside the text, against a bound the prompt never
+#: named).
+MAX_SCENARIO_TEXT = 400
+#: The segment that separates the operation (the corrected text) from the
+#: planner's explanation on a correction line.
+_CORRECTION_EXPLANATION = re.compile(r"\s*\|\s*(?:because|why|explanation|reason|note)\s*:\s*", re.IGNORECASE)
+
+
+def _split_explanation(text: str) -> Tuple[str, str]:
+    """``(operation, explanation)``: the corrected text (or a KEEP or
+    REQUIREMENT reason) before the first ``| because:`` segment, and the
+    explanation after it. A line with no such segment is all operation."""
+    parts = _CORRECTION_EXPLANATION.split(text or "", maxsplit=1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return (text or "").strip(), ""
+
+
 def _scenario_text_problem(text: str, current: str) -> str:
-    """Why a planner's corrected scenario text cannot stand, or ""."""
+    """Why a planner's corrected scenario text cannot stand, or "". The
+    bound is measured and named, so a refusal says what was over it."""
     text = (text or "").strip()
     if not text or text.lower() in ("none", "n/a", "-"):
         return "the corrected text is empty"
-    if "\n" in text or len(text) > 400:
-        return "the corrected text is not one bounded line"
+    if "\n" in text:
+        return "the corrected text spans more than one line"
+    if len(text) > MAX_SCENARIO_TEXT:
+        return (f"the corrected text is {len(text)} characters; the bound is {MAX_SCENARIO_TEXT} (an explanation "
+                "goes after ' | because: ', not in the text)")
     if text == (current or "").strip():
         return "the corrected text equals the declared text"
     return ""
@@ -1823,6 +1848,22 @@ _FINDING_SHAPE = (
     "State each finding with the requirement or condition it breaks, where it is (file and "
     "function), and a concrete failing example (an input or call and the wrong result it gives) "
     "when one exists.")
+#: What an ordinary review covers beyond the happy path (review coverage,
+#: 2026-10-28): the whole error boundary of each entry point the task
+#: touches, and failures the delivery inherits from code its own path
+#: reaches. Generic by design: it names classes of input and failure, never
+#: a known defect of any candidate.
+_ERROR_BOUNDARY_LENS = (
+    "Cover the whole error boundary of the work, not only its happy path. For every entry point the "
+    "task adds or changes (a command, a request handler, a function the goal names), check what happens "
+    "on malformed, missing, empty, out-of-range or oversized input, on a value at the edge of its type's "
+    "range, on a missing or unreadable resource, and on a failure of anything the code calls (storage, a "
+    "parser, a subprocess, the network); and check where each failure is caught, so that what the caller "
+    "sees is the boundary the requirement names (an exit status, a response status, a message), never a "
+    "traceback or a crash. Construction, parsing and checks that run before or outside the handler are "
+    "part of that boundary. A failure the task inherits from code it did not write but that its own path "
+    "reaches, or that the requirement it covers names, is a finding against this task: the delivery is "
+    "held to what the goal requires on the current source, not to what the source did before.")
 
 #: How an evidence request is written and what it can do, for every point
 #: the channel is offered (the next-task prompt, the final-audit challenge).
@@ -1925,6 +1966,9 @@ def _read_covers(spec):
 
 
 _RESOLVES = re.compile(r"^\s*RESOLVES:(.*)$", re.MULTILINE)
+#: A reviewer's reading of one deferred row at the post-merge recheck.
+_DEFERRED_ROW_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(P[0-9]+)[ \t]*:[ \t]*(SHOWN|NOT[ \t]+SHOWN)\b[ \t]*"
+                                r"(?:-|\u2013|\u2014|:|,)?[ \t]*(.*?)[ \t]*$", re.IGNORECASE | re.MULTILINE)
 
 
 def _snapshot_files(snapshot) -> Dict[str, str]:
@@ -2590,6 +2634,9 @@ class Session:
         #: sufficiency apart; every plan admission decided before a wave; and
         #: the session's own effects (checks, captures, probes) as operations.
         self.review_findings: List[dict] = []
+        #: Each RESOLVES or CONTINUES settlement of review findings: the ids
+        #: named and inherited, the reviewers asked, and their rechecks.
+        self.review_resolutions: List[dict] = []
         self.evidence_obligations: List[dict] = []
         self.plan_admissions: List[dict] = []
         self.operations: List[dict] = []
@@ -2759,6 +2806,17 @@ class Session:
         #: the tasks whose one correction call is spent.
         self.scenario_corrections: List[dict] = []
         self.evidence_routes: List[dict] = []
+        #: One record per (child task, reviewer) whose acceptance rows a
+        #: parallel child could not execute: declared by the harness when the
+        #: reviewer is handed the rows, rechecked by that reviewer after the
+        #: merge gate ran them (deferred evidence, 2026-10-28).
+        self.deferred_evidence: List[dict] = []
+        #: Per planning, plan-gate and lead-draft prompt: its character
+        #: counts by block, with the completed-work block measured both as
+        #: the index it was sent as and as the preview render it was sent as
+        #: before 2026-10-28. Characters, never tokens: the CLI's reported
+        #: usage is the token figure, in the delegation ledger.
+        self.prompt_measurements: List[dict] = []
         self._scenario_corrected: set = set()
         #: One record per close decision (close/1): what closed, what held,
         #: what stopped; carried, sealed and published (close family, 2026-10-26).
@@ -4254,6 +4312,7 @@ class Session:
         # P3.4: an unmerged parallel child's finding was otherwise untyped).
         prior, self._outcome = self._outcome, outcome
         self.task_outcomes.append(outcome)
+        self._inherit_review_findings(spec, outcome.continues)
         self._contract = None
         self._task_gate = None
         self._task_outer = None
@@ -5131,26 +5190,9 @@ class Session:
                 for peer, verdict in unresolved:
                     fid = _finding_id(verdict)
                     record = next((r for r in self.review_findings if r["fid"] == fid), None)
-                    if (record is not None and record.get("audit_carried")
-                            and self.config.requirements_ledger and self.memory.ledger.requirements):
-                        # Carried only where an audit will read it: with no
-                        # requirements ledger there is no final audit, so the
-                        # finding stays an open one and stops the run as before.
-                        # No basis and no immediate risk: it does not stop the
-                        # run here. It stays open on the registry by id, is
-                        # carried to the final audit, and the requirements it
-                        # touches are not met until a judge closes it.
-                        self._outcome.note("unverified", f"Task {spec.task_id}: {fid} open, carried to the final "
-                                                         f"audit by id: {record['claim'][:200]}", terminal=False)
-                        self._note(f"task {spec.task_id}: {fid} has no basis and claims no immediate risk; carried "
-                                   "to the final audit by id")
-                    else:
-                        self._open_finding("unverified", verdict)
                     original = (record["text"] if record is not None
                                 else next((n for p, n in blocking if p == peer), verdict))
-                    self.unresolved_reviews.append(dict(task=spec.task_id, peer=peer, finding=original.strip(),
-                                                        text=verdict, description=spec.description[:2000],
-                                                        finding_id=fid))
+                    self._hold_open_finding(spec, peer, verdict, record=record, original=original)
                 # The cap ran out with findings still open. They go to the
                 # record loudly rather than being lost in the transcript.
                 task.record(
@@ -5186,6 +5228,54 @@ class Session:
         self.memory.absorb(summary)
         self.history.append(summary)
         return summary
+
+    def _hold_open_finding(self, spec, peer: str, verdict: str, *, record=None, original=None) -> None:
+        """One review finding left open at a close, into the debt accounting
+        every later reader uses: the legacy open text (or, for a finding
+        with no basis and no immediate risk, the note that carries it to the
+        final audit by id) and the held entry (``unresolved_reviews``) the
+        post-merge recheck, the evidence loop, the hold and a RESOLVES
+        recheck read. The same block the fix loop always wrote, shared with
+        the capped and failed closes (one finding identity, 2026-10-28)."""
+        fid = record["fid"] if record is not None else _finding_id(verdict)
+        if (record is not None and record.get("audit_carried")
+                and self.config.requirements_ledger and self.memory.ledger.requirements):
+            # Carried only where an audit will read it: with no requirements
+            # ledger there is no final audit, so the finding stays an open
+            # one and stops the run as before. No basis and no immediate
+            # risk: it does not stop the run here. It stays open on the
+            # registry by id, is carried to the final audit, and the
+            # requirements it touches are not met until a judge closes it.
+            if self._outcome is not None:
+                self._outcome.note("unverified", f"Task {spec.task_id}: {fid} open, carried to the final "
+                                                 f"audit by id: {record['claim'][:200]}", terminal=False)
+            self._note(f"task {spec.task_id}: {fid} has no basis and claims no immediate risk; carried "
+                       "to the final audit by id")
+        else:
+            self._open_finding("unverified", verdict)
+        text = original if original is not None else (record["text"] if record is not None else verdict)
+        self.unresolved_reviews.append(dict(task=spec.task_id, peer=peer, finding=(text or "").strip(),
+                                            text=verdict, description=spec.description[:2000],
+                                            finding_id=fid))
+
+    def _hold_task_findings(self, spec, why: str) -> None:
+        """Every open review finding of this task that the debt accounting
+        does not hold yet, held there at a capped or failed close (one
+        finding identity, 2026-10-28). controller-continuation-01: t4's
+        second revision hit the turn cap, ``_close_turn_limited`` returned
+        before the block above ran, and eight of Opus's open ids were in the
+        registry but in no held entry, so the post-merge recheck asked about
+        one finding, the planner's RESOLVES was refused, and the audit was
+        the first judge to see them. The finding keeps its reviewer: nothing
+        here judges it, and ``hold`` says why it is held."""
+        held = {e.get("finding_id") for e in self.unresolved_reviews}
+        for record in self._finding_records(task=spec.task_id):
+            if record["fid"] in held:
+                continue
+            record["hold"] = why
+            verdict = f"{record['fid']}: UNRESOLVED ({why}): {record['claim']}"
+            self._hold_open_finding(spec, record["author"], verdict, record=record, original=record.get("text"))
+            self._note(f"task {spec.task_id}: {record['fid']} by {record['author']} held open: {why}")
 
     def _capped_final_draft(self, lead, spec, task, exc, before, collaborators):
         """A capped first draft in the job's last task slot goes to the existing
@@ -5395,6 +5485,8 @@ class Session:
                       **self._attempt_identity(spec))
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
+        self._hold_task_findings(spec, f"left open when {spec.task_id} stopped at its lead turn limit before "
+                                       "its recheck")
         from .project_files import MAX_INSPECT_BYTES
         self._cap_baselines[spec.task_id] = {
             path: (before or {}).get(path, b"") for path in state["changed"]
@@ -5479,6 +5571,7 @@ class Session:
                       content=self._content_fingerprint(changed), **self._attempt_identity(spec))
         task.keep(json.dumps(record), kind="task-failed", author=lead)
         self.failed_records[spec.task_id] = record
+        self._hold_task_findings(spec, f"left open when {spec.task_id} failed ({exc.cause}) before its recheck")
         from .project_files import MAX_INSPECT_BYTES
         before = self._task_before or {}
         self._cap_baselines[spec.task_id] = {
@@ -6031,8 +6124,17 @@ class Session:
                        if self.project and self.config.codebase_map is not None else "")
                 ),
                 recent=self.config.recent_entries,
+                # The completed work as an index (planning context, 2026-10-28;
+                # root's measurement of controller-continuation-01's last
+                # plan: 100,752 characters of previews against 14,251 as the
+                # index, in a 149,250-character prompt). Every artifact id
+                # is listed and FETCH serves any of them whole; the open
+                # debt is stated below in its own blocks.
+                with_previews=False,
                 extra=self._map_block(),
             )
+            if not fetched:
+                self._measure_context("plan", body, extra=self._map_block())
             if fetched:
                 body += ("\n\n" + _render_fetches(fetched)
                          + "\n\nWith that read, answer now.")
@@ -6198,8 +6300,10 @@ class Session:
                 f"unsure about with '?'.\n\n{_SIZE_GUIDE}"
             ),
             recent=self.config.recent_entries,
+            with_previews=False,
             extra=self._map_block(),
         )
+        self._measure_context("plan-gate", prompt, extra=self._map_block())
         # Re-seats on an exhausted window like any other seat call: the plan
         # is usually the first request a run makes, so it is the most likely
         # place to discover the primary is out.
@@ -6745,8 +6849,13 @@ class Session:
                 if resolves:
                     done.edge("settlement", not unresolved)
                 status = self.memory.ledger.requirement_status
+                # Audit ids under ``findings`` (the typed projection checks
+                # them against the audit ledger); review ids apart, checked
+                # against the review registry by their own reader.
+                audit_ids = {f["id"] for f in self.findings}
                 done.open_at_close = dict(
-                    findings=list(unresolved),
+                    findings=[fid for fid in unresolved if fid in audit_ids],
+                    review_findings=[fid for fid in unresolved if fid not in audit_ids],
                     requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
             check_debt = self._record_check_debt(spec, covers)
             self._current_covers, self._current_resolves = [], []
@@ -7976,6 +8085,7 @@ class Session:
                     # parent's to recheck now (workflow repair, 2026-10-24).
                     finding.pop("held", None)
                 self.review_findings.extend(child.review_findings)
+                self.deferred_evidence.extend(child.deferred_evidence)
                 self.scenario_corrections.extend(child.scenario_corrections)
                 self.evidence_routes.extend(child.evidence_routes)
                 # The child's one correction per task is spent in the parent too.
@@ -7996,6 +8106,7 @@ class Session:
                         base_gate=_gate_identity(self.config.integration_gate), environment=self._environment_id(),
                         execution="missing" if obligation["execution"] in ("ran", "failed") else obligation["execution"],
                         receipts=[], source_digest=None, sufficiency="unjudged", judged_by="", judged_binding="",
+                        deferred=None,
                         entry=dict(obligation.get("entry") or {}, after_check=len(self.checks),
                                    after_observed=len(self.review_checks))))
                 self.plan_admissions.extend(child.plan_admissions)
@@ -8066,8 +8177,9 @@ class Session:
                     op["result"] = dict(paths=changed)
                 self.history.append(summary)
                 self.memory.absorb(summary)
-                if child.unresolved_reviews and mine is not None:
-                    pending_rechecks.append((spec, child.unresolved_reviews, mine))
+                deferred = [d for d in child.deferred_evidence if d.get("rechecked") is None]
+                if (child.unresolved_reviews or deferred) and mine is not None:
+                    pending_rechecks.append((spec, list(child.unresolved_reviews), mine, deferred))
                 if getattr(summary, "outcome", "closed") in ("turn_limited", "failed"):
                     (self.turn_limited if summary.outcome == "turn_limited" else self.failed).append(spec.task_id)
                     self._partial_tasks.discard(continues)
@@ -8104,7 +8216,8 @@ class Session:
             # final reviews do (_gate_repair_stages).
             self._route_peers = []
             self._route_after_merge = dict(
-                rechecks=sorted({e["peer"] for _, entries, _ in pending_rechecks for e in entries}),
+                rechecks=sorted({e["peer"] for _, entries, _, _ in pending_rechecks for e in entries}
+                                | {d["peer"] for _, _, _, deferred in pending_rechecks for d in deferred}),
                 capped=[s.task_id for s, _, _ in capped_merged])
             try:
                 self._run_integration_gate(first.lead, merge, task)
@@ -8116,8 +8229,14 @@ class Session:
             if not record["merge_gate"]["passed"]:
                 record["merge_debt"] = self._record_merge_debt(merge, parsed)
         if pending_rechecks and not fatal and (record.get("merge_gate") or {}).get("passed"):
-            record["post_merge_rechecks"] = [self._recheck_after_merge(spec, entries, mine)
-                                             for spec, entries, mine in pending_rechecks]
+            record["post_merge_rechecks"] = [self._recheck_after_merge(spec, entries, mine, deferred=deferred)
+                                             for spec, entries, mine, deferred in pending_rechecks]
+        elif pending_rechecks:
+            why = ("the batch stopped" if fatal else "the merge gate did not pass" if gate is not None
+                   else "the run has no gate to execute them")
+            for _, _, _, deferred in pending_rechecks:
+                for entry in deferred:
+                    entry["rechecked"] = f"not rechecked: {why}"
         if capped_merged and not fatal:
             record["capped_final_reviews"] = [self._review_capped_final_child(spec, covers, mine, record, len(parsed))
                                               for spec, covers, mine in capped_merged]
@@ -8125,7 +8244,7 @@ class Session:
             raise fatal
         return True
 
-    def _recheck_after_merge(self, spec, entries, outcome) -> dict:
+    def _recheck_after_merge(self, spec, entries, outcome, *, deferred=()) -> dict:
         """Recheck a merged child's open review findings once against the
         merged source, by the reviewer who raised them (r09 on ded0095).
 
@@ -8133,7 +8252,22 @@ class Session:
         existing recheck role: its own findings only, no new ones. RESOLVED
         closes exactly those findings (the open text and its fact); anything
         else, a capped recheck or an unavailable reviewer keeps them open. No
-        lead call, no fix round, no slot, recovery or grant."""
+        lead call, no fix round, no slot, recovery or grant. A capped or
+        failed child's open findings are among the entries since 2026-10-28
+        (``_hold_task_findings``)."""
+        return self._recheck_open_findings(
+            spec, entries, outcome, deferred=list(deferred),
+            situation=("You reviewed this task while it ran in parallel with sibling tasks. All the tasks are now "
+                       "merged, and your working directory holds the merged source; 'the revision' below is the "
+                       "source as it now stands."))
+
+    def _recheck_open_findings(self, spec, entries, outcome, *, situation: str, deferred=()) -> dict:
+        """One recheck per reviewer of the held findings in ``entries``
+        (``unresolved_reviews`` rows: task, peer, finding, text, finding_id)
+        against the current source, in ``situation`` (the post-merge recheck,
+        a RESOLVES or CONTINUES settlement). The designated-judge rule holds
+        through ``_apply_review_reading``; a finding's legacy text and fact
+        close on the task that raised it."""
         result = dict(task=spec.task_id, rechecked=[])
         # The merge gate's run on the merged source is the receipt the
         # child's rows were re-based to wait for: settled before the
@@ -8142,11 +8276,18 @@ class Session:
         by_peer: Dict[str, List[dict]] = {}
         for entry in entries:
             by_peer.setdefault(entry["peer"], []).append(entry)
+        deferrals: Dict[str, List[dict]] = {}
+        for entry in deferred:
+            deferrals.setdefault(entry["peer"], []).append(entry)
+            by_peer.setdefault(entry["peer"], [])
         for peer, group in by_peer.items():
-            row = dict(peer=peer, findings=len(group), verdict=None, resolved=[], kept=[], new=[])
+            row = dict(peer=peer, findings=len(group), verdict=None, resolved=[], kept=[], new=[],
+                       deferred=[pid for d in deferrals.get(peer, ()) for pid in d.get("proof_ids") or ()])
             result["rechecked"].append(row)
             if not self._available(peer):
                 row["verdict"] = "kept: reviewer unavailable"
+                for d in deferrals.get(peer, ()):
+                    d["rechecked"] = "kept: reviewer unavailable"
                 continue
             by_fid = {}
             for entry in group:
@@ -8160,37 +8301,49 @@ class Session:
                 if fid is not None:
                     by_fid.setdefault(fid, []).append(entry)
             records = [r for r in self.review_findings if r["fid"] in by_fid and not r.get("closed")]
-            if not records:
+            rows = self._deferred_rows_for(spec.task_id, peer) if peer in deferrals else []
+            if not records and not rows:
                 row["verdict"] = "kept: no open finding to recheck"
+                for d in deferrals.get(peer, ()):
+                    d["rechecked"] = "kept: none of its rows is on the record"
                 continue
             ids = [r["fid"] for r in records]
-            self._recheck_impact, self._fix_cycle_now = _worst_impact(records), 1
+            self._recheck_impact, self._fix_cycle_now = (_worst_impact(records) if records else None), 1
             # The child's own proof rows, as the merged source and the merge
             # gate's receipt now hold them (the active spec is not this task).
             instructions = self._recheck_instructions(ids, spec=spec)
             binding = self._judgment_binding(spec, peer, "recheck")
+            origins = [e for e in group if e.get("task") and e["task"] != spec.task_id and e.get("description")]
+            reviewed = "".join(f"Task {e['task']}, as you reviewed it: {e['description'][:1500]}\n\n"
+                               for e in {e["task"]: e for e in origins}.values())
             prompt = (self._role_packet(spec, "reviewer") + "\n\n"
-                      f"Task: {spec.description}\n\n"
-                      "You reviewed this task while it ran in parallel with sibling tasks, and these "
-                      f"findings were left open:\n{self._finding_lines(records)}\n\n"
-                      "All the tasks are now merged, and your working directory holds the merged source; "
-                      "'the revision' below is the source as it now stands. "
-                      + instructions + self._review_turn_budget_note(peer))
+                      f"Task: {spec.description}\n\n" + reviewed
+                      + f"{situation}\n\n"
+                      + (f"Your findings left open:\n{self._finding_lines(records)}\n\n" + instructions
+                         if records else self._proof_rows(spec) + "\n\n")
+                      + self._deferred_rows_block(rows)
+                      + self._review_turn_budget_note(peer))
             try:
                 with invocation(spec.task_id, "recheck"):
                     verdict = self._invoke_model(peer, prompt)
             except TurnLimitReached:
                 row["verdict"] = "kept: recheck capped"
+                for d in deferrals.get(peer, ()):
+                    d["rechecked"] = "kept: recheck capped"
                 continue
             except FinishReserved as exc:
                 # Not rechecked: the findings stay open exactly as they were.
                 self._finish_refused(spec, f"post-merge recheck by {peer}", exc, outcome=outcome)
                 row["verdict"] = "kept: recheck refused to keep the finish"
+                for d in deferrals.get(peer, ()):
+                    d["rechecked"] = "kept: recheck refused to keep the finish"
                 continue
             finally:
                 self._recheck_impact, self._fix_cycle_now = None, 0
+            if rows:
+                row["new"].extend(self._read_deferred_rows(spec, peer, rows, deferrals.get(peer, ()), verdict, outcome))
             reading = judgment.recheck_verdicts(verdict, ids)
-            if not reading.judged_any:
+            if ids and not reading.judged_any:
                 completed = self._complete_judgment(
                     spec, peer, "recheck", verdict,
                     [f"one line per finding ({', '.join(ids)}): RESOLVED, UNRESOLVED or INVALIDATED"],
@@ -8206,12 +8359,17 @@ class Session:
                 if record["closed"]:
                     row["resolved"].append(fid)
                     for entry in by_fid[fid]:
-                        if entry["text"] in self.open_findings:
-                            self.open_findings.remove(entry["text"])
-                        for fact in outcome.facts:
-                            if fact.kind == "unverified" and fact.active and (fact.full or fact.detail) in (
-                                    entry["text"], entry["text"][:400]):
-                                fact.recovered = True
+                        text = entry.get("text")
+                        if text is None:
+                            continue
+                        if text in self.open_findings:
+                            self.open_findings.remove(text)
+                        raised = [o for o in self.task_outcomes if o.task_id == entry.get("task")]
+                        for holder in raised + ([outcome] if outcome not in raised else []):
+                            for fact in holder.facts:
+                                if fact.kind == "unverified" and fact.active and (fact.full or fact.detail) in (
+                                        text, text[:400]):
+                                    fact.recovered = True
                 else:
                     why = record["history"][-1]["why"] if record["history"] else ""
                     row["kept"].append(f"{fid}: {record['state']}: {why[:160]}")
@@ -8223,15 +8381,92 @@ class Session:
                                                     finding_id=record["fid"]))
                 row["new"].append(record["fid"])
             if row["resolved"]:
-                outcome.note("unverified", f"rechecked by {peer} on the merged source: resolved "
+                outcome.note("unverified", f"rechecked by {peer} on the current source: resolved "
                                            f"{len(row['resolved'])} finding(s) left open during the parallel run"
                                            + (f"; {len(row['kept'])} kept" if row["kept"] else "")
                                            + (f"; {len(row['new'])} new" if row["new"] else ""), terminal=False)
                 self._note(f"{spec.task_id}: {len(row['resolved'])} open finding(s) resolved by {peer} on the "
                            f"merged source" + (f", {len(row['kept'])} kept" if row["kept"] else ""))
             row["verdict"] = ("resolved" if row["resolved"] and not row["kept"] and not row["new"]
-                              else "kept: " + "; ".join(row["kept"] + [f"new {f}" for f in row["new"]])[:300])
+                              else "kept: " + "; ".join(row["kept"] + [f"new {f}" for f in row["new"]])[:300]
+                              if row["kept"] or row["new"] or row["resolved"] else "deferred rows read")
         return result
+
+    def _deferred_rows_block(self, rows: List[dict]) -> str:
+        """For the reviewer's recheck: the rows the harness deferred to the
+        merge gate when it reviewed, as the record holds them now, and the
+        one-line form it answers each with."""
+        if not rows:
+            return ""
+        lines = []
+        for r in rows:
+            receipts = [str(x) for x in (r.get("receipts") or ())]
+            lines.append(f"- {r.get('proof_id') or r['oid']} [{', '.join(x[0] for x in r['requirements'])}]: "
+                         f"{r['behavior'][:220]}; binding {r.get('binding', 'unknown')}: "
+                         f"{', '.join(r.get('cases') or ()) or 'no case bound'}; execution {r['execution']}"
+                         + (f" (receipt {receipts[-1]})" if receipts and r["execution"] == "ran" else "")
+                         + (f" ({r['reason'][:80]})" if r.get("reason") else ""))
+        return ("Rows the harness deferred to the merge gate when you reviewed, as they stand now:\n"
+                + "\n".join(lines)
+                + "\nFor each row, one line and nothing else about it: 'P<n>: SHOWN <what the executed case "
+                "shows for the scenario>' or 'P<n>: NOT SHOWN <what is missing, or what the execution does not "
+                "establish>'. A NOT SHOWN line is recorded as your EVIDENCE finding on this task and held open "
+                "until a later complete run shows it; SHOWN is your reading, recorded as such, and makes nothing "
+                "met: the final audit judges sufficiency. A row whose execution is not 'ran' cannot be SHOWN, "
+                "and is held by its execution state whatever you write. A missing, duplicated or contradictory "
+                "line is recorded as no reading.\n\n")
+
+    def _read_deferred_rows(self, spec, peer: str, rows: List[dict], records, verdict: str, outcome) -> List[str]:
+        """Read the reviewer's per-row lines for its deferred rows: NOT
+        SHOWN registers its EVIDENCE finding (typed, held open, the
+        reviewer's own to close); SHOWN is recorded as the reviewer's
+        reading and establishes nothing; anything else is no reading.
+        Returns the ids of the findings registered."""
+        lines: Dict[str, List[tuple]] = {}
+        for m in _DEFERRED_ROW_LINE.finditer(verdict or ""):
+            lines.setdefault(m.group(1).upper(), []).append((m.group(2).upper().replace("  ", " "), m.group(3).strip()))
+        readings: Dict[str, str] = {}
+        new_ids: List[str] = []
+        for r in rows:
+            pid = r.get("proof_id") or r["oid"]
+            distinct = list(dict.fromkeys(lines.get(pid.upper(), [])))
+            if not distinct:
+                readings[pid] = "no reading: no line for it"
+                continue
+            if len({state for state, _ in distinct}) > 1 or len(distinct) > 1:
+                readings[pid] = f"no reading: {len(distinct)} conflicting lines"
+                continue
+            state, text = distinct[0]
+            if state.startswith("NOT"):
+                saved = self._current_covers
+                self._current_covers = list(getattr(outcome, "covers", None) or [])
+                try:
+                    # The typed EVIDENCE form the review prompt names, basis
+                    # and impact included, so the finding is held as a legacy
+                    # open text and not carried to the audit as baseless.
+                    made = self._register_review_findings(
+                        spec, peer, f"BLOCKING: EVIDENCE {pid} - {text or 'not shown'} | basis: {pid} | impact: contract")
+                finally:
+                    self._current_covers = saved
+                if made:
+                    record = made[0]
+                    record["hold"] = "raised at the post-merge recheck of a deferred row"
+                    self._hold_open_finding(spec, peer, f"{record['fid']}: UNRESOLVED EVIDENCE {pid} - {text}",
+                                            record=record, original=record.get("text"))
+                    new_ids.append(record["fid"])
+                    readings[pid] = f"NOT SHOWN, recorded as {record['fid']}: {text[:200]}"
+                else:
+                    readings[pid] = f"NOT SHOWN (already on the record): {text[:200]}"
+            elif r.get("execution") != "ran":
+                readings[pid] = f"SHOWN refused: the row's execution is {r.get('execution')}, so nothing is shown"
+            else:
+                readings[pid] = f"SHOWN (the reviewer's reading; sufficiency is the audit's): {text[:200]}"
+        for entry in records:
+            entry["rechecked"] = "rechecked"
+            entry["reading"] = dict(readings)
+        self._note(f"task {spec.task_id}: {peer} read {len(rows)} deferred row(s): "
+                   + "; ".join(f"{pid}: {text[:60]}" for pid, text in readings.items()))
+        return new_ids
 
     def _review_capped_final_child(self, spec, covers, outcome, record, size) -> dict:
         """A turn-capped child of the job's final parallel batch meets one
@@ -11381,7 +11616,75 @@ class Session:
             rows.append(delivery.PlanStage("design review", "reserve"))
         if not self._closes_factually(spec):
             rows.append(delivery.PlanStage("close-out", "reserve"))
+        rows.extend(delivery.PlanStage(f"resolution recheck by {peer}", "reserve")
+                    for peer in self._resolution_reviewers(spec))
+        rows.extend(self._planning_stages())
         return rows
+
+    def _measure_context(self, kind: str, body: str, *, task: Optional[str] = None, extra: str = "") -> None:
+        """Record what one prompt carried, in characters by block: the
+        completed-work block as sent (index) and as it would have been sent
+        with previews, the goal and rules, the map, and the rest (the
+        question or task text with its obligation and debt blocks). A
+        comparison of renderings, never a token claim; a failure to measure
+        is noted and never fails the call."""
+        try:
+            ledger = self.memory.ledger
+            index = ledger.render(goal=self.memory.goal, recent=self.config.recent_entries, with_previews=False)
+            full = ledger.render(goal=self.memory.goal, recent=self.config.recent_entries, with_previews=True)
+            # With no question and no extra block the completed work is the
+            # last block of both renders; everything before it is the goal,
+            # the rules, the rulings and the requirements.
+            marker = "## Completed work"
+            head_chars = index.find(marker) if marker in index else len(index)
+            record = dict(kind=kind, task=task or getattr(self._active_spec, "task_id", None),
+                          prompt_chars=len(body), goal_and_rules_chars=max(0, head_chars),
+                          completed_index_chars=max(0, len(index) - head_chars),
+                          completed_preview_chars=max(0, len(full) - (full.find(marker) if marker in full else len(full))),
+                          map_chars=len(extra or ""), entries=len(ledger.entries),
+                          refs=sum(len(e.refs) for e in ledger.entries),
+                          unit="characters of the rendered prompt; not tokens")
+            record["rest_chars"] = max(0, record["prompt_chars"] - record["goal_and_rules_chars"]
+                                       - record["completed_index_chars"] - record["map_chars"])
+            self.prompt_measurements.append(record)
+        except Exception as exc:  # noqa: BLE001 -- a measurement never fails a call
+            self.prompt_measurements.append(dict(kind=kind, task=task, prompt_chars=len(body or ""),
+                                                 error=f"{type(exc).__name__}: {str(exc)[:160]}"))
+
+    def _last_planning_tokens(self) -> Optional[int]:
+        """The reported tokens of the last planning call this episode (the
+        delegation ledger's orchestrator event with known usage), or None."""
+        ledger = getattr(self.config, "delegation_ledger", None)
+        for event in reversed(list(getattr(ledger, "events", None) or [])):
+            if not getattr(event, "invoked", False) or (event.role or "").split(":")[0] != "orchestrator":
+                continue
+            if event.input_tokens is None or event.output_tokens is None:
+                continue
+            return int(event.input_tokens) + int(event.output_tokens)
+        return None
+
+    def _planning_stages(self, *, slots: int = 1) -> list:
+        """The planning call that follows a task (or a batch) when a slot is
+        left after it: one reserve call, counted at the larger of the reserve
+        and the last planning call's reported size (budget-aware admission,
+        2026-10-28; controller-continuation-01's two post-audit planning
+        calls reported 451,817 and 358,436 tokens against a 200,000 reserve,
+        and the route they left room for could not be paid). An explicit
+        list, a parallel child and a job committed to end make no planning
+        call; neither does the final slot, whose finish is held already."""
+        if self._explicit_tasks is not None or getattr(self, "_batch_child", False) or self._terminal_committed():
+            return []
+        total = getattr(self, "_max_tasks", None)
+        if total and int(getattr(self, "_slots_used", 0) or 0) + slots >= int(total):
+            return []
+        budget = self._budget()
+        if budget is None:
+            return []
+        reserve = int((budget.snapshot().get("limits") or {}).get("reserve_tokens_per_call") or 0)
+        if not reserve:
+            return []
+        measured = self._last_planning_tokens()
+        return [delivery.PlanStage("next planning call", "reserve", tokens=max(reserve, measured or 0))]
 
     def _route_wall(self, spec):
         """The wall time of one run of the task's gate after an edit, as
@@ -11425,6 +11728,10 @@ class Session:
             rows.append(delivery.PlanStage(name, "editing" if editing else "reserve", editing=editing))
         if not self._closes_factually(spec, slots=slots):
             rows.append(delivery.PlanStage("close-out", "reserve"))
+        rows.extend(delivery.PlanStage(f"resolution recheck by {peer}", "reserve")
+                    for peer in self._resolution_reviewers(spec))
+        if not post_merge:
+            rows.extend(self._planning_stages(slots=slots))
         budget = self._budget()
         pending = list(budget.finish_pending()) if budget is not None and hasattr(budget, "finish_pending") else []
         rows.extend(delivery.PlanStage(stage, "reserve", finishing=True) for stage in pending)
@@ -11712,7 +12019,9 @@ class Session:
         whole = self._admit_plan(spec.task_id, full, scope="full", wall_extra=self._gate_wall(spec) * checks)
         if whole.feasible:
             return
-        terminal = [r for r in full if r.name != "close-out"]
+        # The terminal candidate ends the job after this task: no close-out
+        # and no planning call follow it.
+        terminal = [r for r in full if r.name not in ("close-out", "next planning call")]
         if len(terminal) < len(full) and self._explicit_tasks is None:
             # The second candidate (admission/3): the same task, reviewers,
             # gates, design and security stages, closed by the harness's
@@ -11802,6 +12111,7 @@ class Session:
                 stages = self._mandatory_stages(spec, peers)
                 rows.extend(r for r in self._plan_stages(spec, stages, collaborators=peers, post_merge=True,
                                                          slots=len(parsed)) if not r.finishing)
+            rows.extend(self._planning_stages(slots=len(parsed)))
         finally:
             self._current_covers = saved
         name = "batch:" + ",".join(spec.task_id for spec, _c, _n in parsed)
@@ -11884,12 +12194,24 @@ class Session:
                          + f"execution {o['execution']}; sufficiency {o['sufficiency']}"
                          for o in self.evidence_obligations)
         notes.extend(self._admission_notes())
+        waiting = [d for d in self.deferred_evidence if not d.get("rechecked") or str(d["rechecked"]).startswith(("kept", "not"))]
+        if waiting:
+            notes.append("Deferred evidence (rows a parallel child could not execute, declared by the harness; "
+                         "their execution state is in the evidence rows and nothing here makes one met):")
+            notes.extend(f"- {d['task']} by {d['peer']}: {', '.join(d.get('proof_ids') or ())}: "
+                         + (str(d['rechecked']) if d.get("rechecked") else "awaiting the merge gate and the reviewer's recheck")
+                         for d in waiting)
         open_findings = [r for r in self.review_findings if not r.get("closed")]
         if open_findings:
-            notes.append("Review findings open by id:")
+            notes.append("Review findings open by id (RESOLVES may name any; each closes only when its own "
+                         "reviewer rechecks it RESOLVED after the resolving task closes clean, never by a lead "
+                         "or the harness):")
             notes.extend(f"- {r['fid']} ({r['task']}, {r['author']}, {r['state']}, impact {r['impact']}"
                          + (", holds affected effects" if r.get("holds_effects") else "")
-                         + (", carried to the audit" if r.get("audit_carried") else "") + f"): {r['claim'][:140]}"
+                         + (", carried to the audit" if r.get("audit_carried") else "")
+                         + (f", held: {r['hold'][:120]}" if r.get("hold") else "")
+                         + (f", inherited by {', '.join(r['inherited_by'])}" if r.get("inherited_by") else "")
+                         + f"): {r['claim'][:140]}"
                          for r in open_findings)
         return obligations.View(requirements=requirements, tasks=tuple(tasks), evidence=evidence,
                                 judgments=judgments, capacity=capacity, notes=tuple(notes))
@@ -12117,17 +12439,34 @@ class Session:
         if len(set(resolves)) != len(resolves):
             return f"RESOLVES names a finding twice: {', '.join(resolves)}."
         by_id = {f["id"]: f for f in self.findings}
-        unknown = [r for r in resolves if r not in by_id]
+        reviews = {r["fid"]: r for r in self.review_findings}
+        unknown = [r for r in resolves if r not in by_id and r not in reviews]
         if unknown:
             return f"RESOLVES names findings that do not exist: {', '.join(unknown)}."
-        if any(by_id[r].get("target") for r in resolves) and not is_design_task(spec):
+        # One registry for RESOLVES (2026-10-28): an audit finding (F<n>)
+        # settles on this task's own check or renders; a review finding
+        # (RFT<task>-<n>) settles only when the reviewer who raised it
+        # rechecks it RESOLVED after this task closes clean
+        # (_settle_review_findings). controller-continuation-01: the planner
+        # named the eight ids the same prompt listed as open and was sent back
+        # as naming findings that do not exist.
+        audit = [r for r in resolves if r in by_id]
+        review = [r for r in resolves if r not in by_id]
+        if any(by_id[r].get("target") for r in audit) and not is_design_task(spec):
             # Only a UI task's own renders can show a measured fault gone.
             return ("RESOLVES needs a UI task whose own renders can show the fault gone; this task "
                     "is not one.")
-        closed = [r for r in resolves if by_id[r]["status"] != "open"]
+        closed = ([r for r in audit if by_id[r]["status"] != "open"]
+                  + [r for r in review if reviews[r].get("closed")])
         if closed:
             return f"RESOLVES names findings that are already resolved: {', '.join(closed)}."
-        missing = sorted({rid for r in resolves for rid in by_id[r]["requirements"]} - set(covers))
+        away = [r for r in review if not self._available(reviews[r]["author"])]
+        if away:
+            return ("RESOLVES names review findings only their own reviewer can close, and that seat is "
+                    "unavailable now: " + ", ".join(f"{r} ({reviews[r]['author']})" for r in away) + ".")
+        wanted = {rid for r in audit for rid in by_id[r]["requirements"]}
+        wanted |= {reviews[r]["requirement"][0] for r in review if reviews[r].get("requirement")}
+        missing = sorted(wanted - set(covers))
         if missing:
             return (f"COVERS must include every requirement of the findings it resolves; missing: "
                     f"{', '.join(missing)}.")
@@ -12135,8 +12474,15 @@ class Session:
 
     def _findings_prompt(self) -> str:
         opened = [f for f in self.findings if f["status"] == "open"]
-        if not opened:
+        # Review ids are named only where RESOLVES can take them (the
+        # requirements ledger on) and their claims are shown (the
+        # obligations view, which that ledger renders).
+        reviews = ([r for r in self.review_findings if not r.get("closed")]
+                   if self.config.requirements_ledger and self.memory.ledger.requirements else [])
+        if not opened and not reviews:
             return ""
+        if not opened:
+            return "\n\n--- OPEN FINDINGS ---\n" + self._review_resolves_note(reviews)
         lines = [f"- {f['id']} (found by {f['task']}, requirements {', '.join(f['requirements'])}): "
                  + (f"the {f['view']} render of {f['target']} is {f['width']}px wide at a "
                     f"{f['viewport']}px viewport" if f.get("target") else f["message"])
@@ -12152,7 +12498,21 @@ class Session:
                 "with no overflow and are approved by the cross-vendor design review. A failed-check "
                 "finding resolves when the resolving task's own integration check passes and it "
                 "closes with no new finding; read the check's output artifact before planning the "
-                "repair.\n" + "\n".join(lines))
+                "repair.\n" + "\n".join(lines)
+                + ("\n\n" + self._review_resolves_note(reviews) if reviews else ""))
+
+    def _review_resolves_note(self, reviews: List[dict]) -> str:
+        """The open review findings RESOLVES may name, by id only: their
+        claims, reviewers and states are in the obligations view, so they
+        are not rendered twice (planning context, 2026-10-28)."""
+        ids = ", ".join(f"{r['fid']} (by {r['author']} on {r['task']})" for r in reviews)
+        return (f"Open review findings, by id: {ids}. Their claims are under 'Review findings open by id' "
+                "below. RESOLVES may name them on the same one line as F<n> ids, each once. A review finding "
+                "closes only when the reviewer who raised it rechecks it RESOLVED after the resolving task "
+                "closes clean with its checks passing on the current source; the resolving task's lead cannot "
+                "clear it, no other reviewer judges it, a finding whose reviewer is unavailable cannot be named, "
+                "and the harness never marks its requirement met. A task that CONTINUES the task holding a "
+                "finding inherits it, and the same recheck follows its clean close without naming it.")
 
     def _recheck_resolved_findings(self) -> None:
         """Reopen each resolved finding whose resolving renders no longer
@@ -12631,7 +12991,8 @@ class Session:
         last gate, no new open finding, and verified, approved renders of the
         measured state (Codex review of e47c7ed: a failed gate closed debt).
         Returns the named findings still open."""
-        if not self._current_resolves:
+        named, inherited = self._review_resolution_targets(spec)
+        if not self._current_resolves and not inherited:
             return []
         self._verify_dependencies(f"at settlement of {spec.task_id}")
         reasons = []
@@ -12643,6 +13004,7 @@ class Session:
             reasons.append("it closed with open findings")
         if not reasons:
             self._resolve_check_findings(spec, gates)
+        review_open = self._settle_review_findings(spec, named, inherited, list(reasons))
         design = [f for f in self.findings if f["id"] in self._current_resolves and f.get("target")]
         if design:
             approved = self._resolution_candidate
@@ -12660,7 +13022,130 @@ class Session:
         for finding in still:
             if reasons:
                 finding["last_attempt"] = f"{spec.task_id}: " + "; ".join(reasons)
-        return [f["id"] for f in still]
+        return [f["id"] for f in still] + review_open
+
+    # -- review findings: one identity for RESOLVES, inheritance and the recheck ----
+    def _continuation_chain(self, task_id: Optional[str]) -> List[str]:
+        """The tasks ``task_id`` continues, nearest first (t5 continues t4,
+        which continued t3), read from the dispatch records."""
+        chain, seen = [], set()
+        links = {o.task_id: o.continues for o in self.task_outcomes}
+        current = task_id or ""
+        while current and current not in seen:
+            seen.add(current)
+            chain.append(current)
+            current = links.get(current) or ""
+        return chain
+
+    def _inherited_review_findings(self, spec, continues=None) -> List[dict]:
+        """The open review findings raised on the work this task continues:
+        the predecessor's and, through it, every earlier link's. A
+        continuation whose reviewer is another seat cannot close them
+        (controller-continuation-01, t5 after t4), so they stay their own
+        reviewer's and are rechecked by that reviewer when the continuation
+        closes clean (``_settle_review_findings``)."""
+        if continues is None:
+            outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+            continues = (outcome.continues if outcome is not None else None) or getattr(self, "_continues", None)
+        chain = self._continuation_chain(continues)
+        if not chain:
+            return []
+        return [r for r in self.review_findings if not r.get("closed") and r.get("task") in chain]
+
+    def _inherit_review_findings(self, spec, continues) -> None:
+        """Mark, at dispatch, the open review findings this continuation
+        inherits, so the record and the planner say who carries them."""
+        for record in self._inherited_review_findings(spec, continues):
+            inherited = list(record.get("inherited_by") or [])
+            if spec.task_id not in inherited:
+                record["inherited_by"] = inherited + [spec.task_id]
+
+    def _inherited_findings_block(self, spec) -> str:
+        """For the lead that continues a task: the open review findings on
+        the work it takes over, by id and as written. They are the
+        predecessor's reviewer's to close, after this task closes clean."""
+        records = self._inherited_review_findings(spec)
+        if not records:
+            return ""
+        lines = [f"- {r['fid']} (raised by {r['author']} on {r['task']}): {(r.get('text') or r['claim'])[:600]}"
+                 for r in records]
+        return ("## Open review findings on the work you continue\n" + "\n".join(lines)
+                + "\nThese were raised on the work this task takes over and are still open. Where one is a "
+                "defect of that work inside this task's permitted paths, address it as part of the remaining "
+                "work. A finding that opens with SCENARIO or EVIDENCE is about the plan's scenario text or "
+                "about execution the harness has not shown, not about the code, and is not yours to answer. "
+                "After this task closes clean, the reviewer who raised each finding rechecks it against the "
+                "finished work: do not mark any of them resolved yourself, and do not report one as done.")
+
+    def _review_resolution_targets(self, spec) -> Tuple[List[str], List[dict]]:
+        """``(named, inherited)``: the open review finding ids this task's
+        RESOLVES names, and the open records it inherits by CONTINUES that
+        RESOLVES did not name."""
+        reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
+        named = [fid for fid in (self._current_resolves or []) if fid in reviews]
+        inherited = [r for r in self._inherited_review_findings(spec) if r["fid"] not in named]
+        return named, inherited
+
+    def _resolution_reviewers(self, spec, *, continues=None, resolves=None) -> List[str]:
+        """The reviewers a clean close of this task sends back to their own
+        open findings (named by RESOLVES or inherited by CONTINUES): one
+        reserve call each on the task's route, costed before the task's
+        first call. Read without side effects."""
+        reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
+        ids = {fid for fid in (resolves if resolves is not None else self._current_resolves or []) if fid in reviews}
+        chain = self._continuation_chain(continues if continues is not None else getattr(self, "_continues", None))
+        ids |= {r["fid"] for r in reviews.values() if r.get("task") in chain}
+        return sorted({reviews[fid]["author"] for fid in ids})
+
+    def _settle_review_findings(self, spec, named: List[str], inherited: List[dict], reasons: List[str]) -> List[str]:
+        """After a clean close: the review findings this task named in
+        RESOLVES or inherited by CONTINUES go back to the reviewers who
+        raised them, one recheck call per reviewer on the current source
+        (``_recheck_open_findings``: RESOLVED closes exactly those findings;
+        anything else, a capped or refused recheck or an unavailable
+        reviewer keeps them open). Nothing else closes a review finding: not
+        the lead's account, not another reviewer, not the harness; and a
+        closed finding makes no requirement met (the audit judges that).
+        With a settlement reason (a failed gate, a new open finding) no
+        recheck is asked and every target stays open, saying why. Returns
+        the named ids still open: an explicit RESOLVES that established
+        nothing is the FindingsUnresolved stop, as for an audit finding;
+        an inherited finding kept open stays held debt."""
+        reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
+        targets = [reviews[fid] for fid in named if fid in reviews] + [r for r in inherited if r["fid"] in reviews]
+        if not targets:
+            return []
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        record = dict(task=spec.task_id, named=list(named), inherited=[r["fid"] for r in inherited],
+                      reviewers=sorted({r["author"] for r in targets}), rechecks=None, refused=None)
+        self.review_resolutions.append(record)
+        if reasons or outcome is None:
+            why = "; ".join(reasons) or "its dispatch record is missing"
+            record["refused"] = why
+            for target in targets:
+                target["hold"] = f"{spec.task_id} closed without its recheck: {why}"[:300]
+            self._note(f"task {spec.task_id}: {len(targets)} review finding(s) not rechecked: {why[:160]}")
+            return list(named)
+        held = {e.get("finding_id"): e for e in self.unresolved_reviews}
+        entries = []
+        for target in targets:
+            entry = held.get(target["fid"])
+            if entry is None:
+                entry = dict(task=target["task"], peer=target["author"], finding=target.get("text") or target["claim"],
+                             text=None, finding_id=target["fid"])
+            entries.append(entry)
+        origins = sorted({e["task"] for e in entries})
+        how = (f"Task {spec.task_id} named {'them' if len(entries) > 1 else 'it'} in RESOLVES"
+               if named and not inherited else
+               f"Task {spec.task_id} continues {', '.join(origins)}" if inherited and not named else
+               f"Task {spec.task_id} named some in RESOLVES and continues {', '.join(origins)} for the rest")
+        situation = (f"You reviewed {', '.join(origins)} and these findings were left open. {how}; it has now "
+                     "closed: its checks passed on the current source and it closed with no new open finding. "
+                     "Your working directory holds the current source; 'the revision' below is the source as it "
+                     "now stands. Nothing here says your findings are addressed: read the source.")
+        record["rechecks"] = self._recheck_open_findings(spec, entries, outcome, situation=situation)
+        current = {r["fid"]: r for r in self.review_findings}
+        return [fid for fid in named if not current.get(fid, {}).get("closed")]
 
     def _ledger_at_settlement(self, spec, reasons) -> None:
         """Compare the ledger this task was dispatched under with the live one
@@ -13101,6 +13586,9 @@ class Session:
         if record:
             blocks.append(_handoff_note(record))
             paths.extend(record.get("changed") or [])
+            inherited = self._inherited_findings_block(spec)
+            if inherited:
+                blocks.append(inherited)
         if spec.scope is not None:
             paths.extend(p for p in spec.scope.permitted_paths if spec.scope.permits(p))
         included, refused = context_pack(self.project, paths, exclude=self.config.project_excludes,
@@ -13169,8 +13657,14 @@ class Session:
         extras: Optional[List[str]] = None,
     ) -> str:
         parts = [
+            # Completed work as an index for the lead too (root's measurement,
+            # 2026-10-28: the last lead of controller-continuation-01 was
+            # sent 130,574 characters, 23 earlier artifacts shown in full).
+            # The current task keeps its own context whole: the goal, the
+            # handoff and source pack of a continued task, the map, the
+            # obligations, and FETCH for any listed artifact.
             self.memory.render(
-                current=spec.description, recent=self.config.recent_entries
+                current=spec.description, recent=self.config.recent_entries, with_previews=False
             ),
         ]
         if self._covered_texts() and not self.memory.ledger.requirements:
@@ -13287,10 +13781,17 @@ class Session:
             "Before finishing, re-read your task, restated verbatim, and "
             f"confirm every part of it is addressed:\n\n{spec.description}"
         )
-        return "\n\n".join(parts)
+        prompt = "\n\n".join(parts)
+        self._measure_context("lead", prompt, task=spec.task_id, extra=map_block)
+        return prompt
 
     def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str) -> str:
         label = resolve(peer)
+        prompt = self._collaborator_prompt_text(spec, draft, peer, label)
+        self._declare_deferred_evidence(spec, peer)
+        return prompt
+
+    def _collaborator_prompt_text(self, spec: TaskSpec, draft: str, peer: str, label) -> str:
         return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task: {spec.description}\n\n"
             f"Current work:\n{draft}\n\n"
@@ -13305,7 +13806,8 @@ class Session:
             "line> | impact: <data-loss|integrity|security|irreversible|correctness|contract|other>'. "
             "A finding with no basis is still recorded and carried to the final audit by id; a "
             "data-loss, integrity, security or irreversible impact holds the affected work whatever "
-            "its basis. " + _FINDING_SHAPE + " If you genuinely find nothing worth changing, "
+            "its basis. " + _FINDING_SHAPE + " " + _ERROR_BOUNDARY_LENS
+            + " If you genuinely find nothing worth changing, "
             "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'. "
             f"Otherwise end your reply with exactly one line, {_REVIEW_COMPLETE}, once you have "
             "read the whole work and reported everything. A reply with no BLOCKING finding and "
@@ -13333,14 +13835,18 @@ class Session:
         if task is None or not rows:
             return ""
         self._refresh_obligations()
+        self._mark_deferred_rows(task)
         rows = [r for r in self.evidence_obligations if r.get("task") == task and r.get("kind") == "acceptance"]
         lines = []
         for r in rows:
             cases = ", ".join(r.get("cases") or ()) or "no case bound"
             receipts = [str(x) for x in (r.get("receipts") or ())]
+            execution = (f"{r['execution']}, deferred to the merge gate (declared by the harness: a parallel child "
+                         "measures no execution; not an EVIDENCE finding)"
+                         if r.get("deferred") and r["execution"] != "ran" else r["execution"])
             lines.append(f"- {r.get('proof_id') or r['oid']} [{', '.join(x[0] for x in r['requirements'])}]: "
                          f"{r['behavior'][:220]}; binding {r.get('binding', 'unknown')}: {cases}; execution "
-                         f"{r['execution']}" + (f" (receipt {receipts[-1]})" if receipts and r["execution"] == "ran" else "")
+                         f"{execution}" + (f" (receipt {receipts[-1]})" if receipts and r["execution"] == "ran" else "")
                          + (f" ({r['reason'][:80]})" if r.get("reason") else ""))
             for entry in (r.get("scenario_lineage") or [])[-1:]:
                 lines.append(f"  corrected by the planner on finding {entry.get('finding')}: {entry.get('field')} was "
@@ -13367,6 +13873,44 @@ class Session:
                 "nothing more; it calls for no code or test rewrite by itself. Ask for code or test changes "
                 "only where the code or the cases themselves are wrong. " + _TYPED_FINDING_FORMS)
 
+    def _mark_deferred_rows(self, task) -> None:
+        """In a parallel child with no gate, every executable acceptance row
+        the child cannot run is marked deferred to the merge gate: a fact
+        the harness holds and declares, so the reviewer need not discover it
+        row by row (controller-continuation-01 t4: seven EVIDENCE findings
+        and seven hold records for one known fact). The mark is the child's;
+        the parent clears it when it re-bases the row to its own gate."""
+        if not (self._batch_child and self.config.integration_gate is None):
+            return
+        for r in self.evidence_obligations:
+            if (r.get("task") == task and r.get("kind") == "acceptance" and r.get("executable_claim")
+                    and r.get("execution") != "ran" and not r.get("deferred")):
+                r["deferred"] = "merge gate"
+
+    def _declare_deferred_evidence(self, spec, peer: str) -> None:
+        """The deferral, on the record, for this reviewer: which rows of
+        this task the harness will run after the merge and ask this
+        reviewer about. One record per (task, reviewer)."""
+        rows = [r for r in self.evidence_obligations
+                if r.get("task") == spec.task_id and r.get("kind") == "acceptance" and r.get("deferred")]
+        if not rows or any(d["task"] == spec.task_id and d["peer"] == peer for d in self.deferred_evidence):
+            return
+        self.deferred_evidence.append(dict(
+            task=spec.task_id, peer=peer, proof_ids=[r.get("proof_id") or r["oid"] for r in rows],
+            declared="deferred to the merge gate: a parallel child measures no execution; the parent's merge "
+                     "gate runs the rows and the same reviewer is asked about them then",
+            rechecked=None, reading=None))
+        self._note(f"task {spec.task_id}: {len(rows)} acceptance row(s) deferred to the merge gate for {peer}")
+
+    def _deferred_rows_for(self, task: str, peer: str) -> List[dict]:
+        """The acceptance rows a deferral record names, as the record holds
+        them now (the parent's re-based rows after a merge)."""
+        pids = [pid for d in self.deferred_evidence if d["task"] == task and d["peer"] == peer
+                for pid in d.get("proof_ids") or ()]
+        return [r for r in self.evidence_obligations
+                if r.get("task") == task and r.get("kind") == "acceptance"
+                and (r.get("proof_id") or r["oid"]) in pids and not r.get("superseded_by")]
+
     def _observation_facts(self, task) -> str:
         """What the harness's own run of the task's checks on exactly the
         current source showed, for the seat reading the proof rows: a
@@ -13377,10 +13921,13 @@ class Session:
         if not self.project:
             return ""
         if self._batch_child and self.config.integration_gate is None:
-            return ("Execution in a parallel child: the harness runs no checks in a child's copy; every row above "
-                    "is measured on the whole project once the batch is merged, and a row left open for it is "
-                    "re-checked by you then. A case not shown executed here, with nothing else wrong, is an "
-                    "EVIDENCE gap, not a code finding.")
+            return ("Execution in a parallel child: the harness runs no checks in a child's copy. A row marked "
+                    "'deferred to the merge gate' is a fact the harness has declared and holds: it runs that row "
+                    "on the merged project and asks you then, by row, what the execution shows. Do not report a "
+                    "deferred row's non-execution as an EVIDENCE finding; it is declared, not discovered, and such "
+                    "a line is filed only as a hold the harness already keeps. Judge the bound cases as written "
+                    "now, and report any other gap (a missing scenario, a wrong expectation, a case that does not "
+                    "exercise its scenario) as the BLOCKING finding it is.")
         current = self._source_fingerprint()
         gate = self._current_gate()
         identity = _gate_identity(gate) if gate is not None else None
@@ -14372,13 +14919,23 @@ class Session:
                   "requirements, location, evidence kind and id stay as declared.\n\n"
                   "## Original goal (verbatim)\n" + self.memory.goal.strip() + "\n\n"
                   + "\n\n".join(blocks)
-                  + "\n\nReply with exactly one line per scenario named above and nothing else:\n"
-                  "SCENARIO P<n>: <operation|state|expect>: <the corrected text> -- adopt the proposal or write a "
-                  "narrower correct text; one field per scenario\n"
-                  "SCENARIO P<n>: KEEP - <why the declared text is right> -- the finding then stands as an ordinary "
-                  "finding for the reviewer and the lead\n"
-                  "SCENARIO P<n>: REQUIREMENT - <what in R<n> would have to change> -- the operator is asked; "
-                  "nothing is reinterpreted and nothing becomes met")
+                  + "\n\nReply with exactly one line per scenario named above and nothing else. Each line "
+                  "carries the operation first and any explanation after it, never mixed:\n"
+                  "SCENARIO P<n>: <operation|state|expect>: <the corrected text only> | because: <why, optional>"
+                  " -- adopt the proposal or write a narrower correct text; one field per scenario\n"
+                  "SCENARIO P<n>: KEEP | because: <why the declared text is right> -- the finding then stands as an "
+                  "ordinary finding for the reviewer and the lead\n"
+                  "SCENARIO P<n>: REQUIREMENT | because: <what in R<n> would have to change> -- the operator is "
+                  "asked; nothing is reinterpreted and nothing becomes met\n"
+                  f"Bounds the harness enforces, with no second ask: the corrected text is the whole new text of "
+                  f"one field of one scenario, on one line, at most {MAX_SCENARIO_TEXT} characters, and it is the "
+                  "text only (not a diff, not a note); the explanation is not part of the text and may be any "
+                  "length on the same line. Correctness and authority are not optional: the corrected text must "
+                  "hold against the requirement texts above, which it cannot change (a requirement that would "
+                  "have to change is a REQUIREMENT line, never a quiet rewording), and the reviewer who raised "
+                  "the finding re-checks the corrected scenario. A text over the bound, on more than one line, "
+                  "empty, or equal to the declared text is refused and the scenario stays as declared with the "
+                  "finding standing.")
         self._count("scenario_correction")
         try:
             seat, reply = self._ask_seat(self.seat(), lambda fetched: prompt + ("\n\n" + _render_fetches(fetched)
@@ -14397,33 +14954,40 @@ class Session:
         # dict comprehension silently applied the last line).
         lines: Dict[str, List[tuple]] = {}
         for m in _SCENARIO_REPLY.finditer(reply or ""):
-            lines.setdefault(m.group(1).upper(), []).append((m.group(2).lower(), m.group(3).strip()))
+            # The operation apart from the explanation (scenario correction,
+            # 2026-10-28): the text before ' | because: ' is what is bounded
+            # and applied; the explanation is kept on the record.
+            operation, explanation = _split_explanation(m.group(3))
+            lines.setdefault(m.group(1).upper(), []).append((m.group(2).lower(), operation, explanation))
         for pid in asked:
-            distinct = list(dict.fromkeys(lines.get(pid, [])))
+            distinct = list(dict.fromkeys((verb, text) for verb, text, _ in lines.get(pid, [])))
+            explanations = [why for _, _, why in lines.get(pid, []) if why]
+            explanation = explanations[0][:600] if explanations else ""
             proof = proofs[pid]
             if len(distinct) > 1:
                 self._record_scenario_correction(
                     spec, pid, by_pid[pid], reply=reply, by=seat.key,
                     status=f"refused: ambiguous reply ({len(distinct)} conflicting lines for {pid}); the scenario "
                            "stays as declared",
-                    lines=[f"{verb}: {text[:200]}" for verb, text in distinct])
+                    lines=[f"{verb}: {text[:200]}" for verb, text in distinct], explanation=explanation)
                 continue
             verb, text = distinct[0] if distinct else (None, "")
             if verb in ("operation", "state", "expect"):
                 problem = _scenario_text_problem(text, proof[verb])
                 if problem:
                     self._record_scenario_correction(spec, pid, by_pid[pid], status=f"refused: {problem}", reply=reply,
-                                                     by=seat.key, field=verb, proposal=text)
+                                                     by=seat.key, field=verb, proposal=text[:600],
+                                                     explanation=explanation)
                     continue
                 spec = self._apply_scenario_correction(spec, pid, verb, text, findings=[r["fid"] for r in by_pid[pid]],
                                                        by=seat.key)
                 self._record_scenario_correction(spec, pid, by_pid[pid], status="corrected", reply=reply, by=seat.key,
-                                                 field=verb, before=proof[verb], after=text)
+                                                 field=verb, before=proof[verb], after=text, explanation=explanation)
             elif verb == "requirement":
                 rids = list(proof["requirements"])
                 question = (f"Scenario {pid} of task {spec.task_id} is contested ({by_pid[pid][0]['typed']['reason'][:300]}) "
                             f"and the planner says it cannot be made right without changing "
-                            f"{', '.join(rids)} ({text[:300]}). "
+                            f"{', '.join(rids)} ({(text or explanation)[:300]}). "
                             + " ".join(f"{rid} reads: {texts.get(rid, '')}" for rid in rids)
                             + " Does it stand as written? Answer 'stands' to keep it, or state the ruling.")
                 if self.config.ask_operator is None:
@@ -14437,7 +15001,7 @@ class Session:
                                                  reply=reply, by=seat.key, answer=str(answer)[:600])
             elif verb == "keep":
                 self._record_scenario_correction(spec, pid, by_pid[pid], status="kept by the planner", reply=reply,
-                                                 by=seat.key, why=text[:300])
+                                                 by=seat.key, why=(text or explanation)[:300])
             else:
                 self._record_scenario_correction(spec, pid, by_pid[pid], status="no valid line for it in the reply; "
                                                                                  "the scenario stays as declared",

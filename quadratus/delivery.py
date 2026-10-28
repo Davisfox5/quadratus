@@ -796,6 +796,10 @@ class PlanStage:
     editing: bool = False
     calls: int = 1
     finishing: bool = False
+    #: A measured figure for this stage (a planning call's last reported
+    #: size): counted per call when it is above the stage's class, never
+    #: below it. None counts the class.
+    tokens: Optional[int] = None
 
     def __post_init__(self):
         _text(self.name, "plan stage name")
@@ -804,6 +808,8 @@ class PlanStage:
         if self.editing and self.exposure != "editing":
             raise ValueError(f"{self.name} holds the write grant and is exposed at the editing ceiling")
         _count(self.calls, f"{self.name} calls", minimum=1)
+        if self.tokens is not None:
+            _count(self.tokens, f"{self.name} tokens")
 
 
 @dataclass(frozen=True)
@@ -844,6 +850,8 @@ def admit_plan(stages: Sequence[PlanStage], *, calls_left: int, tokens_left: int
             figure = figures[stage.exposure] or figures["reserve"]
             if stage.exposure == "editing":
                 figure = max(figures["editing"], figures["reserve"])
+            if stage.tokens:
+                figure = max(figure, stage.tokens)
             tokens += figure * stage.calls
     wall = wall_per_stage * calls + wall_extra
     short = {}

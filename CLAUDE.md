@@ -2804,6 +2804,87 @@ Key design decisions already settled:
   a probe at low) records the effort it sends, with the seat's policy
   decision named beside it. The effort inputs a recheck sets are cleared
   on every exit of the call, and a task entry resets them.
+- **One finding identity, from the review to the planner to the close**
+  (Davis, 2026-10-28; controller-continuation-01). t4's second revision hit
+  the turn cap, `_close_turn_limited` returned before the fix loop's block
+  that writes open findings into `unresolved_reviews`, and eight of Opus's
+  open ids were in the registry but in no held entry: the post-merge
+  recheck asked about one DEFERRED finding, the planner read the eight
+  under "Review findings open by id", named them in RESOLVES, and
+  `_resolves_problem` sent it back as naming findings that do not exist
+  (it read only the audit ledger `self.findings`); the replacement planning
+  call cost the room the last task needed. Now: `_hold_open_finding` is the
+  one block (the legacy text or the audit-carried note, plus the held
+  entry) and `_hold_task_findings` runs it at every capped and failed close
+  with `hold` on the record saying why. RESOLVES accepts `RFT<task>-<n>`
+  ids beside `F<n>`; a review finding settles only in
+  `_settle_review_findings`, after a clean close with its checks passing,
+  by one recheck call per original reviewer (`_recheck_open_findings`, the
+  post-merge recheck generalised); a continuation inherits its chain's open
+  findings (`inherited_by`, the lead's handoff block names them) and the
+  same recheck follows its clean close without naming them. The resolving
+  task's lead, another reviewer and the harness close nothing; a closed
+  finding makes no requirement met. An explicit RESOLVES kept open is the
+  FindingsUnresolved stop as for an audit finding; an inherited finding
+  kept open stays held debt. A reviewer that is unavailable cannot be
+  named. The rechecks are costed on the route (`resolution recheck by
+  <peer>`), recorded in `review_resolutions` (result.json, checkpoint).
+- **Deferred child evidence is declared, never discovered** (same batch).
+  A parallel child measures no execution, so its reviewer was told every
+  unexecuted row was an EVIDENCE gap and filed one finding per row (t4:
+  seven findings, seven holds) for a fact the harness held. The child marks
+  its executable rows `deferred` to the merge gate (`_mark_deferred_rows`),
+  the proof rows say so, the reviewer is told not to file their
+  non-execution, and the deferral is declared per (task, reviewer)
+  (`deferred_evidence`) when the reviewer is handed the rows. The parent
+  clears the mark on its re-based rows, the merge gate runs them, and the
+  same reviewer's post-merge recheck carries them (`_deferred_rows_block`):
+  `P<n>: NOT SHOWN` registers that reviewer's EVIDENCE finding held open;
+  `SHOWN` is a recorded reading that makes nothing met (the audit judges
+  sufficiency) and is refused on a row that did not run; no line is no
+  reading. A merge gate that does not pass leaves the deferral "not
+  rechecked" and the rows missing, listed for the planner. The recheck is
+  the one call per reviewer the EVIDENCE findings already bought; the
+  saving is review lines and hold records.
+- **A correction line carries the operation first and its explanation
+  after `| because:`, and the prompt names the bound** (same batch). The
+  live correction was refused at 869 characters with the explanation inside
+  the text, against a 400 bound the prompt never stated. `MAX_SCENARIO_TEXT`
+  is the one number, stated in the prompt and in the refusal with the
+  measured length; `_split_explanation` takes the text before the segment,
+  the explanation is kept on the record and never counted; KEEP and
+  REQUIREMENT take their reason the same way. Correctness and authority are
+  stated as mandatory: the text must hold against the requirement texts,
+  which only a REQUIREMENT line can question, and the finding's reviewer
+  re-checks the corrected scenario.
+- **The completed work reaches the planner and the lead as an index, and
+  every prompt is measured** (same batch; root's measurement on the last
+  saved run: the final ledger rendered 100,752 characters with previews
+  against 14,251 as the index, inside a 149,250-character planning prompt;
+  the last lead prompt was 130,574 characters with 23 earlier artifacts
+  shown in full). `with_previews=False` at the planner, the plan gate and
+  the lead draft, which keep the goal, rules, rulings, requirements, every
+  summary, reasoning, dead end and harness record, every artifact id, and
+  FETCH for any of them; the handoff and source pack of a continued task,
+  the map, the obligations and the open debt blocks are unchanged. Review,
+  revision, recheck and audit prompts carried no ledger previews and are
+  untouched. `_measure_context` records each such prompt's characters by
+  block, with the completed block both as sent and as the preview render
+  would have been (`prompt_measurements`, result.json): a rendering
+  comparison, never a token claim; tokens are the CLI's reported usage in
+  the delegation ledger. A route's admission now counts the planning call
+  that follows it (`_planning_stages`: one reserve call at the larger of
+  the reserve and the last planning call's reported size; none in the
+  final slot, for a terminal route, an explicit list or a child), because
+  the two post-audit planning calls reported 451,817 and 358,436 tokens
+  against a 200,000 reserve.
+- **An ordinary review covers the whole error boundary and inherited
+  failures** (`_ERROR_BOUNDARY_LENS`, same batch): malformed, missing,
+  out-of-range and oversized input, edge values, missing resources,
+  failures of what the code calls, where each is caught and what the caller
+  sees, construction and parsing outside the handler, and a failure the
+  task inherits from code its own path reaches. Generic by design: it names
+  classes, never a candidate's defect.
 
 ## How development is coordinated
 

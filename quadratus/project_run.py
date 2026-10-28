@@ -773,6 +773,16 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'scenario_corrections': list(getattr(session, 'scenario_corrections', []) or []) if session else [],
         'evidence_routes': list(getattr(session, 'evidence_routes', []) or []) if session else [],
         'close_decisions': list(getattr(session, 'close_decisions', []) or []) if session else [],
+        # RESOLVES and CONTINUES settlements of review findings: who was asked
+        # and what each recheck closed (session._settle_review_findings).
+        'review_resolutions': list(getattr(session, 'review_resolutions', []) or []) if session else [],
+        # Acceptance rows a parallel child could not execute, declared by the
+        # harness and rechecked by the same reviewer after the merge gate.
+        'deferred_evidence': list(getattr(session, 'deferred_evidence', []) or []) if session else [],
+        # Characters each planning, plan-gate and lead prompt carried by
+        # block, with the completed-work block as the index sent and as the
+        # preview render it replaced (session._measure_context). Never tokens.
+        'prompt_measurements': list(getattr(session, 'prompt_measurements', []) or []) if session else [],
         'terminal_route': dict(getattr(session, '_terminal_route', None) or {}) or None if session else None,
         'operations': list(getattr(session, 'operations', []) or []) if session else [],
         'job_store': dict(generation=(job_store.current().number if job_store.current() else None),
