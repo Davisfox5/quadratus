@@ -2652,10 +2652,13 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-28T17:54:25Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "3170dbccd3a6afaa5ba3ea2e438f91ed5cc164aa",
+        "at": "2026-10-28T18:04:08Z"
+      },
       "reviews": [],
       "blockers": [],
       "decisions": []
