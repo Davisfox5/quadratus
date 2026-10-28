@@ -285,7 +285,8 @@ def test_the_route_counts_the_planning_call_and_the_terminal_candidate_does_not(
     spec = TaskSpec(task_id="t3", description="work")
     names = [r.name for r in session._plan_stages(spec, ["lead draft"])]
     assert "next planning call" in names
-    assert "next planning call" in [r.name for r in session._known_remainder(spec, after="review")]
+    assert "next planning call" not in [r.name for r in session._known_remainder(spec, after="review")], \
+        "a mid-task repair route never counts the planning call"
     source = inspect.getsource(Session._refuse_unpayable_dispatch)
     assert 'r.name not in ("close-out", "next planning call")' in source
 
@@ -304,3 +305,19 @@ def test_the_ordinary_review_covers_the_whole_error_boundary_and_inherited_failu
     # Generic by construction: no candidate's defect is named.
     for word in ("OverflowError", "Content-Length", "sqlite3", "2**63"):
         assert word not in S._ERROR_BOUNDARY_LENS
+
+
+def test_a_deferral_not_rechecked_is_listed_for_the_planner_and_a_rechecked_one_is_not(tmp_path):
+    session = _session(tmp_path, requirements_ledger=True)
+    session.memory.ledger.requirements["R1"] = "add returns the sum"
+    session.deferred_evidence.extend([
+        dict(task="t1", peer="openai:sol", proof_ids=["P1"], declared="deferred",
+             rechecked="not rechecked: the merge gate did not pass", reading=None),
+        dict(task="t1", peer="grok:default", proof_ids=["P1"], declared="deferred", rechecked="rechecked",
+             reading={"P1": "SHOWN"}),
+        dict(task="t3", peer="claude:opus", proof_ids=["P2"], declared="deferred", rechecked=None, reading=None)])
+    notes = session._obligations().notes
+    assert any(n.startswith("Deferred evidence (rows a parallel child could not execute") for n in notes)
+    assert "- t1 by openai:sol: P1: not rechecked: the merge gate did not pass" in notes
+    assert "- t3 by claude:opus: P2: awaiting the merge gate and the reviewer's recheck" in notes
+    assert not any("grok:default" in n for n in notes), "a rechecked deferral is not open debt"

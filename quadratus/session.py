@@ -6853,9 +6853,10 @@ class Session:
                 # them against the audit ledger); review ids apart, checked
                 # against the review registry by their own reader.
                 audit_ids = {f["id"] for f in self.findings}
+                review_ids = [fid for fid in unresolved if fid not in audit_ids]
                 done.open_at_close = dict(
                     findings=[fid for fid in unresolved if fid in audit_ids],
-                    review_findings=[fid for fid in unresolved if fid not in audit_ids],
+                    **({"review_findings": review_ids} if review_ids else {}),
                     requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
             check_debt = self._record_check_debt(spec, covers)
             self._current_covers, self._current_resolves = [], []
@@ -8177,8 +8178,21 @@ class Session:
                     op["result"] = dict(paths=changed)
                 self.history.append(summary)
                 self.memory.absorb(summary)
-                deferred = [d for d in child.deferred_evidence if d.get("rechecked") is None]
-                if (child.unresolved_reviews or deferred) and mine is not None:
+                # A reviewer's deferred rows ride in the recheck call its open
+                # findings already buy; a reviewer that left nothing open is
+                # not called for them (no new call: the rows' execution is the
+                # merge gate's record and their sufficiency the audit's).
+                peers = {e["peer"] for e in child.unresolved_reviews}
+                deferred = []
+                for entry in child.deferred_evidence:
+                    if entry.get("rechecked") is not None:
+                        continue
+                    if entry["peer"] in peers:
+                        deferred.append(entry)
+                    else:
+                        entry["rechecked"] = ("not asked: the reviewer left no finding open, so no recheck call is "
+                                              "made; execution is the merge gate's record and sufficiency the audit's")
+                if child.unresolved_reviews and mine is not None:
                     pending_rechecks.append((spec, list(child.unresolved_reviews), mine, deferred))
                 if getattr(summary, "outcome", "closed") in ("turn_limited", "failed"):
                     (self.turn_limited if summary.outcome == "turn_limited" else self.failed).append(spec.task_id)
@@ -8216,8 +8230,7 @@ class Session:
             # final reviews do (_gate_repair_stages).
             self._route_peers = []
             self._route_after_merge = dict(
-                rechecks=sorted({e["peer"] for _, entries, _, _ in pending_rechecks for e in entries}
-                                | {d["peer"] for _, _, _, deferred in pending_rechecks for d in deferred}),
+                rechecks=sorted({e["peer"] for _, entries, _, _ in pending_rechecks for e in entries}),
                 capped=[s.task_id for s, _, _ in capped_merged])
             try:
                 self._run_integration_gate(first.lead, merge, task)
@@ -8340,8 +8353,6 @@ class Session:
                 continue
             finally:
                 self._recheck_impact, self._fix_cycle_now = None, 0
-            if rows:
-                row["new"].extend(self._read_deferred_rows(spec, peer, rows, deferrals.get(peer, ()), verdict, outcome))
             reading = judgment.recheck_verdicts(verdict, ids)
             if ids and not reading.judged_any:
                 completed = self._complete_judgment(
@@ -8353,6 +8364,11 @@ class Session:
                     self._settle_completion(spec, peer, "recheck", reading.judged_any, outcome=outcome)
                     verdict = completed
             new = self._apply_review_reading(spec, peer, "recheck", reading, binding)
+            if rows:
+                # After the findings' reading: registering a NOT SHOWN row's
+                # finding first would move the bound identity the reading is
+                # compared against and void every disposition.
+                row["new"].extend(self._read_deferred_rows(spec, peer, rows, deferrals.get(peer, ()), verdict, outcome))
             current = {r["fid"]: r for r in self.review_findings}
             for fid in ids:
                 record = current[fid]
@@ -11618,7 +11634,10 @@ class Session:
             rows.append(delivery.PlanStage("close-out", "reserve"))
         rows.extend(delivery.PlanStage(f"resolution recheck by {peer}", "reserve")
                     for peer in self._resolution_reviewers(spec))
-        rows.extend(self._planning_stages())
+        # The planning call that follows is counted at dispatch
+        # (_plan_stages) and for a batch, never against a mid-task repair:
+        # a fix the allowance can pay is worth more than the planning call
+        # it may leave unpaid, and the finish keeps its own hold.
         return rows
 
     def _measure_context(self, kind: str, body: str, *, task: Optional[str] = None, extra: str = "") -> None:

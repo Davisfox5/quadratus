@@ -330,9 +330,10 @@ def _token_limits(total):
 @pytest.mark.requirements_ledger
 def test_a_route_the_tokens_cannot_pay_refuses_the_task_before_its_first_call_and_a_payable_one_runs(
         tmp_path, monkeypatch):
-    """The controller-reset numbers in miniature. With 1.3M total, t1's
+    """The controller-reset numbers in miniature. With 1.5M total, t1's
     route (one editing call at the 500k ceiling, one review at the 200k
-    reserve: 700k, and no close-out since 2026-10-21) fits the 899,780
+    reserve, the planning call that follows at the 200k reserve since
+    2026-10-28: 900k, and no close-out since 2026-10-21) fits the 1,099,780
     left after the two 200k holds and the 220 of intake, so t1 is admitted
     whole and runs; no terminal route is recorded, nothing is relinquished
     (root's admission finding on f4fe5b7: a route merely recorded was
@@ -342,11 +343,12 @@ def test_a_route_the_tokens_cannot_pay_refuses_the_task_before_its_first_call_an
     both tasks' routes fit and the run completes. With 1.0M total the
     mandatory stages themselves do not fit: the shortfall names them."""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md"),
-                   files=FILES, max_tasks=2, record_complete=False, limits=_token_limits(1_300_000))
+                   files=FILES, max_tasks=2, record_complete=False, limits=_token_limits(1_500_000))
     result = H.result_json(replay)
     admissions = [a for a in result["plan_admissions"] if a["task"] == "t1"]
     assert [(a["scope"], a["feasible"]) for a in admissions] == [("mandatory", True), ("full", True)]
-    assert admissions[1]["stages"] == ["lead draft(editing/write)", "review by claude:opus(reserve)"]
+    assert admissions[1]["stages"] == ["lead draft(editing/write)", "review by claude:opus(reserve)",
+                                       "next planning call(reserve)"], "a slot follows t1"
     assert "close-out" not in json.dumps(result["plan_admissions"])
     assert [(c.task, c.role) for c in replay.calls if c.task == "t1"] == [("t1", "lead"), ("t1", "collaborator")]
     assert result["terminal_route"] is None and result["not_started"] == [] and not replay.of("closeout")

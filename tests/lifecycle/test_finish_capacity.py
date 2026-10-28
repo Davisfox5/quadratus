@@ -309,11 +309,12 @@ def _tight(total):
 
 @pytest.mark.requirements_ledger
 def test_a_route_without_a_close_out_is_paid_whole_and_the_job_runs_to_its_finish(tmp_path, monkeypatch):
-    """7,400 tokens over three slots, no close-out call anywhere
-    (2026-10-21). t1's route (its lead at the 3,000 ceiling and its review
-    at the 1,000 reserve: 4,000) fits the 5,180 left after the two 1,000
-    holds and the 220 of intake. After t1 and the planning call for t2,
-    t2's route (4,000) fits what remains and is admitted whole; nothing is
+    """8,400 tokens over three slots, no close-out call anywhere
+    (2026-10-21). t1's route (its lead at the 3,000 ceiling, its review
+    at the 1,000 reserve, and the planning call that follows it at the
+    1,000 reserve since 2026-10-28: 5,000) fits the 6,180 left after the
+    two 1,000 holds and the 220 of intake. After t1 and the planning call
+    for t2, t2's route (5,000) fits what remains and is admitted whole; nothing is
     relinquished and no terminal route is recorded. t2 edits within its
     scope, is reviewed, closes on the harness's record, the planner stops,
     the goal question and the audit run, and the run completes. Before
@@ -327,7 +328,7 @@ def test_a_route_without_a_close_out_is_paid_whole_and_the_job_runs_to_its_finis
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = lead
     script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_400),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(8_400),
                    record_complete=False)
     assert [(c.task, c.role) for c in replay.calls if c.task == "t2"] == [("t2", "lead"), ("t2", "collaborator")]
     assert replay.of("auditor"), "the audit runs after the last task"
