@@ -783,6 +783,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # block, with the completed-work block as the index sent and as the
         # preview render it replaced (session._measure_context). Never tokens.
         'prompt_measurements': list(getattr(session, 'prompt_measurements', []) or []) if session else [],
+        # Each unmet requirement's route at the finish (session._evidence_route).
+        'finish_routing': list(getattr(session, 'finish_routing', []) or []) if session else [],
         'terminal_route': dict(getattr(session, '_terminal_route', None) or {}) or None if session else None,
         'operations': list(getattr(session, 'operations', []) or []) if session else [],
         'job_store': dict(generation=(job_store.current().number if job_store.current() else None),

@@ -120,11 +120,135 @@ def _executed_keys(check):
     return keys
 
 
-def _not_run_cleared(entry, checks) -> bool:
+_CASE_ID = re.compile(r"^[\w./-]+\.\w+::(?:[A-Za-z_]\w*::)*test\w*$")
+_SCENARIO_ID = re.compile(r"^P[0-9]+$")
+
+
+def _passed_cases(check):
+    """The case ids a check's own report (and its passed required receipts')
+    show passed, each with and without its parametrization; only from a
+    command run at the project root, so the ids are project-relative."""
+    out = set()
+    rows = [(check.get("report"), check.get("command_cwd") or ".", True, bool(check.get("passed")))]
+    rows += [(r.get("report"), r.get("cwd") or check.get("command_cwd") or ".", r.get("required", True),
+              r.get("status") == "passed") for r in check.get("receipts") or []]
+    for report, cwd, required, passed in rows:
+        if not (passed and required and cwd in ("", ".") and isinstance(report, dict)):
+            continue
+        for name in report.get("passed_cases") or ():
+            name = str(name)
+            out.add(name)
+            out.add(name.split("[", 1)[0])
+    return out
+
+
+def _skipped_in(check) -> bool:
+    """Whether any report or required receipt of the check records a skip, or
+    no count at all (unknown is a skip: fail closed)."""
+    reports = [check.get("report")] + [r.get("report") for r in check.get("receipts") or []
+                                       if r.get("required", True)]
+    for report in reports:
+        counts = report.get("counts") if isinstance(report, dict) else None
+        if not isinstance(counts, dict) or not isinstance(counts.get("skipped"), int):
+            return True
+        if counts["skipped"] > 0:
+            return True
+    return False
+
+
+def _filtered(command: str) -> bool:
+    """Whether a command line selects cases: ``-k``, a pytest ``-m`` marker
+    (not the interpreter's ``-m module``), ``--deselect``, ``--lf`` or
+    ``--ff``. Unparsable is filtered (fail closed)."""
+    import shlex
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return True
+    if not argv:
+        return True
+    rest = argv[1:]
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", Path(argv[0]).name) and rest[:1] == ["-m"]:
+        rest = rest[2:]
+    return any(a in ("-k", "-m", "--deselect", "--lf", "--ff") or a.startswith(("-k", "--deselect="))
+               for a in rest)
+
+
+def _bound_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item the engine bound to scenario or case identities
+    (``binding``, ``cases``), validated here from the saved record alone and
+    never from an engine mark: the binding's provenance (a declared scenario
+    of the same task whose acceptance row binds exactly these cases, or an
+    item that itself names each bound case), then a later check on the final
+    source, under the entry's own gate and environment, required and passed
+    from the project root with no filter and no skip, whose own report shows
+    every bound case passed. Anything missing, malformed, mismatched or on
+    another identity is not cleared (Codex's consumer inventory, 2026-10-29)."""
+    binding = entry.get("binding")
+    cases = entry.get("cases")
+    if not isinstance(binding, dict) or not isinstance(cases, list) or not cases:
+        return False
+    if not all(isinstance(c, str) and _CASE_ID.match(c) for c in cases):
+        return False
+    task, item = entry.get("task"), str(entry.get("item") or "")
+    if binding.get("kind") == "scenario":
+        named = [p for p in re.findall(r"(?<![\w./-])(P[0-9]+)(?![\w./-])", item)]
+        declared = str(binding.get("scenario") or "")
+        if not named or sorted(set(named)) != sorted(set(x.strip() for x in declared.split(","))):
+            return False
+        bound = set()
+        for scenario in dict.fromkeys(named):
+            if not _SCENARIO_ID.match(scenario):
+                return False
+            rows = [o for o in record.get("evidence_obligations") or []
+                    if isinstance(o, dict) and o.get("task") == task and o.get("kind") == "acceptance"
+                    and o.get("proof_id") == scenario and not o.get("superseded_by")]
+            if not rows or not rows[-1].get("cases"):
+                return False
+            bound |= {str(c) for c in rows[-1]["cases"]}
+        if bound != set(cases):
+            return False
+    elif binding.get("kind") == "case":
+        for case in cases:
+            file, _, tail = case.partition("::")
+            parts = tail.split("::")
+            spelled = (case in item or f"{file}::{tail}" in item
+                       or (len(parts) >= 2 and f"{parts[-2]}.{parts[-1]}" in item)
+                       or (len(parts) >= 2 and f"{parts[-2]}::{parts[-1]}" in item)
+                       or re.search(r"(?<![\w.:])" + re.escape(parts[-1]) + r"(?![\w])", item) is not None)
+            if not spelled:
+                return False
+    else:
+        return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    if not isinstance(gate, str) or not isinstance(environment, str):
+        return False
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment):
+            continue
+        if check.get("selection") or _skipped_in(check):
+            continue
+        if _filtered(str(check.get("command") or "")):
+            continue
+        if set(cases) <= _passed_cases(check):
+            return True
+    return False
+
+
+def _not_run_cleared(entry, checks, record=None) -> bool:
     """Cleared only by a later passing check that names the execution: every
     reported file as the file of an executed case, or every skipped case as
-    executed. A command line that mentions a path, or the engine's own
-    discharge mark, is not execution (Codex review of 47bfbfd)."""
+    executed, or (an entry the engine bound to case identities) every bound
+    case passed by an independently validated later run on the final source
+    (``_bound_not_run_cleared``). A command line that mentions a path, or the
+    engine's own discharge mark, is not execution (Codex review of 47bfbfd)."""
+    if record is not None and entry.get("kind") != "skipped" and _bound_not_run_cleared(entry, checks, record):
+        return True
     if entry.get("kind") == "skipped":
         wanted = list(entry.get("cases") or [])
         files = []
@@ -217,7 +341,7 @@ def judge(run_dir, project=None) -> dict:
         elif verdict.get("met") is not True:
             unshown.append(f"{rid} has no independent audit verdict of met")
     for entry in record.get("unexecuted_acceptance") or []:
-        if not _not_run_cleared(entry, checks):
+        if not _not_run_cleared(entry, checks, record):
             unshown.append(f"task {entry.get('task')} reported NOT RUN and no later check shows it ran: "
                            f"{str(entry.get('item'))[:120]}")
     for repair in record.get("test_repairs") or []:

@@ -1687,6 +1687,33 @@ def _report_cases(report) -> set:
     return {str(n) for n in report.get("passed_cases") or ()}
 
 
+def _run_passed_cases(run: dict) -> set:
+    """The ``file::[Class::]test`` ids one recorded run shows passed, from
+    the harness's own report (pytest node ids, the unittest producer's
+    ``file::Class::method``) and pytest's file-qualified verbose lines,
+    each with its parametrization and without it, normalised to the
+    project root through the run's cwd. A run with no case identity
+    shows nothing."""
+    import posixpath
+    cwd = run.get("cwd") or "."
+    out = set()
+
+    def add(name: str) -> None:
+        file, sep, rest = str(name).partition("::")
+        if not sep:
+            return
+        file = posixpath.normpath(posixpath.join(cwd, file)) if cwd not in ("", ".") else file
+        out.add(f"{file}::{rest}")
+        out.add(f"{file}::{rest.split('[', 1)[0]}")
+    for name in run.get("report_cases") or ():
+        add(name)
+    qualified = set(run.get("qualified_names") or ())
+    for key in run.get("executed_names") or {}:
+        if key in qualified:
+            add(key)
+    return out
+
+
 def _complete_run(run: dict) -> bool:
     """A passing required command that ran whole files: no filter, at least
     one executed case and a known zero skips. Anything less does not show
@@ -1708,6 +1735,13 @@ def _item_paths(item: str) -> List[str]:
         if "/" in token or re.search(r"\.[A-Za-z]\w*$", token):
             paths.append(token[2:] if token.startswith("./") else token)
     return paths
+
+
+#: Where a command named in requirement prose ends (Session._command_requirement).
+_COMMAND_PROSE_STOPS = frozenset({
+    "before", "after", "and", "then", "to", "so", "when", "once", "prior", "first", "as", "with", "for",
+    "on", "in", "until", "which", "that", "must", "should", "passes", "pass", "is", "are", "or", "but",
+})
 
 
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
@@ -1858,7 +1892,11 @@ _ERROR_BOUNDARY_LENS = (
     "traceback or a crash. Construction, parsing and checks that run before or outside the handler are "
     "part of that boundary. A failure the task inherits from code it did not write but that its own path "
     "reaches, or that the requirement it covers names, is a finding against this task: the delivery is "
-    "held to what the goal requires on the current source, not to what the source did before.")
+    "held to what the goal requires on the current source, not to what the source did before. Framing is "
+    "input too: a body shorter or longer than its declared length, a stream or file that ends early, a "
+    "partial read, a record cut mid-field; code must not act on what it did not fully receive, and a "
+    "request or record it rejects must leave no change behind, which you check by reading the state "
+    "after the refusal, not by reading the error path.")
 
 #: How an evidence request is written and what it can do, for every point
 #: the channel is offered (the next-task prompt, the final-audit challenge).
@@ -2654,6 +2692,13 @@ class Session:
         #: (Session._serve_evidence): the original finding, the harness's
         #: receipt and the one reassessment, kept whatever the outcome.
         self.evidence_requests: List[dict] = []
+        #: The finish's routing of each requirement the final audit left
+        #: unmet: execution debt (discharged by the gate executing what the
+        #: NOT RUN item binds, or a repair task; never by a challenge),
+        #: a prerequisite nobody can run, or a finding on the behaviour
+        #: (challengeable; a confirmed defect is a repair task's or an
+        #: honest incomplete). Evidence lifecycle batch, 2026-10-29.
+        self.finish_routing: List[dict] = []
         #: Non-blocking task-review observations that name a covered
         #: requirement, with the source they were written about: carried to
         #: the final audit, never as verdicts (Session._record_review_notes).
@@ -3300,8 +3345,10 @@ class Session:
             report = self._last_changed_report
             if report and report.get("status") != "match":
                 self._record_changed_report(key, role, reply, report)
-            self._record_not_run(key, role, reply)
+            # PROVES first: a NOT RUN item naming a scenario binds through
+            # the cases the same reply declares for it.
             self._record_proves(key, role, reply)
+            self._record_not_run(key, role, reply)
             return reply
         except TurnLimitReached as exc:
             if capped is None:
@@ -7061,7 +7108,11 @@ class Session:
                 "a test command the goal does not name; a seat cannot be held to a command the harness "
                 "does not run. If the goal itself requires a command these checks do not run, do not "
                 "drop it and do not prescribe it: ASK, naming the command and the configured checks as "
-                "a configuration conflict.")
+                "a configuration conflict. A lead that cannot run a case where it works (a sandbox "
+                "that denies a socket, a missing dependency) reports it by identity, so the harness's "
+                "own run can discharge it: 'NOT RUN: P<n> - <why>' for a declared scenario, or "
+                "'NOT RUN: <file>::<Class>::<test> - <why>' for a case; a report naming neither is "
+                "kept as written and nothing can discharge it.")
 
     def _verification_note(self) -> str:
         """The orchestrator's view of the harness's own verification."""
@@ -8082,7 +8133,12 @@ class Session:
                 # parent's checks: only a check the parent runs after the merge
                 # can discharge them (Codex review of b6ba3ba, F5).
                 for entry in child.unexecuted_acceptance:
-                    self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks), discharged_at=None))
+                    # Re-based whole: the binding (scenario, cases) the child
+                    # recorded survives; only the parent's own gate and
+                    # environment can discharge it now.
+                    self.unexecuted_acceptance.append(dict(
+                        entry, after_check=len(self.checks), discharged_at=None,
+                        gate=_gate_identity(self.config.integration_gate), environment=self._environment_id()))
                 # The child's typed records come back whole: its findings by
                 # id (unique per task), its obligations (re-based like its
                 # execution facts: only a parent check discharges them), its
@@ -8104,7 +8160,10 @@ class Session:
                     # receipt that discharges it is the parent's own check,
                     # under the parent's gate and environment.
                     paths = _item_paths(str(obligation.get("behavior") or "")) if obligation.get("kind") == "not_run" else []
-                    runner = ("gate" if (obligation.get("kind") == "not_run" and self._gate_can_run(paths))
+                    bound = bool(obligation.get("cases")) and obligation.get("kind") == "not_run"
+                    runner = ("gate" if (obligation.get("kind") == "not_run"
+                                         and (self._gate_can_run(paths)
+                                              or (bound and self.config.integration_gate is not None)))
                               or (obligation.get("kind") != "not_run" and self.config.integration_gate is not None)
                               else None)
                     self.evidence_obligations.append(dict(
@@ -8910,10 +8969,14 @@ class Session:
         if unmet and final:
             unmet = self._final_challenge(unmet)
         if unmet:
+            routes = {r: self._evidence_route(r, why) for r, why in unmet.items()}
+            for rid, route in routes.items():
+                self.finish_routing.append(dict(requirement=rid, site="done refused", why=unmet[rid][:300], **route))
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
-                + "\n".join(f"- {r}: {why[:300]}" for r, why in unmet.items())
-                + "\nName a task that fixes them (with COVERS).")
+                + "\n".join(f"- {r}: {why[:300]}\n  route: {routes[r]['route']}" for r, why in unmet.items())
+                + "\nName a task that fixes them (with COVERS): a repair for a finding on the behaviour; for "
+                "execution debt, a task whose checks run what the NOT RUN item binds.")
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
         return True
@@ -8925,6 +8988,121 @@ class Session:
         seat_vendor = self.seat().key.partition(":")[0]
         return next((p for p in self.brain_trust
                      if self._available(p) and p.partition(":")[0] != seat_vendor), None)
+
+    def _command_requirement(self, rid: str) -> Optional[List[str]]:
+        """The command a requirement's own text names, as argv, or None: a
+        backticked command, else a phrase starting with a known runner
+        (``python3 -m …``, ``python -m …``, ``pytest …``, ``npm …``,
+        ``node …``, ``make …``) up to the end of its sentence."""
+        import shlex
+        text = str(self.memory.ledger.requirements.get(rid) or "")
+        ticked = re.findall(r"`([^`\n]+)`", text)
+        runner = r"(?:[\w./~-]*/)?(?:python3?|pytest|npm|npx|node|make)"
+        phrase = next((t for t in ticked if re.match(r"\s*" + runner + r"\b", t)), None)
+        if phrase is None:
+            match = re.search(r"(?<![\w./-])(" + runner + r"\b(?:\s+-m\s+\S+)?[^.;\n`]*)", text)
+            phrase = match.group(1) if match else None
+            if phrase is not None:
+                # Prose ends where the sentence turns back to English: the
+                # command is the runner and its own operands, never the words
+                # around it ("run pytest before declaring completion").
+                words = phrase.split()
+                stop = next((i for i, w in enumerate(words[1:], 1) if w.lower() in _COMMAND_PROSE_STOPS), len(words))
+                phrase = " ".join(words[:stop])
+        if phrase is None:
+            return None
+        try:
+            argv = shlex.split(phrase.strip())
+        except ValueError:
+            return None
+        return argv or None
+
+    @staticmethod
+    def _command_key(argv) -> Tuple[str, ...]:
+        """A command's identity for the citation: the interpreter by its
+        public name (``/usr/bin/python3.11`` is ``python``; ``pytest`` is
+        ``python -m pytest``, the same rule as project_run._check_identity),
+        the harness's own report token and ``-p no:cacheprovider`` removed,
+        every other argument kept exactly: a flag, a path or a filter makes
+        another command."""
+        from .integration import REPORT_TOKEN
+        argv = [str(a) for a in argv or ()]
+        if not argv:
+            return ()
+        head, rest = os.path.basename(argv[0]), argv[1:]
+        if re.fullmatch(r"python(\d+(\.\d+)*)?", head):
+            head = "python"
+        elif head == "pytest":
+            head, rest = "python", ["-m", "pytest", *rest]
+        out, skip = [], False
+        for i, arg in enumerate(rest):
+            if skip:
+                skip = False
+                continue
+            if arg == "-p" and i + 1 < len(rest) and rest[i + 1] == "no:cacheprovider":
+                skip = True
+                continue
+            if arg == "-pno:cacheprovider" or REPORT_TOKEN in arg or arg.startswith("--quadratus-report="):
+                continue
+            out.append(arg)
+        return (head, *out)
+
+    def _command_receipt_citation(self, rid: str) -> Tuple[Optional[dict], str]:
+        """``(receipt, problem)``: the harness's own receipt that shows the
+        command a requirement names was run, exactly, on the current
+        source, under the effective gate and this environment, as a
+        required command that passed from the project root; else None and
+        why the nearest receipt does not count (another command, a failed
+        or optional run, another source or cwd, or no receipt). Typed and
+        authoritative: read from the check records only, never from a
+        reply."""
+        import shlex
+        wanted = self._command_requirement(rid)
+        if wanted is None:
+            return None, ""
+        if not self.project:
+            return None, "no project checks to cite"
+        from .integration import model_facing
+        current = self._source_fingerprint()
+        gate = _gate_identity(self.config.integration_gate) if self.config.integration_gate is not None else None
+        environment = self._environment_id()
+        nearest = ""
+        for index in range(len(self.checks) - 1, -1, -1):
+            check = self.checks[index]
+            rows = check.get("receipts") or [dict(id="check", status="passed" if check.get("passed") else "failed",
+                                                 required=True, command=check.get("command"),
+                                                 cwd=check.get("command_cwd"))]
+            for row in rows:
+                try:
+                    argv = model_facing(shlex.split(str(row.get("command") or "")))
+                except ValueError:
+                    continue
+                if self._command_key(argv) != self._command_key(wanted):
+                    # Never the harness's own command line: a gate can name a
+                    # file seats must not open (_audit_check_facts); the
+                    # requirement's command is the only one quoted.
+                    nearest = nearest or f"the harness has no receipt for `{' '.join(wanted)}` (its checks ran other commands)"
+                    continue
+                cwd = str(row.get("cwd") or check.get("command_cwd") or ".")
+                reasons = []
+                if row.get("status") != "passed":
+                    reasons.append(f"its run {row.get('status') or 'did not pass'}")
+                if not row.get("required", True):
+                    reasons.append("it is an optional command")
+                if check.get("source") != current:
+                    reasons.append("it ran on another source")
+                if gate is not None and (check.get("gate") or "") != gate:
+                    reasons.append("it ran under another gate")
+                if (check.get("environment") or environment) != environment:
+                    reasons.append("it ran in another environment")
+                if cwd not in ("", "."):
+                    reasons.append("it ran from another directory, not the project root")
+                if reasons:
+                    nearest = nearest or f"the receipt for `{' '.join(wanted)}` does not count: " + "; ".join(reasons)
+                    continue
+                return dict(id=f"check-{index + 1}", receipt=row.get("id"), command=" ".join(argv),
+                            source=check.get("source"), gate=check.get("gate")), ""
+        return None, nearest or f"the harness has no receipt for `{' '.join(wanted)}`"
 
     def _resolve_citations(self, text: str) -> List[str]:
         """The cited paths and test names that actually exist in the project."""
@@ -9082,6 +9260,7 @@ class Session:
             self.requirement_audits.append(dict(auditor=auditor, result=f"void: {moved}"))
             return {r: (False, moved) for r in audited}
         found, stated = {}, []
+        citation_receipts: Dict[str, dict] = {}
         # One strict reading (quadratus.judgment; root reconciliation of the
         # strategy reset): the last line no longer wins, so NOT MET then MET
         # is NOT MET and two MET lines approve nothing.
@@ -9098,7 +9277,19 @@ class Session:
             if met:
                 resolved = self._resolve_citations(why)
                 if not resolved:
-                    met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
+                    # A requirement that names a command is shown by the
+                    # harness's own exact receipt of that command on the
+                    # current source (evidence lifecycle batch, 2026-10-29:
+                    # "run the suite before declaring completion" was lowered
+                    # as uncited while the gate had run it five times).
+                    receipt, problem = self._command_receipt_citation(rid)
+                    if receipt is not None:
+                        citation_receipts[rid] = receipt
+                        why = (f"{why} (harness receipt {receipt['id']}: `{receipt['command']}` passed on the "
+                               f"current source)")[:400]
+                    else:
+                        met, why = False, (f"MET claimed without a file or test that exists in the project ({why[:100]})"
+                                           + (f"; {problem}" if problem else ""))
             found[rid] = (met, why)
         if carried:
             # The auditor's per-id dispositions on the findings carried to it
@@ -9112,7 +9303,9 @@ class Session:
         original = dict(found)
         lowered = self._lower_unexecuted(found)
         lowered += self._lower_unexercised_errors(found, audited, original=original, lowered=lowered)
-        self._judge_obligations(auditor, reply or "", found, ids=list(audited))
+        # Sufficiency is implied from the auditor's own lines (``original``),
+        # never from a verdict lowered above for another record.
+        self._judge_obligations(auditor, reply or "", found, ids=list(audited), raw=original)
         # The one acceptance predicate, after sufficiency is judged: what the
         # auditor wrote stands only where the record agrees.
         lowered += self._apply_acceptance(found, audited)
@@ -9120,6 +9313,7 @@ class Session:
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
                                                                        for r, (ok, why) in verdicts.items()},
                                             lowered=lowered, stated=[r for r in stated if r in audited],
+                                            citation_receipts=citation_receipts,
                                             source=self._source_fingerprint() if self.project else None,
                                             findings_carried=[r["fid"] for r in carried],
                                             findings_standing=[r["fid"] for r in standing],
@@ -9635,8 +9829,14 @@ class Session:
         self._finish_pending_evidence()
         identity = self._evidence_identity()
         tested = {tuple(r["key"][:2]) for r in self.evidence_requests if r.get("identity") == identity}
+        routes = {rid: self._evidence_route(rid, why) for rid, why in unmet.items()}
+        for rid, route in routes.items():
+            self.finish_routing.append(dict(requirement=rid, site="final challenge", why=unmet[rid][:300], **route))
         open_ = {rid: e for rid, e in self._disputable().items()
-                 if e["kind"] == "audit" and rid in unmet and ("audit", e["identity"]) not in tested}
+                 if e["kind"] == "audit" and rid in unmet and ("audit", e["identity"]) not in tested
+                 and routes[rid]["challengeable"]}
+        withheld = [f"- {rid}: {routes[rid]['route']}" for rid in unmet if rid not in open_
+                    and not routes[rid]["challengeable"]]
         if not open_:
             # Nothing left to challenge, including after a resume: a request
             # already made on this source and checks is never made again.
@@ -9649,6 +9849,8 @@ class Session:
         prompt = self.memory.render(
             current=("The task cap is reached: no task, writer, repair or recovery remains, and nothing "
                      "can change the source. The independent final audit found:\n" + listed
+                     + ("\n\nNot offered for challenge, because no executed evidence can discharge what holds "
+                        "them (they stay as recorded):\n" + "\n".join(withheld) if withheld else "")
                      + "\n\nIf you dispute one of these, you may challenge it with executed evidence: "
                      + _EVIDENCE_CHANNEL + "\nOtherwise reply exactly ACCEPT. Any other reply ends the "
                      "challenge and the audit stands."),
@@ -9691,6 +9893,56 @@ class Session:
             commands = getattr(self, "_inherited_checks", None) or []
         return [c for c in commands if not c.skip_reason
                 and integration.discovers_added_tests(integration.model_facing(c.argv), root / c.cwd)]
+
+    def _evidence_route(self, rid: str, why: str = "") -> dict:
+        """Where an unmet requirement goes at the finish (evidence lifecycle
+        batch, 2026-10-29): ``execution debt`` when a standing NOT RUN item
+        of a covering task holds it (discharged only by the harness's gate
+        executing what the item binds, or a repair task; a scratch test
+        shows nothing about it); ``prerequisite`` when an obligation of its
+        has no authorized runner; else a ``finding`` on the behaviour, which
+        executed evidence may dispute (a false positive is legitimate) and
+        which, confirmed, is a repair task's while a slot is left or an
+        honest incomplete. finding-lifecycle-02 spent three challenges, about
+        594k tokens, on requirements held by runner-less NOT RUN rows."""
+        standing = [e for e in self._standing_not_run() if rid in (e.get("requirements") or ())]
+        if standing:
+            bound = [c for e in standing for c in (e.get("cases") or ())]
+            held = [e for e in standing if not e.get("cases")]
+            route = ("execution debt: " + (f"discharged only by the harness's gate executing {', '.join(sorted(set(bound)))} "
+                                           "whole" if bound else "")
+                     + ("; " if bound and held else "")
+                     + (f"{len(held)} NOT RUN item(s) bound to no case ({'; '.join((e.get('binding') or {}).get('problem', '') or e['item'][:60] for e in held)[:200]}), held as written" if held else "")
+                     + "; or a repair task that runs it; never a challenge")
+            return dict(kind="execution debt", challengeable=False, route=route[:500])
+        unrun = [o for o in self.evidence_obligations
+                 if any(r[0] == rid for r in o.get("requirements") or ()) and o.get("modality") == "test"
+                 and not o.get("superseded_by") and o.get("execution") != "ran"]
+        prerequisites = [o for o in unrun if o.get("runner") is None]
+        if prerequisites:
+            return dict(kind="prerequisite", challengeable=False,
+                        route=("prerequisite: " + ", ".join(o["oid"] for o in prerequisites)
+                               + " has no authorized runner; a task that binds it to a case the gate runs, never a challenge")[:500])
+        failed = [o for o in unrun if o.get("execution") == "failed"]
+        if failed:
+            # A read-only proof cannot repair a required run that failed;
+            # the reassessment's own acceptance would refuse it (root's
+            # finish seam control: the planner call was bought for nothing).
+            # A missing or stale execution is not withheld: the challenge's
+            # own proof may be the bound case executed on this source.
+            return dict(kind="failed execution", challengeable=False,
+                        route=("; ".join(f"{o['oid']} failed" + (f" ({o.get('reason')})" if o.get("reason") else "")
+                                         for o in failed)
+                               + ": a repair task whose checks pass it, never a challenge")[:500])
+        open_reviews = self._open_findings_touching(rid)
+        if open_reviews:
+            return dict(kind="open review finding", challengeable=False,
+                        route=("held by open review finding(s) " + ", ".join(open_reviews)
+                               + ": their own reviewer's recheck decides them; a challenge of the audit cannot")[:500])
+        return dict(kind="finding", challengeable=True,
+                    route="finding on the behaviour: executed evidence may dispute it (a false positive is "
+                          "legitimate); confirmed, it is a repair task's while a slot is left, else the run ends "
+                          "incomplete and says so")
 
     def _disputable(self) -> Dict[str, dict]:
         """The findings an evidence request may test now, by id: each NOT MET
@@ -10197,7 +10449,14 @@ class Session:
         if not met:
             return f"confirmed on reassessment: {why[:200]}"
         if not self._resolve_citations(why):
-            return "held: MET claimed without a project file or test that exists"
+            # The same typed citation the audit accepts: the harness's own
+            # exact receipt of the command the requirement names, on the
+            # current source (never a model's word, never another command).
+            receipt, problem = self._command_receipt_citation(target)
+            if receipt is None:
+                return "held: MET claimed without a project file or test that exists" + (f"; {problem}" if problem else "")
+            why = f"{why} (harness receipt {receipt['id']}: `{receipt['command']}` passed on the current source)"[:400]
+            record["citation_receipt"] = receipt
         verdict = {target: (True, why)}
         # The same acceptance the audit's own MET gets: refreshed
         # obligations, the NOT RUN and error-clause rules, the auditor's
@@ -10258,7 +10517,16 @@ class Session:
             if not item or item.lower() in ("none", "nothing", "n/a"):
                 continue
             entry = dict(task=task, role=role, author=key, item=item[:300], why=why.strip()[:300],
-                         requirements=list(self._current_covers), after_check=len(self.checks))
+                         requirements=list(self._current_covers), after_check=len(self.checks),
+                         # The identity a discharging check must carry: the
+                         # gate and environment the report was made under
+                         # (root's control on 2ab56eb: a passing run on
+                         # another source, gate or environment left the typed
+                         # row unexecuted while the prompts showed no debt).
+                         gate=_gate_identity(self._current_gate()), environment=self._environment_id())
+            # What the item names, bound now so a later genuine execution
+            # can discharge it (evidence lifecycle batch, 2026-10-29).
+            self._bind_not_run(entry)
             # A report after a check is a new report: an earlier run cannot
             # discharge what was said about the source since (F3: a re-report
             # in revision was deduplicated away and the old run lifted it).
@@ -10267,6 +10535,137 @@ class Session:
                 self.unexecuted_acceptance.append(entry)
                 self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
                 self._register_obligation(entry, kind="not_run")
+
+    def _bind_not_run(self, entry: dict) -> None:
+        """Bind a NOT RUN item to what it names, as the harness can identify
+        it: a declared scenario of the reporting task (``P<n>``, through the
+        cases its acceptance row binds), a test case (an explicit
+        ``file::[Class::]test`` id, ``Class.test`` or ``Class::test``, or a
+        bare ``test_*`` name defined in exactly one test file), or the path
+        operands the older rule reads. The binding is on the entry as
+        ``binding`` (kind, scenario, cases, problem) and its case ids as
+        ``cases``; the item and its reason stay as written. Anything
+        ambiguous, undefined or unbound binds nothing and is held as before
+        (finding-lifecycle-02: eight items naming scenarios and cases of a
+        suite the harness's own gate then ran whole kept five requirements
+        unmet, with no record able to discharge them)."""
+        item = str(entry.get("item") or "")
+        binding = dict(kind="none", scenario=None, cases=[], problem="")
+        scenarios = re.findall(r"(?<![\w./-])(P[0-9]+)(?![\w./-])", item)
+        explicit = _cited_cases(item)
+        if scenarios and re.match(r"^\s*P[0-9]+\b", item):
+            # Every scenario the item names must resolve, and the item is
+            # discharged only by all of them: "P1 and P2" with P2 unknown
+            # binds nothing (root's partial-claim control).
+            binding["kind"], binding["scenario"] = "scenario", ", ".join(dict.fromkeys(scenarios))
+            cases, problems = [], []
+            for scenario in dict.fromkeys(scenarios):
+                rows = [r for r in self.evidence_obligations
+                        if r.get("task") == entry.get("task") and r.get("kind") == "acceptance"
+                        and r.get("proof_id") == scenario and not r.get("superseded_by")]
+                if not rows:
+                    problems.append(f"{scenario} is not a scenario this task declares")
+                elif not list(rows[-1].get("cases") or ()):
+                    problems.append(f"{scenario} binds no case yet (no valid PROVES line)")
+                else:
+                    cases.extend(str(c) for c in rows[-1]["cases"])
+            if problems:
+                binding["problem"] = "; ".join(problems)[:300]
+            else:
+                binding["cases"] = sorted(set(cases))
+        elif explicit:
+            binding["kind"] = "case"
+            resolved, problem = self._resolve_case_ids(explicit)
+            binding["cases"], binding["problem"] = resolved, problem
+        elif [p for p in _item_paths(item) if not re.match(r"^[A-Za-z_]\w*\.test\w*$", p)]:
+            # A path operand (``Class.test_x`` is a case, not a file).
+            binding["kind"] = "paths"
+        else:
+            names = re.findall(r"\b((?:[A-Za-z_]\w*(?:\.|::))?test\w*)\b", item)
+            if names:
+                binding["kind"] = "case"
+                resolved, problem = self._resolve_case_ids([n.replace("::", ".") for n in names])
+                binding["cases"], binding["problem"] = resolved, problem
+            else:
+                binding["problem"] = "names no scenario, case or path the harness can identify"
+        entry["binding"] = binding
+        entry["cases"] = list(binding["cases"])
+        if binding["problem"]:
+            self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+
+    def _rebind_not_run(self, task) -> None:
+        """A scenario-bound NOT RUN item follows its scenario's binding: when
+        a later PROVES line rebinds or invalidates the scenario, the item is
+        bound again to what the scenario binds now (nothing, when the
+        declaration is invalid) and its typed row's cases follow, so a case
+        set the lead has since withdrawn never discharges it. An execution
+        already recorded against the old cases is reset: it showed other
+        cases."""
+        for entry in self.unexecuted_acceptance:
+            if entry.get("task") != task or (entry.get("binding") or {}).get("kind") != "scenario":
+                continue
+            before = list(entry.get("cases") or ())
+            self._bind_not_run(entry)
+            if list(entry.get("cases") or ()) == before:
+                continue
+            for row in self.evidence_obligations:
+                if (row.get("kind") == "not_run" and row.get("task") == task
+                        and (row.get("entry") or {}).get("item") == entry.get("item")):
+                    row["cases"] = list(entry.get("cases") or ())
+                    if row.get("execution") in ("ran", "failed"):
+                        row.update(execution="missing", receipts=[], source_digest=None,
+                                   reason="the scenario was rebound after the execution")
+                    self._sync_obligation(row)
+
+    def _resolve_case_ids(self, names) -> Tuple[List[str], str]:
+        """``(case ids, problem)``: each name resolved to exactly one
+        ``file::[Class::]test`` defined in the project's test files (read
+        with ``ast``, never executed); an explicit id is checked against its
+        own file. A name defined in no file, or in more than one, resolves
+        nothing and names the problem, so a same-named case elsewhere never
+        stands in for the one reported."""
+        import ast
+        if not self.project:
+            return [], "no project to resolve cases in"
+        root = Path(self.project)
+        defined: Dict[str, List[str]] = {}
+        for test_file in sorted(root.rglob("test*.py")):
+            if ".quadratus" in test_file.parts or any(part in ("node_modules", ".venv", "venv") for part in test_file.parts):
+                continue
+            try:
+                tree = ast.parse(test_file.read_text(errors="ignore"))
+            except (OSError, SyntaxError, ValueError):
+                continue
+            rel = test_file.relative_to(root).as_posix()
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                    defined.setdefault(node.name, []).append(f"{rel}::{node.name}")
+                elif isinstance(node, ast.ClassDef):
+                    for inner in node.body:
+                        if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner.name.startswith("test"):
+                            defined.setdefault(f"{node.name}.{inner.name}", []).append(f"{rel}::{node.name}::{inner.name}")
+                            defined.setdefault(inner.name, []).append(f"{rel}::{node.name}::{inner.name}")
+        all_ids = {cid for ids in defined.values() for cid in ids}
+        resolved, problems = [], []
+        for name in names:
+            name = str(name).strip()
+            if "::" in name and (name.split("::")[0].endswith(".py") or "/" in name.split("::")[0]):
+                base = name.split("[", 1)[0]
+                if base in all_ids:
+                    resolved.append(base)
+                else:
+                    problems.append(f"{name} is not defined where it says")
+                continue
+            hits = sorted(set(defined.get(name, [])))
+            if len(hits) == 1:
+                resolved.append(hits[0])
+            elif not hits:
+                problems.append(f"{name} is not defined in any test file")
+            else:
+                problems.append(f"{name} is defined in {len(hits)} places ({', '.join(hits[:3])})")
+        if problems:
+            return [], "; ".join(problems)[:300]
+        return sorted(set(resolved)), ""
 
     def _record_proves(self, key, role, reply) -> None:
         """Bind the active task's proof scenarios to the named cases an
@@ -10342,6 +10741,7 @@ class Session:
                                                                  after_check=len(self.checks)))
             if previous and previous != tuple(cases):
                 self._note(f"task {task}: {pid} rebound from {', '.join(previous)} to {', '.join(cases)}")
+        self._rebind_not_run(task)
         if problems:
             self.proof_binding_problems.extend(dict(task=task, role=role, author=key, problem=p) for p in problems)
             self._note(f"task {task}: PROVES declaration invalid: {'; '.join(problems)[:200]}")
@@ -10541,25 +10941,9 @@ class Session:
         skipped none; a skip fact only by such a run of the same command. A
         model's word, a substring, an optional or skipped receipt, or a
         name-filtered run never does (Codex review of b6ba3ba, F3)."""
-        standing = []
-        for entry in self.unexecuted_acceptance:
-            ran = False
-            paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
-            for check in self.checks[entry["after_check"]:]:
-                runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
-                if entry.get("kind") == "skipped" and entry.get("cases"):
-                    # Decided when each check ran, against that check's own
-                    # source (_discharge_named).
-                    ran = entry.get("discharged_at") is not None
-                elif entry.get("kind") == "skipped":
-                    ran = any(r["id"] == entry["receipt"] for r in runs)
-                else:
-                    ran = bool(paths) and any(all(p in r["files"] for p in paths) for r in runs)
-                if ran:
-                    break
-            if not ran:
-                standing.append(entry)
-        return standing
+        # One reading for the audit's block, the lowering and the receipt:
+        # ``_discharging_check`` (the case-bound route included).
+        return [entry for entry in self.unexecuted_acceptance if self._discharging_check(entry) is None]
 
     def _unnamed_standing(self) -> List[str]:
         """Unnamed test files not reconciled by later execution. A later
@@ -10595,9 +10979,13 @@ class Session:
         if unrun:
             lines.append("- test files no required check names (not shown to have run): " + ", ".join(unrun))
         for entry in standing:
+            binding = entry.get("binding") or {}
             lines.append(f"- task {entry['task']} ({entry['role']}) reported NOT RUN: {entry['item']}"
                          + (f" - {entry['why']}" if entry["why"] else "")
-                         + (f" (covers {', '.join(entry['requirements'])})" if entry["requirements"] else ""))
+                         + (f" (covers {', '.join(entry['requirements'])})" if entry["requirements"] else "")
+                         + (f" [bound to {', '.join(binding['cases'])}: discharged only by the harness's gate "
+                            "executing it whole]" if binding.get("cases") else
+                            f" [not bound to any case: {binding['problem']}]" if binding.get("problem") else ""))
         return ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
                 + "\nA requirement whose only evidence is a file listed here is NOT MET, and so is a "
                 "requirement a task covering it reported NOT RUN: name what did not run.")
@@ -10738,9 +11126,17 @@ class Session:
         if kind == "skipped":
             runner, cases = "gate", tuple(entry.get("cases") or ())
         elif kind == "not_run":
-            # Routed to the gate only where the gate names every path the
-            # item does as a whole operand; otherwise a prerequisite.
-            runner, cases = ("gate" if self._gate_can_run(_item_paths(behavior)) else None), ()
+            # Routed to the gate where the gate names every path the item
+            # does as a whole operand, or where the item is bound to cases
+            # the gate's own case record can show executed (``_bind_not_run``);
+            # otherwise a prerequisite.
+            bound = tuple(str(c) for c in (entry.get("cases") or ()))
+            runner = ("gate" if self._gate_can_run(_item_paths(behavior))
+                      or (bound and self._current_gate() is not None) else None)
+            # The binding is the item's identity and survives a runner-less
+            # registration (a parallel child has no gate; the parent re-bases
+            # the row to its own and needs the cases to do it).
+            cases = bound
         else:
             runner, cases = ("gate" if self._current_gate() is not None else None), ()
         modality = str(entry.get("modality") or "test")
@@ -10886,10 +11282,26 @@ class Session:
 
     def _discharging_check(self, entry: dict) -> Optional[int]:
         """The index of the first later check that discharges a NOT RUN or
-        skip record (the rule _standing_not_run applies), or None."""
+        skip record (the rule _standing_not_run applies), or None. A NOT
+        RUN item bound to cases (``_bind_not_run``) is discharged by a later
+        complete required run whose own case record shows every bound case
+        passed; a filtered, failed, skipping or caseless run, a run of
+        another file's same-named case, or an item bound to nothing never
+        discharges it (evidence lifecycle batch, 2026-10-29)."""
         paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
+        bound = [str(c) for c in (entry.get("cases") or ())] if entry.get("kind") != "skipped" else []
+        current = self._source_fingerprint() if self.project else None
+        gate, environment = self._not_run_identity(entry)
         for offset, check in enumerate(self.checks[entry["after_check"]:]):
             index = entry["after_check"] + offset
+            if entry.get("kind") != "skipped" and not (
+                    current is not None and check.get("source") == current
+                    and (check.get("gate") or "") == gate and check.get("environment") == environment):
+                # The same identity the typed row is held to
+                # (delivery.discharge): a run on another source, under another
+                # gate or in another environment is no execution of the item,
+                # in the prompts exactly as in the record.
+                continue
             runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
             if entry.get("kind") == "skipped" and entry.get("cases"):
                 if entry.get("discharged_at") is not None and entry["discharged_at"] <= index:
@@ -10901,7 +11313,23 @@ class Session:
                 continue
             if paths and any(all(p in r["files"] for p in paths) for r in runs):
                 return index
+            if bound and check.get("passed") and any(set(bound) <= _run_passed_cases(r) for r in runs):
+                return index
         return None
+
+    def _not_run_identity(self, entry: dict) -> Tuple[str, Optional[str]]:
+        """The gate identity and environment a NOT RUN entry's discharge is
+        held to: recorded on the entry, else the typed row's (an entry from
+        a checkpoint written before the identity was kept), else the
+        current ones."""
+        if entry.get("gate") is not None and entry.get("environment") is not None:
+            return str(entry["gate"]), str(entry["environment"])
+        row = next((o for o in self.evidence_obligations
+                    if o.get("kind") == "not_run" and o.get("task") == entry.get("task")
+                    and (o.get("entry") or {}).get("item") == entry.get("item")), None)
+        if row is not None:
+            return str(row.get("gate") or ""), str(row.get("environment") or "")
+        return _gate_identity(self._current_gate()), self._environment_id()
 
     def _refresh_obligations(self) -> None:
         """Settle every typed obligation against the record as it stands:
@@ -11067,16 +11495,23 @@ class Session:
         return f"capture:{task}:{digest}", ""
 
     def _judge_obligations(self, auditor: str, reply: str, found: dict, *, ids=None, modalities=None,
-                           oids=None) -> None:
+                           oids=None, raw=None) -> None:
         """Sufficiency from the audit: an explicit '<O-id>: SUFFICIENT|INSUFFICIENT'
-        line decides; otherwise the auditor's verdict on every requirement an
-        executed obligation binds does (all MET after lowering: sufficient;
-        any NOT MET: insufficient). Two lines for one id (a duplicate or a
-        contradiction) are no verdict: the obligation is left unjudged with
+        line decides; otherwise the auditor's own verdict on every requirement
+        an executed obligation binds does (all MET: sufficient; any NOT MET:
+        insufficient), read from ``raw``, the verdicts as the auditor wrote
+        them, never from a verdict the harness lowered for another record
+        (finding-lifecycle-02: R9 lowered for a NOT RUN item made O4, O5, O6
+        and O9 insufficient, and the predicate then lowered R3, R4 and R11,
+        which the auditor had passed). The record says which it was:
+        ``sufficiency_source`` is the explicit line, or the implication with
+        the requirement ids it rests on. Two lines for one id (a duplicate or
+        a contradiction) are no verdict: the obligation is left unjudged with
         the conflict noted. Only obligations binding an audited requirement
         (``ids``; every one when None) are judged. Bound to exactly the
         evidence judged."""
         explicit, conflicts = judgment.sufficiency_reading(reply, [o["oid"] for o in self.evidence_obligations])
+        verdicts = raw if raw is not None else found
         refreshed = []
         for record in self.evidence_obligations:
             obligation = delivery.EvidenceObligation.from_dict(record)
@@ -11094,9 +11529,11 @@ class Session:
                 continue
             if obligation.oid in conflicts:
                 obligation = replace(obligation, sufficiency="unjudged", judged_by="", judged_binding="")
-                refreshed.append(dict(record, **obligation.to_dict(), sufficiency_note=conflicts[obligation.oid]))
+                refreshed.append(dict(record, **obligation.to_dict(), sufficiency_note=conflicts[obligation.oid],
+                                      sufficiency_source=""))
                 continue
             verdict, why = explicit.get(obligation.oid, (None, ""))
+            source = f"explicit line by {auditor}" if verdict is not None else ""
             reading = record.get("modality") == "reading"
             legacy = record.get("modality") == "legacy"
             capture = record.get("modality") == "capture"
@@ -11115,12 +11552,28 @@ class Session:
             # of modality or file authorizes no exemption). A reading
             # SUFFICIENT must cite the file the scenario names on the
             # current source; one that does not is not a judgment of it.
+            if verdict is None and obligation.sufficiency_current and not capture:
+                # A judgment already made about exactly this evidence (the
+                # same receipts, source, gate, environment and revisions:
+                # ``sufficiency_current``) by its own judging seat stands
+                # until that seat, or an explicit line, speaks again; a
+                # verdict on the requirement re-judges nothing and takes
+                # the judgment from nobody (root's control on 2ab56eb: an
+                # audit with no O line re-judged a shared row from the
+                # requirement flags). An explicit line above still decides.
+                refreshed.append(record)
+                continue
             if verdict is None and obligation.execution == "ran" and not (reading or legacy or capture):
                 # Executed evidence is judged by implication from the
-                # verdicts on the requirements it binds.
-                judged = [found.get(rid) for rid, _ in obligation.requirements]
+                # auditor's own verdicts on the requirements it binds, and
+                # the record says so; a verdict lowered by the harness for
+                # another record implies nothing about this row.
+                judged = [verdicts.get(rid) for rid, _ in obligation.requirements]
                 if all(v is not None for v in judged) and judged:
                     verdict = "sufficient" if all(v[0] for v in judged) else "insufficient"
+                    source = ("implied from the auditor's own verdicts on "
+                              + ", ".join(f"{rid} {'MET' if v[0] else 'NOT MET'}"
+                                          for (rid, _), v in zip(obligation.requirements, judged, strict=True)))
             elif reading and verdict == "sufficient":
                 location = str(record.get("location") or "")
                 if location not in self._resolve_citations(why):
@@ -11141,8 +11594,9 @@ class Session:
             if verdict is not None:
                 obligation = delivery.judge_sufficiency(obligation, verdict, judged_by=auditor,
                                                         reading=reading or legacy)
+                extra = dict(extra, sufficiency_source=source)
                 if reading or legacy:
-                    extra = dict(judged_source=self._source_fingerprint() if self.project else None)
+                    extra = dict(extra, judged_source=self._source_fingerprint() if self.project else None)
             refreshed.append(dict(record, **obligation.to_dict(), **extra))
         self.evidence_obligations = refreshed
 

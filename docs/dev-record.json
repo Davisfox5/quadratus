@@ -2662,6 +2662,29 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-evidence-lifecycle",
+      "purpose": "Evidence lifecycle (Davis, 2026-10-29): NOT RUN reports bound to scenario/case identities and discharged only by the gate executing them on the current identity, prompt and record consistent; sufficiency from the auditor's own verdicts with a prior judgment standing; typed exact-command receipts as citations without a privacy leak; finish routing withholding challenges that cannot clear a blocker; framing lens; truth_check validating saved bindings independently; offline controls",
+      "base": "2ab56ebb2a03c4c245016831076567a720546903",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tools/truth_check.py",
+        "tests/test_evidence_lifecycle_units.py",
+        "tests/lifecycle/test_evidence_lifecycle.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-29T17:02:05Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [

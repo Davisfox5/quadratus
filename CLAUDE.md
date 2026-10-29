@@ -2917,6 +2917,90 @@ Key design decisions already settled:
   sees, construction and parsing outside the handler, and a failure the
   task inherits from code its own path reaches. Generic by design: it names
   classes, never a candidate's defect.
+- **A NOT RUN report binds to an identity the harness can execute, or
+  to nothing** (evidence lifecycle batch, Davis, 2026-10-29;
+  `Session._bind_not_run`). finding-lifecycle-02: t7's lead reported
+  scenarios (`P5`) and cases (`ApiDependencies.test_handler_...`) it could
+  not run in its sandbox, the harness's own gate then ran the suite whole
+  five times, and five requirements stayed NOT MET on runner-less rows no
+  record could discharge. Each item is now bound at the report: a declared
+  scenario (`P<n>`, every one the item names, through the cases its
+  acceptance row binds; PROVES is read before NOT RUN so the same reply
+  binds both, and a later rebinding re-binds the item and resets its row),
+  an explicit `file::[Class::]test` id checked against its file, or a
+  `Class.test`/bare `test_*` name defined in exactly one test file (read
+  with `ast`). Ambiguous, undefined, wrong-class, suffix, partial
+  (`P1 and P2` with P2 unknown) or prose items bind nothing and are held
+  as written, with the problem on the record. A bound item's typed row
+  gets the gate as runner and the cases as identity (kept even
+  runner-less, so a parallel child's row re-bases to the parent's gate);
+  it is discharged only by a later complete required run on the current
+  source, under the entry's own gate and environment, whose own case
+  record shows every bound case passed. `_standing_not_run` and
+  `_discharging_check` now apply that identity too (root's control: a
+  passing run on another source, gate or environment left the typed row
+  unexecuted while the prompts showed no debt), so prompt and record
+  agree. The lead is told the two forms.
+- **Sufficiency is the auditor's own verdict, never a flag the harness
+  lowered for another record, and a judgment about exactly this evidence
+  stands** (`_judge_obligations(raw=...)`, `sufficiency_source`). Root's
+  correction on finding-lifecycle-02: `_read_audit` lowered R9 for a NOT
+  RUN item, the implied sufficiency read the lowered flag over every
+  requirement a shared row binds, and the acceptance predicate then
+  lowered R3, R4 and R11 the auditor had passed: deterministic
+  contamination, not judgment. Implied sufficiency now reads the verdicts
+  as the auditor wrote them and the record says so (`implied from the
+  auditor's own verdicts on R3 MET, R9 NOT MET`, or `explicit line by
+  <seat>`). A row already judged by its seat about the same receipts,
+  source, gate, environment and revisions (`sufficiency_current`) is not
+  re-judged by implication and its judge is not replaced; an explicit
+  O-line still decides, and new evidence makes the old judgment stale as
+  before. Execution facts, explicit sufficiency and requirement verdicts
+  are three records; none is derived from another's lowering.
+- **A requirement that names a command is shown by the harness's exact
+  receipt** (`_command_requirement`, `_command_receipt_citation`,
+  `citation_receipts`). R21 ("run the suite before declaring completion")
+  was lowered as uncited while the gate had run that suite five times. A
+  MET with no file or test citation now stands when a required receipt on
+  the current source, gate and environment, from the project root, ran the
+  named command (interpreter by public name, report token and
+  `-p no:cacheprovider` removed, everything else exact; `_command_key`),
+  and the audit record names the receipt. A failed, optional, filtered,
+  other-source, other-gate, other-environment or other-directory receipt
+  is refused with its reason, and the harness's own command line is never
+  quoted back (a gate can name a file seats must not open), only the
+  requirement's. The receipt is a citation and nothing more: the
+  requirement's scenarios still have to execute and be judged. The
+  reassessment uses the same resolver.
+- **The finish routes each unmet requirement and withholds a challenge
+  that cannot clear it** (`_evidence_route`, `finish_routing`, carried and
+  exported). finding-lifecycle-02 spent three challenges, about 594k
+  tokens, on requirements held by NOT RUN rows. A standing NOT RUN item
+  (execution debt), an obligation with no runner (prerequisite), a failed
+  required execution, or an open review finding touching the requirement
+  is not offered: a read-only proof cannot discharge any of them, and the
+  prompt and the DONE refusal say where each goes instead (a task whose
+  checks run what the item binds, a repair task, the finding's own
+  reviewer). A finding on the behaviour, including one whose bound case is
+  missing or stale, stays challengeable, because the challenge's own proof
+  may be that case executed on this source and a false positive is a
+  legitimate dispute.
+- **Framing is part of the error boundary** (`_ERROR_BOUNDARY_LENS`). The
+  one product defect finding-lifecycle-02 left (a short body parsed as a
+  complete prefix and acted on) is not named in the lens; the lens says a
+  body shorter or longer than its declared length, an early EOF, a partial
+  read and a record cut mid-field are input, that code must not act on
+  what it did not fully receive, and that a rejected input must leave no
+  change behind, checked by reading the state after the refusal.
+- **The independent checker validates a bound NOT RUN entry itself**
+  (`tools/truth_check.py::_bound_not_run_cleared`). It reads the saved
+  binding's provenance (a declared scenario of the same task whose
+  acceptance row binds exactly these cases, or an item that itself names
+  each bound case), then a later check on the final source under the
+  entry's own gate and environment, required, passed, unfiltered, zero
+  skips, from the project root, whose own report shows every bound case
+  passed. It never reads an engine discharge mark; forged, stale,
+  mismatched, partial, malformed or historical entries stay unverified.
 
 ## How development is coordinated
 
