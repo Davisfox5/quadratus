@@ -1749,6 +1749,34 @@ def _split_item_reason(text: str) -> Tuple[str, str]:
     return text, ""
 
 
+def _named_skip_run(entry: dict, run: dict, texts) -> Optional[List[str]]:
+    """The names a run verifies for a skip fact with named cases, or None:
+    the same command (the receipt id the fact names), passed, required,
+    unfiltered, with a complete case record in which each name is executed
+    at least as often as the fact counts it and never skipped, and each
+    name is runner-qualified or held by the same one file as when the
+    fact was recorded (``_case_files`` over ``texts``). The rule
+    ``_discharge_named`` decides with; a discharge marker without its
+    names is re-verified through it, never trusted (root's review of
+    e1d9c01)."""
+    from collections import Counter
+    need = Counter(entry.get("cases") or ())
+    if not need:
+        return None
+    files = entry.get("case_files") or {}
+    qualified = set(entry.get("qualified_cases") or ())
+    if not (run["id"] == entry.get("receipt") and run["passed"] and run["required"]
+            and not run["filtered"] and run["every_names"] is not None):
+        return None
+    if not all(run["executed_names"][n] >= k and not run["skipped_names"][n] for n, k in need.items()):
+        return None
+    if not all((n in qualified and n in run["qualified_names"])
+               or (files.get(n) and _case_files(n, texts, False) == frozenset(files[n]))
+               for n in need):
+        return None
+    return sorted(need)
+
+
 def _item_paths(item: str) -> List[str]:
     """The file paths a NOT RUN item names; none for a runner name or prose."""
     import shlex
@@ -10955,7 +10983,6 @@ class Session:
         name must be held by the same single test file as when it was
         recorded, read from this check's source, so a name reused in another
         file never stands in (T4, U1)."""
-        from collections import Counter
         index = len(self.checks) - 1
         pending = [e for e in self.unexecuted_acceptance if e.get("kind") == "skipped" and e.get("cases")
                    and e.get("discharged_at") is None and e["after_check"] <= index]
@@ -10964,18 +10991,9 @@ class Session:
         texts, _ = self._case_texts()
         runs = _check_runs(self.checks[index], self.project)
         for entry in pending:
-            need = Counter(entry["cases"])
-            files = entry.get("case_files") or {}
-            qualified = set(entry.get("qualified_cases") or ())
             for run in runs:
-                if not (run["id"] == entry["receipt"] and run["passed"] and run["required"]
-                        and not run["filtered"] and run["every_names"] is not None):
-                    continue
-                if not all(run["executed_names"][n] >= k and not run["skipped_names"][n] for n, k in need.items()):
-                    continue
-                if all((n in qualified and n in run["qualified_names"])
-                       or (files.get(n) and _case_files(n, texts, False) == frozenset(files[n]))
-                       for n in need):
+                verified = _named_skip_run(entry, run, texts)
+                if verified is not None:
                     # The decision's own evidence travels with the index: the
                     # run (same command) and the names it verified executed
                     # and unskipped, so the typed receipt carries exactly
@@ -10984,7 +11002,7 @@ class Session:
                     # recovery beside an unrelated historical skip).
                     entry["discharged_at"] = index
                     entry["discharged_run"] = run["id"]
-                    entry["discharged_cases"] = sorted(need)
+                    entry["discharged_cases"] = verified
                     break
 
     def _skip_baseline(self, gate, result, current: dict):
@@ -11441,9 +11459,23 @@ class Session:
                 continue
             runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
             if entry.get("kind") == "skipped" and entry.get("cases"):
-                if entry.get("discharged_at") is not None and entry["discharged_at"] <= index:
-                    return dict(index=entry["discharged_at"], run=entry.get("discharged_run") or entry.get("receipt"),
-                                cases=list(entry.get("discharged_cases") or entry.get("cases") or ()))
+                decided = entry.get("discharged_at")
+                if decided is not None and decided <= index:
+                    if entry.get("discharged_cases"):
+                        return dict(index=decided, run=entry.get("discharged_run") or entry.get("receipt"),
+                                    cases=list(entry["discharged_cases"]))
+                    # A marker written before the decision kept its names
+                    # (a checkpoint from an earlier engine): the evidence is
+                    # re-read from the recorded check through the same
+                    # rule, and a marker the record cannot justify is no
+                    # discharge (root's review of e1d9c01: never the claim).
+                    if 0 <= decided < len(self.checks):
+                        texts, _ = self._case_texts()
+                        for run in _check_runs(self.checks[decided], self.project):
+                            verified = _named_skip_run(entry, run, texts)
+                            if verified is not None:
+                                return dict(index=decided, run=run["id"], cases=verified)
+                    return None
                 continue
             if entry.get("kind") == "skipped":
                 run = next((r for r in runs if r["id"] == entry["receipt"]), None)

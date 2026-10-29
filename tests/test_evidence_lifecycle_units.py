@@ -534,6 +534,9 @@ def test_the_typed_receipt_carries_the_skip_decision_s_own_run_and_names(tmp_pat
 
 
 def test_the_checker_clears_a_skip_fact_only_by_the_same_command_s_own_executed_names(tmp_path):
+    """The historical rule: a record with no typed row and no identity keys
+    on the entry is held to the same command's counters on the final
+    source wherever the check records one."""
     from tests.lifecycle.test_evidence_lifecycle import truth
     record = dict(source_fingerprint="f" * 64)
 
@@ -546,6 +549,11 @@ def test_the_checker_clears_a_skip_fact_only_by_the_same_command_s_own_executed_
         return base
     entry = _skip_entry()
     assert truth._not_run_cleared(entry, [check()], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": 0, "unit": 1}, skipped={})))], record), "zero executions"
+    assert not truth._not_run_cleared(_skip_entry(cases=["browser", "browser"]), [check()], record), "two debts, one execution"
+    assert truth._not_run_cleared(_skip_entry(cases=["browser", "browser"]),
+                                  [check(receipt=dict(cases=dict(executed={"browser": 2}, skipped={})))], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": True}, skipped={})))], record), "a flag is not a count"
     assert not truth._not_run_cleared(entry, [check(receipt=dict(id="other"))], record), "another command"
     assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": 1}, skipped={"browser": 1})))], record)
     assert not truth._not_run_cleared(entry, [check(receipt=dict(status="failed"))], record)
@@ -559,3 +567,64 @@ def test_the_checker_clears_a_skip_fact_only_by_the_same_command_s_own_executed_
                   cases=dict(executed={"browser": 1}, skipped={}))
     assert truth._not_run_cleared(_skip_entry(receipt="check"), [direct], record), "the single-command shape"
     assert not truth._not_run_cleared(_skip_entry(receipt="ui"), [direct], record), "a receipt id the check does not carry"
+
+
+
+def test_the_checker_holds_a_typed_skip_fact_to_its_row_s_current_identity_and_counts(tmp_path):
+    """Root's four negatives on e1d9c01, independently of the engine: a
+    typed skip fact (its row in the record, identity keys on the entry) is
+    cleared only by the same command's counters on a check recording the
+    final source, the row's gate and environment and its requirement
+    revisions; zero executions, a duplicate debt with one execution, a
+    check without a source, another gate or another revision never clear,
+    and the historical rule is not available to it."""
+    from tests.lifecycle.test_evidence_lifecycle import truth
+    entry = _skip_entry(gate="g1", environment="e1")
+    row = dict(oid="O1", kind="skipped", task="t1", entry=dict(item=entry["item"], receipt="ui"), gate="g1",
+               environment="e1", requirements=[["R1", 1]])
+    record = dict(source_fingerprint="f" * 64, evidence_obligations=[row])
+
+    def check(**over):
+        base = dict(passed=True, source="f" * 64, gate="g1", environment="e1", requirements={"R1": 1},
+                    receipts=[dict(id="ui", status="passed", required=True,
+                                   command="node --test tests/ui/browser.test.js", selection="",
+                                   cases=dict(executed={"browser": 1, "unit": 1}, skipped={"old-platform": 1}))])
+        base["receipts"][0].update(over.pop("receipt", {}))
+        base.update(over)
+        return base
+    assert truth._not_run_cleared(entry, [check()], record), "the genuine recovery beside an unrelated historical skip"
+    rejected = {
+        "zero executions": check(receipt=dict(cases=dict(executed={"browser": 0}, skipped={}))),
+        "no source on the check": check(source=None),
+        "another source": check(source="0" * 64),
+        "another gate": check(gate="unrelated-gate"),
+        "another environment": check(environment="e2"),
+        "another requirement revision": check(requirements={"R1": 2}),
+        "no revisions recorded": check(requirements=None),
+        "name skipped again": check(receipt=dict(cases=dict(executed={"browser": 1}, skipped={"browser": 1}))),
+        "another command": check(receipt=dict(id="other")),
+    }
+    for name, bad in rejected.items():
+        assert not truth._not_run_cleared(entry, [bad], record), name
+    assert not truth._not_run_cleared(_skip_entry(gate="g1", environment="e1", cases=["browser", "browser"]),
+                                      [check()], record), "two debts, one execution"
+    assert not truth._not_run_cleared(entry, [check()], dict(record, evidence_obligations=[])), \
+        "an entry with identity keys and no typed row is neither current nor historical"
+
+
+def test_a_discharge_marker_without_its_names_is_re_verified_from_the_recorded_check(tmp_path):
+    """A checkpoint from an earlier engine carries ``discharged_at`` alone:
+    the names are re-read from that check through the same rule, and a
+    marker the record cannot justify is no discharge (never the claim)."""
+    root = _project(tmp_path, {**TESTS, "tests/ui/browser.test.js":
+                               "const t=require('node:test');t('browser',()=>{});\n"})
+    session = _session(tmp_path, project=root, gate=_gate(root))
+    session._snapshot_original_tests()
+    entry = _skip_entry(discharged_at=0, case_files={"browser": ["tests/ui/browser.test.js"]})
+    session.unexecuted_acceptance.append(entry)
+    session.checks.append(_node_check(session))
+    record = session._discharge_record(entry)
+    assert record == dict(index=0, run="ui", cases=["browser"]), record
+    unjustified = _skip_entry(discharged_at=0, cases=["absent"], case_files={"absent": ["tests/ui/browser.test.js"]})
+    session.unexecuted_acceptance.append(unjustified)
+    assert session._discharge_record(unjustified) is None, "a bare marker proves nothing"

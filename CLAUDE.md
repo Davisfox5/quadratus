@@ -2960,8 +2960,19 @@ Key design decisions already settled:
   (`_discharge_named`: same command, each name executed and unskipped,
   held by the same file or runner-qualified) now keeps its run and names
   on the entry (`discharged_run`, `discharged_cases`); never the claim
-  itself. The checker's skip route (`_skipped_cleared`) reads the same
-  receipt id's own executed and skipped names, never another command's. A bound item's typed row
+  itself, and a marker from an earlier checkpoint that carries no names
+  is re-verified from the recorded check through the same rule
+  (`_named_skip_run`) or is no discharge. The checker's skip route
+  (`_skipped_cleared`) reads the same receipt id's own executed and
+  skipped counters (integers, each name at least as often as the fact
+  names it, skipped zero; never a set of keys) and holds a fact with a
+  typed row in the record to that row's current identity read
+  independently (the final source recorded on the check, the row's gate
+  and environment, its requirement revisions); only a record with no
+  typed row and no identity keys on the entry takes the separate
+  historical rule (same command's counters, final source where recorded).
+  Root's review of e1d9c01: zero executions, a duplicate debt with one
+  execution, a check without a source and another gate all cleared. A bound item's typed row
   gets the gate as runner and the cases as identity (kept even
   runner-less, so a parallel child's row re-bases to the parent's gate);
   it is discharged only by a later complete required run on the current

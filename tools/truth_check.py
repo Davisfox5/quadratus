@@ -416,25 +416,79 @@ def _not_run_cleared(entry, checks, record=None) -> bool:
     return False
 
 
+def _typed_skip_row(entry, record):
+    """The typed obligation the engine registered for this skip fact (kind
+    ``skipped``, same task and item), read from the saved record; None for
+    a record written before typed rows existed."""
+    for row in (record or {}).get("evidence_obligations") or []:
+        if (isinstance(row, dict) and row.get("kind") == "skipped" and row.get("task") == entry.get("task")
+                and (row.get("entry") or {}).get("item") == entry.get("item")):
+            return row
+    return None
+
+
+def _counts_executed(cases, wanted) -> bool:
+    """Every wanted name executed at least as many times as the fact names
+    it (the record's integer counters, never a set of keys) and skipped
+    zero times."""
+    from collections import Counter
+    if not isinstance(cases, dict):
+        return False
+    executed = cases.get("executed") if isinstance(cases.get("executed"), dict) else None
+    skipped = cases.get("skipped") if isinstance(cases.get("skipped"), dict) else {}
+    if executed is None:
+        return False
+    for name, times in Counter(wanted).items():
+        ran = executed.get(name)
+        if not isinstance(ran, int) or isinstance(ran, bool) or ran < times:
+            return False
+        held = skipped.get(name, 0)
+        if not isinstance(held, int) or isinstance(held, bool) or held > 0:
+            return False
+    return True
+
+
 def _skipped_cleared(entry, checks, record) -> bool:
     """A skip fact (the harness's own record of a required command that
     passed with named cases skipped) is cleared only by a later run of the
     same command (the receipt id the fact names) that passed, was required,
-    selected nothing, and whose own printed case record shows every named
-    case executed and none of them skipped; on the final source wherever
-    the check records one. Another command's run, a name printed elsewhere,
-    or a fact without names is never cleared here."""
+    selected nothing, and whose own printed case counters show every named
+    case executed as many times as the fact names it and skipped zero
+    times. A fact with a typed row in the record is held to that row's
+    current identity, read independently: the check must record the final
+    source, the row's gate and environment, and the row's requirement
+    revisions. A record written before typed rows existed (no typed row,
+    no identity keys on the entry) is the separate historical rule: the
+    same command's counters on the final source wherever the check
+    records one. Another command's run, a name printed elsewhere, a fact
+    without names, or a count the record does not carry never clears
+    (root's review of e1d9c01: counters were read as sets and the typed
+    identity was not enforced)."""
     wanted = list(entry.get("cases") or [])
     receipt_id = entry.get("receipt")
     if not wanted or not receipt_id:
+        return False
+    typed = _typed_skip_row(entry, record)
+    historical = typed is None and "gate" not in entry and "environment" not in entry
+    if typed is None and not historical:
         return False
     start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else 0
     final = (record or {}).get("source_fingerprint")
     for check in checks[start:]:
         if not check.get("passed"):
             continue
-        if check.get("source") and final and check.get("source") != final:
-            continue
+        if historical:
+            if check.get("source") and final and check.get("source") != final:
+                continue
+        else:
+            if not (final and check.get("source") == final):
+                continue
+            if check.get("gate") != typed.get("gate") or check.get("environment") != typed.get("environment"):
+                continue
+            revisions = check.get("requirements") if isinstance(check.get("requirements"), dict) else None
+            bound = [(str(r[0]), r[1]) for r in (typed.get("requirements") or ()) if isinstance(r, (list, tuple)) and len(r) == 2]
+            if revisions is None or not bound or any(revisions.get(rid) != rev for rid, rev in bound):
+                continue
         receipts = check.get("receipts") or []
         if receipts:
             rows = [r for r in receipts if isinstance(r, dict) and r.get("id") == receipt_id]
@@ -447,10 +501,7 @@ def _skipped_cleared(entry, checks, record) -> bool:
                 continue
             if _filtered(str(row.get("command") or "")):
                 continue
-            cases = row.get("cases") if isinstance(row.get("cases"), dict) else {}
-            executed = set(cases.get("executed") or {})
-            skipped = set(cases.get("skipped") or {})
-            if all(c in executed and c not in skipped for c in wanted):
+            if _counts_executed(row.get("cases"), wanted):
                 return True
     return False
 
