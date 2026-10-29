@@ -193,26 +193,63 @@ def test_the_checker_rejects_forged_stale_or_mismatched_bindings(tmp_path, monke
             entry.__setitem__("item", "P1 and tests/test_app.py::test_absent"),
             entry.__setitem__("binding", dict(kind="mixed", scenario="P1", cases=[CASE], problem=""))),
         "binding key present but empty": lambda record, entry: entry.__setitem__("binding", {}),
+        "binding key missing on an identity claim": lambda record, entry: entry.pop("binding"),
+        "kind paths forged on an explicit case": lambda record, entry: (
+            entry.__setitem__("item", "tests/test_app.py::test_absent"),
+            entry.__setitem__("binding", dict(kind="paths", scenario=None, cases=[], problem="")),
+            entry.__setitem__("cases", [])),
+        "a spaced parameter instance the run never showed": lambda record, entry: (
+            entry.__setitem__("item", "tests/test_app.py::test_add[missing instance]"),
+            entry.__setitem__("binding", dict(kind="case", scenario=None, cases=["tests/test_app.py::test_add[missing instance]"], problem="")),
+            entry.__setitem__("cases", ["tests/test_app.py::test_add[missing instance]"])),
+        "a suffixed id read as its prefix": lambda record, entry: (
+            entry.__setitem__("item", "tests/test_app.py::test_add.extra"),
+            entry.__setitem__("binding", dict(kind="case", scenario=None, cases=[CASE], problem="")),
+            entry.__setitem__("cases", [CASE])),
     }
     for name, mutate in rejected.items():
         assert not _tampered(replay, mutate), name
 
-    def legacy(record, entry):
-        # A record written before bindings existed: no key at all, decided
-        # by the older file-level reading (the file of an executed case the
-        # check printed, as a legacy claim).
-        entry.pop("binding")
-        entry.pop("cases")
+    def path_only(record, entry):
+        # A path-only item (binding kind paths, as the engine records it):
+        # cleared by a later check of the right identity whose command names
+        # the file whole and whose own report shows a case of it passed.
+        entry["item"] = "tests/test_app.py"
+        entry["binding"] = dict(kind="paths", scenario=None, cases=[], problem="")
+        entry["cases"] = []
+        for check in record["checks"]:
+            check["command"] = check["command"] + " tests/test_app.py"
+    assert _tampered(replay, path_only), "the supported file-only route, with every identity check"
+
+    def path_only_not_operand(record, entry):
+        path_only(record, entry)
+        for check in record["checks"]:
+            check["command"] = check["command"].replace(" tests/test_app.py", "")
+    assert not _tampered(replay, path_only_not_operand), "a path the command did not name whole is not shown"
+
+    def path_only_other_source(record, entry):
+        path_only(record, entry)
+        record["source_fingerprint"] = "0" * 24
+    assert not _tampered(replay, path_only_other_source)
+
+    def historical(record, entry):
+        # A record written before bindings or identities existed: no binding,
+        # gate or environment keys; a path-only claim is held to the final
+        # source and the check's own passed cases of that file.
+        for key in ("binding", "cases", "gate", "environment"):
+            entry.pop(key)
         entry["item"] = "tests/test_app.py"
         for check in record["checks"]:
-            check["cases"] = {"executed": {CASE: 1}}
-    assert _tampered(replay, legacy), "a historical record keeps its honest file-level reading"
+            check["command"] = check["command"] + " tests/test_app.py"
+    assert _tampered(replay, historical), "a historical path-only record keeps its honest reading"
 
-    def legacy_unshown(record, entry):
-        entry.pop("binding")
-        entry.pop("cases")
-        entry["item"] = "tests/test_app.py"
-    assert not _tampered(replay, legacy_unshown), "and that reading still needs the executed case names"
+    def historical_identity_claim(record, entry):
+        for key in ("binding", "cases", "gate", "environment"):
+            entry.pop(key)
+        entry["item"] = "tests/test_app.py::test_absent"
+        for check in record["checks"]:
+            check["command"] = check["command"] + " tests/test_app.py"
+    assert not _tampered(replay, historical_identity_claim), "an identity claim never rides file execution"
 
 
 # -- 3. sufficiency is the auditor's own, never a flag lowered for another record -----------------

@@ -2931,9 +2931,13 @@ Key design decisions already settled:
   `Class.test`/bare `test_*` name defined in exactly one test file (read
   with `ast`), reading the whole item in every grammar at once: a mixed
   claim (`P1 and Other.test_absent`, `TestX.test_complete and P2`) binds
-  the union or nothing, a parametrized id keeps its parameter and is
-  discharged only by a run showing that instance, and the complete item
-  is the identity (root's control on bd0164f: a 300-character display
+  the union or nothing, a parametrized id keeps its whole bracketed
+  parameter (spaces included; `_CASE_CITATION` and `_CASE_NAME` read an
+  id to a boundary, so `test_x[not a real parameter]` is that instance,
+  never its base, and `test_x.extra` or a stray bracket is "a case id the
+  harness cannot read whole", held as written and never a path; root's
+  controls on d88d8c0) and is discharged only by a run showing that
+  instance, and the complete item is the identity (root's control on bd0164f: a 300-character display
   prefix of `P1 <detail> and P2` bound P1 alone; prompts bound the display
   with `_display_item`, the record, the dedupe key, the merge, the
   checkpoint and the checker read it whole). Ambiguous, undefined,
@@ -3032,7 +3036,18 @@ Key design decisions already settled:
   (root's control on bd0164f: a rejected explicit-case record cleared on
   its file); only a record without the key takes that route. Forged,
   stale, mismatched, partial, parametrized-instance, malformed or
-  historical entries stay unverified.
+  historical entries stay unverified. Since d88d8c0 the item's whole text
+  decides the route (`_claim`): an identity claim (a scenario, an id, a
+  class or bare case name, anything shaped like a case id) is decided by
+  the saved binding alone, whether the key is present, empty, missing or
+  forged as `paths`; a path-only item takes `_paths_cleared`, which keeps
+  every identity check (final source, the entry's gate and environment
+  where recorded, required, unfiltered, zero skips, project root) and
+  needs the command to name the file whole and the report to show a case
+  of it passed; a historical record without identity keys is held to the
+  final source and the same passed-case reading. A parsed report that
+  lost its skipped count reads as unknown (`integration.skipped_count`),
+  never zero and never a crash, so a citation refuses it.
 
 ## How development is coordinated
 

@@ -2495,12 +2495,23 @@ _EXECUTED_ERROR_RULE = (
     "whatever it says. Other requirements cite files or tests as before.")
 
 
-_CASE_CITATION = re.compile(r"([\w./-]+\.[A-Za-z]\w*)::((?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?)")
+#: A token that is a source or test file by its extension (a path operand
+#: in a NOT RUN item); anything else shaped like a case is an identity claim.
+_SOURCE_FILE = re.compile(r"\.(?:py|pyi|js|mjs|cjs|ts|tsx|jsx|rb|go|rs|java|kt|cs|php|sh|feature)$")
+#: An explicit case id, read whole: the bracketed parameter is kept entire
+#: (spaces included) and the id must end at a boundary (end, whitespace, a
+#: separator, or sentence punctuation), so ``test_complete[not a real
+#: parameter]`` is that instance and never its base, and ``test_complete
+#: .extra`` is no id at all (root's control on d88d8c0: a prefix match let
+#: a run of the base clear a claim about an instance that never existed).
+_ID_END = r"(?=$|[\s,;)]|\.(?:\s|$))"
+_CASE_CITATION = re.compile(r"([\w./-]+\.[A-Za-z]\w*)::((?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])?)" + _ID_END)
 #: A case named without its file in a NOT RUN item: ``Class.test``,
-#: ``Class::test`` or a bare ``test_*``, with any parameter; never a word
-#: inside a path or an explicit id (the lookarounds refuse ``/``, ``.``,
-#: ``:`` and ``-`` neighbours).
-_CASE_NAME = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]\s]*\])?)(?![\w/.:-])")
+#: ``Class::test`` or a bare ``test_*``, with any parameter kept whole;
+#: never a word inside a path or an explicit id (the lookarounds refuse
+#: ``/``, ``.``, ``:`` and ``-`` neighbours).
+_CASE_NAME = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]]*\])?)(?![\w/\[:-])"
+                        r"(?!\.(?!\s|$))")
 
 
 def _cited_cases(text: str) -> List[str]:
@@ -10610,6 +10621,21 @@ class Session:
         explicit = _cited_cases(item)
         rest = _CASE_CITATION.sub(" ", item)
         names = list(dict.fromkeys(m.group(1) for m in _CASE_NAME.finditer(rest)))
+        leftover = _CASE_NAME.sub(" ", rest)
+        # A word shaped like a case outside any path operand (``Class.test_x
+        # .extra``) is a claim the harness cannot read whole, not a path.
+        unreadable = any(re.search(r"\btest\w*", tok) for tok in leftover.split()
+                         if "/" not in tok and not _SOURCE_FILE.search(tok))
+        if "::" in leftover or "[" in leftover or "]" in leftover or unreadable:
+            # Part of the item is shaped like a case id the harness cannot
+            # read whole (a suffix after the case, an unclosed or stray
+            # bracket): the claim is held as written, never its readable
+            # prefix and never a path.
+            binding.update(kind="case", problem="names a case id the harness cannot read whole: "
+                                                 + " ".join(leftover.split())[:120])
+            entry["binding"], entry["cases"] = binding, []
+            self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
         if not (scenarios or explicit or names):
             if _item_paths(item):
                 binding["kind"] = "paths"

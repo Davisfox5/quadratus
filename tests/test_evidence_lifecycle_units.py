@@ -87,7 +87,12 @@ def _check(session, passed_cases, *, passed=True, output="1 passed in 0.1s", com
     ("tests/test_app.py::TestApi::test_complete and P2", "mixed", [], "P2 is not a scenario this task declares"),
     ("tests/test_app.py::TestApi::test_complete and P1", "mixed", ["tests/test_app.py::TestApi::test_complete", CASE], ""),
     ("tests/test_app.py::test_add[not-a-real-parameter]", "case", ["tests/test_app.py::test_add[not-a-real-parameter]"], ""),
+    ("tests/test_app.py::test_add[not a real parameter]", "case", ["tests/test_app.py::test_add[not a real parameter]"], ""),
     ("TestApi.test_history[x]", "case", ["tests/test_app.py::TestApi::test_history[x]"], ""),
+    ("TestApi.test_history[a spaced instance]", "case", ["tests/test_app.py::TestApi::test_history[a spaced instance]"], ""),
+    ("tests/test_app.py::TestApi::test_history.extra", "case", [], "names a case id the harness cannot read whole"),
+    ("TestApi.test_history.extra", "case", [], "names a case id the harness cannot read whole"),
+    ("tests/test_app.py::test_add[unclosed", "case", [], "names a case id the harness cannot read whole"),
     ("P2", "scenario", [], "P2 is not a scenario this task declares"),
     (CASE, "case", [CASE], ""),
     ("tests/test_app.py::TestApi::test_history", "case", ["tests/test_app.py::TestApi::test_history"], ""),
@@ -190,6 +195,17 @@ def test_a_bound_item_is_discharged_only_by_a_complete_passing_run_of_the_same_i
     assert session._discharging_check(exact) is None, "the base case passing does not show that instance"
     session.checks[:] = [_check(session, ["tests/test_app.py::test_add[1-2]"])]
     assert session._discharging_check(exact) == 0
+    spaced = _entry(session, "tests/test_app.py::test_add[a spaced instance]")
+    assert spaced["cases"] == ["tests/test_app.py::test_add[a spaced instance]"], "the whole bracketed identity"
+    session.checks[:] = [_check(session, ["tests/test_app.py::test_add[one]", "tests/test_app.py::test_add[a spaced instance]"])]
+    assert session._discharging_check(spaced) == 0
+    missing = _entry(session, "tests/test_app.py::test_add[missing instance]")
+    assert session._discharging_check(missing) is None, "a real parametrized case's other instances show nothing"
+    suffixed = _entry(session, "tests/test_app.py::TestApi::test_history.extra")
+    assert suffixed["binding"]["kind"] == "case" and "cannot read whole" in suffixed["binding"]["problem"]
+    session.checks[:] = [_check(session, [CASE, "tests/test_app.py::TestApi::test_history"],
+                                command="python3 -m pytest -q tests/test_app.py")]
+    assert session._discharging_check(suffixed) is None, "never its readable prefix, never a path"
     pathed = _entry(session, "tests/test_app.py")
     assert pathed["binding"]["kind"] == "paths"
     session.checks[:] = [_check(session, [CASE], command="python3 -m pytest -q tests/test_app.py")]
@@ -372,7 +388,9 @@ def test_a_typed_receipt_of_exactly_the_named_command_on_the_current_identity_is
         "it skipped 1 case(s)": _receipt_check(session, "python3 -m pytest -q", output="1 passed, 1 skipped", skipped=1),
         "it has failures": _receipt_check(session, "python3 -m pytest -q", counts=dict(failed=1)),
         "it ran a selection, not the whole command": _receipt_check(session, "python3 -m pytest -q", selection="-k add"),
+        "its skips are unknown": _receipt_check(session, "python3 -m pytest -q", counts={"skipped": None}),
     }
+    del negatives["its skips are unknown"]["report"]["counts"]["skipped"]  # the receipt shares the report
     negatives["the harness has no receipt for `python3 -m pytest -q` (its checks ran other commands)"] = \
         _receipt_check(session, "python3 -m pytest -q -k add")
     for expected, check in negatives.items():

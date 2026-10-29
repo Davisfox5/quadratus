@@ -1789,8 +1789,13 @@ def skipped_count(receipt) -> Optional[int]:
     """Cases a check skipped: the structured report's count when it parsed,
     else the runner's own summary line, else None (unknown, never zero)."""
     report = getattr(receipt, 'report', None) or {}
-    if report.get('state') == 'parsed':
-        return int(report['counts']['skipped'])
+    if isinstance(report, dict) and report.get('state') == 'parsed':
+        counts = report.get('counts')
+        value = counts.get('skipped') if isinstance(counts, dict) else None
+        # A parsed report that lost its count is an incomplete record:
+        # unknown (None), never zero and never a crash in a consumer that
+        # is deciding whether to refuse it (root's control on d88d8c0).
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
     output = getattr(receipt, 'output', '') or ''
     node = re.findall(r'(?m)^(?:#|\u2139)\s*(?:skipped|skip) (\d+)\s*$', output)
     if node:

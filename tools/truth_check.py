@@ -120,10 +120,71 @@ def _executed_keys(check):
     return keys
 
 
-_CASE_ID = re.compile(r"^[\w./-]+\.\w+::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?$")
+_CASE_ID = re.compile(r"^[\w./-]+\.\w+::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])?$")
 _SCENARIO_ID = re.compile(r"^P[0-9]+$")
-_EXPLICIT_ID = re.compile(r"([\w./-]+\.[A-Za-z]\w*::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?)")
-_NAMED_CASE = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]\s]*\])?)(?![\w/.:-])")
+#: Read whole, as the engine reads them: a bracketed parameter kept entire
+#: and an id that must end at a boundary, so a prefix never stands in.
+_ID_END = r"(?=$|[\s,;)]|\.(?:\s|$))"
+_EXPLICIT_ID = re.compile(r"([\w./-]+\.[A-Za-z]\w*::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])?)" + _ID_END)
+_NAMED_CASE = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]]*\])?)(?![\w/\[:-])"
+                         r"(?!\.(?!\s|$))")
+_SCENARIO_REF = re.compile(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])")
+_SOURCE_FILE = re.compile(r"\.(?:py|pyi|js|mjs|cjs|ts|tsx|jsx|rb|go|rs|java|kt|cs|php|sh|feature)$")
+
+
+def _claim(item: str) -> str:
+    """What a NOT RUN item claims, read from its whole text: ``identity``
+    (a scenario, an explicit id, a class or bare case name, or anything
+    shaped like a case id the reader cannot take whole), ``paths`` (only
+    path operands) or ``none``. The claim, never a stored kind, decides
+    which route may clear it."""
+    if _SCENARIO_REF.search(item) or _EXPLICIT_ID.search(item):
+        return "identity"
+    rest = _EXPLICIT_ID.sub(" ", item)
+    if _NAMED_CASE.search(rest) or "::" in rest or "[" in rest or "]" in rest:
+        return "identity"
+    if any(re.search(r"\btest\w*", tok) for tok in rest.split() if "/" not in tok and not _SOURCE_FILE.search(tok)):
+        return "identity"
+    return "paths" if _PATH.findall(item) else "none"
+
+
+def _identity_ok(entry, check, record) -> bool:
+    """The receipt identity every route demands: a passing check on the
+    final source, under the entry's own gate and environment where the
+    entry records them (a record without them is held to the source
+    alone), required, unfiltered, no skips, from the project root."""
+    if not (check.get("passed") and check.get("source") and check.get("source") == record.get("source_fingerprint")):
+        return False
+    for key in ("gate", "environment"):
+        if key in entry and (not isinstance(entry.get(key), str) or check.get(key) != entry[key]):
+            return False
+    if check.get("selection") or _skipped_in(check) or _filtered(str(check.get("command") or "")):
+        return False
+    return str(check.get("command_cwd") or ".") in ("", ".")
+
+
+def _paths_cleared(entry, checks, record) -> bool:
+    """A path-only item: cleared by a later check of the right identity
+    whose command names every path as a whole operand and whose own
+    passed cases include a case of each file. Never an identity claim."""
+    if _claim(str(entry.get("item") or "")) != "paths":
+        return False
+    import shlex
+    files = [p[2:] if p.startswith("./") else p for p in _PATH.findall(str(entry.get("item") or ""))]
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None or not files:
+        return False
+    for check in checks[start:]:
+        if not _identity_ok(entry, check, record):
+            continue
+        try:
+            operands = [a[2:] if a.startswith("./") else a for a in shlex.split(str(check.get("command") or ""))]
+        except ValueError:
+            continue
+        passed_files = {c.split("::", 1)[0] for c in _passed_cases(check) if "::" in c}
+        if all(f in operands and f in passed_files for f in files):
+            return True
+    return False
 
 
 def _passed_cases(check):
@@ -268,18 +329,30 @@ def _bound_not_run_cleared(entry, checks, record) -> bool:
 
 
 def _not_run_cleared(entry, checks, record=None) -> bool:
-    """Cleared only by a later passing check that names the execution: every
-    reported file as the file of an executed case, or every skipped case as
-    executed, or (an entry the engine bound to case identities) every bound
-    case passed by an independently validated later run on the final source
-    (``_bound_not_run_cleared``). A command line that mentions a path, or the
-    engine's own discharge mark, is not execution (Codex review of 47bfbfd)."""
-    if entry.get("kind") != "skipped" and "binding" in entry:
-        # A record the engine bound (the key is present, whatever it holds)
-        # is decided by the binding alone; the file-level route below is for
-        # records written before bindings existed (root's control on
-        # bd0164f: a rejected explicit-case record cleared on its file).
-        return record is not None and _bound_not_run_cleared(entry, checks, record)
+    """Cleared only by a later passing check that names the execution. The
+    item's whole text decides the route (``_claim``): an identity claim (a
+    scenario, an explicit id, a class or bare case name, or anything shaped
+    like a case id) is cleared only by ``_bound_not_run_cleared`` on the
+    engine's saved binding, so a record with the key missing, empty or
+    reading ``paths`` never rides file execution (root's controls on
+    d88d8c0); a path-only item is cleared by ``_paths_cleared`` with every
+    identity check; a skip fact by the older executed-case route. A command
+    line that mentions a path, or the engine's own discharge mark, is not
+    execution (Codex review of 47bfbfd)."""
+    if entry.get("kind") != "skipped":
+        if record is None:
+            return False
+        claim = _claim(str(entry.get("item") or ""))
+        binding = entry.get("binding")
+        if claim == "identity":
+            if not isinstance(binding, dict) or binding.get("kind") not in ("scenario", "case", "mixed"):
+                return False
+            return _bound_not_run_cleared(entry, checks, record)
+        if claim == "paths":
+            if binding is not None and not (isinstance(binding, dict) and binding.get("kind") == "paths"):
+                return False
+            return _paths_cleared(entry, checks, record)
+        return False
     if entry.get("kind") == "skipped":
         wanted = list(entry.get("cases") or [])
         files = []
