@@ -543,17 +543,19 @@ def test_the_checker_clears_a_skip_fact_only_by_the_same_command_s_own_executed_
     def check(**over):
         base = dict(passed=True, source="f" * 64, receipts=[dict(
             id="ui", status="passed", required=True, command="node --test tests/ui/browser.test.js", selection="",
+            output="# pass 2\n# fail 0\n# skipped 1\n",
             cases=dict(executed={"browser": 1, "unit": 1}, skipped={"old-platform": 1}))])
         base["receipts"][0].update(over.pop("receipt", {}))
         base.update(over)
         return base
     entry = _skip_entry()
     assert truth._not_run_cleared(entry, [check()], record)
-    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": 0, "unit": 1}, skipped={})))], record), "zero executions"
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": 0, "unit": 1}, skipped={"old-platform": 1})))], record), "zero executions"
     assert not truth._not_run_cleared(_skip_entry(cases=["browser", "browser"]), [check()], record), "two debts, one execution"
     assert truth._not_run_cleared(_skip_entry(cases=["browser", "browser"]),
-                                  [check(receipt=dict(cases=dict(executed={"browser": 2}, skipped={})))], record)
-    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": True}, skipped={})))], record), "a flag is not a count"
+                                  [check(receipt=dict(output="# pass 2\n# fail 0\n# skipped 0\n",
+                                                      cases=dict(executed={"browser": 2}, skipped={})))], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": True}, skipped={"old-platform": 1})))], record), "a flag is not a count"
     assert not truth._not_run_cleared(entry, [check(receipt=dict(id="other"))], record), "another command"
     assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": 1}, skipped={"browser": 1})))], record)
     assert not truth._not_run_cleared(entry, [check(receipt=dict(status="failed"))], record)
@@ -564,7 +566,7 @@ def test_the_checker_clears_a_skip_fact_only_by_the_same_command_s_own_executed_
     assert not truth._not_run_cleared(entry, [check(passed=False)], record)
     assert not truth._not_run_cleared(_skip_entry(cases=[]), [check()], record), "a fact without names"
     direct = dict(passed=True, source="f" * 64, command="node --test tests/ui/browser.test.js",
-                  cases=dict(executed={"browser": 1}, skipped={}))
+                  output="# pass 1\n# fail 0\n# skipped 0\n", cases=dict(executed={"browser": 1}, skipped={}))
     assert truth._not_run_cleared(_skip_entry(receipt="check"), [direct], record), "the single-command shape"
     assert not truth._not_run_cleared(_skip_entry(receipt="ui"), [direct], record), "a receipt id the check does not carry"
 
@@ -588,13 +590,14 @@ def test_the_checker_holds_a_typed_skip_fact_to_its_row_s_current_identity_and_c
         base = dict(passed=True, source="f" * 64, gate="g1", environment="e1", requirements={"R1": 1},
                     receipts=[dict(id="ui", status="passed", required=True,
                                    command="node --test tests/ui/browser.test.js", selection="",
+                                   output="# pass 2\n# fail 0\n# skipped 1\n",
                                    cases=dict(executed={"browser": 1, "unit": 1}, skipped={"old-platform": 1}))])
         base["receipts"][0].update(over.pop("receipt", {}))
         base.update(over)
         return base
     assert truth._not_run_cleared(entry, [check()], record), "the genuine recovery beside an unrelated historical skip"
     rejected = {
-        "zero executions": check(receipt=dict(cases=dict(executed={"browser": 0}, skipped={}))),
+        "zero executions": check(receipt=dict(cases=dict(executed={"browser": 0}, skipped={"old-platform": 1}))),
         "no source on the check": check(source=None),
         "another source": check(source="0" * 64),
         "another gate": check(gate="unrelated-gate"),
@@ -628,3 +631,61 @@ def test_a_discharge_marker_without_its_names_is_re_verified_from_the_recorded_c
     unjustified = _skip_entry(discharged_at=0, cases=["absent"], case_files={"absent": ["tests/ui/browser.test.js"]})
     session.unexecuted_acceptance.append(unjustified)
     assert session._discharge_record(unjustified) is None, "a bare marker proves nothing"
+
+
+
+def test_the_checker_demands_a_complete_case_record_that_accounts_for_the_runner_s_own_tally(tmp_path):
+    """Root's control on 5ce8ebc: the real Node recovery (browser and unit
+    executed once, one unrelated historical skip, raw ``# skipped 1``)
+    clears; the same receipt with ``cases.skipped`` emptied cannot show
+    the named case was not among the skips the runner counted, and is
+    held. Malformed, negative, boolean or missing counters and a missing
+    or truncated tally are all incomplete records, in both receipt shapes;
+    the parsed report's count outranks the summary line, as the engine's
+    own reading does."""
+    from tests.lifecycle.test_evidence_lifecycle import truth
+    record = dict(source_fingerprint="f" * 64)
+    good = dict(executed={"browser": 1, "unit": 1}, skipped={"legacy-platform": 1})
+
+    def suite(output="# pass 2\n# fail 0\n# skipped 1\n", cases=good, report=None, **over):
+        row = dict(id="ui", status="passed", required=True, command="node --test tests/ui/browser.test.js",
+                   selection="", output=output, cases=cases, report=report)
+        row.update(over)
+        return dict(passed=True, source="f" * 64, receipts=[row])
+
+    def direct(output="# pass 2\n# fail 0\n# skipped 1\n", cases=good, report=None):
+        return dict(passed=True, source="f" * 64, command="node --test tests/ui/browser.test.js", selection="",
+                    output=output, cases=cases, report=report)
+    entry, direct_entry = _skip_entry(), _skip_entry(receipt="check")
+    assert truth._not_run_cleared(entry, [suite()], record), "the genuine recovery beside the unrelated historical skip"
+    assert truth._not_run_cleared(direct_entry, [direct()], record), "and in the single-command shape"
+    incomplete = {
+        "skipped mapping emptied under raw skipped 1": dict(cases=dict(executed=good["executed"], skipped={})),
+        "skipped mapping missing": dict(cases=dict(executed=good["executed"])),
+        "executed mapping missing": dict(cases=dict(skipped=good["skipped"])),
+        "no case record": dict(cases=None),
+        "truncated record (past the bound)": dict(cases=None, output="# pass 2\n# fail 0\n# skipped 1\n"),
+        "record is not a mapping": dict(cases=["browser"]),
+        "negative executed counter": dict(cases=dict(executed={"browser": -1, "unit": 1}, skipped=good["skipped"])),
+        "boolean executed counter": dict(cases=dict(executed={"browser": True, "unit": 1}, skipped=good["skipped"])),
+        "text executed counter": dict(cases=dict(executed={"browser": "1", "unit": 1}, skipped=good["skipped"])),
+        "negative skipped counter": dict(cases=dict(executed=good["executed"], skipped={"legacy-platform": -1})),
+        "boolean skipped counter": dict(cases=dict(executed=good["executed"], skipped={"legacy-platform": True})),
+        "malformed other counter": dict(cases=dict(executed=good["executed"], skipped=good["skipped"], other={"x": "y"})),
+        "no tally at all": dict(output=""),
+        "tally says two skips, record lists one": dict(output="# pass 2\n# fail 0\n# skipped 2\n"),
+        "tally says none, record lists one": dict(output="# pass 3\n# fail 0\n# skipped 0\n"),
+        "parsed report count disagrees with the record": dict(report=dict(state="parsed", counts=dict(passed=2, failed=0, errors=0, skipped=2))),
+        "parsed report count missing": dict(report=dict(state="parsed", counts=dict(passed=2))),
+        "parsed report count is a bool": dict(report=dict(state="parsed", counts=dict(skipped=True))),
+    }
+    for name, variant in incomplete.items():
+        assert not truth._not_run_cleared(entry, [suite(**variant)], record), f"suite: {name}"
+        assert not truth._not_run_cleared(direct_entry, [direct(**{k: v for k, v in variant.items() if k in ("output", "cases", "report")})], record), f"direct: {name}"
+    # The parsed report's integer count is the tally when it parsed, over a
+    # summary line that says otherwise; a report in another state defers to
+    # the summary.
+    assert truth._not_run_cleared(entry, [suite(output="# skipped 9\n", report=dict(state="parsed", counts=dict(skipped=1)))], record)
+    assert truth._not_run_cleared(entry, [suite(report=dict(state="invalid", counts=dict(skipped=9)))], record)
+    assert truth._not_run_cleared(entry, [suite(output="2 passed, 1 skipped in 0.1s\n")], record), "a pytest summary"
+    assert truth._not_run_cleared(entry, [suite(output="Ran 3 tests\n\nOK (skipped=1)\n")], record), "a unittest summary"

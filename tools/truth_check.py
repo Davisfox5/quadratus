@@ -427,23 +427,72 @@ def _typed_skip_row(entry, record):
     return None
 
 
+def _count(value):
+    """A counter the record may be trusted with: a non-negative int that is
+    not a bool; anything else is None (malformed)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _skipped_tally(row):
+    """The skipped total the runner itself reported for a command, read
+    independently of the case record: the parsed report's integer count,
+    else the runner's own summary line (node ``# skipped N`` or
+    ``ℹ skipped N``, pytest ``N skipped``, unittest ``skipped=N``), else
+    None (unknown, never zero)."""
+    report = row.get("report")
+    if isinstance(report, dict) and report.get("state") == "parsed":
+        counts = report.get("counts")
+        return _count(counts.get("skipped")) if isinstance(counts, dict) else None
+    output = str(row.get("output") or "")
+    node = re.findall(r"(?m)^(?:#|\u2139)\s*(?:skipped|skip) (\d+)\s*$", output)
+    if node:
+        return int(node[-1])
+    for line in reversed(output.splitlines()):
+        found = re.findall(r"\b(\d+) (passed|failed|skipped|deselected|errors?)\b", line)
+        if found:
+            return sum(int(n) for n, kind in found if kind == "skipped")
+    unittest = re.findall(r"skipped=(\d+)", output)
+    return int(unittest[-1]) if unittest else None
+
+
+def _complete_cases(row):
+    """The command's whole case record, or None when it cannot be trusted
+    to be complete: ``cases`` must be a mapping with ``executed`` and
+    ``skipped`` mappings whose every counter is a non-negative int (no
+    bool, no negative, no text), and the skipped counters must account
+    for exactly the skipped total the runner reported (an unknown total
+    is unknown). A record that lists fewer skips than the runner counted
+    cannot show that a named case was not among the missing ones (root's
+    control on 5ce8ebc: ``cases.skipped`` emptied under a raw ``skipped
+    1`` cleared the fact)."""
+    cases = row.get("cases")
+    if not isinstance(cases, dict):
+        return None
+    executed, skipped = cases.get("executed"), cases.get("skipped")
+    if not isinstance(executed, dict) or not isinstance(skipped, dict):
+        return None
+    other = cases.get("other") if cases.get("other") is not None else {}
+    if not isinstance(other, dict):
+        return None
+    for mapping in (executed, skipped, other):
+        for name, value in mapping.items():
+            if not isinstance(name, str) or _count(value) is None:
+                return None
+    tally = _skipped_tally(row)
+    if tally is None or sum(skipped.values()) != tally:
+        return None
+    return dict(executed=executed, skipped=skipped)
+
+
 def _counts_executed(cases, wanted) -> bool:
     """Every wanted name executed at least as many times as the fact names
-    it (the record's integer counters, never a set of keys) and skipped
-    zero times."""
+    it (the validated record's counters, never a set of keys) and skipped
+    zero times; the record itself must be complete (``_complete_cases``)."""
     from collections import Counter
-    if not isinstance(cases, dict):
-        return False
-    executed = cases.get("executed") if isinstance(cases.get("executed"), dict) else None
-    skipped = cases.get("skipped") if isinstance(cases.get("skipped"), dict) else {}
-    if executed is None:
+    if cases is None:
         return False
     for name, times in Counter(wanted).items():
-        ran = executed.get(name)
-        if not isinstance(ran, int) or isinstance(ran, bool) or ran < times:
-            return False
-        held = skipped.get(name, 0)
-        if not isinstance(held, int) or isinstance(held, bool) or held > 0:
+        if cases["executed"].get(name, 0) < times or cases["skipped"].get(name, 0) > 0:
             return False
     return True
 
@@ -495,13 +544,14 @@ def _skipped_cleared(entry, checks, record) -> bool:
         else:
             rows = [dict(status="passed" if check.get("passed") else "failed", required=True,
                          command=check.get("command"), selection=check.get("selection"),
-                         cases=check.get("cases"))] if receipt_id == "check" else []
+                         cases=check.get("cases"), output=check.get("output"),
+                         report=check.get("report"))] if receipt_id == "check" else []
         for row in rows:
             if row.get("status") != "passed" or not row.get("required", True) or row.get("selection"):
                 continue
             if _filtered(str(row.get("command") or "")):
                 continue
-            if _counts_executed(row.get("cases"), wanted):
+            if _counts_executed(_complete_cases(row), wanted):
                 return True
     return False
 

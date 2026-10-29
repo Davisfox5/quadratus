@@ -2965,8 +2965,16 @@ Key design decisions already settled:
   (`_named_skip_run`) or is no discharge. The checker's skip route
   (`_skipped_cleared`) reads the same receipt id's own executed and
   skipped counters (integers, each name at least as often as the fact
-  names it, skipped zero; never a set of keys) and holds a fact with a
-  typed row in the record to that row's current identity read
+  names it, skipped zero; never a set of keys), demands a complete case
+  record first (`_complete_cases`: `executed` and `skipped` mappings
+  whose counters are non-negative ints, the skipped counters accounting
+  for exactly the skipped total the runner itself reported, read from the
+  parsed report's count else the runner's summary line, unknown never
+  zero; root's control on 5ce8ebc: the real Node recovery with its
+  `cases.skipped` emptied under a raw `skipped 1` cleared, when the record
+  could no longer show the named case was not among the counted skips),
+  and holds a fact with a typed row in the record to that row's current
+  identity read
   independently (the final source recorded on the check, the row's gate
   and environment, its requirement revisions); only a record with no
   typed row and no identity keys on the entry takes the separate
