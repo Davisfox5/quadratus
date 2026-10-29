@@ -2936,7 +2936,11 @@ Key design decisions already settled:
   id to a boundary, so `test_x[not a real parameter]` is that instance,
   never its base, and `test_x.extra` or a stray bracket is "a case id the
   harness cannot read whole", held as written and never a path; root's
-  controls on d88d8c0) and is discharged only by a run showing that
+  controls on d88d8c0; an id ends at whitespace, a separator, a closing
+  quote or backtick, or sentence punctuation, so a quoted id followed by
+  prose still cites, and a NOT RUN reason is split at the first ` - `
+  outside the brackets, so `test_x[a - b]` keeps its parameter; root's
+  addendum on 3b99f5f) and is discharged only by a run showing that
   instance, and the complete item is the identity (root's control on bd0164f: a 300-character display
   prefix of `P1 <detail> and P2` bound P1 alone; prompts bound the display
   with `_display_item`, the record, the dedupe key, the merge, the
@@ -3052,9 +3056,13 @@ Key design decisions already settled:
   per-command rows (receipt status, required flag, command, cwd,
   selection, report, count) or one row from a single-command gate, and
   `_row_ok` demands of each row a whole successful run (passed, required,
-  no selection or filter, project root, known counts with zero skipped,
-  failed and errored and at least one passed case); nothing is fabricated
-  across the shapes and `gate suite` is never read as argv. A parsed
+  no selection or filter, project root, a report in state `parsed` with
+  known counts, zero skipped, failed and errored and at least one passed
+  case; a report in any other state carries nothing, whatever fields it
+  still holds); nothing is fabricated across the shapes and `gate suite`
+  is never read as argv. A path-only record written before bindings
+  existed (no `binding` key) keeps the older executed-case reading, held
+  to the final source wherever the check records one. A parsed
   report that lost its skipped count reads as unknown
   (`integration.skipped_count`), never zero and never a crash, so a
   citation refuses it.
