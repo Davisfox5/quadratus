@@ -149,18 +149,16 @@ def _claim(item: str) -> str:
 
 
 def _identity_ok(entry, check, record) -> bool:
-    """The receipt identity every route demands: a passing check on the
-    final source, under the entry's own gate and environment where the
+    """The check-level identity every route demands: a passing check on
+    the final source, under the entry's own gate and environment where the
     entry records them (a record without them is held to the source
-    alone), required, unfiltered, no skips, from the project root."""
+    alone). The per-command facts are read per row (``_row_ok``)."""
     if not (check.get("passed") and check.get("source") and check.get("source") == record.get("source_fingerprint")):
         return False
     for key in ("gate", "environment"):
         if key in entry and (not isinstance(entry.get(key), str) or check.get(key) != entry[key]):
             return False
-    if check.get("selection") or _skipped_in(check) or _filtered(str(check.get("command") or "")):
-        return False
-    return str(check.get("command_cwd") or ".") in ("", ".")
+    return True
 
 
 def _paths_cleared(entry, checks, record) -> bool:
@@ -177,45 +175,16 @@ def _paths_cleared(entry, checks, record) -> bool:
     for check in checks[start:]:
         if not _identity_ok(entry, check, record):
             continue
-        try:
-            operands = [a[2:] if a.startswith("./") else a for a in shlex.split(str(check.get("command") or ""))]
-        except ValueError:
-            continue
-        passed_files = {c.split("::", 1)[0] for c in _passed_cases(check) if "::" in c}
-        if all(f in operands and f in passed_files for f in files):
-            return True
-    return False
-
-
-def _passed_cases(check):
-    """The case ids a check's own report (and its passed required receipts')
-    show passed, each with and without its parametrization; only from a
-    command run at the project root, so the ids are project-relative."""
-    out = set()
-    rows = [(check.get("report"), check.get("command_cwd") or ".", True, bool(check.get("passed")))]
-    rows += [(r.get("report"), r.get("cwd") or check.get("command_cwd") or ".", r.get("required", True),
-              r.get("status") == "passed") for r in check.get("receipts") or []]
-    for report, cwd, required, passed in rows:
-        if not (passed and required and cwd in ("", ".") and isinstance(report, dict)):
-            continue
-        for name in report.get("passed_cases") or ():
-            name = str(name)
-            out.add(name)
-            out.add(name.split("[", 1)[0])
-    return out
-
-
-def _skipped_in(check) -> bool:
-    """Whether any report or required receipt of the check records a skip, or
-    no count at all (unknown is a skip: fail closed)."""
-    reports = [check.get("report")] + [r.get("report") for r in check.get("receipts") or []
-                                       if r.get("required", True)]
-    for report in reports:
-        counts = report.get("counts") if isinstance(report, dict) else None
-        if not isinstance(counts, dict) or not isinstance(counts.get("skipped"), int):
-            return True
-        if counts["skipped"] > 0:
-            return True
+        for row in _rows(check):
+            if not _row_ok(row):
+                continue
+            try:
+                operands = [a[2:] if a.startswith("./") else a for a in shlex.split(row["command"])]
+            except ValueError:
+                continue
+            passed_files = {c.split("::", 1)[0] for c in _row_passed_cases(row) if "::" in c}
+            if all(f in operands and f in passed_files for f in files):
+                return True
     return False
 
 
@@ -235,6 +204,64 @@ def _filtered(command: str) -> bool:
         rest = rest[2:]
     return any(a in ("-k", "-m", "--deselect", "--lf", "--ff") or a.startswith(("-k", "--deselect="))
                for a in rest)
+
+
+def _rows(check):
+    """A check's command records in one shape, read from the record alone:
+    with ``receipts`` (a gate suite: the aggregate command is the literal
+    ``gate suite`` and the aggregate report is None), one row per receipt
+    with its own status, required flag, command, cwd, selection, report
+    and count; without them (a single-command gate), one row from the
+    check's own fields. Nothing is fabricated across the two shapes."""
+    receipts = check.get("receipts") or []
+    if receipts:
+        rows = []
+        for r in receipts:
+            if not isinstance(r, dict):
+                continue
+            selection = str(r.get("selection") or "")
+            if r.get("id") in ("check", "original-tests:check") and check.get("selection"):
+                selection = "; ".join(x for x in (selection, str(check.get("selection"))) if x)
+            rows.append(dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
+                             command=str(r.get("command") or ""), cwd=str(r.get("cwd") or check.get("command_cwd") or "."),
+                             selection=selection, report=r.get("report"), tests=r.get("tests")))
+        return rows
+    return [dict(id="check", passed=bool(check.get("passed")), required=True,
+                 command=str(check.get("command") or ""), cwd=str(check.get("command_cwd") or "."),
+                 selection=str(check.get("selection") or ""), report=check.get("report"), tests=None)]
+
+
+def _row_ok(row) -> bool:
+    """One command record that shows a whole successful run: passed,
+    required, no selection, no argv filter, from the project root, a parsed
+    report whose counts are known with zero skipped, zero failed, zero
+    errors and at least one passed. Unknown is a refusal (fail closed)."""
+    if not (row["passed"] and row["required"]) or row["selection"] or _filtered(row["command"]):
+        return False
+    if row["cwd"] not in ("", "."):
+        return False
+    report = row["report"]
+    counts = report.get("counts") if isinstance(report, dict) else None
+    if not isinstance(counts, dict):
+        return False
+    for key in ("skipped", "failed", "errors", "passed"):
+        if not isinstance(counts.get(key), int) or isinstance(counts.get(key), bool):
+            return False
+    if counts["skipped"] or counts["failed"] or counts["errors"] or counts["passed"] <= 0:
+        return False
+    return bool(report.get("passed_cases"))
+
+
+def _row_passed_cases(row):
+    """The case ids a row's own report shows passed, each with and without
+    its parametrization."""
+    out = set()
+    report = row["report"]
+    for name in (report.get("passed_cases") or ()) if isinstance(report, dict) else ():
+        name = str(name)
+        out.add(name)
+        out.add(name.split("[", 1)[0])
+    return out
 
 
 def _bound_not_run_cleared(entry, checks, record) -> bool:
@@ -319,12 +346,9 @@ def _bound_not_run_cleared(entry, checks, record) -> bool:
         if not (check.get("passed") and check.get("source") and check.get("source") == current
                 and check.get("gate") == gate and check.get("environment") == environment):
             continue
-        if check.get("selection") or _skipped_in(check):
-            continue
-        if _filtered(str(check.get("command") or "")):
-            continue
-        if set(cases) <= _passed_cases(check):
-            return True
+        for row in _rows(check):
+            if _row_ok(row) and set(cases) <= _row_passed_cases(row):
+                return True
     return False
 
 

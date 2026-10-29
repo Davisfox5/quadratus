@@ -10,6 +10,7 @@ execution debt; and the independent record checker validating the saved
 binding itself. Every claim here is a record the harness wrote."""
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -74,12 +75,22 @@ def _not_run_obligations(replay, task="t1"):
 
 # -- 1. a NOT RUN report bound to an identity is discharged by the gate executing it ----------------
 
+#: A second configured command beside the harness gate makes the production
+#: shape (GateSuite: aggregate command 'gate suite', report None, the
+#: evidence in per-command receipts), which the larger runs use.
+SUITE_EXTRA = [[sys.executable, "-m", "pytest", "-q", "tests/test_app.py", "--quadratus-report={report}"]]
+
+
 @pytest.mark.parametrize("item, kind", [(CASE, "case"), ("P1", "scenario"), ("test_add", "case")])
+@pytest.mark.parametrize("suite", [False, True], ids=["direct", "suite"])
 def test_a_not_run_report_the_gate_then_executes_whole_is_discharged_and_the_requirement_stands(
-        tmp_path, monkeypatch, item, kind):
+        tmp_path, monkeypatch, item, kind, suite):
     replay = H.run(tmp_path, monkeypatch, _script(_plan(_scope(proofs=_proofs("R1"))), _lead_not_run(item),
                                                   auditor=_auditor(item)),
-                   files=FILES, max_tasks=1, record_complete=False)
+                   files=FILES, max_tasks=1, record_complete=False, extra_checks=SUITE_EXTRA if suite else ())
+    if suite:
+        last = H.result_json(replay)["checks"][-1]
+        assert last["command"] == "gate suite" and last["report"] is None and len(last["receipts"]) >= 2
     assert replay.result.completed, replay.result.error
     [row] = _not_run_rows(replay)
     assert row["item"] == item and row["why"] == NOT_RUN_WHY, "the report is kept as written"
@@ -90,7 +101,8 @@ def test_a_not_run_report_the_gate_then_executes_whole_is_discharged_and_the_req
     assert obligation["receipts"], "discharged by a named harness receipt"
     result = H.result_json(replay)
     assert result["checks"][-1]["passed"] and result["checks"][-1]["source"] == result["source_fingerprint"]
-    assert CASE in (result["checks"][-1]["report"] or {}).get("passed_cases", [])
+    reports = [result["checks"][-1]["report"]] + [r.get("report") for r in result["checks"][-1]["receipts"]]
+    assert any(CASE in (r or {}).get("passed_cases", []) for r in reports)
     audit = result["requirements"]["audits"][-1]
     assert audit["lowered"] == [] and audit["verdicts"]["R1"]["met"] is True
     assert "reported NOT RUN" not in replay.of("auditor")[-1].prompt, "a discharged item is no standing debt"
@@ -242,6 +254,53 @@ def test_the_checker_rejects_forged_stale_or_mismatched_bindings(tmp_path, monke
         for check in record["checks"]:
             check["command"] = check["command"] + " tests/test_app.py"
     assert _tampered(replay, historical), "a historical path-only record keeps its honest reading"
+
+    def suite(record, entry, **receipt):
+        # The production shape: the aggregate carries no command line and no
+        # report; the evidence is one required receipt per command.
+        for check in record["checks"]:
+            report = check["report"]
+            check["receipts"] = [dict(id="transport", status="passed", required=True,
+                                      command=check["command"] + " tests/test_app.py", cwd=".", selection="",
+                                      report=report, tests=1, **receipt)]
+            check["command"], check["report"] = "gate suite", None
+
+    def suite_case(record, entry, **receipt):
+        suite(record, entry, **receipt)
+    assert _tampered(replay, suite_case), "an exact-case claim clears on a genuine suite receipt"
+
+    def suite_paths(record, entry, **receipt):
+        suite(record, entry, **receipt)
+        entry["item"] = "tests/test_app.py"
+        entry["binding"] = dict(kind="paths", scenario=None, cases=[], problem="")
+        entry["cases"] = []
+    assert _tampered(replay, suite_paths), "a path-only claim clears on a genuine suite receipt"
+
+    def receipt_mutation(mutate_receipt, paths=False):
+        def apply(record, entry):
+            (suite_paths if paths else suite_case)(record, entry)
+            for check in record["checks"]:
+                mutate_receipt(check["receipts"][0])
+        return apply
+    import copy
+    suite_rejected = {
+        "optional receipt": lambda r: r.__setitem__("required", False),
+        "failed receipt": lambda r: r.__setitem__("status", "failed"),
+        "receipt selection": lambda r: r.__setitem__("selection", "-k add"),
+        "receipt filter in argv": lambda r: r.__setitem__("command", r["command"] + " -k add"),
+        "receipt cwd": lambda r: r.__setitem__("cwd", "tests"),
+        "receipt skip": lambda r: r["report"]["counts"].__setitem__("skipped", 1),
+        "receipt count missing": lambda r: r["report"]["counts"].pop("skipped"),
+        "receipt no report": lambda r: r.__setitem__("report", None),
+        "receipt empty cases": lambda r: r["report"].__setitem__("passed_cases", []),
+        "receipt contradictory failure": lambda r: r["report"]["counts"].__setitem__("failed", 1),
+        "receipt names another file": lambda r: r.__setitem__("command", r["command"].replace(" tests/test_app.py", " tests/other.py")),
+    }
+    for name, mutate_receipt in suite_rejected.items():
+        for paths in (False, True):
+            if name == "receipt names another file" and not paths:
+                continue
+            assert not _tampered(replay, receipt_mutation(copy.deepcopy(mutate_receipt), paths)), (name, paths)
 
     def historical_identity_claim(record, entry):
         for key in ("binding", "cases", "gate", "environment"):

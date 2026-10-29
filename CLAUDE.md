@@ -3045,9 +3045,19 @@ Key design decisions already settled:
   where recorded, required, unfiltered, zero skips, project root) and
   needs the command to name the file whole and the report to show a case
   of it passed; a historical record without identity keys is held to the
-  final source and the same passed-case reading. A parsed report that
-  lost its skipped count reads as unknown (`integration.skipped_count`),
-  never zero and never a crash, so a citation refuses it.
+  final source and the same passed-case reading. The checker reads both
+  record shapes (root's control on 3b99f5f): a gate suite's aggregate
+  command is the literal `gate suite` with no aggregate report and the
+  evidence in one receipt per command, so `_rows` normalises a check into
+  per-command rows (receipt status, required flag, command, cwd,
+  selection, report, count) or one row from a single-command gate, and
+  `_row_ok` demands of each row a whole successful run (passed, required,
+  no selection or filter, project root, known counts with zero skipped,
+  failed and errored and at least one passed case); nothing is fabricated
+  across the shapes and `gate suite` is never read as argv. A parsed
+  report that lost its skipped count reads as unknown
+  (`integration.skipped_count`), never zero and never a crash, so a
+  citation refuses it.
 
 ## How development is coordinated
 
