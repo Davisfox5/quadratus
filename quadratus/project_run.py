@@ -1146,17 +1146,26 @@ def _terminal_state_patch(session) -> dict:
     saying the debt was still owed); the task lists travel with the records
     so the handoff and its lists agree."""
     patch = dict(model_resolution=dict(getattr(session, 'model_resolution', {}) or {}))
-    for name in ('failed', 'turn_limited', 'failed_records', 'turn_limited_records', '_cap_baselines',
-                 '_partial_tasks', 'close_decisions'):
-        if not hasattr(session, name):
-            continue
-        value = getattr(session, name)
-        if isinstance(value, dict):
-            patch[name] = dict(value)
-        elif isinstance(value, (set, frozenset)):
-            patch[name] = set(value)
-        else:
-            patch[name] = list(value or [])
+    # The whole carried state as the session ends (root's control on
+    # 6c1b922: the sealed state of a last-slot batch held the pre-batch
+    # review_findings=[] and unresolved_reviews=[] beside the end's capped
+    # lists, so the terminal record said nothing was owed to any reviewer).
+    # Each key is encoded on its own; one that cannot be is named under
+    # terminal_patch_omitted, never a silent drop of the whole patch.
+    from . import checkpoint
+    omitted = []
+    try:
+        snapshot = checkpoint.carried_snapshot(session)
+    except Exception as exc:  # noqa: BLE001 -- the record says what it could not read
+        snapshot = {}
+        omitted.append(f"snapshot: {type(exc).__name__}: {str(exc)[:160]}")
+    for name, value in snapshot.items():
+        try:
+            patch[name] = checkpoint._encode(value)
+        except TypeError as exc:
+            omitted.append(f"{name}: {str(exc)[:160]}")
+    if omitted:
+        patch['terminal_patch_omitted'] = omitted
     return patch
 
 

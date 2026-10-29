@@ -2847,16 +2847,48 @@ Key design decisions already settled:
   the one call per reviewer the EVIDENCE findings already bought; the
   saving is review lines and hold records.
 - **A correction line carries the operation first and its explanation
-  after `| because:`, and the prompt names the bound** (same batch). The
-  live correction was refused at 869 characters with the explanation inside
-  the text, against a 400 bound the prompt never stated. `MAX_SCENARIO_TEXT`
-  is the one number, stated in the prompt and in the refusal with the
-  measured length; `_split_explanation` takes the text before the segment,
-  the explanation is kept on the record and never counted; KEEP and
-  REQUIREMENT take their reason the same way. Correctness and authority are
-  stated as mandatory: the text must hold against the requirement texts,
-  which only a REQUIREMENT line can question, and the finding's reviewer
-  re-checks the corrected scenario.
+  after `| because:`, and its size bound is the declaration's** (same
+  batch; root on 6c1b922). The live correction was refused at 869
+  characters with the explanation inside the text, against a 400 bound
+  the prompt never stated; the first repair stated the 400 and root's
+  probe showed a 683-character state `read_proofs` accepts refused only
+  for being over it. There is no character count now: `_split_explanation`
+  takes the text before the segment, the explanation is kept on the record
+  and never counted, the shape rules stay (empty, multi-line, equal to
+  the declared text, ambiguous lines), and the one size bound a corrected
+  field meets is the one a declared field meets, the task's role packet
+  limit, checked on a trial scope that is discarded
+  (`_correction_packet_problem`). The prompt asks for a field as concise
+  as a declared one and says what the limit is. KEEP and REQUIREMENT take
+  their reason the same way. Correctness and authority are stated as
+  mandatory: the text must hold against the requirement texts, which only
+  a REQUIREMENT line can question, and the finding's reviewer re-checks the
+  corrected scenario.
+- **FETCH serves an artifact whole, in exact windows** (root on 6c1b922:
+  with the completed work rendered as an index, FETCH is the one path to
+  an original, and a ~25,000-character draft came back as its first
+  12,000 and "[...truncated]"). `FETCH: <id>` returns characters 0 to
+  `_FETCH_CHAR_CAP` (40,000); a window that ends before the end says how
+  many characters remain and the exact next request, `FETCH: <id> FROM
+  <n>`; each window is one fetch against `max_fetches`; nothing inside a
+  window is elided; an offset past the end says so. The window bounds one
+  prompt's growth per request, not what can be read.
+- **The sealed terminal state is one snapshot of the end** (root on
+  6c1b922: a last-slot batch's sealed checkpoint kept the pre-batch
+  `review_findings=[]` and `unresolved_reviews=[]` beside the end's capped
+  lists, so the terminal record named no reviewer's debt while result.json
+  did). `_terminal_state_patch` now carries `checkpoint.carried_snapshot`,
+  every carried key, the task outcomes, the history and the ledger as the
+  session ends, encoded per key with any key that cannot be encoded named
+  under `terminal_patch_omitted`; sealed runs stay non-resumable and older
+  sealed records are left as they were.
+- **A raised or unmerged child's open findings are held before its failed
+  record is written** (`_record_unmerged_failure` calls
+  `_hold_task_findings` with the child's outcome; root on 6c1b922: the
+  raised child's RFT2-1 had no hold and its failed handoff carried no
+  review debt). The scope conflict goes through the same call. Nothing is
+  merged, retried, or turned into a continuable cap; the findings stay
+  their reviewer's and a continuation inherits them by task id.
 - **The completed work reaches the planner and the lead as an index, and
   every prompt is measured** (same batch; root's measurement on the last
   saved run: the final ledger rendered 100,752 characters with previews

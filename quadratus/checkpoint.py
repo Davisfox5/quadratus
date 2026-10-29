@@ -152,6 +152,30 @@ def _uncarried(session) -> List[str]:
     return present
 
 
+def carried_snapshot(session) -> dict:
+    """The carried state as the session holds it now, unencoded: what
+    ``capture_state`` carries, read without the resumability check. The
+    terminal patch reads it (``project_run._terminal_state_patch``) so a
+    sealed run's state is one coherent snapshot of its end, never the last
+    quiescent point's review debt beside the end's task lists (root's
+    control on 6c1b922)."""
+    ledger = session.memory.ledger
+    state = {
+        "history": [dataclasses.asdict(s) for s in session.history],
+        "ledger": dict(entries=[dataclasses.asdict(e) for e in ledger.entries], rulings=list(ledger.rulings),
+                       requirements=dict(ledger.requirements),
+                       requirement_status=dict(ledger.requirement_status),
+                       ambiguous=dict(ledger.ambiguous), ambiguous_since=dict(ledger.ambiguous_since),
+                       decisions=dict(ledger.decisions)),
+        "task_outcomes": [dataclasses.asdict(o) for o in session.task_outcomes],
+        "breaker_counted": [o.task_id for o in getattr(session, "_breaker_counted", [])],
+        "slots_used": int(getattr(session, "_slots_used", 0)),
+    }
+    for name in _CARRIED:
+        state[name] = getattr(session, name, None)
+    return state
+
+
 def capture_state(session) -> dict:
     """The carried session state, or a dict naming why it cannot be carried
     (``{"uncarried": [...]}``)."""

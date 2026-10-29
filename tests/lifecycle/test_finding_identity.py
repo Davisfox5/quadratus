@@ -33,6 +33,7 @@ from tests.lifecycle.test_lifecycle_matrix import FILES
 from tests.lifecycle.test_recovery_handoff import (
     CONTINUE,
     GROK_CAP,
+    NARRATION,
     REQS,
     TASK,
     TYPED,
@@ -167,3 +168,82 @@ def test_a_capped_child_s_open_finding_reaches_the_post_merge_recheck(tmp_path, 
     rechecks = [c for c in replay.of("recheck") if c.task == "t2" and "ran in parallel" in c.prompt]
     assert len(rechecks) == 1 and "RFT2-1" in rechecks[0].prompt
     assert "still owed: t1, t2" in replay.of("orchestrator")[1].prompt
+
+
+# -- 3. a raised or unmerged child keeps its findings under their reviewer ------------------------
+
+FAILING = H.grok_ok(NARRATION, stop="max_turn_requests", num_turns=8, error="permission denied: write README.md")
+
+
+@pytest.mark.requirements_ledger
+def test_a_raised_child_s_open_findings_are_held_before_its_failed_record_is_written(tmp_path, monkeypatch):
+    """Root's control on 6c1b922: the ProviderError child goes through
+    _record_unmerged_failure, not _close_failed, and its RFT2-1 had no hold.
+    Nothing is merged or retried and the stop stays."""
+    replay = H.run(tmp_path, monkeypatch, _batch_script(FAILING), files=FILES, max_tasks=4, record_complete=False)
+    record = H.result_json(replay)
+    assert record["failed_tasks"] == ["t2"] and len(replay.of("orchestrator")) == 1
+    assert (replay.project / "README.md").read_text() == FILES["README.md"], "nothing was merged"
+    finding = _findings(replay)["RFT2-1"]
+    assert not finding["closed"] and finding["hold"].startswith("left open when t2 was not merged (")
+    sealed = checkpoint.load(Path(replay.result.run_dir))
+    state = checkpoint._decode(sealed["state"])
+    assert sealed["sealed"] and "RFT2-1" in {e.get("finding_id") for e in state["unresolved_reviews"]}
+    # The verdict line carried no basis, so the finding is carried to the
+    # audit by id (the note on t2's own outcome), not a legacy open text;
+    # with a basis it would be the legacy text as in the capped cases.
+    outcome = [t for t in record["workflow"]["tasks"] if t["task_id"] == "t2"][0]
+    assert any("RFT2-1 open, carried to the final audit by id" in (f.get("detail") or "") for f in outcome["facts"])
+    assert state["failed_records"]["t2"]["cause"] != "scope" and state["failed_records"]["t2"]["unmerged_artifact"]
+    assert not replay.result.completed
+
+
+# -- 4. the sealed terminal state is the end's state --------------------------------------------
+
+@pytest.mark.requirements_ledger
+def test_the_sealed_terminal_state_carries_the_end_s_findings_and_outcomes(tmp_path, monkeypatch):
+    """Root's control on 6c1b922: a last-slot batch's sealed checkpoint
+    kept review_findings=[] and unresolved_reviews=[] from the pre-batch
+    quiescent point beside the end's capped lists."""
+    replay = H.run(tmp_path, monkeypatch, _batch_script(GROK_CAP), files=FILES, max_tasks=2, record_complete=False)
+    record = H.result_json(replay)
+    assert sorted(record["turn_limited_tasks"]) == ["t1", "t2"]
+    sealed = checkpoint.load(Path(replay.result.run_dir))
+    assert sealed["sealed"] and not sealed.get("resumable")
+    state = checkpoint._decode(sealed["state"])
+    assert "terminal_patch_omitted" not in state
+    assert {r["fid"] for r in state["review_findings"]} == {r["fid"] for r in record["review_findings"]} >= {"RFT2-1"}
+    assert {e.get("finding_id") for e in state["unresolved_reviews"]} >= {"RFT2-1"}
+    assert [o["task_id"] for o in state["task_outcomes"]] == [o["task_id"] for o in record["workflow"]["tasks"]]
+    assert sorted(state["turn_limited"]) == ["t1", "t2"] and state["open_findings"] == record["open_findings"]
+    assert state["close_decisions"] == record["close_decisions"]
+
+
+# -- 5. the corrected scenario field has no character count ------------------------------------
+
+@pytest.mark.requirements_ledger
+def test_a_long_corrected_field_the_declaration_accepts_is_applied(tmp_path, monkeypatch):
+    from tests.lifecycle.test_close_family import CONTRADICTION, PROPOSAL, TAIL
+    from tests.lifecycle.test_proof_binding import _acceptance, _at, _proofs, _scope
+    from tests.lifecycle.test_proof_binding import _plan as _proof_plan
+    from tests.lifecycle.test_workflow_repair import CORRECTION_HEAD, MET, Seen
+    from tests.lifecycle.test_workflow_repair import _script as _repair_script
+    seen = Seen()
+    finding = f"BLOCKING: SCENARIO P1 - {CONTRADICTION} | {PROPOSAL}{TAIL}"
+    long_state = "nothing is stored; " + "; ".join(f"ticket {i} is absent" for i in range(40))
+    assert len(long_state) > 600
+
+    def orchestrator(call, replay):
+        if CORRECTION_HEAD in call.prompt:
+            assert "there is no character count" in call.prompt
+            return f"SCENARIO P1: state: {long_state} | because: the store starts empty for every ticket"
+        return _proof_plan(_scope(proofs=_proofs("R1"))) if len(replay.of("orchestrator")) == 1 else "DONE"
+    replay = H.run(_at(tmp_path, "long"), monkeypatch,
+                   _repair_script(seen, orchestrator=orchestrator, collaborator=lambda c, r: finding + MET,
+                                  recheck=lambda c, r: "RFT1-1: RESOLVED the corrected scenario holds"),
+                   files=FILES, max_tasks=1, record_complete=False)
+    record = H.result_json(replay)
+    corrections = record["scenario_corrections"]
+    assert [c["status"] for c in corrections] == ["corrected"], corrections
+    assert corrections[0]["explanation"] == "the store starts empty for every ticket"
+    assert dict(_acceptance(replay)[0]["scenario"])["state"] == long_state

@@ -312,7 +312,7 @@ _TERMINAL_REQUEST = (
     "whatever you reply. Reply exactly DONE if the work in the ledger meets the "
     "goal. Otherwise reply 'NOT DONE: <what remains>'. To read a full artifact "
     "behind a summary first, reply with exactly 'FETCH: <artifact-id>' and "
-    "nothing else."
+    "nothing else; a long artifact comes in windows, each naming the exact next request."
 )
 
 
@@ -1807,12 +1807,6 @@ def _typed_near_miss(claim: str) -> str:
     return "an EVIDENCE claim without saying what is not shown"
 
 
-#: The bound on one corrected scenario field, stated to the planner in the
-#: correction prompt in the same number (scenario correction, 2026-10-28:
-#: controller-continuation-01's correction was refused at 869 characters
-#: with the explanation inside the text, against a bound the prompt never
-#: named).
-MAX_SCENARIO_TEXT = 400
 #: The segment that separates the operation (the corrected text) from the
 #: planner's explanation on a correction line.
 _CORRECTION_EXPLANATION = re.compile(r"\s*\|\s*(?:because|why|explanation|reason|note)\s*:\s*", re.IGNORECASE)
@@ -1829,16 +1823,17 @@ def _split_explanation(text: str) -> Tuple[str, str]:
 
 
 def _scenario_text_problem(text: str, current: str) -> str:
-    """Why a planner's corrected scenario text cannot stand, or "". The
-    bound is measured and named, so a refusal says what was over it."""
+    """Why a planner's corrected scenario text cannot stand on its own
+    shape, or "": empty, more than one line, or the declared text again.
+    There is no character count (root on 6c1b922: a 683-character state
+    the declaration accepts was refused only for being over 400); the
+    size bound a corrected field meets is the one a declared field meets,
+    the task's role packet limit, checked by ``_correction_packet_problem``."""
     text = (text or "").strip()
     if not text or text.lower() in ("none", "n/a", "-"):
         return "the corrected text is empty"
     if "\n" in text:
         return "the corrected text spans more than one line"
-    if len(text) > MAX_SCENARIO_TEXT:
-        return (f"the corrected text is {len(text)} characters; the bound is {MAX_SCENARIO_TEXT} (an explanation "
-                "goes after ' | because: ', not in the text)")
     if text == (current or "").strip():
         return "the corrected text equals the declared text"
     return ""
@@ -3634,16 +3629,18 @@ class Session:
         call = (lambda key, prompt: self._edit(key, prompt, role="lead")) if editing else self._invoke_model
         reply = call(model_key, build_prompt(fetched))
         for _ in range(self.config.max_fetches):
-            artifact_id = _parse_fetch(reply)
-            if artifact_id is None:
+            window = _parse_fetch_window(reply)
+            if window is None:
                 break
+            artifact_id, offset = window
             try:
                 content = self.memory.fetch(artifact_id)
             except KeyError:
-                content = f"(no artifact {artifact_id!r} exists -- check the id)"
-            fetched.append((artifact_id, content))
+                content, offset = f"(no artifact {artifact_id!r} exists -- check the id)", 0
+            fetched.append((artifact_id, content, offset))
             if task is not None:
-                task.record("assistant", f"[fetched artifact {artifact_id}]")
+                task.record("assistant", f"[fetched artifact {artifact_id}"
+                                         + (f" from character {offset:,}" if offset else "") + "]")
             reply = call(model_key, build_prompt(fetched))
         if _parse_fetch(reply) is not None:
             message = "Artifact fetch budget exhausted before an answer was produced."
@@ -5229,7 +5226,7 @@ class Session:
         self.history.append(summary)
         return summary
 
-    def _hold_open_finding(self, spec, peer: str, verdict: str, *, record=None, original=None) -> None:
+    def _hold_open_finding(self, spec, peer: str, verdict: str, *, record=None, original=None, outcome=None) -> None:
         """One review finding left open at a close, into the debt accounting
         every later reader uses: the legacy open text (or, for a finding
         with no basis and no immediate risk, the note that carries it to the
@@ -5238,6 +5235,10 @@ class Session:
         recheck read. The same block the fix loop always wrote, shared with
         the capped and failed closes (one finding identity, 2026-10-28)."""
         fid = record["fid"] if record is not None else _finding_id(verdict)
+        # The task outcome the fact lands on: the running task's, or the one
+        # a parent names for a child it is holding findings for (a raised or
+        # unmerged child, 2026-10-29).
+        holder = outcome if outcome is not None else self._outcome
         if (record is not None and record.get("audit_carried")
                 and self.config.requirements_ledger and self.memory.ledger.requirements):
             # Carried only where an audit will read it: with no requirements
@@ -5246,11 +5247,14 @@ class Session:
             # risk: it does not stop the run here. It stays open on the
             # registry by id, is carried to the final audit, and the
             # requirements it touches are not met until a judge closes it.
-            if self._outcome is not None:
-                self._outcome.note("unverified", f"Task {spec.task_id}: {fid} open, carried to the final "
-                                                 f"audit by id: {record['claim'][:200]}", terminal=False)
+            if holder is not None:
+                holder.note("unverified", f"Task {spec.task_id}: {fid} open, carried to the final "
+                                          f"audit by id: {record['claim'][:200]}", terminal=False)
             self._note(f"task {spec.task_id}: {fid} has no basis and claims no immediate risk; carried "
                        "to the final audit by id")
+        elif outcome is not None:
+            self.open_findings.append(verdict)
+            outcome.note("unverified", verdict)
         else:
             self._open_finding("unverified", verdict)
         text = original if original is not None else (record["text"] if record is not None else verdict)
@@ -5258,7 +5262,7 @@ class Session:
                                             text=verdict, description=spec.description[:2000],
                                             finding_id=fid))
 
-    def _hold_task_findings(self, spec, why: str) -> None:
+    def _hold_task_findings(self, spec, why: str, *, outcome=None) -> None:
         """Every open review finding of this task that the debt accounting
         does not hold yet, held there at a capped or failed close (one
         finding identity, 2026-10-28). controller-continuation-01: t4's
@@ -5274,7 +5278,8 @@ class Session:
                 continue
             record["hold"] = why
             verdict = f"{record['fid']}: UNRESOLVED ({why}): {record['claim']}"
-            self._hold_open_finding(spec, record["author"], verdict, record=record, original=record.get("text"))
+            self._hold_open_finding(spec, record["author"], verdict, record=record, original=record.get("text"),
+                                    outcome=outcome)
             self._note(f"task {spec.task_id}: {record['fid']} by {record['author']} held open: {why}")
 
     def _capped_final_draft(self, lead, spec, task, exc, before, collaborators):
@@ -6096,7 +6101,8 @@ class Session:
                     "Name the single next task, or reply exactly DONE if the "
                     "goal is met. To read a full artifact behind a summary "
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
-                    "nothing else. " + _ASK_SPARINGLY
+                    "nothing else; a long artifact comes in windows, each naming the exact next "
+                    "request, and each window is one fetch. " + _ASK_SPARINGLY
                     + f"\n\n{_SIZE_GUIDE}\n\n{self._kind_request()}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
                                   else _REQUIREMENTS_REQUEST + " " + _COVERS_REQUEST)
@@ -8597,6 +8603,13 @@ class Session:
         is the call that failed as the child recorded it (a cycle-2 revision
         is not a lead draft); the scope conflict's edits are the lead's."""
         from .project_files import MAX_INSPECT_BYTES
+        # The child's open review findings stay their reviewer's and go into
+        # the debt accounting before the failed record is written (root's
+        # control on 6c1b922: a raised child's RFT2-1 had no hold and the
+        # failed handoff carried no review debt). Nothing is merged, retried
+        # or turned into a continuable cap by this.
+        self._hold_task_findings(spec, f"left open when {spec.task_id} was not merged ({cause}): {reason[:160]}",
+                                 outcome=outcome)
         record = dict(task=spec.task_id, lead=lead or spec.lead or (getattr(outcome, "lead", "") or ""),
                       cause=cause, error=f"not merged: {reason}; its files are kept in artifact {kept.id}",
                       changed=list(changed), changed_lines=0, note="parallel batch: nothing was merged",
@@ -13750,7 +13763,9 @@ class Session:
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
-            "the content and be asked again. A request (FETCH, CONSULT or WORKER) closes "
+            "the content and be asked again; a long artifact comes in windows, each naming the exact "
+            "next request ('FETCH: <artifact-id> FROM <n>'), and each window is one fetch. "
+            "A request (FETCH, CONSULT or WORKER) closes "
             "the reply: at most " + str(MAX_REQUEST_PREFACE_LINES) + " lines of preface may "
             "precede it, and a reply that carries a CHANGED line is a delivery, never a "
             "request. There is no ASK channel for you: a reply beginning ASK:, or a request "
@@ -14946,15 +14961,18 @@ class Session:
                   "ordinary finding for the reviewer and the lead\n"
                   "SCENARIO P<n>: REQUIREMENT | because: <what in R<n> would have to change> -- the operator is "
                   "asked; nothing is reinterpreted and nothing becomes met\n"
-                  f"Bounds the harness enforces, with no second ask: the corrected text is the whole new text of "
-                  f"one field of one scenario, on one line, at most {MAX_SCENARIO_TEXT} characters, and it is the "
-                  "text only (not a diff, not a note); the explanation is not part of the text and may be any "
-                  "length on the same line. Correctness and authority are not optional: the corrected text must "
-                  "hold against the requirement texts above, which it cannot change (a requirement that would "
-                  "have to change is a REQUIREMENT line, never a quiet rewording), and the reviewer who raised "
-                  "the finding re-checks the corrected scenario. A text over the bound, on more than one line, "
-                  "empty, or equal to the declared text is refused and the scenario stays as declared with the "
-                  "finding standing.")
+                  "Bounds the harness enforces, with no second ask: the corrected text is the whole new text of "
+                  "one field of one scenario, on one line, and it is the text only (not a diff, not a note); the "
+                  "explanation is not part of the text and may be any length on the same line. Keep the field as "
+                  "concise as a declared one: there is no character count, and the one size limit is the same the "
+                  "declaration met, the task's role packet (scope and scenarios together). "
+                  "Correctness and authority are not optional: the corrected text must hold against the "
+                  "requirement texts above, "
+                  "which it cannot change (a requirement that would have to change is a REQUIREMENT line, "
+                  "never a quiet rewording), and the reviewer who raised the finding re-checks the corrected "
+                  "scenario. A "
+                  "text on more than one line, empty, equal to the declared text, or one that puts the role "
+                  "packet over its limit is refused and the scenario stays as declared with the finding standing.")
         self._count("scenario_correction")
         try:
             seat, reply = self._ask_seat(self.seat(), lambda fetched: prompt + ("\n\n" + _render_fetches(fetched)
@@ -14992,7 +15010,7 @@ class Session:
                 continue
             verb, text = distinct[0] if distinct else (None, "")
             if verb in ("operation", "state", "expect"):
-                problem = _scenario_text_problem(text, proof[verb])
+                problem = _scenario_text_problem(text, proof[verb]) or self._correction_packet_problem(spec, pid, verb, text)
                 if problem:
                     self._record_scenario_correction(spec, pid, by_pid[pid], status=f"refused: {problem}", reply=reply,
                                                      by=seat.key, field=verb, proposal=text[:600],
@@ -15036,6 +15054,24 @@ class Session:
         for record in records:
             record["route"] = f"scenario: {status}"
         self._note(f"task {spec.task_id}: scenario {pid}: {status}")
+
+    def _correction_packet_problem(self, spec, pid: str, field: str, text: str) -> str:
+        """The size bound a corrected scenario field meets is the one its
+        declaration met: the task's role packets (lead and reviewer) built
+        from the corrected scope must still be within their limit. Nothing
+        is applied; the trial scope is discarded. Returns why not, or ""."""
+        scope = spec.scope
+        if scope is None or not getattr(scope, "proofs", None):
+            return ""
+        trial = replace(spec, scope=replace(scope, proofs=tuple(
+            dict(p, **{field: text}) if p["id"] == pid else p for p in scope.proofs)))
+        try:
+            for role in self._packet_roles(spec):
+                self._role_packet(trial, role)
+        except Exception as exc:  # noqa: BLE001 -- the packet builder's own refusal, named
+            return (f"the corrected text puts this task's role packet over its limit, which the declaration met "
+                    f"({str(exc)[:160]})")
+        return ""
 
     def _apply_scenario_correction(self, spec, pid: str, field: str, text: str, *, findings: List[str], by: str):
         """Put the corrected text in force: on the task's scope (so every
@@ -16061,34 +16097,70 @@ def _describe_tree_change(before: dict, after: dict, *, limit: int = 20) -> str:
     )
 
 
+_FETCH_REQUEST = re.compile(r"^\s*FETCH\s*:\s*(?P<id>\S+?)(?:\s+FROM\s+(?P<offset>[0-9]+))?\s*$", re.IGNORECASE)
+
+
 def _parse_fetch(reply: str) -> Optional[str]:
-    """An artifact request: the whole reply is ``FETCH: <artifact-id>``.
+    """An artifact request: the whole reply is ``FETCH: <artifact-id>`` or
+    ``FETCH: <artifact-id> FROM <character offset>`` (the next window of a
+    long artifact, exact retrieval, 2026-10-29). Returns the artifact id;
+    ``_parse_fetch_window`` reads the offset.
 
     Deliberately strict -- only a reply that *is* a fetch request counts, so a
     draft that merely mentions the word FETCH in code or prose is never
     mistaken for one.
     """
+    window = _parse_fetch_window(reply)
+    return window[0] if window else None
+
+
+def _parse_fetch_window(reply: str) -> Optional[Tuple[str, int]]:
+    """``(artifact id, character offset)`` of a fetch request, or None."""
     stripped = _parse_kind(reply)[2].strip()
     stripped = lead_request(stripped) or stripped
     lines = [ln for ln in stripped.splitlines() if ln.strip()]
-    if len(lines) == 1 and lines[0].upper().startswith("FETCH:"):
-        wanted = lines[0].split(":", 1)[1].strip()
-        return wanted or None
-    return None
+    if len(lines) != 1 or not lines[0].upper().startswith("FETCH:"):
+        return None
+    match = _FETCH_REQUEST.match(lines[0])
+    if match:
+        return match.group("id"), int(match.group("offset") or 0)
+    wanted = lines[0].split(":", 1)[1].strip()
+    return (wanted, 0) if wanted else None
 
 
-#: Fetched artifacts are appended whole, but a pathological artifact must not
-#: flood the requester's prompt.
-_FETCH_CHAR_CAP = 12_000
+#: One fetch window: the characters of an artifact one request returns.
+#: Exact retrieval, 2026-10-29 (root's control on 6c1b922: a ~25,000
+#: character draft came back as its first 12,000 and "[...truncated]", and
+#: with the completed work rendered as an index that was the only path to
+#: the original). A longer artifact is served in windows: each reply names
+#: the exact next request, each window is one fetch against ``max_fetches``,
+#: and nothing is ever elided inside a window. The size bounds one prompt's
+#: growth per request; it is not a limit on what can be read.
+_FETCH_CHAR_CAP = 40_000
+_FETCH_SYNTAX = ("'FETCH: <artifact-id>' (or 'FETCH: <artifact-id> FROM <n>' for the window starting at "
+                 "character n of a long artifact; each window is one fetch)")
 
 
 def _render_fetches(fetched) -> str:
+    """The fetched windows, each exact: a window that ends before the
+    artifact's end says how many characters remain and the exact request
+    for the next window; an offset past the end says so."""
     blocks = ["## Fetched artifacts (you asked for these)"]
-    for artifact_id, content in fetched:
-        body = content if len(content) <= _FETCH_CHAR_CAP else (
-            content[:_FETCH_CHAR_CAP] + "\n[...truncated]"
-        )
-        blocks.append(f"[artifact {artifact_id}]\n{body}")
+    for entry in fetched:
+        artifact_id, content = entry[0], entry[1]
+        offset = int(entry[2]) if len(entry) > 2 else 0
+        total = len(content)
+        if offset and offset >= total:
+            blocks.append(f"[artifact {artifact_id} | {total:,} characters; offset {offset:,} is past the end, "
+                          "nothing to show]")
+            continue
+        end = min(total, offset + _FETCH_CHAR_CAP)
+        head = (f"[artifact {artifact_id} | characters {offset:,} to {end:,} of {total:,}"
+                + (", whole" if offset == 0 and end == total else "") + "]")
+        tail = ("" if end >= total else
+                f"\n[{total - end:,} characters remain; for the next window reply exactly "
+                f"'FETCH: {artifact_id} FROM {end}' (one fetch per window; nothing above is elided)]")
+        blocks.append(f"{head}\n{content[offset:end]}{tail}")
     return "\n\n".join(blocks)
 
 

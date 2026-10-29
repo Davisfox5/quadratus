@@ -16,10 +16,12 @@ from quadratus.delegation import DelegationLedger, InvocationEvent
 from quadratus.memory import TaskMemory
 from quadratus.run_budget import RunBudget, RunLimits
 from quadratus.session import (
-    MAX_SCENARIO_TEXT,
     Session,
     SessionConfig,
     TaskSpec,
+    _parse_fetch,
+    _parse_fetch_window,
+    _render_fetches,
     _scenario_text_problem,
     _split_explanation,
 )
@@ -179,18 +181,72 @@ def test_the_explanation_segment_is_split_from_the_operation(line, operation, ex
     assert _split_explanation(line) == (operation, explanation)
 
 
-def test_the_text_bound_is_measured_and_named_and_the_explanation_is_not_counted():
-    long = "x" * (MAX_SCENARIO_TEXT + 69)
-    assert _scenario_text_problem(long, "old") == (f"the corrected text is {MAX_SCENARIO_TEXT + 69} characters; the bound "
-                                                   f"is {MAX_SCENARIO_TEXT} (an explanation goes after ' | because: ', "
-                                                   "not in the text)")
-    assert _scenario_text_problem("x" * MAX_SCENARIO_TEXT, "old") == ""
+def test_the_corrected_text_has_no_character_count_and_meets_the_declaration_s_packet_bound(tmp_path):
+    """Root on 6c1b922: a 683-character state the declaration accepts was
+    refused only for being over 400. The shape rules stay; the one size
+    bound is the task's role packet, the same the declaration met."""
+    from quadratus.scope import TaskScope, read_proofs
+    long_state = "the store holds " + ", ".join(f"ticket {i} with prerequisite {i + 1}" for i in range(28))
+    assert len(long_state) > 600
+    assert _scenario_text_problem(long_state, "old") == ""
     assert _scenario_text_problem("a\nb", "old") == "the corrected text spans more than one line"
-    text, why = _split_explanation("x" * 300 + " | because: " + "y" * 569)
-    assert _scenario_text_problem(text, "old") == "" and len(why) == 569
+    assert _scenario_text_problem("old", "old") == "the corrected text equals the declared text"
+    assert _scenario_text_problem("", "old") == "the corrected text is empty"
+    text, why = _split_explanation(long_state + " | because: " + "y" * 569)
+    assert text == long_state and len(why) == 569
+    proofs = read_proofs([dict(id="P1", requirements=["R1"], operation="add is called", state="nothing stored",
+                               expect="the sum", location="tests/test_app.py")])
+    session = _session(tmp_path)
+    spec = TaskSpec(task_id="t1", description="work",
+                    scope=TaskScope(permitted_paths=["app.py"], intended_result="add", acceptance=["add works"],
+                                    max_lines=20, proofs=proofs))
+    assert session._correction_packet_problem(spec, "P1", "state", long_state) == ""
+    declared = session._role_packet(spec, "lead")
+    assert len(declared.encode()) <= 20_000
+    huge = "x" * 21_000
+    problem = session._correction_packet_problem(spec, "P1", "state", huge)
+    assert problem.startswith("the corrected text puts this task's role packet over its limit, which the declaration met")
+    assert dict(spec.scope.proofs[0])["state"] == "nothing stored", "a refused trial applied nothing"
     prompt = inspect.getsource(Session._correct_scenarios)
-    assert "at most {MAX_SCENARIO_TEXT} characters" in prompt and "| because: <why, optional>" in prompt
+    assert "there is no character count" in prompt and "| because: <why, optional>" in prompt
     assert "Correctness and authority are not optional" in prompt and "never a quiet rewording" in prompt
+    assert "MAX_SCENARIO_TEXT" not in inspect.getsource(S)
+
+
+# -- 2b. exact retrieval: fetch windows ------------------------------------------------------------
+
+@pytest.mark.parametrize("reply, parsed", [
+    ("FETCH: abc123", ("abc123", 0)),
+    ("fetch: abc123 FROM 40000", ("abc123", 40000)),
+    ("FETCH: abc123 from 12", ("abc123", 12)),
+    ("FETCH: abc123 FROM x", ("abc123 FROM x", 0)),
+    ("FETCH: abc123\nand more", None),
+    ("I will FETCH: abc123 later", None),
+])
+def test_a_fetch_request_names_an_artifact_and_optionally_a_window_offset(reply, parsed):
+    assert _parse_fetch_window(reply) == parsed
+    assert _parse_fetch(reply) == (parsed[0] if parsed else None)
+
+
+def test_a_long_artifact_is_served_in_exact_windows_that_name_the_next_request():
+    content = "".join(f"line {i:06d}\n" for i in range(9000))
+    assert len(content) > 80_000
+    first = _render_fetches([("art1", content, 0)])
+    assert first.count("line 000000\n") == 1 and "[...truncated]" not in first
+    shown = first.split("]\n", 1)[1].split("\n[", 1)[0]
+    assert shown == content[:40_000], "nothing inside a window is elided"
+    assert f"{len(content) - 40_000:,} characters remain" in first
+    assert "reply exactly 'FETCH: art1 FROM 40000'" in first
+    second = _render_fetches([("art1", content, 40_000)])
+    assert second.split("]\n", 1)[1].split("\n[", 1)[0] == content[40_000:80_000]
+    assert "'FETCH: art1 FROM 80000'" in second
+    last = _render_fetches([("art1", content, 80_000)])
+    assert last.endswith(content[80_000:]) and "remain" not in last
+    assert "characters 80,000 to " in last
+    whole = _render_fetches([("art2", "short text")])
+    assert "whole]" in whole and whole.endswith("short text")
+    past = _render_fetches([("art1", content, 999_999)])
+    assert "past the end" in past and "line" not in past.split("\n", 1)[-1]
 
 
 # -- 3. the planning context: index mode, measured; the planning call admitted -----------------
@@ -321,3 +377,56 @@ def test_a_deferral_not_rechecked_is_listed_for_the_planner_and_a_rechecked_one_
     assert "- t1 by openai:sol: P1: not rechecked: the merge gate did not pass" in notes
     assert "- t3 by claude:opus: P2: awaiting the merge gate and the reviewer's recheck" in notes
     assert not any("grok:default" in n for n in notes), "a rechecked deferral is not open debt"
+
+
+def test_the_terminal_patch_is_the_whole_carried_state_as_the_run_ends(tmp_path):
+    """Root on 6c1b922: a last-slot batch's sealed state kept the pre-batch
+    review_findings=[] and unresolved_reviews=[] beside the end's capped
+    lists. The patch now carries every carried key as it is at the end,
+    encoded per key, with task outcomes and the ledger."""
+    from quadratus.outcome import TaskOutcome
+    from quadratus.project_run import _terminal_state_patch
+    session = _session(tmp_path)
+    session.task_outcomes.append(TaskOutcome(task_id="t2", intent="implementation", lead="x", covers=["R1"]))
+    session.review_findings.append(_review("RFT2-1", "claude:opus", "t2", hold="left open when t2 stopped"))
+    session.unresolved_reviews.append(dict(task="t2", peer="claude:opus", finding="x", text="RFT2-1: UNRESOLVED x",
+                                           finding_id="RFT2-1"))
+    session.turn_limited.append("t2")
+    session._partial_tasks.add("t2")
+    session.deferred_evidence.append(dict(task="t1", peer="openai:sol", proof_ids=["P1"], declared="d",
+                                          rechecked=None, reading=None))
+    patch = _terminal_state_patch(session)
+    assert "terminal_patch_omitted" not in patch
+    assert [r["fid"] for r in patch["review_findings"]] == ["RFT2-1"]
+    assert patch["unresolved_reviews"][0]["finding_id"] == "RFT2-1"
+    assert patch["turn_limited"] == ["t2"] and patch["_partial_tasks"] == {"__set__": ["t2"]}
+    assert [o["task_id"] for o in patch["task_outcomes"]] == ["t2"]
+    assert patch["deferred_evidence"][0]["peer"] == "openai:sol" and patch["review_resolutions"] == []
+    for name in checkpoint._CARRIED:
+        assert name in patch, name
+    decoded = checkpoint._decode(json.loads(json.dumps(patch)))
+    assert decoded["_partial_tasks"] == {"t2"}
+
+
+def test_a_scope_conflict_child_s_findings_are_held_through_the_shared_failed_record(tmp_path):
+    """The scope conflict and the raised child share _record_unmerged_failure;
+    the hold lands there, on the child's outcome, before the failed record."""
+    from quadratus.outcome import TaskOutcome
+    session = _session(tmp_path, requirements_ledger=True)
+    session.memory.ledger.requirements["R2"] = "README documents add"
+    outcome = TaskOutcome(task_id="t2", intent="implementation", lead="grok:default", covers=["R2"])
+    session.task_outcomes.append(outcome)
+    session.review_findings.append(_review("RFT2-1", "openai:sol", "t2", requirement=("R2", 1)))
+    spec = TaskSpec(task_id="t2", description="document add")
+    kept = session.store.put("{}", kind="parallel-unmerged", author="grok:default")
+    record = session._record_unmerged_failure(spec, outcome, ["README.md", "app.py"], {}, kept, cause="scope",
+                                              reason="changed files outside its scope: app.py", listed=False)
+    assert record["cause"] == "scope" and session.failed_records["t2"] is record
+    finding = session.review_findings[0]
+    assert finding["hold"] == "left open when t2 was not merged (scope): changed files outside its scope: app.py"
+    assert [e["finding_id"] for e in session.unresolved_reviews] == ["RFT2-1"]
+    assert session.open_findings == ["RFT2-1: UNRESOLVED (left open when t2 was not merged (scope): changed files "
+                                     "outside its scope: app.py): RFT2-1 claim"]
+    assert any(f.kind == "unverified" and f.active and f.detail.startswith("RFT2-1: UNRESOLVED") for f in outcome.facts)
+    assert session.failed == [], "listed=False: the conflict's caller lists the task"
+    assert not finding["closed"] and finding["author"] == "openai:sol"
