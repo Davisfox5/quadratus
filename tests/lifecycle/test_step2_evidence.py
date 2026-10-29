@@ -18,8 +18,22 @@ import pytest
 
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
-from tests.lifecycle.replies import audit_reply, recheck_reply, requested_obligations
-from tests.lifecycle.test_lifecycle_matrix import DECL_T1, FILES, FIXED, T1, Script
+from tests.lifecycle.replies import (
+    audit_reply,
+    judged,
+    judging_scenarios,
+    recheck_reply,
+    requested_obligations,
+)
+from tests.lifecycle.test_lifecycle_matrix import (
+    ADD_PROOF,
+    ADD_SHOWN,
+    DECL_T1,
+    FILES,
+    FIXED,
+    T1,
+    Script,
+)
 
 _R1 = "add(a, b) returns the sum of two numbers"
 DECLARED = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1"
@@ -87,7 +101,12 @@ def _auditor(wrong: bool, *, reassessment=None):
             return (reassessment or _add_reassessment)(call.prompt)
         if wrong and not ("Result: passed" in call.prompt or "## Executed evidence" in call.prompt):
             return "R1: NOT MET - negative sums are not handled; at app.py add; example: add(-1, -2)"
-        return "R1: MET - app.py:2"
+        # The ordinary audit's own judgment of the one declared scenario,
+        # on every row carrying it (a repair task declares it again), where
+        # the prompt lists it executed.
+        return judged(call.prompt, {"R1": "MET - app.py:2"},
+                      approve={_ADD_OBLIGATION: "the project check ran add(1, 2) == 3 on this source, which is "
+                                                "exactly this scenario"})
     return auditor
 
 
@@ -294,7 +313,8 @@ def test_a_held_review_finding_is_tested_and_rechecked_once_by_its_own_reviewer(
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead, collaborator=collaborator, recheck=recheck,
-        auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        auditor=judging_scenarios(lambda c, r: "R1: MET - app.py:2", ADD_PROOF, basis=ADD_SHOWN),
+        **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=3, record_complete=False)
     if not _sandboxed():
         pytest.skip("no scratch sandbox here")
@@ -1023,7 +1043,9 @@ def test_a_positive_reassessment_without_a_sufficiency_judgment_keeps_the_requir
     requirement never overwrites the insufficiency an earlier independent
     NOT MET implied. Missing, explicitly insufficient and contradictory
     sufficiency lines all keep R1 held, the record says why, and the run
-    ends RequirementsUnmet; the proof and the reassessment stay on record."""
+    ends RequirementsUnmet; the proof and the reassessment stay on record.
+    Since the evidence lifecycle batch nothing is implied: a missing line
+    reads honestly as unjudged, an explicit INSUFFICIENT as insufficient."""
     def reply(prompt):
         judged = {o["oid"]: {"insufficient": "INSUFFICIENT the proof shows one case only",
                              "conflicting": "SUFFICIENT shown\n{oid}: INSUFFICIENT not shown"}.get(shape, "")
@@ -1038,7 +1060,7 @@ def test_a_positive_reassessment_without_a_sufficiency_judgment_keeps_the_requir
     assert record["disposition"].startswith("held: acceptance predicate:"), record["disposition"]
     assert "sufficiency" in record["disposition"]
     obligation = next(o for o in H.result_json(replay)["evidence_obligations"] if o["behavior"] == _ADD_OBLIGATION)
-    assert obligation["sufficiency"] == {"conflicting": "unjudged"}.get(shape, "insufficient")
+    assert obligation["sufficiency"] == {"insufficient": "insufficient"}.get(shape, "unjudged")
     assert len(_reassessments(replay)) == 1
     assert not replay.result.completed and "RequirementsUnmet" in (replay.result.error or "")
 

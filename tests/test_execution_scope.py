@@ -33,13 +33,33 @@ PYTEST = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--qu
 UNIT, BROWSER = "tests/ui/unit.test.js", "tests/ui/browser.test.js"
 
 
-def _session(tmp_path, root, gate, reply):
+def _session(tmp_path, root, gate, reply, approve=()):
+    """``reply``: the scripted auditor's verdict lines. ``approve``: the NOT
+    RUN items or skip-fact items (their text, as the obligations block
+    renders them, or a prefix ending in ': ' for a skip fact whose count
+    and names the case cannot know ahead) this case judges SUFFICIENT where
+    the prompt lists them executed; nothing else is judged, and a held row
+    gets no line (replies.judged)."""
+    from tests.lifecycle.replies import judged, requested_obligations
     session = Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
                       config=SessionConfig(project=root, allow_writes=True, requirements_ledger=True,
                                            integration_gate=gate, max_gate_fixes=0))
     session.memory.ledger.requirements = {"R1": "unit requirement", "R5": "browser acceptance executes"}
     session._auditor = lambda: "claude:opus"
-    session._invoke_model = lambda *a, **k: reply
+
+    def audit(key, prompt, **kw):
+        verdicts = {}
+        for line in reply.splitlines():
+            rid, _, text = line.partition(": ")
+            if rid.strip():
+                verdicts[rid.strip()] = text
+        named = {}
+        for row in requested_obligations(prompt):
+            for item in approve:
+                if row["behavior"] == item or (item.endswith(": ") and row["behavior"].startswith(item)):
+                    named[row["behavior"]] = f"the harness's own run executed {row['behavior'][:80]} on this source"
+        return judged(prompt, verdicts, approve=named)
+    session._invoke_model = audit
     return session
 
 
@@ -128,7 +148,7 @@ def test_a_relative_operand_is_read_from_the_command_cwd():
 def test_a_run_in_a_subdirectory_discharges_the_project_path(tmp_path):
     root = _node_project(tmp_path, "const t=require('node:test');t('browser',()=>{});\n")
     gate = GateSuite([GateCommand(id="browser", argv=(NODE, "--test", "browser.test.js"), cwd="tests/ui")], cwd=root)
-    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}", approve=(BROWSER,))
     session._snapshot_original_tests()
     _not_run(session, BROWSER)
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "nothing has run yet"
@@ -143,7 +163,7 @@ def test_a_product_edit_that_skips_a_case_is_recorded(tmp_path):
                                    "t('browser',{skip:!JSON.parse(f.readFileSync('enabled.json','utf8'))},()=>{});\n")
     (root / "enabled.json").write_text("true")
     gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
-    session = _session(tmp_path, root, gate, f"R5: MET - {UNIT} and {BROWSER}")
+    session = _session(tmp_path, root, gate, f"R5: MET - {UNIT} and {BROWSER}", approve=("ui: ",))
     session._snapshot_original_tests()
     _gate(session, "t0", ["R1"])
     (root / "enabled.json").write_text("false")
@@ -285,7 +305,7 @@ def test_a_single_command_gate_keeps_its_cwd(tmp_path):
     """Session construction binds a gate to the project; one set afterwards,
     as the reviewer's control does, can run in a subdirectory."""
     root = _node_project(tmp_path, "const t=require('node:test');t('browser',()=>{});\n")
-    session = _session(tmp_path, root, None, f"R5: MET - {BROWSER}")
+    session = _session(tmp_path, root, None, f"R5: MET - {BROWSER}", approve=(BROWSER,))
     session.config.integration_gate = IntegrationGate((NODE, "--test", "browser.test.js"), cwd=root / "tests" / "ui")
     session._snapshot_original_tests()
     _not_run(session, BROWSER)
@@ -429,7 +449,10 @@ def test_a_file_qualified_case_recovers_its_own_requirement(tmp_path, unit_skip)
     (root / browser).write_text(ran)
     (root / unit).write_text(unit_source(unit_skip == "historical"))
     gate = GateSuite([GateCommand(id="acceptance", argv=(*PYTEST, "-vv", browser, unit))], cwd=root)
-    session = _session(tmp_path, root, gate, f"R1: MET - {unit}\nR5: MET - {browser}")
+    # The case judges the browser skip fact it expects to see executed again;
+    # the unit skip fact (R1's own row) is never judged here.
+    session = _session(tmp_path, root, gate, f"R1: MET - {unit}\nR5: MET - {browser}",
+                       approve=("acceptance: 1 skipped test case(s) not skipped at run start: tests/test_browser.py::test_browser",))
     session._snapshot_original_tests()
     (root / browser).write_text(skipped)
     _gate(session, "t1", ["R5"])
@@ -585,7 +608,7 @@ def test_a_node_file_named_pytest_keeps_node_case_identity(tmp_path, monkeypatch
     other = "tests/pytest"
     (root / other).write_text("const t=require('node:test');t('unit',()=>{});t('old-platform',{skip:true},()=>{});\n")
     gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", other, BROWSER))], cwd=root)
-    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}", approve=("ui: ",))
     session._snapshot_original_tests()
     (root / BROWSER).write_text("const t=require('node:test');t('browser',{skip:true},()=>{});\n")
     check = _gate(session, "t1", ["R5"])

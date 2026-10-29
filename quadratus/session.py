@@ -10976,7 +10976,15 @@ class Session:
                 if all((n in qualified and n in run["qualified_names"])
                        or (files.get(n) and _case_files(n, texts, False) == frozenset(files[n]))
                        for n in need):
+                    # The decision's own evidence travels with the index: the
+                    # run (same command) and the names it verified executed
+                    # and unskipped, so the typed receipt carries exactly
+                    # what was decided (root's six-case diagnosis on 01cfaf8:
+                    # a whole-run re-reading dropped bare Node names and a
+                    # recovery beside an unrelated historical skip).
                     entry["discharged_at"] = index
+                    entry["discharged_run"] = run["id"]
+                    entry["discharged_cases"] = sorted(need)
                     break
 
     def _skip_baseline(self, gate, result, current: dict):
@@ -11290,20 +11298,17 @@ class Session:
                     if e.get("task") == record["task"] and e.get("item") == entry.get("item")]
         if kind in ("not_run", "skipped"):
             for found in matching:
-                index = self._discharging_check(found)
-                if index is not None:
+                decided = self._discharge_record(found)
+                if decided is not None:
+                    index = decided["index"]
                     check = self.checks[index]
-                    # The passed cases are read off the check's own case
-                    # record, never copied from the claim.
-                    shown = set()
-                    for run in _check_runs(check, self.project):
-                        if _complete_run(run):
-                            shown |= _run_passed_cases(run)
+                    # Exactly the decision's evidence: the run that decided
+                    # it and the cases it verified, never a second reading
+                    # of the check and never the claim.
                     return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
-                                runner="gate", **self._receipt_identity(check, record), completed=True,
-                                passed=bool(check.get("passed")),
-                                passed_cases=[c for c in (found.get("cases") or ()) if c in shown],
-                                skipped_cases=[])
+                                runner="gate", run=decided["run"], **self._receipt_identity(check, record),
+                                completed=True, passed=bool(check.get("passed")),
+                                passed_cases=list(decided["cases"]), skipped_cases=[])
             return None
         # A declared acceptance behavior: discharged only by a passing check
         # on exactly the current source, under the obligation's gate and
@@ -11392,12 +11397,29 @@ class Session:
 
     def _discharging_check(self, entry: dict) -> Optional[int]:
         """The index of the first later check that discharges a NOT RUN or
-        skip record (the rule _standing_not_run applies), or None. A NOT
-        RUN item bound to cases (``_bind_not_run``) is discharged by a later
-        complete required run whose own case record shows every bound case
-        passed; a filtered, failed, skipping or caseless run, a run of
-        another file's same-named case, or an item bound to nothing never
-        discharges it (evidence lifecycle batch, 2026-10-29)."""
+        skip record (the rule _standing_not_run applies), or None: the
+        index of ``_discharge_record``."""
+        record = self._discharge_record(entry)
+        return None if record is None else record["index"]
+
+    def _discharge_record(self, entry: dict) -> Optional[dict]:
+        """The one discharge decision for a NOT RUN or skip record, with its
+        evidence: ``index`` (the check), ``run`` (the command receipt id
+        within it) and ``cases`` (the case identities that run was verified
+        to have executed and passed for this record). A skip fact with named
+        cases is decided when its check ran (``_discharge_named``: the same
+        command, each name executed and unskipped, held by the same file or
+        runner-qualified) and carries that decision's names; a skip fact
+        without names by the same command's complete run; a NOT RUN item
+        bound to cases (``_bind_not_run``) by a later complete required run
+        whose own case record shows every bound case passed, on the current
+        source, gate and environment; a path-only item by a complete run
+        naming every path whole. A filtered, failed, skipping or caseless
+        run, a run of another file's same-named case, or an item bound to
+        nothing never discharges (evidence lifecycle batch, 2026-10-29). The
+        typed receipt (``_obligation_receipt``) carries exactly this record,
+        never a re-reading of the run under another rule and never the
+        claim itself."""
         claim = (entry.get("binding") or {}).get("kind") in ("scenario", "case", "mixed")
         # An identity claim, valid or not, is discharged by its cases or by
         # nothing: the file-level route is for items that name only paths
@@ -11420,16 +11442,22 @@ class Session:
             runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
             if entry.get("kind") == "skipped" and entry.get("cases"):
                 if entry.get("discharged_at") is not None and entry["discharged_at"] <= index:
-                    return entry["discharged_at"]
+                    return dict(index=entry["discharged_at"], run=entry.get("discharged_run") or entry.get("receipt"),
+                                cases=list(entry.get("discharged_cases") or entry.get("cases") or ()))
                 continue
             if entry.get("kind") == "skipped":
-                if any(r["id"] == entry["receipt"] for r in runs):
-                    return index
+                run = next((r for r in runs if r["id"] == entry["receipt"]), None)
+                if run is not None:
+                    return dict(index=index, run=run["id"], cases=[])
                 continue
-            if paths and any(all(p in r["files"] for p in paths) for r in runs):
-                return index
-            if bound and check.get("passed") and any(set(bound) <= _run_passed_cases(r) for r in runs):
-                return index
+            if paths:
+                run = next((r for r in runs if all(p in r["files"] for p in paths)), None)
+                if run is not None:
+                    return dict(index=index, run=run["id"], cases=[])
+            if bound and check.get("passed"):
+                run = next((r for r in runs if set(bound) <= _run_passed_cases(r)), None)
+                if run is not None:
+                    return dict(index=index, run=run["id"], cases=list(bound))
         return None
 
     def _not_run_identity(self, entry: dict) -> Tuple[str, Optional[str]]:

@@ -412,21 +412,46 @@ def _not_run_cleared(entry, checks, record=None) -> bool:
             return _paths_cleared(entry, checks, record)
         return False
     if entry.get("kind") == "skipped":
-        wanted = list(entry.get("cases") or [])
-        files = []
-    else:
-        wanted = []
-        files = [p[2:] if p.startswith("./") else p for p in _PATH.findall(entry.get("item") or "")]
-    if not wanted and not files:
+        return _skipped_cleared(entry, checks, record)
+    return False
+
+
+def _skipped_cleared(entry, checks, record) -> bool:
+    """A skip fact (the harness's own record of a required command that
+    passed with named cases skipped) is cleared only by a later run of the
+    same command (the receipt id the fact names) that passed, was required,
+    selected nothing, and whose own printed case record shows every named
+    case executed and none of them skipped; on the final source wherever
+    the check records one. Another command's run, a name printed elsewhere,
+    or a fact without names is never cleared here."""
+    wanted = list(entry.get("cases") or [])
+    receipt_id = entry.get("receipt")
+    if not wanted or not receipt_id:
         return False
     start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else 0
+    final = (record or {}).get("source_fingerprint")
     for check in checks[start:]:
         if not check.get("passed"):
             continue
-        keys = _executed_keys(check)
-        ran_files = {k.split("::", 1)[0] for k in keys if "::" in k}
-        if all(c in keys for c in wanted) and all(f in ran_files for f in files):
-            return True
+        if check.get("source") and final and check.get("source") != final:
+            continue
+        receipts = check.get("receipts") or []
+        if receipts:
+            rows = [r for r in receipts if isinstance(r, dict) and r.get("id") == receipt_id]
+        else:
+            rows = [dict(status="passed" if check.get("passed") else "failed", required=True,
+                         command=check.get("command"), selection=check.get("selection"),
+                         cases=check.get("cases"))] if receipt_id == "check" else []
+        for row in rows:
+            if row.get("status") != "passed" or not row.get("required", True) or row.get("selection"):
+                continue
+            if _filtered(str(row.get("command") or "")):
+                continue
+            cases = row.get("cases") if isinstance(row.get("cases"), dict) else {}
+            executed = set(cases.get("executed") or {})
+            skipped = set(cases.get("skipped") or {})
+            if all(c in executed and c not in skipped for c in wanted):
+                return True
     return False
 
 

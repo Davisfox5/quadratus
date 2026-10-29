@@ -149,9 +149,15 @@ def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_pat
     def auditor(call, replay):
         return ('R1: MET - switches.py; tests/test_error_contract.py::test_invalid_string_error '
                 'and tests/test_error_contract.py::test_nonstring_error demonstrate explicit error paths.')
+    # This case's own judgment of the scenario it declared, only where the
+    # prompt lists it executed (the good-executed scratch run); a failed or
+    # skipped proof leaves the row unexecuted and unjudged.
+    judged_auditor = judging_scenarios(auditor, bound_scope['proofs'][0],
+                                       basis='the scratch run executed test_invalid_string_error and '
+                                             'test_nonstring_error on the delivered source, exactly this scenario')
     replay = H.run(tmp_path, monkeypatch,
         Script(orchestrator=lambda c,r:bound_plan if not r.of('lead') else 'DONE', lead=lead,
-               collaborator=peer, auditor=auditor, **{'requirements-review':lambda c,r:'COMPLETE'}),
+               collaborator=peer, auditor=judged_auditor, **{'requirements-review':lambda c,r:'COMPLETE'}),
         files={'switches.py':GOOD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},
         goal=GOAL,max_tasks=1,
         limits=_ROOT_LIMITS,

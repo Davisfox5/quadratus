@@ -2948,9 +2948,20 @@ Key design decisions already settled:
   wrong-class, suffix, partial or prose items bind nothing and are held
   as written, with the problem on the record. An identity claim, valid or
   not, never falls back to the file-level route (root's control: an
-  undefined case cleared when its file ran other cases), and the receipt's
-  passed cases are read off the check's own case record, never copied
-  from the claim. A bound item's typed row
+  undefined case cleared when its file ran other cases). The discharge is
+  one decision with its evidence (`_discharge_record`: the check, the
+  command receipt within it and the case identities that run was verified
+  to have executed for the record), and the typed receipt
+  (`_obligation_receipt`) carries exactly that record: root's six-case
+  diagnosis on 01cfaf8 found the receipt re-reading the check under a
+  whole-run rule, which dropped bare Node names and a named-case recovery
+  beside an unrelated historical skip, so the prompts said discharged
+  while the typed row read invalid. A skip fact's decision
+  (`_discharge_named`: same command, each name executed and unskipped,
+  held by the same file or runner-qualified) now keeps its run and names
+  on the entry (`discharged_run`, `discharged_cases`); never the claim
+  itself. The checker's skip route (`_skipped_cleared`) reads the same
+  receipt id's own executed and skipped names, never another command's. A bound item's typed row
   gets the gate as runner and the cases as identity (kept even
   runner-less, so a parallel child's row re-bases to the parent's gate);
   it is discharged only by a later complete required run on the current

@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from quadratus.artifacts import ArtifactStore
 from quadratus.integration import GateCommand, GateSuite
-from quadratus.session import Session, _gate_identity
+from quadratus.session import Session, SessionConfig, TaskSpec, _gate_identity
 from tools.step2_test_selection import MARKER, WholeFileGateSuite, installed, render, whole_files
 
 
@@ -102,17 +103,29 @@ def test_actual_complete_file_receipt_clears_and_skip_stays_held(tmp_path, skip,
     text = 'def test_one():\n    assert 1 == 1\n'
     if skip:
         text += 'import pytest\n@pytest.mark.skip(reason="synthetic negative")\ndef test_two():\n    assert False\n'
-    populate(tmp_path, body=text)
-    result = WholeFileGateSuite([command()], cwd=tmp_path).run()
+    project = tmp_path / 'project'
+    populate(project, body=text)
+    suite = WholeFileGateSuite([command()], cwd=project)
+    result = suite.run()
     assert result.passed
     receipt = result.receipts[0]
     assert 'tests/test_one.py' in receipt.command and MARKER not in receipt.command
     assert receipt.cases['executed']['tests/test_one.py::test_one'] == 1
-    session = Session.__new__(Session)
-    session.project = str(tmp_path)
-    session.checks = [{'passed': result.passed, 'receipts': [dataclasses.asdict(receipt)]}]
-    session.unexecuted_acceptance = [{'task': 'inert', 'role': 'revision',
-        'item': 'tests/test_one.py::test_one', 'after_check': 0, 'requirements': ['R1'], 'why': 'inert'}]
+    # A real session bound to the project and this gate; the NOT RUN report
+    # is recorded as a lead would make it and the check as the session
+    # records one (source, gate, environment and command cwd), so the
+    # discharge reads the actual current receipt identity.
+    session = Session('goal', ArtifactStore(tmp_path / 'artifacts'), lambda *a, **k: '',
+                      config=SessionConfig(project=project, requirements_ledger=True, integration_gate=suite))
+    session.memory.ledger.requirements['R1'] = 'test_one passes'
+    session._active_spec, session._current_covers = TaskSpec('inert', 'offline'), ['R1']
+    session._record_not_run('openai:sol', 'revision', 'NOT RUN: tests/test_one.py::test_one - inert')
+    [entry] = session.unexecuted_acceptance
+    assert entry['cases'] == ['tests/test_one.py::test_one']
+    session.checks.append({'passed': result.passed, 'command': result.command, 'output': result.output,
+                           'receipts': [dataclasses.asdict(receipt)], 'command_cwd': '.',
+                           'source': session._source_fingerprint(), 'gate': _gate_identity(suite),
+                           'environment': session._environment_id()})
     assert bool(session._standing_not_run()) is held
 
 

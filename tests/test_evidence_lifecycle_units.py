@@ -485,3 +485,77 @@ def test_the_review_lens_covers_framing_and_no_mutation_on_rejected_input_withou
     assert "by reading the state after the refusal, not by reading the error path" in prompt
     for word in ("Content-Length", "JSON prefix", "ApiDependencies", "socket", "sqlite3", "truncated body"):
         assert word not in S._ERROR_BOUNDARY_LENS
+
+
+# -- 6. the typed receipt carries the discharge decision, never a re-reading -----------------------
+
+def _skip_entry(**over):
+    entry = dict(task="t1", role="check", author="harness",
+                 item="ui: 1 skipped test case(s) not skipped at run start: browser",
+                 why="the required check passed with these cases skipped", requirements=["R1"], after_check=0,
+                 receipt="ui", kind="skipped", cases=["browser"], case_files={"browser": ["tests/ui/browser.test.js"]},
+                 qualified_cases=[], baseline=None)
+    entry.update(over)
+    return entry
+
+
+def _node_check(session, *, executed=("browser", "unit"), skipped=("old-platform",), receipt="ui", status="passed",
+                selection=""):
+    return dict(passed=status == "passed", command="gate suite", output="", command_cwd=".", report=None,
+                source=session._source_fingerprint(), gate=_gate_identity(session._current_gate()),
+                environment=session._environment_id(), requirements=session._requirement_revisions(),
+                receipts=[dict(id=receipt, status=status, required=True, command="node --test tests/ui/unit.test.js tests/ui/browser.test.js",
+                               cwd=".", selection=selection, output="# pass 2\n# fail 0\n# skipped 1\n", tests=2,
+                               report=None, cases=dict(executed={n: 1 for n in executed}, skipped={n: 1 for n in skipped}))])
+
+
+def test_the_typed_receipt_carries_the_skip_decision_s_own_run_and_names(tmp_path):
+    """Root's six-case diagnosis on 01cfaf8: a bare Node name verified by
+    the skip decision was dropped by a whole-run re-reading of the check
+    (no file-qualified id, an unrelated historical skip still present), so
+    the typed row read invalid while the prompts showed no debt."""
+    root = _project(tmp_path)
+    session = _session(tmp_path, project=root, gate=_gate(root))
+    decided = _skip_entry(discharged_at=0, discharged_run="ui", discharged_cases=["browser"])
+    session.unexecuted_acceptance.append(decided)
+    row = session._register_obligation(decided, kind="skipped")
+    session.checks.append(_node_check(session))
+    record = session._discharge_record(decided)
+    assert record == dict(index=0, run="ui", cases=["browser"])
+    receipt = session._obligation_receipt(row)
+    assert receipt["passed_cases"] == ["browser"] and receipt["run"] == "ui" and receipt["id"] == "check-1"
+    session._refresh_obligations()
+    assert session.evidence_obligations[0]["execution"] == "ran", "the decision's evidence satisfies the typed row"
+    undecided = _skip_entry(item="ui: 1 skipped test case(s): browser")
+    session.unexecuted_acceptance.append(undecided)
+    row = session._register_obligation(undecided, kind="skipped")
+    assert session._discharge_record(undecided) is None and session._obligation_receipt(row) is None, \
+        "no decision, no receipt: the names are never copied from the claim"
+
+
+def test_the_checker_clears_a_skip_fact_only_by_the_same_command_s_own_executed_names(tmp_path):
+    from tests.lifecycle.test_evidence_lifecycle import truth
+    record = dict(source_fingerprint="f" * 64)
+
+    def check(**over):
+        base = dict(passed=True, source="f" * 64, receipts=[dict(
+            id="ui", status="passed", required=True, command="node --test tests/ui/browser.test.js", selection="",
+            cases=dict(executed={"browser": 1, "unit": 1}, skipped={"old-platform": 1}))])
+        base["receipts"][0].update(over.pop("receipt", {}))
+        base.update(over)
+        return base
+    entry = _skip_entry()
+    assert truth._not_run_cleared(entry, [check()], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(id="other"))], record), "another command"
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"browser": 1}, skipped={"browser": 1})))], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(status="failed"))], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(required=False))], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(selection="-k browser"))], record)
+    assert not truth._not_run_cleared(entry, [check(receipt=dict(cases=dict(executed={"unit": 1}, skipped={})))], record)
+    assert not truth._not_run_cleared(entry, [check(source="0" * 64)], record), "another source"
+    assert not truth._not_run_cleared(entry, [check(passed=False)], record)
+    assert not truth._not_run_cleared(_skip_entry(cases=[]), [check()], record), "a fact without names"
+    direct = dict(passed=True, source="f" * 64, command="node --test tests/ui/browser.test.js",
+                  cases=dict(executed={"browser": 1}, skipped={}))
+    assert truth._not_run_cleared(_skip_entry(receipt="check"), [direct], record), "the single-command shape"
+    assert not truth._not_run_cleared(_skip_entry(receipt="ui"), [direct], record), "a receipt id the check does not carry"

@@ -96,19 +96,23 @@ def judged(prompt: str, requirements: Dict[str, str], *, approve: Optional[Dict[
     behavior the prompt does not list executed is an error (the case would
     be judging nothing); every other row is left exactly as the case left
     it, unjudged. Never a transform of the verdicts."""
-    rows = {}
+    rows: Dict[str, list] = {}
     for row in requested_obligations(prompt):
-        rows.setdefault(row["behavior"], row)
+        if row["oid"] not in {r["oid"] for r in rows.get(row["behavior"], [])}:
+            rows.setdefault(row["behavior"], []).append(row)
     obligations: Dict[str, str] = {}
     for mapping, word in ((approve or {}, "SUFFICIENT"), (reject or {}, "INSUFFICIENT")):
         for behavior, text in mapping.items():
-            row = rows.get(behavior)
-            assert row is not None, f"the prompt lists no obligation for {behavior!r}; listed: {sorted(rows) or 'none'}"
-            if word == "SUFFICIENT" and row["execution"] != "ran":
-                # Nothing executed, nothing the case can call shown: the row
-                # is left as it is (the engine would refuse the line anyway).
-                continue
-            obligations[row["oid"]] = f"{word} {text}"
+            listed = rows.get(behavior)
+            assert listed, f"the prompt lists no obligation for {behavior!r}; listed: {sorted(rows) or 'none'}"
+            # Every row that carries the named scenario (a repair task
+            # declares the same one again) gets the case's line.
+            for row in listed:
+                if word == "SUFFICIENT" and row["execution"] != "ran":
+                    # Nothing executed, nothing the case can call shown: the
+                    # row is left as it is (the engine would refuse the line).
+                    continue
+                obligations[row["oid"]] = f"{word} {text}"
     return audit_reply(prompt, requirements, obligations)
 
 
@@ -137,11 +141,13 @@ def judging_scenarios(base, *proofs, basis: str):
         reply = base(call, replay)
         if not isinstance(reply, str):
             return reply
-        listed = {row["behavior"]: row for row in requested_obligations(call.prompt)}
         spoken = set(_re.findall(r"^\s*(O\d+)\s*:", reply, _re.MULTILINE))
-        lines = [f"{listed[t]['oid']}: SUFFICIENT {basis}" for t in texts
-                 if t in listed and listed[t]["execution"] == "ran" and listed[t]["modality"] == "test"
-                 and listed[t]["oid"] not in spoken]
+        lines, seen = [], set()
+        for row in requested_obligations(call.prompt):
+            if (row["behavior"] in texts and row["execution"] == "ran" and row["modality"] == "test"
+                    and row["oid"] not in spoken and row["oid"] not in seen):
+                seen.add(row["oid"])
+                lines.append(f"{row['oid']}: SUFFICIENT {basis}")
         return reply + ("\n" + "\n".join(lines) if lines else "")
     return auditor
 
