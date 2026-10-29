@@ -23,8 +23,15 @@ import pytest
 
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script, judging
-from tests.lifecycle.test_step2_recovery import _episode, _interrupt_after, _simple
+from tests.lifecycle.test_step2_recovery import (
+    SIMPLE_SHOWN,
+    _episode,
+    _interrupt_after,
+    _simple,
+    simple_proofs,
+)
 
 PLAN_1 = ("REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: README documents add\n"
           + _simple("app.py", "Implement add in app.py.", "R1"))
@@ -63,7 +70,9 @@ def _script(plan, *, t2_review="BLOCKING: README lacks an example\nR2: MET - REA
     extra = {"closeout": closeout} if closeout else {}
     return Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
                   recheck=lambda call, replay: recheck,
-                  auditor=judging(lambda call, replay: "R1: MET - app.py\nR2: MET - README.md", reading=DOCS_JUDGED),
+                  auditor=judging_scenarios(
+                      judging(lambda call, replay: "R1: MET - app.py\nR2: MET - README.md", reading=DOCS_JUDGED),
+                      *simple_proofs("R1"), basis=SIMPLE_SHOWN),
                   **{"requirements-review": lambda call, replay: "COMPLETE"}, **extra)
 
 
@@ -268,7 +277,8 @@ def test_a_selected_repair_carries_no_close_out_and_the_finish_still_runs(tmp_pa
     script = Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
                     collaborator=lambda c, r: ("BLOCKING: negative-number behavior needs an explicit regression "
                                                "test.\nR1: MET - app.py"),
-                    auditor=lambda c, r: "R1: MET - app.py", **{"requirements-review": lambda c, r: "COMPLETE"})
+                    auditor=judging_scenarios(lambda c, r: "R1: MET - app.py", *simple_proofs("R1"), basis=SIMPLE_SHOWN),
+                    **{"requirements-review": lambda c, r: "COMPLETE"})
 
     def respond(call, replay):
         role = call.role
@@ -327,7 +337,8 @@ def test_a_route_without_a_close_out_is_paid_whole_and_the_job_runs_to_its_finis
         return 'Added the docstring.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = lead
-    script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
+    script.overrides["auditor"] = judging_scenarios(lambda call, replay: "R1: MET - app.py", *simple_proofs("R1"),
+                                                    basis=SIMPLE_SHOWN)
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(8_400),
                    record_complete=False)
     assert [(c.task, c.role) for c in replay.calls if c.task == "t2"] == [("t2", "lead"), ("t2", "collaborator")]
@@ -365,7 +376,8 @@ def test_a_mandatory_deficit_has_no_terminal_candidate_and_nothing_is_written(tm
     its mandatory admission, nothing is written, t1 is NOT RUN, the slots
     are forfeited and the stop says so."""
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
-    script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
+    script.overrides["auditor"] = judging_scenarios(lambda call, replay: "R1: MET - app.py", *simple_proofs("R1"),
+                                                    basis=SIMPLE_SHOWN)
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(6_100),
                    record_complete=False)
     assert not [c for c in replay.calls if c.task in ("t1", "t2")], "no task call was made"
@@ -397,7 +409,8 @@ def test_a_last_slot_tasks_capped_checked_source_meets_the_bounded_review(tmp_pa
                          stop="cancelled", num_turns=14)
     script = _script([ONE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["lead"] = lead
-    script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
+    script.overrides["auditor"] = judging_scenarios(lambda call, replay: "R1: MET - app.py", *simple_proofs("R1"),
+                                                    basis=SIMPLE_SHOWN)
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, limits=_tight(7_000),
                    record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
     result = H.result_json(replay)

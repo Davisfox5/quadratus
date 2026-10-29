@@ -1722,6 +1722,17 @@ def _complete_run(run: dict) -> bool:
             and (run["tests"] or 0) > 0 and run["skipped"] == 0)
 
 
+#: The bounded display of a NOT RUN item in a prompt; the record keeps it whole.
+_ITEM_DISPLAY_CHARS = 300
+
+
+def _display_item(item: str) -> str:
+    item = str(item or "")
+    if len(item) <= _ITEM_DISPLAY_CHARS:
+        return item
+    return f"{item[:_ITEM_DISPLAY_CHARS]} [... {len(item) - _ITEM_DISPLAY_CHARS:,} more characters; the record holds the whole item]"
+
+
 def _item_paths(item: str) -> List[str]:
     """The file paths a NOT RUN item names; none for a runner name or prose."""
     import shlex
@@ -2485,6 +2496,11 @@ _EXECUTED_ERROR_RULE = (
 
 
 _CASE_CITATION = re.compile(r"([\w./-]+\.[A-Za-z]\w*)::((?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?)")
+#: A case named without its file in a NOT RUN item: ``Class.test``,
+#: ``Class::test`` or a bare ``test_*``, with any parameter; never a word
+#: inside a path or an explicit id (the lookarounds refuse ``/``, ``.``,
+#: ``:`` and ``-`` neighbours).
+_CASE_NAME = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]\s]*\])?)(?![\w/.:-])")
 
 
 def _cited_cases(text: str) -> List[str]:
@@ -9049,13 +9065,19 @@ class Session:
 
     def _command_receipt_citation(self, rid: str) -> Tuple[Optional[dict], str]:
         """``(receipt, problem)``: the harness's own receipt that shows the
-        command a requirement names was run, exactly, on the current
-        source, under the effective gate and this environment, as a
-        required command that passed from the project root; else None and
-        why the nearest receipt does not count (another command, a failed
-        or optional run, another source or cwd, or no receipt). Typed and
-        authoritative: read from the check records only, never from a
-        reply."""
+        command a requirement names was run whole and passed, exactly, on
+        the current source, under the effective gate and in this
+        environment, as a required command from the project root, with
+        cases executed, none skipped and none failed; else None and why the
+        nearest receipt does not count. Typed and authoritative: read from
+        the check records only, never from a reply. A check whose source,
+        gate or environment is not recorded is an unknown identity and is
+        refused (root's control on bd0164f). The citation names the
+        command in the requirement's own public spelling; the check record
+        keeps the argv that ran (an interpreter path is private;
+        _audit_check_facts). It is a citation of a successful complete run
+        of that command and nothing more: the requirement's scenarios are
+        still established by their own rows."""
         import shlex
         wanted = self._command_requirement(rid)
         if wanted is None:
@@ -9063,46 +9085,66 @@ class Session:
         if not self.project:
             return None, "no project checks to cite"
         from .integration import model_facing
+        public = " ".join(wanted)
         current = self._source_fingerprint()
-        gate = _gate_identity(self.config.integration_gate) if self.config.integration_gate is not None else None
+        gate = _gate_identity(self.config.integration_gate) if self.config.integration_gate is not None else ""
         environment = self._environment_id()
         nearest = ""
         for index in range(len(self.checks) - 1, -1, -1):
             check = self.checks[index]
             rows = check.get("receipts") or [dict(id="check", status="passed" if check.get("passed") else "failed",
                                                  required=True, command=check.get("command"),
-                                                 cwd=check.get("command_cwd"))]
-            for row in rows:
+                                                 cwd=check.get("command_cwd"), report=check.get("report"))]
+            runs = _check_runs(check, self.project)
+            for row, run in zip(rows, runs, strict=True):
                 try:
                     argv = model_facing(shlex.split(str(row.get("command") or "")))
                 except ValueError:
                     continue
                 if self._command_key(argv) != self._command_key(wanted):
                     # Never the harness's own command line: a gate can name a
-                    # file seats must not open (_audit_check_facts); the
-                    # requirement's command is the only one quoted.
-                    nearest = nearest or f"the harness has no receipt for `{' '.join(wanted)}` (its checks ran other commands)"
+                    # file seats must not open.
+                    nearest = nearest or f"the harness has no receipt for `{public}` (its checks ran other commands)"
                     continue
-                cwd = str(row.get("cwd") or check.get("command_cwd") or ".")
                 reasons = []
+                if not check.get("source"):
+                    reasons.append("its source is not recorded")
+                elif check.get("source") != current:
+                    reasons.append("it ran on another source")
+                if (check.get("gate") or "") != gate:
+                    reasons.append("it ran under another gate")
+                if not check.get("environment"):
+                    reasons.append("its environment is not recorded")
+                elif check.get("environment") != environment:
+                    reasons.append("it ran in another environment")
                 if row.get("status") != "passed":
                     reasons.append(f"its run {row.get('status') or 'did not pass'}")
                 if not row.get("required", True):
                     reasons.append("it is an optional command")
-                if check.get("source") != current:
-                    reasons.append("it ran on another source")
-                if gate is not None and (check.get("gate") or "") != gate:
-                    reasons.append("it ran under another gate")
-                if (check.get("environment") or environment) != environment:
-                    reasons.append("it ran in another environment")
-                if cwd not in ("", "."):
+                if run["filtered"]:
+                    reasons.append("it ran a selection, not the whole command")
+                if str(run.get("cwd") or ".") not in ("", "."):
                     reasons.append("it ran from another directory, not the project root")
+                if not (run["tests"] or 0) > 0:
+                    reasons.append("it executed no cases")
+                if run["skipped"] is None:
+                    reasons.append("its skips are unknown")
+                elif run["skipped"] > 0:
+                    reasons.append(f"it skipped {run['skipped']} case(s)")
+                report = row.get("report") if row.get("report") is not None else check.get("report")
+                clean = _executed_clean(report, run["tests"])
+                if clean and clean not in ("its counts are unknown", "its skips and failures were not parsed"):
+                    reasons.append(clean)
+                elif clean and (run["tests"] or 0) > 0 and run["skipped"] == 0:
+                    # Counts from the runner's own summary, no parsed report:
+                    # the summary line is the record (tests and skips read).
+                    pass
                 if reasons:
-                    nearest = nearest or f"the receipt for `{' '.join(wanted)}` does not count: " + "; ".join(reasons)
+                    nearest = nearest or f"the receipt for `{public}` does not count: " + "; ".join(reasons)
                     continue
-                return dict(id=f"check-{index + 1}", receipt=row.get("id"), command=" ".join(argv),
+                return dict(id=f"check-{index + 1}", receipt=row.get("id"), command=public,
                             source=check.get("source"), gate=check.get("gate")), ""
-        return None, nearest or f"the harness has no receipt for `{' '.join(wanted)}`"
+        return None, nearest or f"the harness has no receipt for `{public}`"
 
     def _resolve_citations(self, text: str) -> List[str]:
         """The cited paths and test names that actually exist in the project."""
@@ -9226,9 +9268,10 @@ class Session:
                "test, file, receipt or command showing it never held>' or '<id>: UNRESOLVED <why it "
                "stands>'; a finding you do not judge stays open.")
             + ("" if not any(o.get("execution") == "ran" for o in obligations_rows) else
-               " You may add one line per executed evidence obligation, '<O-id>: SUFFICIENT <why>' or "
-               "'<O-id>: INSUFFICIENT <what it does not establish>'; without one, your verdict on its "
-               "requirements decides.")
+               " Each executed evidence obligation listed above needs its own line, '<O-id>: SUFFICIENT "
+               "<what the executed case shows for that requirement and scenario>' or '<O-id>: INSUFFICIENT "
+               "<what it does not establish>'. Your verdict on a requirement never judges a row it binds: a "
+               "row left unjudged keeps its requirement not met.")
             + ("" if not any(o.get("modality") in ("legacy", "reading") for o in obligations_rows) else
                " Each legacy acceptance or reading row listed above needs its own '<O-id>: SUFFICIENT "
                "<evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; it is never judged by "
@@ -9305,7 +9348,7 @@ class Session:
         lowered += self._lower_unexercised_errors(found, audited, original=original, lowered=lowered)
         # Sufficiency is implied from the auditor's own lines (``original``),
         # never from a verdict lowered above for another record.
-        self._judge_obligations(auditor, reply or "", found, ids=list(audited), raw=original)
+        self._judge_obligations(auditor, reply or "", found, ids=list(audited))
         # The one acceptance predicate, after sufficiency is judged: what the
         # auditor wrote stands only where the record agrees.
         lowered += self._apply_acceptance(found, audited)
@@ -9732,6 +9775,11 @@ class Session:
                          + f"; sufficiency {o['sufficiency']}"
                          + (f" by {o['judged_by']}" if o.get("judged_by") else "")
                          + self._scenario_line(o))
+        if any(o.get("modality", "test") == "test" and o.get("execution") == "ran" for o in rows):
+            lines.append("An executed test row is judged only by your own line, '<O-id>: SUFFICIENT <what the "
+                         "executed case shows for that requirement and scenario>' or '<O-id>: INSUFFICIENT <what "
+                         "it does not establish>'; your MET or NOT MET on a requirement it binds does not judge "
+                         "it, and unjudged it keeps that requirement not met.")
         if any(o.get("modality") == "legacy" for o in rows):
             lines.append("A legacy acceptance row is judged only by your own line, '<O-id>: SUFFICIENT <the "
                          "project evidence you read that shows it>' or '<O-id>: INSUFFICIENT <what it does not "
@@ -10384,9 +10432,10 @@ class Session:
                           f"file path or test name that shows it>' or '{rid}: NOT MET - <what is still missing>'. "
                           "A MET without a cited project file or test is counted as not met."
                           + ("" if not any(o.get("execution") == "ran" for o in bound) else
-                             " You may add one line per executed evidence obligation listed above, "
+                             " Each executed evidence obligation listed above needs its own line, "
                              "'<O-id>: SUFFICIENT <why>' or '<O-id>: INSUFFICIENT <what it does not establish>'; "
-                             "an obligation left unjudged or judged insufficient keeps the requirement not met.")
+                             "your verdict on the requirement never judges a row it binds, and an obligation "
+                             "left unjudged or judged insufficient keeps the requirement not met.")
                           + ("" if not any(o.get("modality") in ("legacy", "reading") for o in bound) else
                              " Each legacy acceptance or reading row listed above needs its own '<O-id>: "
                              "SUFFICIENT <evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; "
@@ -10516,7 +10565,10 @@ class Session:
             item = item.strip().strip("`")
             if not item or item.lower() in ("none", "nothing", "n/a"):
                 continue
-            entry = dict(task=task, role=role, author=key, item=item[:300], why=why.strip()[:300],
+            # The complete item is the claim (root's control on bd0164f: a
+            # 300-character prefix of 'P1 <detail> and P2' bound P1 alone);
+            # prompts bound the display, never the identity.
+            entry = dict(task=task, role=role, author=key, item=item, why=why.strip()[:300],
                          requirements=list(self._current_covers), after_check=len(self.checks),
                          # The identity a discharging check must carry: the
                          # gate and environment the report was made under
@@ -10538,56 +10590,56 @@ class Session:
 
     def _bind_not_run(self, entry: dict) -> None:
         """Bind a NOT RUN item to what it names, as the harness can identify
-        it: a declared scenario of the reporting task (``P<n>``, through the
-        cases its acceptance row binds), a test case (an explicit
-        ``file::[Class::]test`` id, ``Class.test`` or ``Class::test``, or a
-        bare ``test_*`` name defined in exactly one test file), or the path
-        operands the older rule reads. The binding is on the entry as
-        ``binding`` (kind, scenario, cases, problem) and its case ids as
-        ``cases``; the item and its reason stay as written. Anything
-        ambiguous, undefined or unbound binds nothing and is held as before
-        (finding-lifecycle-02: eight items naming scenarios and cases of a
-        suite the harness's own gate then ran whole kept five requirements
-        unmet, with no record able to discharge them)."""
+        it, reading the whole item in every grammar at once: declared
+        scenarios of the reporting task (``P<n>``, through the cases their
+        acceptance rows bind), explicit ``file::[Class::]test[param]`` ids
+        checked against their file, and ``Class.test``, ``Class::test`` or
+        bare ``test_*`` names defined in exactly one test file. The item is
+        discharged only by all of them: a claim that names P1 and a case, or
+        two scenarios, binds the union, and one unresolvable part binds
+        nothing (root's controls on bd0164f: mixed claims cleared on one
+        grammar's identities). A parametrized id keeps its parameter. An
+        item naming no scenario or case binds by path operands (the older
+        rule) or by nothing. The binding is on the entry as ``binding``
+        (kind, scenario, cases, problem) and its case ids as ``cases``; the
+        item and its reason stay as written. An identity claim, valid or
+        not, never falls back to a path."""
         item = str(entry.get("item") or "")
         binding = dict(kind="none", scenario=None, cases=[], problem="")
-        scenarios = re.findall(r"(?<![\w./-])(P[0-9]+)(?![\w./-])", item)
+        scenarios = list(dict.fromkeys(re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", item)))
         explicit = _cited_cases(item)
-        if scenarios and re.match(r"^\s*P[0-9]+\b", item):
-            # Every scenario the item names must resolve, and the item is
-            # discharged only by all of them: "P1 and P2" with P2 unknown
-            # binds nothing (root's partial-claim control).
-            binding["kind"], binding["scenario"] = "scenario", ", ".join(dict.fromkeys(scenarios))
-            cases, problems = [], []
-            for scenario in dict.fromkeys(scenarios):
-                rows = [r for r in self.evidence_obligations
-                        if r.get("task") == entry.get("task") and r.get("kind") == "acceptance"
-                        and r.get("proof_id") == scenario and not r.get("superseded_by")]
-                if not rows:
-                    problems.append(f"{scenario} is not a scenario this task declares")
-                elif not list(rows[-1].get("cases") or ()):
-                    problems.append(f"{scenario} binds no case yet (no valid PROVES line)")
-                else:
-                    cases.extend(str(c) for c in rows[-1]["cases"])
-            if problems:
-                binding["problem"] = "; ".join(problems)[:300]
-            else:
-                binding["cases"] = sorted(set(cases))
-        elif explicit:
-            binding["kind"] = "case"
-            resolved, problem = self._resolve_case_ids(explicit)
-            binding["cases"], binding["problem"] = resolved, problem
-        elif [p for p in _item_paths(item) if not re.match(r"^[A-Za-z_]\w*\.test\w*$", p)]:
-            # A path operand (``Class.test_x`` is a case, not a file).
-            binding["kind"] = "paths"
-        else:
-            names = re.findall(r"\b((?:[A-Za-z_]\w*(?:\.|::))?test\w*)\b", item)
-            if names:
-                binding["kind"] = "case"
-                resolved, problem = self._resolve_case_ids([n.replace("::", ".") for n in names])
-                binding["cases"], binding["problem"] = resolved, problem
+        rest = _CASE_CITATION.sub(" ", item)
+        names = list(dict.fromkeys(m.group(1) for m in _CASE_NAME.finditer(rest)))
+        if not (scenarios or explicit or names):
+            if _item_paths(item):
+                binding["kind"] = "paths"
             else:
                 binding["problem"] = "names no scenario, case or path the harness can identify"
+            entry["binding"], entry["cases"] = binding, []
+            return
+        binding["kind"] = ("scenario" if scenarios and not (explicit or names)
+                           else "case" if not scenarios else "mixed")
+        binding["scenario"] = ", ".join(scenarios) if scenarios else None
+        cases, problems = [], []
+        for scenario in scenarios:
+            rows = [r for r in self.evidence_obligations
+                    if r.get("task") == entry.get("task") and r.get("kind") == "acceptance"
+                    and r.get("proof_id") == scenario and not r.get("superseded_by")]
+            if not rows:
+                problems.append(f"{scenario} is not a scenario this task declares")
+            elif not list(rows[-1].get("cases") or ()):
+                problems.append(f"{scenario} binds no case yet (no valid PROVES line)")
+            else:
+                cases.extend(str(c) for c in rows[-1]["cases"])
+        if explicit or names:
+            resolved, problem = self._resolve_case_ids(explicit + [n.replace("::", ".") for n in names])
+            cases.extend(resolved)
+            if problem:
+                problems.append(problem)
+        if problems:
+            binding["problem"] = "; ".join(problems)[:300]
+        else:
+            binding["cases"] = sorted(set(cases))
         entry["binding"] = binding
         entry["cases"] = list(binding["cases"])
         if binding["problem"]:
@@ -10649,16 +10701,19 @@ class Session:
         resolved, problems = [], []
         for name in names:
             name = str(name).strip()
-            if "::" in name and (name.split("::")[0].endswith(".py") or "/" in name.split("::")[0]):
-                base = name.split("[", 1)[0]
+            base, bracket, param = name.partition("[")
+            suffix = bracket + param
+            if "::" in base and (base.split("::")[0].endswith(".py") or "/" in base.split("::")[0]):
                 if base in all_ids:
-                    resolved.append(base)
+                    # The parameter is part of the identity: only a run
+                    # that shows exactly that instance discharges it.
+                    resolved.append(base + suffix)
                 else:
                     problems.append(f"{name} is not defined where it says")
                 continue
-            hits = sorted(set(defined.get(name, [])))
+            hits = sorted(set(defined.get(base, [])))
             if len(hits) == 1:
-                resolved.append(hits[0])
+                resolved.append(hits[0] + suffix)
             elif not hits:
                 problems.append(f"{name} is not defined in any test file")
             else:
@@ -10980,7 +11035,7 @@ class Session:
             lines.append("- test files no required check names (not shown to have run): " + ", ".join(unrun))
         for entry in standing:
             binding = entry.get("binding") or {}
-            lines.append(f"- task {entry['task']} ({entry['role']}) reported NOT RUN: {entry['item']}"
+            lines.append(f"- task {entry['task']} ({entry['role']}) reported NOT RUN: {_display_item(entry['item'])}"
                          + (f" - {entry['why']}" if entry["why"] else "")
                          + (f" (covers {', '.join(entry['requirements'])})" if entry["requirements"] else "")
                          + (f" [bound to {', '.join(binding['cases'])}: discharged only by the harness's gate "
@@ -11143,10 +11198,13 @@ class Session:
         if modality != "test":
             runner = None
         oid = f"O{len(self.evidence_obligations) + 1}"
-        key = (entry.get("task"), kind, behavior, requirements)
+        # The complete item, never its bounded display, is the identity a
+        # repeat is matched on (root's control on bd0164f).
+        key = (entry.get("task"), kind, behavior, requirements, str(entry.get("item") or ""))
         for existing in self.evidence_obligations:
             if (existing["task"], existing.get("kind"), existing["behavior"],
-                    tuple(tuple(r) for r in existing["requirements"])) == key and existing["execution"] != "ran":
+                    tuple(tuple(r) for r in existing["requirements"]),
+                    str((existing.get("entry") or {}).get("item") or "")) == key and existing["execution"] != "ran":
                 return existing
         obligation = delivery.EvidenceObligation(
             oid=oid, behavior=behavior, requirements=requirements, gate=_gate_identity(self._current_gate()),
@@ -11190,9 +11248,16 @@ class Session:
                 index = self._discharging_check(found)
                 if index is not None:
                     check = self.checks[index]
+                    # The passed cases are read off the check's own case
+                    # record, never copied from the claim.
+                    shown = set()
+                    for run in _check_runs(check, self.project):
+                        if _complete_run(run):
+                            shown |= _run_passed_cases(run)
                     return dict(id=f"check-{index + 1}", source=check.get("source"), gate=check.get("gate"),
                                 runner="gate", **self._receipt_identity(check, record), completed=True,
-                                passed=bool(check.get("passed")), passed_cases=list(found.get("cases") or ()),
+                                passed=bool(check.get("passed")),
+                                passed_cases=[c for c in (found.get("cases") or ()) if c in shown],
                                 skipped_cases=[])
             return None
         # A declared acceptance behavior: discharged only by a passing check
@@ -11288,7 +11353,12 @@ class Session:
         passed; a filtered, failed, skipping or caseless run, a run of
         another file's same-named case, or an item bound to nothing never
         discharges it (evidence lifecycle batch, 2026-10-29)."""
-        paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
+        claim = (entry.get("binding") or {}).get("kind") in ("scenario", "case", "mixed")
+        # An identity claim, valid or not, is discharged by its cases or by
+        # nothing: the file-level route is for items that name only paths
+        # (root's controls on bd0164f: an undefined case cleared when its
+        # file ran other cases).
+        paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" and not claim else []
         bound = [str(c) for c in (entry.get("cases") or ())] if entry.get("kind") != "skipped" else []
         current = self._source_fingerprint() if self.project else None
         gate, environment = self._not_run_identity(entry)
@@ -11495,23 +11565,25 @@ class Session:
         return f"capture:{task}:{digest}", ""
 
     def _judge_obligations(self, auditor: str, reply: str, found: dict, *, ids=None, modalities=None,
-                           oids=None, raw=None) -> None:
-        """Sufficiency from the audit: an explicit '<O-id>: SUFFICIENT|INSUFFICIENT'
-        line decides; otherwise the auditor's own verdict on every requirement
-        an executed obligation binds does (all MET: sufficient; any NOT MET:
-        insufficient), read from ``raw``, the verdicts as the auditor wrote
-        them, never from a verdict the harness lowered for another record
-        (finding-lifecycle-02: R9 lowered for a NOT RUN item made O4, O5, O6
-        and O9 insufficient, and the predicate then lowered R3, R4 and R11,
-        which the auditor had passed). The record says which it was:
-        ``sufficiency_source`` is the explicit line, or the implication with
-        the requirement ids it rests on. Two lines for one id (a duplicate or
-        a contradiction) are no verdict: the obligation is left unjudged with
+                           oids=None) -> None:
+        """Sufficiency from the audit: only an explicit, scoped
+        '<O-id>: SUFFICIENT|INSUFFICIENT' line in the judging seat's own
+        reply decides, and the record names it (``sufficiency_source``). No
+        verdict on a requirement implies anything about a row it binds:
+        finding-lifecycle-02 showed the harness's lowering of R9 cascading
+        through implied sufficiency into R3, R4 and R11, and root's review
+        of bd0164f showed the same family on first judgment (R1 MET plus R5
+        NOT MET on a shared row labelled it insufficient; all MET labelled an
+        unjudged row sufficient). Fresh or stale executed evidence stays
+        unjudged until a seat judges it in a reply it was already asked for;
+        no call is added. A judgment already made about exactly this
+        evidence stands. Two lines for one id (a duplicate or a
+        contradiction) are no verdict: the obligation is left unjudged with
         the conflict noted. Only obligations binding an audited requirement
         (``ids``; every one when None) are judged. Bound to exactly the
-        evidence judged."""
+        evidence judged. ``found`` is unused and kept for the callers'
+        shape."""
         explicit, conflicts = judgment.sufficiency_reading(reply, [o["oid"] for o in self.evidence_obligations])
-        verdicts = raw if raw is not None else found
         refreshed = []
         for record in self.evidence_obligations:
             obligation = delivery.EvidenceObligation.from_dict(record)
@@ -11552,29 +11624,16 @@ class Session:
             # of modality or file authorizes no exemption). A reading
             # SUFFICIENT must cite the file the scenario names on the
             # current source; one that does not is not a judgment of it.
-            if verdict is None and obligation.sufficiency_current and not capture:
-                # A judgment already made about exactly this evidence (the
-                # same receipts, source, gate, environment and revisions:
-                # ``sufficiency_current``) by its own judging seat stands
-                # until that seat, or an explicit line, speaks again; a
-                # verdict on the requirement re-judges nothing and takes
-                # the judgment from nobody (root's control on 2ab56eb: an
-                # audit with no O line re-judged a shared row from the
-                # requirement flags). An explicit line above still decides.
+            if verdict is None:
+                # No scoped line for this row: nothing changes. A judgment
+                # already made about exactly this evidence stands
+                # (``sufficiency_current``), a fresh or stale row stays
+                # unjudged, and a verdict on a requirement the row binds
+                # judges nothing about it (root's controls on 2ab56eb and
+                # bd0164f). An explicit line above still decides.
                 refreshed.append(record)
                 continue
-            if verdict is None and obligation.execution == "ran" and not (reading or legacy or capture):
-                # Executed evidence is judged by implication from the
-                # auditor's own verdicts on the requirements it binds, and
-                # the record says so; a verdict lowered by the harness for
-                # another record implies nothing about this row.
-                judged = [verdicts.get(rid) for rid, _ in obligation.requirements]
-                if all(v is not None for v in judged) and judged:
-                    verdict = "sufficient" if all(v[0] for v in judged) else "insufficient"
-                    source = ("implied from the auditor's own verdicts on "
-                              + ", ".join(f"{rid} {'MET' if v[0] else 'NOT MET'}"
-                                          for (rid, _), v in zip(obligation.requirements, judged, strict=True)))
-            elif reading and verdict == "sufficient":
+            if reading and verdict == "sufficient":
                 location = str(record.get("location") or "")
                 if location not in self._resolve_citations(why):
                     verdict = None

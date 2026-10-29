@@ -120,8 +120,10 @@ def _executed_keys(check):
     return keys
 
 
-_CASE_ID = re.compile(r"^[\w./-]+\.\w+::(?:[A-Za-z_]\w*::)*test\w*$")
+_CASE_ID = re.compile(r"^[\w./-]+\.\w+::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?$")
 _SCENARIO_ID = re.compile(r"^P[0-9]+$")
+_EXPLICIT_ID = re.compile(r"([\w./-]+\.[A-Za-z]\w*::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?)")
+_NAMED_CASE = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]\s]*\])?)(?![\w/.:-])")
 
 
 def _passed_cases(check):
@@ -191,35 +193,60 @@ def _bound_not_run_cleared(entry, checks, record) -> bool:
     if not all(isinstance(c, str) and _CASE_ID.match(c) for c in cases):
         return False
     task, item = entry.get("task"), str(entry.get("item") or "")
-    if binding.get("kind") == "scenario":
-        named = [p for p in re.findall(r"(?<![\w./-])(P[0-9]+)(?![\w./-])", item)]
-        declared = str(binding.get("scenario") or "")
-        if not named or sorted(set(named)) != sorted(set(x.strip() for x in declared.split(","))):
-            return False
-        bound = set()
-        for scenario in dict.fromkeys(named):
-            if not _SCENARIO_ID.match(scenario):
-                return False
-            rows = [o for o in record.get("evidence_obligations") or []
-                    if isinstance(o, dict) and o.get("task") == task and o.get("kind") == "acceptance"
-                    and o.get("proof_id") == scenario and not o.get("superseded_by")]
-            if not rows or not rows[-1].get("cases"):
-                return False
-            bound |= {str(c) for c in rows[-1]["cases"]}
-        if bound != set(cases):
-            return False
-    elif binding.get("kind") == "case":
-        for case in cases:
-            file, _, tail = case.partition("::")
-            parts = tail.split("::")
-            spelled = (case in item or f"{file}::{tail}" in item
-                       or (len(parts) >= 2 and f"{parts[-2]}.{parts[-1]}" in item)
-                       or (len(parts) >= 2 and f"{parts[-2]}::{parts[-1]}" in item)
-                       or re.search(r"(?<![\w.:])" + re.escape(parts[-1]) + r"(?![\w])", item) is not None)
-            if not spelled:
-                return False
-    else:
+    kind = binding.get("kind")
+    if kind not in ("scenario", "case", "mixed"):
         return False
+    named = re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", item)
+    declared = [x.strip() for x in str(binding.get("scenario") or "").split(",") if x.strip()]
+    if kind == "case" and (named or declared):
+        return False
+    if kind != "case" and (not named or sorted(set(named)) != sorted(set(declared))):
+        return False
+    from_scenarios = set()
+    for scenario in dict.fromkeys(named):
+        if not _SCENARIO_ID.match(scenario):
+            return False
+        rows = [o for o in record.get("evidence_obligations") or []
+                if isinstance(o, dict) and o.get("task") == task and o.get("kind") == "acceptance"
+                and o.get("proof_id") == scenario and not o.get("superseded_by")]
+        if not rows or not rows[-1].get("cases"):
+            return False
+        from_scenarios |= {str(c) for c in rows[-1]["cases"]}
+    if not from_scenarios <= set(cases):
+        return False
+    # Every bound case outside the scenarios' own must be spelled by the item
+    # itself (an explicit id, Class.test, Class::test or a bare name with the
+    # same parameter), so a forged case list never rides a genuine item.
+    for case in set(cases) - from_scenarios:
+        base, bracket, param = case.partition("[")
+        file, _, tail = base.partition("::")
+        parts = tail.split("::")
+        suffix = bracket + param
+        forms = [case, f"{parts[-1]}{suffix}"]
+        if len(parts) >= 2:
+            forms += [f"{parts[-2]}.{parts[-1]}{suffix}", f"{parts[-2]}::{parts[-1]}{suffix}"]
+        if not any(re.search(r"(?<![\w/.:-])" + re.escape(form) + r"(?![\w/.:-])", item) for form in forms):
+            return False
+    if kind == "scenario" and set(cases) != from_scenarios:
+        return False
+    # And the other direction: every case the item itself spells (an explicit
+    # id, Class.test, Class::test or a bare name) must be among the bound
+    # cases, so a mixed claim bound on one grammar alone is rejected.
+    stripped = _EXPLICIT_ID.sub(" ", item)
+    spelled = [m.group(1) for m in _EXPLICIT_ID.finditer(item)]
+    spelled += [m.group(1) for m in _NAMED_CASE.finditer(stripped)]
+    if kind == "scenario" and spelled:
+        return False
+    for name in spelled:
+        base, bracket, param = name.partition("[")
+        suffix = bracket + param
+        if "::" in base and ("/" in base.split("::")[0] or "." in base.split("::")[0]):
+            if name not in cases:
+                return False
+            continue
+        tail = "::".join(base.replace("::", ".").split("."))
+        if not any(c == f"{c.split('::')[0]}::{tail}{suffix}" or c.endswith(f"::{tail}{suffix}") for c in cases):
+            return False
     gate, environment = entry.get("gate"), entry.get("environment")
     if not isinstance(gate, str) or not isinstance(environment, str):
         return False
@@ -247,8 +274,12 @@ def _not_run_cleared(entry, checks, record=None) -> bool:
     case passed by an independently validated later run on the final source
     (``_bound_not_run_cleared``). A command line that mentions a path, or the
     engine's own discharge mark, is not execution (Codex review of 47bfbfd)."""
-    if record is not None and entry.get("kind") != "skipped" and _bound_not_run_cleared(entry, checks, record):
-        return True
+    if entry.get("kind") != "skipped" and "binding" in entry:
+        # A record the engine bound (the key is present, whatever it holds)
+        # is decided by the binding alone; the file-level route below is for
+        # records written before bindings existed (root's control on
+        # bd0164f: a rejected explicit-case record cleared on its file).
+        return record is not None and _bound_not_run_cleared(entry, checks, record)
     if entry.get("kind") == "skipped":
         wanted = list(entry.get("cases") or [])
         files = []

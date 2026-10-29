@@ -17,7 +17,8 @@ import pytest
 
 from quadratus.config import Settings
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import FILES, Script
+from tests.lifecycle.replies import judging_scenarios
+from tests.lifecycle.test_lifecycle_matrix import ADD_PROOF, ADD_SHOWN, FILES, Script
 from tests.lifecycle.test_step2_recovery import _FINDING, _R1, _TYPED, DECL_SIMPLE, _plan, _simple
 
 pytestmark = pytest.mark.requirements_ledger
@@ -47,7 +48,7 @@ def _run(tmp_path, monkeypatch, *, plan=DECLARED, lead=None, revision=None, coll
         revision=revision or (lambda c, r: "Revised.\n" + PROVES),
         collaborator=collaborator or (lambda c, r: "NO FINDINGS\nR1: MET - app.py:5"),
         recheck=recheck or (lambda c, r: "RESOLVED"),
-        auditor=auditor or (lambda c, r: "R1: MET - app.py:5"),
+        auditor=auditor or judging_scenarios(lambda c, r: "R1: MET - app.py:5", ADD_PROOF, basis=ADD_SHOWN),
         **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=max_tasks, record_complete=False,
         settings=settings or Settings(backend="cli"))
@@ -147,7 +148,7 @@ def test_the_planner_sees_the_measured_size_against_the_estimate(tmp_path, monke
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=_plan(plan2, docs), lead=lead,
         collaborator=lambda c, r: "NO FINDINGS\n" + ("R1: MET - app.py:5" if c.task == "t1" else "R2: MET - README.md:3"),
-        auditor=lambda c, r: "R1: MET - app.py:5\nR2: MET - README.md:3",
+        auditor=judging_scenarios(lambda c, r: "R1: MET - app.py:5\nR2: MET - README.md:3", ADD_PROOF, basis=ADD_SHOWN),
         **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=2, record_complete=False)
     second = replay.of("orchestrator")[1].prompt
@@ -212,11 +213,21 @@ def test_a_size_past_the_direct_bound_escalates_to_the_full_review_without_refus
     """The direct tier's own bound stays conservative: a task sized over it
     is not admitted to the direct tier and runs on the normal tier, with
     its cross-vendor review, rather than being refused."""
-    from tests.lifecycle.test_direct_tier import FAVICON, REQS, _decl, _files, _lead, _task
+    from tests.lifecycle.test_direct_tier import (
+        FAVICON,
+        FAVICON_PROOF,
+        FAVICON_SHOWN,
+        REQS,
+        _decl,
+        _files,
+        _lead,
+        _task,
+    )
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=lambda c, r: (REQS + _decl(dict(FAVICON, max_lines=400))) if len(r.of("orchestrator")) == 1 else "DONE",
         lead=_lead, **{"requirements-review": lambda c, r: "COMPLETE",
-                       "auditor": lambda c, r: "R1: MET - static/favicon.svg",
+                       "auditor": judging_scenarios(lambda c, r: "R1: MET - static/favicon.svg", FAVICON_PROOF,
+                                                    basis=FAVICON_SHOWN),
                        "design-review": lambda c, r: "APPROVED",
                        "collaborator": lambda c, r: "NO FINDINGS\nR1: MET - static/favicon.svg"}),
         files=_files(), max_tasks=3, direct_tier=True, record_complete=False)

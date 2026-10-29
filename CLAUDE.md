@@ -2929,9 +2929,20 @@ Key design decisions already settled:
   binds both, and a later rebinding re-binds the item and resets its row),
   an explicit `file::[Class::]test` id checked against its file, or a
   `Class.test`/bare `test_*` name defined in exactly one test file (read
-  with `ast`). Ambiguous, undefined, wrong-class, suffix, partial
-  (`P1 and P2` with P2 unknown) or prose items bind nothing and are held
-  as written, with the problem on the record. A bound item's typed row
+  with `ast`), reading the whole item in every grammar at once: a mixed
+  claim (`P1 and Other.test_absent`, `TestX.test_complete and P2`) binds
+  the union or nothing, a parametrized id keeps its parameter and is
+  discharged only by a run showing that instance, and the complete item
+  is the identity (root's control on bd0164f: a 300-character display
+  prefix of `P1 <detail> and P2` bound P1 alone; prompts bound the display
+  with `_display_item`, the record, the dedupe key, the merge, the
+  checkpoint and the checker read it whole). Ambiguous, undefined,
+  wrong-class, suffix, partial or prose items bind nothing and are held
+  as written, with the problem on the record. An identity claim, valid or
+  not, never falls back to the file-level route (root's control: an
+  undefined case cleared when its file ran other cases), and the receipt's
+  passed cases are read off the check's own case record, never copied
+  from the claim. A bound item's typed row
   gets the gate as runner and the cases as identity (kept even
   runner-less, so a parallel child's row re-bases to the parent's gate);
   it is discharged only by a later complete required run on the current
@@ -2941,22 +2952,32 @@ Key design decisions already settled:
   passing run on another source, gate or environment left the typed row
   unexecuted while the prompts showed no debt), so prompt and record
   agree. The lead is told the two forms.
-- **Sufficiency is the auditor's own verdict, never a flag the harness
-  lowered for another record, and a judgment about exactly this evidence
-  stands** (`_judge_obligations(raw=...)`, `sufficiency_source`). Root's
-  correction on finding-lifecycle-02: `_read_audit` lowered R9 for a NOT
-  RUN item, the implied sufficiency read the lowered flag over every
-  requirement a shared row binds, and the acceptance predicate then
-  lowered R3, R4 and R11 the auditor had passed: deterministic
-  contamination, not judgment. Implied sufficiency now reads the verdicts
-  as the auditor wrote them and the record says so (`implied from the
-  auditor's own verdicts on R3 MET, R9 NOT MET`, or `explicit line by
-  <seat>`). A row already judged by its seat about the same receipts,
-  source, gate, environment and revisions (`sufficiency_current`) is not
-  re-judged by implication and its judge is not replaced; an explicit
-  O-line still decides, and new evidence makes the old judgment stale as
-  before. Execution facts, explicit sufficiency and requirement verdicts
-  are three records; none is derived from another's lowering.
+- **Sufficiency is an explicit scoped judgment, never a verdict on a
+  requirement** (`_judge_obligations`, `sufficiency_source`; root's
+  correction on finding-lifecycle-02 and review of bd0164f). The old
+  implication read requirement flags over every requirement a shared row
+  binds: `_read_audit`'s lowering of R9 for a NOT RUN item cascaded into
+  R3, R4 and R11 the auditor had passed, and on first judgment R1 MET plus
+  R5 NOT MET labelled a shared row insufficient while all MET labelled an
+  unjudged row sufficient. There is no implication now: an executed test
+  row is judged only by its own `<O-id>: SUFFICIENT|INSUFFICIENT` line in
+  the reply the seat was already asked for (no call added), the audit and
+  reassessment prompts and the obligations block say so, a fresh or stale
+  row left without one stays unjudged and lowers its requirement through
+  the acceptance predicate, a judgment about exactly this evidence
+  (`sufficiency_current`) stands until a seat speaks again, and conflicts
+  stay unjudged. The fixture contract follows and is as strict: a
+  scripted auditor in `tests/lifecycle` authors its own row lines for the
+  named evidence it means to approve (`replies.judged`, keyed by the
+  scenario text the obligations block renders), an overridden handler's
+  reply is carried exactly as written, and only the default `Script`
+  auditor judges, and only the default fixture's own add scenario
+  (`default_audit`). No test-side transform adds lines from verdicts
+  (root's blocker on the first draft of this correction: a blanket
+  adapter would have moved the removed inference into the test
+  transport and masked missing-judgment negatives). Execution facts,
+  explicit sufficiency and requirement verdicts are three records; none
+  is derived from another.
 - **A requirement that names a command is shown by the harness's exact
   receipt** (`_command_requirement`, `_command_receipt_citation`,
   `citation_receipts`). R21 ("run the suite before declaring completion")
@@ -2964,14 +2985,19 @@ Key design decisions already settled:
   MET with no file or test citation now stands when a required receipt on
   the current source, gate and environment, from the project root, ran the
   named command (interpreter by public name, report token and
-  `-p no:cacheprovider` removed, everything else exact; `_command_key`),
-  and the audit record names the receipt. A failed, optional, filtered,
-  other-source, other-gate, other-environment or other-directory receipt
-  is refused with its reason, and the harness's own command line is never
-  quoted back (a gate can name a file seats must not open), only the
-  requirement's. The receipt is a citation and nothing more: the
-  requirement's scenarios still have to execute and be judged. The
-  reassessment uses the same resolver.
+  `-p no:cacheprovider` removed, everything else exact; `_command_key`)
+  whole and successfully: cases executed, a known zero skipped, none
+  failed or errored, no selection, and the audit record names the
+  receipt. A check whose source, gate or environment is not recorded is
+  an unknown identity and is refused (root's control on bd0164f), as is a
+  failed, optional, filtered, other-source, other-gate,
+  other-environment, other-directory, zero-case, skipping or failing
+  receipt, each with its reason. The citation names the command in the
+  requirement's own public spelling and never the argv that ran (a
+  private interpreter path; root's addendum), which stays in the check
+  record. The receipt is a citation of that successful complete run and
+  nothing more: the requirement's scenarios still have to execute and be
+  judged. The reassessment uses the same resolver.
 - **The finish routes each unmet requirement and withholds a challenge
   that cannot clear it** (`_evidence_route`, `finish_routing`, carried and
   exported). finding-lifecycle-02 spent three challenges, about 594k
@@ -2999,8 +3025,14 @@ Key design decisions already settled:
   each bound case), then a later check on the final source under the
   entry's own gate and environment, required, passed, unfiltered, zero
   skips, from the project root, whose own report shows every bound case
-  passed. It never reads an engine discharge mark; forged, stale,
-  mismatched, partial, malformed or historical entries stay unverified.
+  passed, in both directions (every bound case is spelled by the item or
+  its scenarios; every case the item spells is bound). It never reads an
+  engine discharge mark, and an entry that carries a `binding` key is
+  decided by the binding alone, never by the older file-level route
+  (root's control on bd0164f: a rejected explicit-case record cleared on
+  its file); only a record without the key takes that route. Forged,
+  stale, mismatched, partial, parametrized-instance, malformed or
+  historical entries stay unverified.
 
 ## How development is coordinated
 

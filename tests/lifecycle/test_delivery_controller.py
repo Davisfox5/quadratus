@@ -27,9 +27,16 @@ import pytest
 from quadratus import checkpoint, jobstore
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judged, judging_scenarios, scenario_text
 from tests.lifecycle.test_finish_capacity import DOCS_JUDGED, PLAN_1, PLAN_2, _budget, _script
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script, judging
-from tests.lifecycle.test_step2_recovery import _episode, _interrupt_after, _simple
+from tests.lifecycle.test_step2_recovery import (
+    SIMPLE_SHOWN,
+    _episode,
+    _interrupt_after,
+    _simple,
+    simple_proofs,
+)
 
 #: The gate names every test file whole, as an operator's check does when it
 #: lists its files (the whole-file marker is root's WholeFileGateSuite, a
@@ -131,9 +138,9 @@ def test_a_basis_less_concern_is_carried_to_the_audit_by_id_and_judged_there(tmp
     requirement unmet."""
     review = "BLOCKING: the example might mislead users | impact: other\nR2: MET - README.md"
     script = _recheck_script(["RFT2-1: UNRESOLVED it still might"], t2_review=review)
-    script.overrides["auditor"] = judging(lambda call, replay: (
+    script.overrides["auditor"] = judging_scenarios(judging(lambda call, replay: (
         "R1: MET - app.py\nR2: MET - README.md\nRFT2-1: INVALIDATED README.md shows add(1, 2) returning 3"),
-        reading=DOCS_JUDGED)
+        reading=DOCS_JUDGED), *simple_proofs("R1"), basis=SIMPLE_SHOWN)
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     audit = replay.of("auditor")[-1].prompt
@@ -230,6 +237,8 @@ def test_real_http_server_answers_add():
         server.server_close()
 '''
 HTTP_FILES = {**FILES, "tests/test_http.py": HTTP_TEST}
+HTTP_SHOWN = ("the project check executed tests/test_app.py::test_add and tests/test_http.py::"
+              "test_real_http_server_answers_add on the delivered source, which is this scenario")
 
 
 def _http_script(not_run_item):
@@ -244,10 +253,19 @@ def _http_script(not_run_item):
         return (f'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\n'
                 f'PROVES: P2 - tests/test_http.py::test_real_http_server_answers_add\n'
                 f'NOT RUN: {not_run_item}\nCHANGED: ["app.py"]')
+    item = not_run_item.split(" - ", 1)[0].strip()
+
+    def auditor(call, replay):
+        # This fixture's own judgments: its two declared scenarios and the
+        # NOT RUN item it scripted, each only where the prompt lists it
+        # executed (replies.judged).
+        return judged(call.prompt, {"R1": "MET - app.py", "R2": "MET - tests/test_http.py"},
+                      approve={**{scenario_text(p): HTTP_SHOWN for p in simple_proofs("R1, R2")},
+                               item: "the gate ran tests/test_http.py whole on the delivered source, which is the "
+                                     "item the lead could not run"})
     return Script(orchestrator=orchestrator, lead=lead,
                   collaborator=lambda call, replay: "NO FINDINGS\nR1: MET - app.py\nR2: MET - tests/test_http.py",
-                  auditor=lambda call, replay: "R1: MET - app.py\nR2: MET - tests/test_http.py",
-                  **{"requirements-review": lambda call, replay: "COMPLETE"})
+                  auditor=auditor, **{"requirements-review": lambda call, replay: "COMPLETE"})
 
 
 @pytest.mark.requirements_ledger

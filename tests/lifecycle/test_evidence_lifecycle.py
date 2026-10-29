@@ -15,8 +15,9 @@ from pathlib import Path
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judged
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script, covered_met
-from tests.lifecycle.test_proof_binding import CASE, _at, _plan, _proofs, _scope, _script
+from tests.lifecycle.test_proof_binding import CASE, _at, _plan, _proofs, _scope
 from tests.lifecycle.test_step2_evidence import _CHALLENGE, _ratio_run
 
 pytestmark = pytest.mark.requirements_ledger
@@ -27,6 +28,31 @@ truth = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(truth)
 
 NOT_RUN_WHY = "the sandbox denies sockets"
+#: The proof_binding fixture's declared scenario (_proofs("R1")), as the
+#: obligations block renders it: the row these cases judge by name.
+ADD_SCENARIO = "P1: add is called for R1; given two tickets exist; expect the sum is returned; in tests/test_app.py"
+SHOWN = "tests/test_app.py::test_add executed on the delivered source and returned the sum, exactly this scenario"
+
+
+def _auditor(*not_run_items, verdicts=None):
+    """A case-authored audit: MET on R1 citing the executed case, this
+    fixture's own SUFFICIENT line for the add scenario, and one for each
+    NOT RUN item the case expects the gate to have executed (its row is
+    listed executed only then; an item still held has no executed row and
+    gets no line). Nothing else is judged."""
+    def auditor(call, replay):
+        approve = {ADD_SCENARIO: SHOWN}
+        for item in not_run_items:
+            approve[item] = f"the gate executed {CASE} whole on the delivered source, which is what the item names"
+        return judged(call.prompt, verdicts or {"R1": f"MET - {CASE}"}, approve=approve)
+    return auditor
+
+
+def _script(plan, lead, **kw):
+    return Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
+                  collaborator=kw.pop("collaborator", lambda c, r: "NO FINDINGS\nR1: MET - app.py"),
+                  auditor=kw.pop("auditor", _auditor()),
+                  **{"requirements-review": lambda c, r: "COMPLETE"}, **kw)
 
 
 def _lead_not_run(item, *, proves=(CASE,), extra_files=None):
@@ -51,7 +77,8 @@ def _not_run_obligations(replay, task="t1"):
 @pytest.mark.parametrize("item, kind", [(CASE, "case"), ("P1", "scenario"), ("test_add", "case")])
 def test_a_not_run_report_the_gate_then_executes_whole_is_discharged_and_the_requirement_stands(
         tmp_path, monkeypatch, item, kind):
-    replay = H.run(tmp_path, monkeypatch, _script(_plan(_scope(proofs=_proofs("R1"))), _lead_not_run(item)),
+    replay = H.run(tmp_path, monkeypatch, _script(_plan(_scope(proofs=_proofs("R1"))), _lead_not_run(item),
+                                                  auditor=_auditor(item)),
                    files=FILES, max_tasks=1, record_complete=False)
     assert replay.result.completed, replay.result.error
     [row] = _not_run_rows(replay)
@@ -125,7 +152,8 @@ def _tampered(replay, mutate):
 
 
 def test_the_checker_rejects_forged_stale_or_mismatched_bindings(tmp_path, monkeypatch):
-    replay = H.run(tmp_path, monkeypatch, _script(_plan(_scope(proofs=_proofs("R1"))), _lead_not_run("P1")),
+    replay = H.run(tmp_path, monkeypatch, _script(_plan(_scope(proofs=_proofs("R1"))), _lead_not_run("P1"),
+                                                  auditor=_auditor("P1")),
                    files=FILES, max_tasks=1, record_complete=False)
     assert replay.result.completed, replay.result.error
     assert _tampered(replay, lambda record, entry: None), "the genuine record clears"
@@ -153,9 +181,38 @@ def test_the_checker_rejects_forged_stale_or_mismatched_bindings(tmp_path, monke
                                                    for c in record["checks"]],
         "engine mark alone": lambda record, entry: (entry.__setitem__("cases", ["tests/test_app.py::test_other"]),
                                                     entry.__setitem__("discharged_at", 0)),
+        "explicit case rejected, file ran other cases": lambda record, entry: (
+            entry.__setitem__("item", "tests/test_app.py::test_absent"),
+            entry.__setitem__("binding", dict(kind="case", scenario=None, cases=["tests/test_app.py::test_absent"], problem="")),
+            entry.__setitem__("cases", ["tests/test_app.py::test_absent"])),
+        "parameter instance the run never showed": lambda record, entry: (
+            entry.__setitem__("item", "tests/test_app.py::test_add[not-real]"),
+            entry.__setitem__("binding", dict(kind="case", scenario=None, cases=["tests/test_app.py::test_add[not-real]"], problem="")),
+            entry.__setitem__("cases", ["tests/test_app.py::test_add[not-real]"])),
+        "mixed claim bound on one grammar": lambda record, entry: (
+            entry.__setitem__("item", "P1 and tests/test_app.py::test_absent"),
+            entry.__setitem__("binding", dict(kind="mixed", scenario="P1", cases=[CASE], problem=""))),
+        "binding key present but empty": lambda record, entry: entry.__setitem__("binding", {}),
     }
     for name, mutate in rejected.items():
         assert not _tampered(replay, mutate), name
+
+    def legacy(record, entry):
+        # A record written before bindings existed: no key at all, decided
+        # by the older file-level reading (the file of an executed case the
+        # check printed, as a legacy claim).
+        entry.pop("binding")
+        entry.pop("cases")
+        entry["item"] = "tests/test_app.py"
+        for check in record["checks"]:
+            check["cases"] = {"executed": {CASE: 1}}
+    assert _tampered(replay, legacy), "a historical record keeps its honest file-level reading"
+
+    def legacy_unshown(record, entry):
+        entry.pop("binding")
+        entry.pop("cases")
+        entry["item"] = "tests/test_app.py"
+    assert not _tampered(replay, legacy_unshown), "and that reading still needs the executed case names"
 
 
 # -- 3. sufficiency is the auditor's own, never a flag lowered for another record -----------------
@@ -183,9 +240,14 @@ def test_a_not_run_on_one_requirement_never_lowers_a_sibling_the_auditor_passed(
         H.write(call, {"app.py": FIXED + "\n\n# tidy\n"})
         return f'Tidied add.\nPROVES: P1 - {CASE}\nNOT RUN: tests/test_app.py::test_absent - {NOT_RUN_WHY}\nCHANGED: ["app.py"]'
 
+    shared_text = "P1: add(1, 2); given nothing stored; expect 3 is returned; in tests/test_app.py"
+    t2_text = "P1: add is called for R2; given two tickets exist; expect the sum is returned; in tests/test_app.py"
+
+    def auditor(call, replay):
+        return judged(call.prompt, {"R1": f"MET - {CASE}", "R2": f"MET - {CASE}"},
+                      approve={shared_text: SHOWN, t2_text: SHOWN})
     script = Script(orchestrator=orchestrator, lead=lead,
-                    collaborator=lambda c, r: "NO FINDINGS\n" + covered_met(c.prompt),
-                    auditor=lambda c, r: f"R1: MET - {CASE}\nR2: MET - {CASE}",
+                    collaborator=lambda c, r: "NO FINDINGS\n" + covered_met(c.prompt), auditor=auditor,
                     **{"requirements-review": lambda c, r: "COMPLETE"})
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert not replay.result.completed
@@ -197,8 +259,26 @@ def test_a_not_run_on_one_requirement_never_lowers_a_sibling_the_auditor_passed(
     [shared_row] = [o for o in result["evidence_obligations"] if o["task"] == "t1" and o["kind"] == "acceptance"]
     assert sorted(r[0] for r in shared_row["requirements"]) == ["R1", "R2"]
     assert shared_row["execution"] == "ran" and shared_row["sufficiency"] == "sufficient"
-    assert shared_row["sufficiency_source"] == "implied from the auditor's own verdicts on R1 MET, R2 MET"
+    assert shared_row["sufficiency_source"].startswith("explicit line by "), "the case's own line for that row"
     assert result["requirements"]["status"]["R1"].lower().startswith("met")
+
+
+def test_an_audit_with_verdicts_and_no_row_line_leaves_the_executed_row_unjudged(tmp_path, monkeypatch):
+    """The engine side of the fixture contract: a MET on R1 judges nothing
+    about the executed row that binds it; unjudged, the row lowers R1."""
+    script = _script(_plan(_scope(proofs=_proofs("R1"))), _lead_not_run("P1"),
+                     auditor=lambda c, r: f"R1: MET - {CASE}")
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False)
+    assert not replay.result.completed
+    result = H.result_json(replay)
+    [row] = [o for o in result["evidence_obligations"] if o["task"] == "t1" and o["kind"] == "acceptance"]
+    assert row["execution"] == "ran" and row["sufficiency"] == "unjudged" and not row["judged_by"]
+    audit = result["requirements"]["audits"][-1]
+    assert audit["verdicts"]["R1"]["met"] is False
+    assert any("unjudged" in r["reason"] for r in audit["lowered"]), audit["lowered"]
+    prompt = replay.of("auditor")[-1].prompt
+    assert "An executed test row is judged only by your own line" in prompt
+    assert "Each executed evidence obligation listed above needs its own line" in prompt
 
 
 # -- 4. a command the requirement names is cited by the harness's exact receipt ------------------
@@ -216,10 +296,18 @@ def _two_requirement_plan(second=_RUN_REQ, proves_p2=CASE):
     return plan, lead
 
 
-def _command_script(plan, lead):
+P2_SCENARIO = "P2: add is called for R2; given two tickets exist; expect the sum is returned; in tests/test_app.py"
+
+
+def _command_script(plan, lead, approve_p2=True):
+    def auditor(call, replay):
+        approve = {ADD_SCENARIO: SHOWN}
+        if approve_p2:
+            approve[P2_SCENARIO] = SHOWN
+        return judged(call.prompt, {"R1": f"MET - {CASE}", "R2": "MET - the harness ran the suite before completion"},
+                      approve=approve)
     return Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
-                  collaborator=lambda c, r: "NO FINDINGS\n" + covered_met(c.prompt),
-                  auditor=lambda c, r: f"R1: MET - {CASE}\nR2: MET - the harness ran the suite before completion",
+                  collaborator=lambda c, r: "NO FINDINGS\n" + covered_met(c.prompt), auditor=auditor,
                   **{"requirements-review": lambda c, r: "COMPLETE"})
 
 
@@ -249,8 +337,8 @@ def test_a_command_the_harness_never_ran_is_not_cited_and_a_receipt_never_stands
     assert "pytest" not in why, "never the harness's own command"
 
     plan, lead = _two_requirement_plan(proves_p2="tests/test_app.py::test_absent")
-    unshown = H.run(_at(tmp_path, "unshown"), monkeypatch, _command_script(plan, lead), files=FILES, max_tasks=1,
-                    record_complete=False)
+    unshown = H.run(_at(tmp_path, "unshown"), monkeypatch, _command_script(plan, lead, approve_p2=False), files=FILES,
+                    max_tasks=1, record_complete=False)
     assert not unshown.result.completed
     audit = H.result_json(unshown)["requirements"]["audits"][-1]
     assert "R2" in audit["citation_receipts"], "the receipt is a citation"
@@ -280,9 +368,15 @@ def test_a_parallel_child_s_bound_not_run_is_discharged_by_the_parent_s_merge_ga
         H.write(call, {"README.md": "# app\n\nadd(a, b) returns the sum.\n"})
         return f'Documented add.\nPROVES: P1 - {CASE}\nCHANGED: ["README.md"]'
 
+    def auditor(call, replay):
+        return judged(call.prompt, {"R1": f"MET - {CASE}", "R2": "MET - README.md"},
+                      approve={"P1: tests/test_app.py exercises R1; given the project as delivered; expect R1 holds "
+                               "on the delivered source; in tests/test_app.py": SHOWN,
+                               "P1: tests/test_app.py exercises R2; given the project as delivered; expect R2 holds "
+                               "on the delivered source; in tests/test_app.py": SHOWN,
+                               "P1": f"the parent's merge gate executed {CASE} whole on the merged source"})
     script = Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
-                    collaborator=lambda c, r: "NO FINDINGS\n" + covered_met(c.prompt),
-                    auditor=lambda c, r: f"R1: MET - {CASE}\nR2: MET - README.md",
+                    collaborator=lambda c, r: "NO FINDINGS\n" + covered_met(c.prompt), auditor=auditor,
                     **{"requirements-review": lambda c, r: "COMPLETE"})
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, record_complete=False)
     assert replay.result.completed, replay.result.error

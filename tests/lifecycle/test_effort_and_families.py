@@ -10,7 +10,16 @@ import pytest
 from tests.conftest import write_codex_catalog
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import FILES, Script
-from tests.lifecycle.test_proof_binding import CASE, NEGATIVE, _at, _lead, _plan, _proofs, _scope
+from tests.lifecycle.test_proof_binding import (
+    CASE,
+    NEGATIVE,
+    _at,
+    _default_auditor,
+    _lead,
+    _plan,
+    _proofs,
+    _scope,
+)
 from tests.lifecycle.test_workflow_repair import CODE_FINDING, MET, NEG_TESTS
 
 
@@ -38,7 +47,7 @@ def _ledger(replay):
 def _script(collaborator=None, revision=None, recheck=None):
     script = Script(orchestrator=lambda c, r: _plan(_scope(proofs=_proofs("R1"))) if len(r.of("orchestrator")) == 1 else "DONE",
                     lead=_lead(), collaborator=collaborator or (lambda c, r: "NO FINDINGS" + MET),
-                    auditor=lambda c, r: f"R1: MET - {CASE}", **{"requirements-review": lambda c, r: "COMPLETE"})
+                    auditor=_default_auditor, **{"requirements-review": lambda c, r: "COMPLETE"})
     if revision is not None:
         script.overrides["revision"] = revision
     if recheck is not None:

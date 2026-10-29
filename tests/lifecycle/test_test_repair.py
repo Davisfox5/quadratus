@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import CLOSEOUT, FIXED, Script
 
 pytestmark = pytest.mark.requirements_ledger
@@ -45,7 +46,10 @@ def _run(tmp_path, monkeypatch, writes, *, repair=("tests/test_reset.py",)):
     script = Script(orchestrator=lambda c, r: plan.pop(0) if plan else "DONE", lead=lead,
                     closeout=lambda c, r: CLOSEOUT,
                     **{"requirements-review": lambda c, r: "COMPLETE",
-                       "auditor": lambda c, r: "R1: MET - tests/test_reset.py"})
+                       "auditor": judging_scenarios(
+                           lambda c, r: "R1: MET - tests/test_reset.py", SCOPE["proofs"][0],
+                           basis="the project check executed tests/test_reset.py::test_reset_keeps_order repaired, "
+                                 "on the delivered source, which is this scenario")})
     return H.run(tmp_path, monkeypatch, script, files=FILES, check=CHECK, max_tasks=2, repair_tests=repair)
 
 

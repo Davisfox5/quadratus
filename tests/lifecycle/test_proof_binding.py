@@ -16,6 +16,7 @@ import pytest
 from quadratus import checkpoint, delivery
 from quadratus.scope import TaskScope
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import FILES, FILES_OK, FIXED, Script
 
 CASE = "tests/test_app.py::test_add"
@@ -54,10 +55,21 @@ def _lead(proves=(CASE,), tests=None, lines=None):
     return lead
 
 
+#: This file's own declared add scenario (_proofs("R1")) and the state its
+#: scripted corrections give it, with the file's authored basis.
+PROOF_R1 = _proofs("R1")[0]
+PROOF_R1_CORRECTED = dict(PROOF_R1, state="nothing is stored")
+SHOWN = "tests/test_app.py::test_add executed on the delivered source and returned the sum, exactly this scenario"
+
+
+def _default_auditor(call, replay):
+    return judging_scenarios(lambda c, r: f"R1: MET - {CASE}", PROOF_R1, PROOF_R1_CORRECTED, basis=SHOWN)(call, replay)
+
+
 def _script(plan, lead, **kw):
     return Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
                   collaborator=kw.pop("collaborator", lambda c, r: "NO FINDINGS\nR1: MET - app.py"),
-                  auditor=kw.pop("auditor", lambda c, r: "R1: MET - tests/test_app.py::test_add"),
+                  auditor=kw.pop("auditor", _default_auditor),
                   **{"requirements-review": lambda c, r: "COMPLETE"}, **kw)
 
 
@@ -146,7 +158,7 @@ def test_a_parallel_batch_block_without_proof_scenarios_is_sent_back_the_same_wa
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
                 + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result, which is all R2 asks" for o in docs))
-    script = _script(None, lead, auditor=auditor,
+    script = _script(None, lead, auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
                      collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py\nR2: MET - README.md")
     script.overrides["orchestrator"] = orchestrator
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4, record_complete=False)
@@ -488,7 +500,9 @@ def test_a_bound_executed_case_with_an_independent_not_met_stays_unmet(tmp_path,
                            auditor=lambda c, r: "R1: NOT MET - the sum is returned but negative sums are not shown"),
                    files=FILES, max_tasks=1, record_complete=False)
     row = _acceptance(replay)[0]
-    assert row["execution"] == "ran" and row["sufficiency"] == "insufficient" and not row["established"]
+    # The NOT MET judges nothing about the row (evidence lifecycle, 2026-10-29):
+    # it stays unjudged, unestablished, and the requirement is not met.
+    assert row["execution"] == "ran" and row["sufficiency"] == "unjudged" and not row["established"]
     assert not replay.result.completed
 
 

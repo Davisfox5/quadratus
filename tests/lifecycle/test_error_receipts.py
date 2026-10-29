@@ -33,6 +33,7 @@ import pytest
 
 from quadratus.config import Settings
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import Script, judging
 from tests.lifecycle.test_step2_evidence import _ROOT_LIMITS
 
@@ -303,7 +304,7 @@ def test_actual_declared_quiet_check_can_credit_the_negative_cases_it_executed(t
             H.write(c,{'switches.py':GOOD,'tests/test_errors.py':NEGATIVE});return ('Implemented and tested.\nPROVES: P1 - tests/test_errors.py::test_invalid_string_error\nPROVES: P1 - tests/test_errors.py::test_nonstring_error\nCHANGED: ["switches.py", "tests/test_errors.py"]')
         H.write(c,{'README.md':'# Switch parser\n\nparse_switch validates on/off.\n'});return 'Documented.\nCHANGED: ["README.md"]'
     met='R1: MET - tests/test_errors.py::test_invalid_string_error and tests/test_errors.py::test_nonstring_error'
-    replay=H.run(tmp_path,monkeypatch,Script(orchestrator=planner,lead=lead,collaborator=lambda c,r:met+'\nREVIEW: COMPLETE' if c.task=='t1' else 'R2: MET - README.md\nREVIEW: COMPLETE',auditor=judging(lambda c,r:met+'\nR2: MET - README.md', reading=DOCS_JUDGED),**{'requirements-review':lambda c,r:'COMPLETE'}),files={'switches.py':BAD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},goal=GOAL+' Document parse_switch in README.',max_tasks=2,settings=Settings(backend='cli'))
+    replay=H.run(tmp_path,monkeypatch,Script(orchestrator=planner,lead=lead,collaborator=lambda c,r:met+'\nREVIEW: COMPLETE' if c.task=='t1' else 'R2: MET - README.md\nREVIEW: COMPLETE',auditor=judging_scenarios(judging(lambda c,r:met+'\nR2: MET - README.md', reading=DOCS_JUDGED),*scope['proofs'],basis='the project check executed tests/test_errors.py::test_invalid_string_error and test_nonstring_error on the delivered source, which is this scenario'),**{'requirements-review':lambda c,r:'COMPLETE'}),files={'switches.py':BAD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},goal=GOAL+' Document parse_switch in README.',max_tasks=2,settings=Settings(backend='cli'))
     data=H.result_json(replay);assert data['checks'] and all(c['passed'] for c in data['checks'])
     assert (replay.project/'tests/test_errors.py').read_text()==NEGATIVE
     print(json.dumps({'case':'declared-quiet-proof','completed':replay.result.completed,'error':replay.result.error,'checks':data['checks'],'audits':data['requirements'].get('audits')}))

@@ -4,6 +4,8 @@ requirement flags, typed command receipts as citations, finish routing
 and the framing lens. No controller run; the whole-run controls are in
 tests/lifecycle/test_evidence_lifecycle.py."""
 
+import json
+
 import pytest
 
 from quadratus import session as S
@@ -77,10 +79,19 @@ def _check(session, passed_cases, *, passed=True, output="1 passed in 0.1s", com
     ("P1", "scenario", [CASE], ""),
     ("P10", "scenario", [], "P10 is not a scenario this task declares"),
     ("P1 and P2", "scenario", [], "P2 is not a scenario this task declares"),
+    ("P1 " + "transport acceptance detail " * 20 + " and P2", "scenario", [], "P2 is not a scenario this task declares"),
+    ("P1 and TestApi.test_history", "mixed", ["tests/test_app.py::TestApi::test_history", CASE], ""),
+    ("P1 and TestOther.test_absent", "mixed", [], "TestOther.test_absent is not defined in any test file"),
+    ("TestApi.test_complete and P2", "mixed", [], "P2 is not a scenario this task declares"),
+    ("P1 and tests/test_app.py::TestApi::test_absent", "mixed", [], "is not defined where it says"),
+    ("tests/test_app.py::TestApi::test_complete and P2", "mixed", [], "P2 is not a scenario this task declares"),
+    ("tests/test_app.py::TestApi::test_complete and P1", "mixed", ["tests/test_app.py::TestApi::test_complete", CASE], ""),
+    ("tests/test_app.py::test_add[not-a-real-parameter]", "case", ["tests/test_app.py::test_add[not-a-real-parameter]"], ""),
+    ("TestApi.test_history[x]", "case", ["tests/test_app.py::TestApi::test_history[x]"], ""),
     ("P2", "scenario", [], "P2 is not a scenario this task declares"),
     (CASE, "case", [CASE], ""),
     ("tests/test_app.py::TestApi::test_history", "case", ["tests/test_app.py::TestApi::test_history"], ""),
-    ("tests/test_app.py::test_add[1]", "case", [CASE], ""),
+    ("tests/test_app.py::test_add[1]", "case", ["tests/test_app.py::test_add[1]"], ""),
     ("tests/test_app.py::test_absent", "case", [], "tests/test_app.py::test_absent is not defined where it says"),
     ("tests/test_app.py::test_add_more", "case", [], "tests/test_app.py::test_add_more is not defined where it says"),
     ("TestApi.test_history", "case", ["tests/test_app.py::TestApi::test_history"], ""),
@@ -165,6 +176,24 @@ def test_a_bound_item_is_discharged_only_by_a_complete_passing_run_of_the_same_i
     unbound = _entry(session, "the browser scenario")
     session.unexecuted_acceptance.append(unbound)
     assert session._discharging_check(unbound) is None and unbound in session._standing_not_run()
+    # An identity claim never falls back to the file: the gate ran the file's
+    # other cases, and the undefined or parametrized case stays held.
+    session.checks[:] = [_check(session, [CASE, "tests/test_app.py::TestApi::test_history"],
+                                command="python3 -m pytest -q tests/test_app.py")]
+    for item in ("tests/test_app.py::test_absent", "P1 and tests/test_app.py::test_absent",
+                 "tests/test_app.py::test_add[not-a-real-parameter]", "TestApi.test_complete and P2",
+                 "P1 " + "detail " * 60 + " and P2"):
+        held = _entry(session, item)
+        assert session._discharging_check(held) is None, item
+    exact = _entry(session, "tests/test_app.py::test_add[1-2]")
+    assert exact["cases"] == ["tests/test_app.py::test_add[1-2]"]
+    assert session._discharging_check(exact) is None, "the base case passing does not show that instance"
+    session.checks[:] = [_check(session, ["tests/test_app.py::test_add[1-2]"])]
+    assert session._discharging_check(exact) == 0
+    pathed = _entry(session, "tests/test_app.py")
+    assert pathed["binding"]["kind"] == "paths"
+    session.checks[:] = [_check(session, [CASE], command="python3 -m pytest -q tests/test_app.py")]
+    assert session._discharging_check(pathed) == 0, "an item naming only a path keeps the file-level route"
 
 
 def test_the_prompt_block_and_the_obligation_say_how_a_bound_item_is_discharged(tmp_path):
@@ -180,6 +209,16 @@ def test_the_prompt_block_and_the_obligation_say_how_a_bound_item_is_discharged(
     assert row["runner"] == "gate" and list(row["cases"]) == [CASE] and row["kind"] == "not_run"
     row = session._register_obligation(held, kind="not_run")
     assert row["runner"] is None and list(row["cases"]) == []
+    long_a = _entry(session, "P1 " + "a " * 200 + "and P2")
+    long_b = _entry(session, "P1 " + "a " * 200 + "and P3")
+    first = session._register_obligation(long_a, kind="not_run")
+    second = session._register_obligation(long_b, kind="not_run")
+    assert first is not second and first["entry"]["item"] != second["entry"]["item"], "the whole item is the identity"
+    session.unexecuted_acceptance.append(long_a)
+    block = session._not_run_block()
+    assert long_a["item"][:300] in block and long_a["item"] not in block, "the prompt shows a bounded display"
+    assert f"[... {len(long_a['item']) - 300:,} more characters; the record holds the whole item]" in block
+    assert "[not bound to any case: P2 is not a scenario this task declares]" in block
     gateless = _session(tmp_path / "g", project=root)
     gateless.evidence_obligations.append(_acceptance_row())
     row = gateless._register_obligation(_entry(gateless, "P1 - no socket"), kind="not_run")
@@ -208,23 +247,32 @@ def _executed_row(session, oid="O1", rids=("R1", "R2")):
     return row
 
 
-def test_implied_sufficiency_reads_the_raw_verdicts_never_a_verdict_lowered_for_another_record(tmp_path):
+def test_a_fresh_or_stale_executed_row_is_never_judged_from_requirement_verdicts(tmp_path):
+    """Root's controls on 2ab56eb and bd0164f: R1 MET plus R5 NOT MET on a
+    shared row labelled it insufficient, all MET labelled it sufficient.
+    Neither direction exists now: without a scoped line the row stays
+    unjudged, and the acceptance predicate lowers the requirement."""
     root = _project(tmp_path)
     session = _session(tmp_path, project=root, gate=_gate(root), requirements=("R1", "R2"))
     _executed_row(session)
-    raw = {"R1": (True, CASE), "R2": (True, CASE)}
-    lowered = {"R1": (True, CASE), "R2": (False, "acceptance reported NOT RUN by the covering task")}
-    session._judge_obligations("claude:opus", "R1: MET\nR2: MET", dict(lowered), ids=["R1", "R2"], raw=raw)
-    row = session.evidence_obligations[0]
-    assert row["sufficiency"] == "sufficient" and row["judged_by"] == "claude:opus"
-    assert row["sufficiency_source"] == "implied from the auditor's own verdicts on R1 MET, R2 MET"
-    session.evidence_obligations[0] = dict(row, sufficiency="unjudged", judged_by="", judged_binding="")
-    session._judge_obligations("claude:opus", "", dict(lowered), ids=["R1", "R2"])
-    assert session.evidence_obligations[0]["sufficiency"] == "insufficient", "without raw, the lowered flag leaks in"
-    session.evidence_obligations[0] = dict(row, sufficiency="unjudged", judged_by="", judged_binding="")
-    session._judge_obligations("claude:opus", "", dict(lowered), ids=["R1", "R2"], raw={"R1": (True, CASE), "R2": (False, "x")})
-    assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
-    assert session.evidence_obligations[0]["sufficiency_source"] == "implied from the auditor's own verdicts on R1 MET, R2 NOT MET"
+    for reply, found in (("R1: MET - x\nR2: MET - x", {"R1": (True, CASE), "R2": (True, CASE)}),
+                         ("R1: MET - x\nR2: NOT MET - y", {"R1": (True, CASE), "R2": (False, "y")}),
+                         ("R1: NOT MET - y\nR2: NOT MET - y", {"R1": (False, "y"), "R2": (False, "y")})):
+        session._judge_obligations("claude:opus", reply, dict(found), ids=["R1", "R2"])
+        row = session.evidence_obligations[0]
+        assert (row["sufficiency"], row["judged_by"]) == ("unjudged", ""), reply
+        assert "sufficiency_source" not in row or not row["sufficiency_source"]
+    lowered = session._apply_acceptance({"R1": (True, CASE), "R2": (True, CASE)}, ["R1", "R2"])
+    assert [r["requirement"] for r in lowered] == ["R1", "R2"] and "unjudged" in lowered[0]["reason"]
+    stale = dict(session.evidence_obligations[0], execution="stale", reason="executed on another source")
+    session.evidence_obligations[0] = stale
+    session._sync_obligation(stale)
+    session._judge_obligations("claude:opus", "R1: MET - x\nR2: MET - x", {}, ids=["R1", "R2"])
+    assert session.evidence_obligations[0]["sufficiency"] == "unjudged"
+    session._judge_obligations("claude:opus", "O1: SUFFICIENT the case shows it", {}, ids=["R1", "R2"])
+    assert session.evidence_obligations[0]["sufficiency"] == "unjudged", "a stale row cannot be found sufficient"
+    session._judge_obligations("claude:opus", "O1: INSUFFICIENT it ran on another source", {}, ids=["R1", "R2"])
+    assert session.evidence_obligations[0]["sufficiency"] == "insufficient", "an explicit INSUFFICIENT still counts"
 
 
 def test_an_explicit_line_decides_and_a_conflict_leaves_the_row_unjudged_with_no_source(tmp_path):
@@ -232,10 +280,10 @@ def test_an_explicit_line_decides_and_a_conflict_leaves_the_row_unjudged_with_no
     session = _session(tmp_path, project=root, gate=_gate(root), requirements=("R1", "R2"))
     _executed_row(session)
     raw = {"R1": (True, CASE), "R2": (True, CASE)}
-    session._judge_obligations("claude:opus", "O1: INSUFFICIENT negative sums are not shown", dict(raw), raw=raw)
+    session._judge_obligations("claude:opus", "O1: INSUFFICIENT negative sums are not shown", dict(raw))
     row = session.evidence_obligations[0]
     assert row["sufficiency"] == "insufficient" and row["sufficiency_source"] == "explicit line by claude:opus"
-    session._judge_obligations("claude:opus", "O1: SUFFICIENT fine\nO1: INSUFFICIENT not fine", dict(raw), raw=raw)
+    session._judge_obligations("claude:opus", "O1: SUFFICIENT fine\nO1: INSUFFICIENT not fine", dict(raw))
     row = session.evidence_obligations[0]
     assert row["sufficiency"] == "unjudged" and row["sufficiency_source"] == "" and row["sufficiency_note"]
 
@@ -248,21 +296,21 @@ def test_a_prior_judgment_about_exactly_this_evidence_stands_until_a_seat_speaks
     before = dict(session.evidence_obligations[0])
     assert before["sufficiency"] == "insufficient" and before["judged_by"] == "openai:sol"
     raw = {"R1": (True, CASE), "R2": (True, CASE)}
-    session._judge_obligations("claude:opus", "R1: MET\nR2: MET", dict(raw), ids=["R1", "R2"], raw=raw)
+    session._judge_obligations("claude:opus", "R1: MET\nR2: MET", dict(raw), ids=["R1", "R2"])
     after = session.evidence_obligations[0]
     assert (after["sufficiency"], after["judged_by"], after["judged_binding"]) == ("insufficient", "openai:sol", before["judged_binding"])
-    session._judge_obligations("claude:opus", "O1: SUFFICIENT the case divides by zero on this source", dict(raw), raw=raw)
+    session._judge_obligations("claude:opus", "O1: SUFFICIENT the case divides by zero on this source", dict(raw))
     after = session.evidence_obligations[0]
     assert (after["sufficiency"], after["judged_by"]) == ("sufficient", "claude:opus"), "an explicit line still decides"
-    # New evidence makes the judgment stale, and the implication applies again.
+    # New evidence makes the judgment stale: it is no longer current, and
+    # nothing but a new scoped line judges it again.
     stale = dict(after, receipts=["check-2"])
     session.evidence_obligations[0] = stale
     session._sync_obligation(stale)
     assert not stale["sufficiency_current"]
-    session._judge_obligations("claude:opus", "R1: NOT MET\nR2: MET", {}, ids=["R1", "R2"],
-                               raw={"R1": (False, "x"), "R2": (True, CASE)})
-    assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
-    assert session.evidence_obligations[0]["judged_by"] == "claude:opus"
+    session._judge_obligations("claude:opus", "R1: NOT MET\nR2: MET", {}, ids=["R1", "R2"])
+    assert not session.evidence_obligations[0]["sufficiency_current"]
+    assert session.evidence_obligations[0]["judged_by"] == "claude:opus", "no re-judgment from verdicts"
 
 
 # -- 3. a command the requirement names is cited by the harness's own receipt ------------------------
@@ -282,10 +330,19 @@ def test_the_command_a_requirement_names_is_read_as_argv(tmp_path, text, argv):
     assert session._command_requirement("R1") == argv
 
 
-def _receipt_check(session, command, *, status="passed", required=True, source=None, cwd=".", gate=None, environment=None):
-    check = _check(session, [CASE], passed=status == "passed", command=command, source=source, gate=gate,
-                   environment=environment)
-    check["receipts"] = [dict(id="check", status=status, required=required, command=command, cwd=cwd)]
+def _receipt_check(session, command, *, status="passed", required=True, source=None, cwd=".", gate=None,
+                   environment=None, output="1 passed in 0.1s", skipped=0, cases=(CASE,), counts=None, selection=""):
+    check = _check(session, list(cases), passed=status == "passed", command=command, source=source, gate=gate,
+                   environment=environment, output=output, skipped=skipped)
+    if counts:
+        check["report"]["counts"].update(counts)
+    check["receipts"] = [dict(id="check", status=status, required=required, command=command, cwd=cwd,
+                              report=check["report"], tests=len(cases) or None)]
+    check["selection"] = selection
+    if environment == "":
+        check["environment"] = None
+    if source == "":
+        check["source"] = None
     return check
 
 
@@ -294,10 +351,11 @@ def test_a_typed_receipt_of_exactly_the_named_command_on_the_current_identity_is
     session = _session(tmp_path, project=root, gate=_gate(root))
     session.memory.ledger.requirements["R1"] = "Run `python3 -m pytest -q` before declaring completion"
     assert session._command_receipt_citation("R1") == (None, "the harness has no receipt for `python3 -m pytest -q`")
-    session.checks.append(_receipt_check(session, "/usr/bin/python3.11 -m pytest -q -p no:cacheprovider --quadratus-report={report}"))
+    session.checks.append(_receipt_check(session, "/private/operator/runtime/bin/python3.11 -m pytest -q -p no:cacheprovider --quadratus-report={report}"))
     receipt, problem = session._command_receipt_citation("R1")
     assert problem == "" and receipt["id"] == "check-1"
-    assert receipt["command"] == "/usr/bin/python3.11 -m pytest -q -p no:cacheprovider", "the receipt as recorded"
+    assert receipt["command"] == "python3 -m pytest -q", "the requirement's public spelling, never the argv"
+    assert "/private/operator" not in json.dumps(receipt)
     assert receipt["source"] == session._source_fingerprint()
     negatives = {
         "the harness has no receipt for `python3 -m pytest -q` (its checks ran other commands)":
@@ -308,7 +366,15 @@ def test_a_typed_receipt_of_exactly_the_named_command_on_the_current_identity_is
         "it ran under another gate": _receipt_check(session, "python3 -m pytest -q", gate="other"),
         "it ran in another environment": _receipt_check(session, "python3 -m pytest -q", environment="elsewhere"),
         "it ran from another directory, not the project root": _receipt_check(session, "python3 -m pytest -q", cwd="tests"),
+        "its environment is not recorded": _receipt_check(session, "python3 -m pytest -q", environment=""),
+        "its source is not recorded": _receipt_check(session, "python3 -m pytest -q", source=""),
+        "it executed no cases": _receipt_check(session, "python3 -m pytest -q", cases=(), output="no tests ran"),
+        "it skipped 1 case(s)": _receipt_check(session, "python3 -m pytest -q", output="1 passed, 1 skipped", skipped=1),
+        "it has failures": _receipt_check(session, "python3 -m pytest -q", counts=dict(failed=1)),
+        "it ran a selection, not the whole command": _receipt_check(session, "python3 -m pytest -q", selection="-k add"),
     }
+    negatives["the harness has no receipt for `python3 -m pytest -q` (its checks ran other commands)"] = \
+        _receipt_check(session, "python3 -m pytest -q -k add")
     for expected, check in negatives.items():
         session.checks[:] = [check]
         receipt, problem = session._command_receipt_citation("R1")

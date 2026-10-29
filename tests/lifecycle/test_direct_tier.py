@@ -16,6 +16,7 @@ import json
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
 
 pytestmark = pytest.mark.requirements_ledger
@@ -26,6 +27,13 @@ FAVICON = dict(
     intended_result="GET /favicon.ico returns 200 with a project-owned SVG icon",
     acceptance=["static/favicon.svg exists", "tests pass"], max_lines=40,
     capture={"path": "/", "steps": []})
+
+
+#: The scenario _decl declares for its favicon task (proofs_for below), for
+#: this file's scripted auditor to judge by name, with the authored basis.
+FAVICON_PROOF = H.proofs_for("R1", "tests/test_basic.py")[0]
+FAVICON_SHOWN = ("the project check executed tests/test_basic.py::test_favicon_file on the delivered source, which "
+                 "reads the favicon file this scenario is about")
 
 
 def _decl(scope=FAVICON, tier="direct", extra="", covers="R1"):
@@ -65,7 +73,8 @@ def _run(tmp_path, monkeypatch, decl, *, direct=True, lead=_lead, roles=None, **
         return plan.pop(0) if plan else "DONE"
     overrides = dict(orchestrator=orchestrator, lead=lead,
                      **{"requirements-review": lambda c, r: "COMPLETE",
-                        "auditor": lambda c, r: "R1: MET - static/favicon.svg",
+                        "auditor": judging_scenarios(lambda c, r: "R1: MET - static/favicon.svg", FAVICON_PROOF,
+                                                     basis=FAVICON_SHOWN),
                         "design-review": lambda c, r: "APPROVED",
                         "collaborator": lambda c, r: "BLOCKING: the link tag has no type attribute"},
                      **(roles or {}))

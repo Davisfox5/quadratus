@@ -14,12 +14,17 @@ from pathlib import Path
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
 from tests.lifecycle.test_proof_binding import (
     CASE,
     NEGATIVE,
+    PROOF_R1,
+    PROOF_R1_CORRECTED,
+    SHOWN,
     _acceptance,
     _at,
+    _default_auditor,
     _lead,
     _plan,
     _proofs,
@@ -81,7 +86,7 @@ def _script(seen, *, orchestrator=None, lead=None, collaborator=None, revision=N
         seen.keep("revision", call)
         return (revision or (lambda c, r: "Nothing to change.\nCHANGED: []"))(call, replay)
     script = Script(orchestrator=plan, lead=lead or _lead(), collaborator=review,
-                    auditor=auditor or (lambda c, r: f"R1: MET - {CASE}"),
+                    auditor=auditor or _default_auditor,
                     **{"requirements-review": lambda c, r: "COMPLETE"})
     script.overrides["recheck"] = recheck_
     script.overrides["revision"] = revision_
@@ -421,7 +426,8 @@ def test_a_parallel_child_holds_an_evidence_finding_for_the_post_merge_recheck_w
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
                 + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
-    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator, auditor=auditor,
+    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+                    auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE"})
     script.overrides["recheck"] = recheck
     script.overrides["revision"] = lambda c, r: pytest.fail("no editor call for an evidence gap in a child")
@@ -507,7 +513,8 @@ def test_the_planner_is_shown_the_requirement_nobody_took_on_and_done_is_refused
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
                 + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
     replay = H.run(_at(tmp_path, "covered"), monkeypatch,
-                   _script(seen, orchestrator=orchestrator, lead=lead, auditor=auditor,
+                   _script(seen, orchestrator=orchestrator, lead=lead,
+                           auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
                            collaborator=lambda c, r: "NO FINDINGS\n" + ("R2: MET - README.md" if "README" in c.prompt
                                                                      else "R1: MET - app.py")),
                    files=FILES, max_tasks=3, record_complete=False)
@@ -549,7 +556,8 @@ def test_a_later_task_on_unchanged_source_is_shown_the_run_that_already_passed_o
         return "NO FINDINGS\nR1: MET - app.py\nR2: MET - app.py"
     replay = H.run(_at(tmp_path, "twice"), monkeypatch,
                    _script(seen, orchestrator=orchestrator, lead=lead, collaborator=collaborator,
-                           auditor=lambda c, r: f"R1: MET - {CASE}\nR2: MET - {CASE}"),
+                           auditor=judging_scenarios(lambda c, r: f"R1: MET - {CASE}\nR2: MET - {CASE}", PROOF_R1,
+                                                     _proofs("R2")[0], basis=SHOWN)),
                    files=FILES, max_tasks=2, record_complete=False)
     assert [task for task, _ in prompts] == ["t1", "t2"]
     assert "execution ran (receipt observed-1)" in prompts[0][1]
@@ -648,7 +656,8 @@ def test_a_parallel_child_scenario_correction_carries_the_verbatim_requirement(t
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
                 + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
-    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator, auditor=auditor,
+    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+                    auditor=judging_scenarios(auditor, PROOF_R1, PROOF_R1_CORRECTED, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE"})
     script.overrides["recheck"] = recheck
     script.overrides["revision"] = lambda c, r: pytest.fail("a scenario-only round makes no editing call")

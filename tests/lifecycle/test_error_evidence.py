@@ -23,6 +23,7 @@ import pytest
 
 from quadratus.session import _error_clause
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import Script, judging
 from tests.lifecycle.test_step2_recovery import _simple
 
@@ -39,6 +40,11 @@ def _scoped(paths, text, covers):
 #: row): README.md names add(a, b) and its result, which is all R2 asks.
 DOCS_JUDGED = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 R1 = "add(a, b) raises TypeError when either argument is not a number"
+#: This file's declared refusal scenario (_scoped below) and its authored basis.
+ERROR_PROOF = H.proofs_for("R1", "tests/test_app.py", operation="add('x', 1)", state="nothing stored",
+                           expect="TypeError is raised")[0]
+ERROR_SHOWN = ("the project check executed tests/test_app.py::test_add_refuses_text on the delivered source, which "
+               "raises TypeError for a text argument, exactly this scenario")
 R2 = "README documents add"
 PLAN = ("REQUIREMENTS:\nR1: " + R1 + "\nR2: " + R2 + "\n"
         + _scoped(["app.py", "tests/test_app.py"], "Implement add in app.py with its refusal and a test.", "R1"))
@@ -79,7 +85,8 @@ def _run(tmp_path, monkeypatch, *, source, tests, audit, review="NO FINDINGS\nR1
         return review if call.task == "t1" else "NO FINDINGS\nR2: MET - README.md"
 
     script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
-                    auditor=judging(lambda call, replay: audit, reading=DOCS_JUDGED),
+                    auditor=judging_scenarios(judging(lambda call, replay: audit, reading=DOCS_JUDGED), ERROR_PROOF,
+                                              basis=ERROR_SHOWN),
                     **{"requirements-review": lambda call, replay: "COMPLETE",
                        "revision": lambda call, replay: "Nothing to change.\nCHANGED: []"})
     return H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False, check=check)

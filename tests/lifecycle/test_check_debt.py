@@ -14,7 +14,16 @@ import json
 import pytest
 
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import DECL_T1, FILES, FIXED, T1, Script
+from tests.lifecycle.replies import judging_scenarios
+from tests.lifecycle.test_lifecycle_matrix import (
+    ADD_PROOF,
+    ADD_SHOWN,
+    DECL_T1,
+    FILES,
+    FIXED,
+    T1,
+    Script,
+)
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -44,7 +53,7 @@ def _fixes(call, replay):
 def _run(tmp_path, monkeypatch, orchestrator, leads, **kw):
     overrides = dict(orchestrator=orchestrator, lead=lambda call, replay: leads[call.task](call, replay),
                      **{"requirements-review": lambda call, replay: "COMPLETE",
-                        "auditor": lambda call, replay: MET})
+                        "auditor": judging_scenarios(lambda call, replay: MET, ADD_PROOF, basis=ADD_SHOWN)})
     replay = H.run(tmp_path, monkeypatch, Script(**overrides), files=FILES, max_tasks=4, **kw)
     replay.findings = H.result_json(replay).get("findings", [])
     return replay

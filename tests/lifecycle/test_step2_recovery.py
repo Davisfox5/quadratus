@@ -18,7 +18,10 @@ from quadratus.project_run import run_project
 from quadratus.run_budget import RunBudget, RunLimits
 from quadratus.session import Session
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import (
+    ADD_PROOF,
+    ADD_SHOWN,
     DECL_T1,
     DECL_T2,
     FILES,
@@ -353,8 +356,9 @@ def test_the_planner_is_told_which_requirements_no_task_has_covered(tmp_path, mo
     reqs = "REQUIREMENTS:\nR1: add works\nR2: README documents add\n"
     first = reqs + DECL_T1 + "\nCOVERS: R1"
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(first, DECL_T2 + "\nCOVERS: R2"),
-                                                  auditor=judging(lambda c, r: "R1: MET - app.py\nR2: MET - README.md",
-                                                                  reading=DOCS_JUDGED)),
+                                                  auditor=judging_scenarios(
+                                                      judging(lambda c, r: "R1: MET - app.py\nR2: MET - README.md",
+                                                              reading=DOCS_JUDGED), ADD_PROOF, basis=ADD_SHOWN)),
                    files=FILES, max_tasks=3, record_complete=False)
     second = replay.of("orchestrator")[1].prompt
     assert "Requirements no task has covered yet: R2." in second
@@ -498,6 +502,15 @@ def _simple(path, text, covers):
     return f"KIND: backend simple\nSCOPE: {scope}\n{text}\nCOVERS: {covers}"
 
 
+#: The scenarios ``_simple("app.py", ..., covers)`` declares, for a scripted
+#: auditor to judge by name (replies.judging_scenarios), and the authored basis.
+def simple_proofs(covers="R1"):
+    return H.proofs_for(covers, "tests/test_app.py")
+
+
+SIMPLE_SHOWN = "the project check executed tests/test_app.py::test_add on the delivered source, which is this scenario"
+
+
 @pytest.mark.requirements_ledger
 @pytest.mark.parametrize("source", ["unmet", "met"])
 def test_goal_bearing_simple_parallel_work_meets_one_cross_vendor_review(tmp_path, monkeypatch, source):
@@ -592,7 +605,8 @@ def test_goal_bearing_work_is_reviewed_or_held_never_closed_unreviewed(tmp_path,
         return "NO FINDINGS"
 
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, collaborator=collaborator,
-                                                 auditor=lambda c, r: "R1: MET - app.py"),
+                                                 auditor=judging_scenarios(lambda c, r: "R1: MET - app.py", ADD_PROOF,
+                                                                           basis=ADD_SHOWN)),
                    files=FILES, max_tasks=1, direct_tier=route == "direct", record_complete=False)
     t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
     lead_vendor = replay.of("lead")[0].vendor
@@ -761,7 +775,8 @@ def test_review_and_audit_trace_every_error_path_and_judge_the_goal_over_require
 
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
                                                  collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
-                                                 auditor=lambda c, r: "R1: MET - app.py",
+                                                 auditor=judging_scenarios(lambda c, r: "R1: MET - app.py", ADD_PROOF,
+                                                                           basis=ADD_SHOWN),
                                                  **{"requirements-review": lambda c, r: "COMPLETE"}),
                    files=FILES, max_tasks=1, record_complete=False)
     review, audit = replay.of("collaborator")[0].prompt, replay.of("auditor")[0].prompt
@@ -1659,8 +1674,8 @@ def test_the_cap_goal_question_lists_full_work_by_id_and_the_audit_still_decides
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead,
         collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
-        auditor=lambda c, r: "R1: NOT MET - no test of a negative sum" if case == "audit-not-met"
-        else "R1: MET - app.py:2",
+        auditor=judging_scenarios(lambda c, r: "R1: NOT MET - no test of a negative sum" if case == "audit-not-met"
+                                  else "R1: MET - app.py:2", ADD_PROOF, basis=ADD_SHOWN),
         **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=1, record_complete=False)
     assert caps, "the cap question was asked"
@@ -1717,7 +1732,8 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
         where.mkdir()
         return H.run(where, monkeypatch, Script(
             orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
-            auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
+            auditor=judging_scenarios(lambda c, r: "R1: MET - app.py:2", ADD_PROOF, basis=ADD_SHOWN),
+            **{"requirements-review": lambda c, r: "COMPLETE"}),
             files=FILES, max_tasks=1, record_complete=False,
             limits=RunLimits(max_calls=120, max_reported_tokens=total, wall_seconds=600,
                              max_concurrent_workers=2, reserve_tokens_per_call=reserve))
@@ -1775,7 +1791,8 @@ def test_a_capped_revision_that_changed_nothing_gets_one_measured_retry_from_the
 
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=_plan(declared), lead=lead, revision=revision, collaborator=collaborator, recheck=recheck,
-        auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        auditor=judging_scenarios(lambda c, r: "R1: MET - app.py:2", ADD_PROOF, basis=ADD_SHOWN),
+        **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
     writers = [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
     roles = [c.role for c in writers]

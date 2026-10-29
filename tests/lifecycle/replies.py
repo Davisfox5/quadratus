@@ -83,3 +83,65 @@ def recheck_reply(prompt: str, dispositions: Optional[Dict[str, str]] = None, *,
         assert text is not None, f"no disposition authored for expected finding {fid}"
         lines.append(f"{fid}: {text}")
     return "\n".join(lines)
+
+
+def judged(prompt: str, requirements: Dict[str, str], *, approve: Optional[Dict[str, str]] = None,
+           reject: Optional[Dict[str, str]] = None) -> str:
+    """An auditor's reply whose sufficiency lines are authored by the case
+    for named evidence: ``approve`` maps the exact behavior text of an
+    obligation the prompt lists executed (as the obligations block renders
+    it, e.g. ``'P1: add(1, 2); given nothing stored; expect 3 is returned;
+    in tests/test_app.py'`` or a NOT RUN item's text) to the case's own
+    SUFFICIENT basis; ``reject`` maps one to its INSUFFICIENT gap. A named
+    behavior the prompt does not list executed is an error (the case would
+    be judging nothing); every other row is left exactly as the case left
+    it, unjudged. Never a transform of the verdicts."""
+    rows = {}
+    for row in requested_obligations(prompt):
+        rows.setdefault(row["behavior"], row)
+    obligations: Dict[str, str] = {}
+    for mapping, word in ((approve or {}, "SUFFICIENT"), (reject or {}, "INSUFFICIENT")):
+        for behavior, text in mapping.items():
+            row = rows.get(behavior)
+            assert row is not None, f"the prompt lists no obligation for {behavior!r}; listed: {sorted(rows) or 'none'}"
+            if word == "SUFFICIENT" and row["execution"] != "ran":
+                # Nothing executed, nothing the case can call shown: the row
+                # is left as it is (the engine would refuse the line anyway).
+                continue
+            obligations[row["oid"]] = f"{word} {text}"
+    return audit_reply(prompt, requirements, obligations)
+
+
+def scenario_text(proof: dict) -> str:
+    """A declared proof scenario as the obligations block renders its row
+    (Session._register_obligation's behavior text), for ``judged``."""
+    return f"{proof['id']}: {proof['operation']}; given {proof['state']}; expect {proof['expect']}; in {proof['location']}"
+
+
+def judging_scenarios(base, *proofs, basis: str):
+    """A named fixture judgment: the reply of ``base`` (a scripted auditor)
+    plus this fixture's own SUFFICIENT line, with its authored ``basis``,
+    for exactly the declared scenarios ``proofs`` (proof dicts as the
+    fixture's own SCOPE declares them) that the prompt lists executed. It
+    never reads a verdict, never writes INSUFFICIENT and never touches a
+    row it does not name. A named row the reply already speaks about (one
+    line or several: an authored judgment, conflict or restatement) is
+    left exactly as written; a line about another row (a sibling reading
+    judgment from ``judging``) neither blocks nor changes the named line
+    (root's note on the first draft, which returned the whole reply
+    unchanged whenever any O-line existed)."""
+    import re as _re
+    texts = [scenario_text(p) for p in proofs]
+
+    def auditor(call, replay):
+        reply = base(call, replay)
+        if not isinstance(reply, str):
+            return reply
+        listed = {row["behavior"]: row for row in requested_obligations(call.prompt)}
+        spoken = set(_re.findall(r"^\s*(O\d+)\s*:", reply, _re.MULTILINE))
+        lines = [f"{listed[t]['oid']}: SUFFICIENT {basis}" for t in texts
+                 if t in listed and listed[t]["execution"] == "ran" and listed[t]["modality"] == "test"
+                 and listed[t]["oid"] not in spoken]
+        return reply + ("\n" + "\n".join(lines) if lines else "")
+    return auditor
+

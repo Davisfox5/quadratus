@@ -13,6 +13,7 @@ Controller determinism, not live reliability.
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -89,8 +90,32 @@ def judging(base=None, *, reading=None, legacy=None, capture=None):
     return judge
 
 
+#: The one scenario the default fixture declares (T1, proofs_for above): the
+#: only row the default auditor judges, by name (replies.judging_scenarios).
+ADD_PROOF = T1["proofs"][0]
+ADD_SCENARIO = "P1: add(1, 2); given nothing stored; expect 3 is returned; in tests/test_app.py"
+#: This fixture's authored basis for that scenario.
+ADD_SHOWN = ("the project check executed tests/test_app.py::test_add on the delivered source, which is exactly "
+             "this scenario")
+
+
+def default_audit(prompt: str) -> str:
+    """The default fixture's own audit: one MET per covered requirement and,
+    for its own declared add scenario where the prompt lists it executed,
+    this fixture's authored sufficiency line. Nothing is judged for any
+    other row: a case that declares its own scenarios authors its own
+    lines (replies.judged, replies.judging_scenarios)."""
+    from tests.lifecycle.replies import judging_scenarios
+    return judging_scenarios(lambda c, r: covered_met(prompt).rstrip("\n"), ADD_PROOF, basis=ADD_SHOWN)(
+        SimpleNamespace(prompt=prompt), None)
+
+
 class Script:
-    """Default replies by role; a case overrides the parts it is about."""
+    """Default replies by role; a case overrides the parts it is about. An
+    overridden handler's reply is carried exactly as written (nothing is
+    added to it, so a missing, duplicated or contradictory judgment stays
+    what the case wrote); only the default auditor judges, and only the
+    default fixture's own scenario (``default_audit``)."""
 
     def __init__(self, **overrides):
         self.overrides = overrides
@@ -101,6 +126,9 @@ class Script:
         if handler is None:
             return "No blocking findings.\n" + covered_met(call.prompt) + "REVIEW: COMPLETE"
         return handler(call, replay)
+
+    def _auditor(self, call, replay):
+        return default_audit(call.prompt)
 
     def _orchestrator(self, call, replay):
         n = len(replay.of("orchestrator"))

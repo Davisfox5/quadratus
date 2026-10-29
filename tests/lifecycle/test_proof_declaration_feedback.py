@@ -24,6 +24,7 @@ from tests.lifecycle.test_proof_binding import (
     NEGATIVE,
     _acceptance,
     _at,
+    _default_auditor,
     _lead,
     _plan,
     _proofs,
@@ -40,7 +41,7 @@ def _run(tmp_path, monkeypatch, name, lines, *, collaborator=None, revision=None
     script = Script(orchestrator=lambda c, r: _plan(_scope(proofs=_proofs("R1"))) if len(r.of("orchestrator")) == 1 else "DONE",
                     lead=_lead(lines=lines, tests=tests),
                     collaborator=collaborator or (lambda c, r: "NO FINDINGS\nR1: MET - app.py"),
-                    auditor=lambda c, r: f"R1: MET - {CASE}", **{"requirements-review": lambda c, r: "COMPLETE"})
+                    auditor=_default_auditor, **{"requirements-review": lambda c, r: "COMPLETE"})
     if revision is not None:
         script.overrides["revision"] = revision
         script.overrides["recheck"] = lambda c, r: "RFT1-1: RESOLVED redeclared"

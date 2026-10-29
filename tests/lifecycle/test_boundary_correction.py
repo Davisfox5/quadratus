@@ -24,9 +24,11 @@ import pytest
 from quadratus import checkpoint, jobstore, monitor
 from quadratus.session import Session, invocation_context
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios, scenario_text
 from tests.lifecycle.test_delivery_controller import (
     GATE_FILES,
     HTTP_FILES,
+    HTTP_SHOWN,
     _findings,
     _http_script,
     _obligations,
@@ -34,13 +36,28 @@ from tests.lifecycle.test_delivery_controller import (
 )
 from tests.lifecycle.test_finish_capacity import PLAN_1, PLAN_2, _script
 from tests.lifecycle.test_lifecycle_matrix import DECL_T1, DECL_T2, FILES, FIXED, Script
-from tests.lifecycle.test_step2_recovery import _commit, _episode, _interrupted, _plan
+from tests.lifecycle.test_step2_recovery import (
+    SIMPLE_SHOWN,
+    _commit,
+    _episode,
+    _interrupted,
+    _plan,
+    simple_proofs,
+)
 
 CLEAN_T2 = "NO FINDINGS\nR2: MET - README.md"
 
 
 def _run_dir(replay) -> Path:
     return Path(replay.result.run_dir)
+
+
+def _scenario_rows(prompt):
+    """The ids of the http fixture's two declared scenarios (P1 for R1, P2
+    for R2, both in tests/test_app.py) where the prompt lists them executed."""
+    from tests.lifecycle.replies import requested_obligations
+    texts = {scenario_text(p) for p in simple_proofs("R1, R2")}
+    return [row["oid"] for row in requested_obligations(prompt) if row["behavior"] in texts and row["execution"] == "ran"]
 
 
 def _not_run_rows(prompt, path):
@@ -77,6 +94,9 @@ def test_an_explicit_insufficient_or_a_conflicting_sufficiency_keeps_the_require
             lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
             if shape == "conflict":
                 lines.append(f"{oid}: SUFFICIENT it does answer /add")
+        # The case's own lines for the two declared scenarios, so only the
+        # NOT RUN row's judgment is what this case is about.
+        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt)]
         return "\n".join(lines)
     script.overrides["auditor"] = auditor
     replay = H.run(tmp_path, monkeypatch, script, files=HTTP_FILES, check=GATE_FILES, max_tasks=1,
@@ -379,8 +399,9 @@ def test_a_settled_judgment_the_record_never_consumed_is_not_asked_again_on_resu
         return original(self, found, audited)
     monkeypatch.setattr(Session, "_apply_acceptance", die_before_consumption)
     script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
-    script.overrides["auditor"] = lambda call, replay: ("R1: MET - app.py\nR2: NOT MET - README lacks the example the "
-                                                        "goal asks for; at README.md; example: none")
+    script.overrides["auditor"] = judging_scenarios(
+        lambda call, replay: ("R1: MET - app.py\nR2: NOT MET - README lacks the example the goal asks for; at "
+                              "README.md; example: none"), *simple_proofs("R1"), basis=SIMPLE_SHOWN)
     # Three slots: the planner's DONE after t2 follows a quiescent point, so
     # the source the checkpoint holds is the delivered one and the only
     # thing between the checkpoint and the death is the settled judgment.
@@ -503,6 +524,7 @@ def test_combined_debt_names_every_reason_and_commits_an_incomplete_terminal(tmp
         lines = ["R1: MET - app.py", "R2: MET - tests/test_http.py", "RFT1-1: UNRESOLVED it stands"]
         for oid in _not_run_rows(call.prompt, "tests/test_http.py"):
             lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
+        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt)]
         return "\n".join(lines)
     script.overrides["auditor"] = auditor
     replay = H.run(tmp_path, monkeypatch, script, files=HTTP_FILES, check=GATE_FILES, max_tasks=1,
