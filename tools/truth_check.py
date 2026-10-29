@@ -124,7 +124,7 @@ _CASE_ID = re.compile(r"^[\w./-]+\.\w+::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])
 _SCENARIO_ID = re.compile(r"^P[0-9]+$")
 #: Read whole, as the engine reads them: a bracketed parameter kept entire
 #: and an id that must end at a boundary, so a prefix never stands in.
-_ID_END = r"(?=$|[\s,;)]|\.(?:\s|$))"
+_ID_END = r"(?=$|[\s,;)\]\"'`]|[.:](?:\s|$))"
 _EXPLICIT_ID = re.compile(r"([\w./-]+\.[A-Za-z]\w*::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])?)" + _ID_END)
 _NAMED_CASE = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]]*\])?)(?![\w/\[:-])"
                          r"(?!\.(?!\s|$))")
@@ -241,7 +241,12 @@ def _row_ok(row) -> bool:
     if row["cwd"] not in ("", "."):
         return False
     report = row["report"]
-    counts = report.get("counts") if isinstance(report, dict) else None
+    if not isinstance(report, dict) or report.get("state") != "parsed":
+        # A report that did not parse (or says it is invalid, truncated or
+        # anything but parsed) carries no counts and no cases the reader
+        # may credit, whatever fields it still holds.
+        return False
+    counts = report.get("counts")
     if not isinstance(counts, dict):
         return False
     for key in ("skipped", "failed", "errors", "passed"):
@@ -352,6 +357,33 @@ def _bound_not_run_cleared(entry, checks, record) -> bool:
     return False
 
 
+def _historical_paths_cleared(entry, checks, record) -> bool:
+    """A path-only record written before bindings existed (no ``binding``
+    key): the older reading, a later passing check whose executed case
+    names (its printed ``cases.executed`` or a row's own parsed report)
+    include a case of every reported file, held to the final source
+    wherever the check records one. An identity claim never comes here."""
+    files = [p[2:] if p.startswith("./") else p for p in _PATH.findall(str(entry.get("item") or ""))]
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else 0
+    if not files:
+        return False
+    for check in checks[start:]:
+        if not check.get("passed"):
+            continue
+        if check.get("source") and check.get("source") != record.get("source_fingerprint"):
+            continue
+        if any(key in entry and check.get(key) != entry.get(key) for key in ("gate", "environment")):
+            continue
+        keys = _executed_keys(check)
+        for row in _rows(check):
+            if _row_ok(row):
+                keys |= _row_passed_cases(row)
+        ran_files = {k.split("::", 1)[0] for k in keys if "::" in k}
+        if all(f in ran_files for f in files):
+            return True
+    return False
+
+
 def _not_run_cleared(entry, checks, record=None) -> bool:
     """Cleared only by a later passing check that names the execution. The
     item's whole text decides the route (``_claim``): an identity claim (a
@@ -373,7 +405,9 @@ def _not_run_cleared(entry, checks, record=None) -> bool:
                 return False
             return _bound_not_run_cleared(entry, checks, record)
         if claim == "paths":
-            if binding is not None and not (isinstance(binding, dict) and binding.get("kind") == "paths"):
+            if "binding" not in entry:
+                return _historical_paths_cleared(entry, checks, record)
+            if not (isinstance(binding, dict) and binding.get("kind") == "paths"):
                 return False
             return _paths_cleared(entry, checks, record)
         return False

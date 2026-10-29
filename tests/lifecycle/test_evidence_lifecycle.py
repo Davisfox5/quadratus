@@ -189,6 +189,8 @@ def test_the_checker_rejects_forged_stale_or_mismatched_bindings(tmp_path, monke
         "a skip in the run": lambda record, entry: [c["report"]["counts"].__setitem__("skipped", 1)
                                                     for c in record["checks"] if c.get("report")],
         "unknown counts": lambda record, entry: [c.__setitem__("report", None) for c in record["checks"]],
+        "direct report not parsed": lambda record, entry: [c["report"].__setitem__("state", "truncated")
+                                                            for c in record["checks"] if c.get("report")],
         "filtered command": lambda record, entry: [c.__setitem__("command", c["command"] + " -k add")
                                                    for c in record["checks"]],
         "engine mark alone": lambda record, entry: (entry.__setitem__("cases", ["tests/test_app.py::test_other"]),
@@ -295,6 +297,8 @@ def test_the_checker_rejects_forged_stale_or_mismatched_bindings(tmp_path, monke
         "receipt empty cases": lambda r: r["report"].__setitem__("passed_cases", []),
         "receipt contradictory failure": lambda r: r["report"]["counts"].__setitem__("failed", 1),
         "receipt names another file": lambda r: r.__setitem__("command", r["command"].replace(" tests/test_app.py", " tests/other.py")),
+        "receipt report not parsed": lambda r: r["report"].__setitem__("state", "invalid"),
+        "receipt report state missing": lambda r: r["report"].pop("state"),
     }
     for name, mutate_receipt in suite_rejected.items():
         for paths in (False, True):

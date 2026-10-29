@@ -93,6 +93,9 @@ def _check(session, passed_cases, *, passed=True, output="1 passed in 0.1s", com
     ("tests/test_app.py::TestApi::test_history.extra", "case", [], "names a case id the harness cannot read whole"),
     ("TestApi.test_history.extra", "case", [], "names a case id the harness cannot read whole"),
     ("tests/test_app.py::test_add[unclosed", "case", [], "names a case id the harness cannot read whole"),
+    ("`tests/test_app.py::test_add` was not run here", "case", [CASE], ""),
+    ('"tests/test_app.py::test_add" needs a socket', "case", [CASE], ""),
+    ("tests/test_app.py::test_add: the sandbox denies it", "case", [CASE], ""),
     ("P2", "scenario", [], "P2 is not a scenario this task declares"),
     (CASE, "case", [CASE], ""),
     ("tests/test_app.py::TestApi::test_history", "case", ["tests/test_app.py::TestApi::test_history"], ""),
@@ -120,6 +123,26 @@ def test_a_not_run_item_binds_to_exactly_what_it_names_or_to_nothing(tmp_path, i
     assert entry["binding"]["kind"] == kind, entry["binding"]
     assert entry["cases"] == cases and entry["binding"]["cases"] == cases, entry["binding"]
     assert (problem in entry["binding"]["problem"]) if problem else entry["binding"]["problem"] == "", entry["binding"]
+
+
+def test_a_reason_is_split_outside_the_bracketed_identity_and_quoted_ids_cite(tmp_path):
+    from quadratus.session import _cited_cases, _split_item_reason
+    assert _split_item_reason("tests/test_app.py::test_add[a - b] - no socket") == ("tests/test_app.py::test_add[a - b]", "no socket")
+    assert _split_item_reason("P1 - the sandbox denies sockets") == ("P1", "the sandbox denies sockets")
+    assert _split_item_reason("tests/test_app.py::test_add[a - b]") == ("tests/test_app.py::test_add[a - b]", "")
+    assert _cited_cases("shown by `tests/test_app.py::test_add` on this source") == [CASE]
+    assert _cited_cases('shown by "tests/test_app.py::test_add", which passed') == [CASE]
+    assert _cited_cases("tests/test_app.py::test_add: passes") == [CASE]
+    assert _cited_cases("tests/test_app.py::test_add[a - b] passed") == ["tests/test_app.py::test_add[a - b]"]
+    assert _cited_cases("tests/test_app.py::test_add.extra passed") == []
+    root = _project(tmp_path)
+    session = _session(tmp_path, project=root, gate=_gate(root))
+    session._active_spec = TaskSpec(task_id="t1", description="x")
+    session._current_covers = ["R1"]
+    session._record_not_run("codex:sol", "lead", "NOT RUN: tests/test_app.py::test_add[a - b] - the sandbox denies sockets")
+    [entry] = session.unexecuted_acceptance
+    assert entry["item"] == "tests/test_app.py::test_add[a - b]" and entry["why"] == "the sandbox denies sockets"
+    assert entry["cases"] == ["tests/test_app.py::test_add[a - b]"]
 
 
 def test_a_scenario_with_no_valid_proves_line_binds_nothing(tmp_path):

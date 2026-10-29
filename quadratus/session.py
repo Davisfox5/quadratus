@@ -1733,6 +1733,22 @@ def _display_item(item: str) -> str:
     return f"{item[:_ITEM_DISPLAY_CHARS]} [... {len(item) - _ITEM_DISPLAY_CHARS:,} more characters; the record holds the whole item]"
 
 
+def _split_item_reason(text: str) -> Tuple[str, str]:
+    """``(item, why)``: the item and its reason are separated by the first
+    `` - `` that lies outside a bracketed parameter, so ``test_value[a - b]
+    - no socket`` keeps its whole identity (root's addendum on 3b99f5f: a
+    plain partition cut the parameter at ``[a``)."""
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif depth == 0 and text.startswith(" - ", i):
+            return text[:i], text[i + 3:]
+    return text, ""
+
+
 def _item_paths(item: str) -> List[str]:
     """The file paths a NOT RUN item names; none for a runner name or prose."""
     import shlex
@@ -2504,7 +2520,10 @@ _SOURCE_FILE = re.compile(r"\.(?:py|pyi|js|mjs|cjs|ts|tsx|jsx|rb|go|rs|java|kt|c
 #: parameter]`` is that instance and never its base, and ``test_complete
 #: .extra`` is no id at all (root's control on d88d8c0: a prefix match let
 #: a run of the base clear a claim about an instance that never existed).
-_ID_END = r"(?=$|[\s,;)]|\.(?:\s|$))"
+#: ...or a closing quote or backtick around the id, or a colon before prose
+#: (root's addendum on 3b99f5f: a backticked or double-quoted id followed by
+#: prose returned nothing, which also starved PROVES and error citations).
+_ID_END = r"(?=$|[\s,;)\]\"'`]|[.:](?:\s|$))"
 _CASE_CITATION = re.compile(r"([\w./-]+\.[A-Za-z]\w*)::((?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])?)" + _ID_END)
 #: A case named without its file in a NOT RUN item: ``Class.test``,
 #: ``Class::test`` or a bare ``test_*``, with any parameter kept whole;
@@ -10572,7 +10591,7 @@ class Session:
         still found all five requirements met)."""
         task = getattr(self._active_spec, "task_id", "run")
         for match in _NOT_RUN_LINE.finditer(reply or ""):
-            item, _, why = match.group(1).partition(" - ")
+            item, why = _split_item_reason(match.group(1))
             item = item.strip().strip("`")
             if not item or item.lower() in ("none", "nothing", "n/a"):
                 continue
