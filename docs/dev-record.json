@@ -2682,8 +2682,8 @@
       "claimed_at": "2026-10-29T17:02:05Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "a092e0515d6445726d248424c33abd002d13c006",
-        "at": "2026-10-29T19:12:27Z"
+        "sha": "032283a3d6d1a0d441c99236afb582b911b91795",
+        "at": "2026-10-29T20:01:54Z"
       },
       "reviews": [],
       "blockers": [],
