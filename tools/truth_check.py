@@ -194,8 +194,9 @@ def _paths_cleared(entry, checks, record) -> bool:
 
 def _filtered(command: str) -> bool:
     """Whether a command line selects cases: ``-k``, a pytest ``-m`` marker
-    (not the interpreter's ``-m module``), ``--deselect``, ``--lf`` or
-    ``--ff``. Unparsable is filtered (fail closed)."""
+    (not the interpreter's ``-m module``), ``--deselect``, ``--lf``,
+    ``--ff``, or a ``::`` node-id operand (a selection inside a file, as
+    the engine reads it). Unparsable is filtered (fail closed)."""
     import shlex
     try:
         argv = shlex.split(command)
@@ -206,7 +207,7 @@ def _filtered(command: str) -> bool:
     rest = argv[1:]
     if re.fullmatch(r"python(\d+(\.\d+)*)?", Path(argv[0]).name) and rest[:1] == ["-m"]:
         rest = rest[2:]
-    return any(a in ("-k", "-m", "--deselect", "--lf", "--ff") or a.startswith(("-k", "--deselect="))
+    return any(a in ("-k", "-m", "--deselect", "--lf", "--ff") or a.startswith(("-k", "--deselect=")) or "::" in a
                for a in rest)
 
 
@@ -426,63 +427,6 @@ def _unittest_modules(args):
 
 _CLASS_ID = re.compile(r"^[\w./-]+\.py::(?!test)[A-Za-z_]\w*$")
 _CLASS_MEMBER = re.compile(r"^test\w*(?:\[.*\])?$")
-_PYTEST_VALUE_FLAGS = frozenset({"-p", "-o", "-c", "-W", "-n", "-r", "--tb", "--rootdir", "--confcutdir", "--basetemp",
-                                 "--junitxml", "--maxfail", "--durations", "--color", "--override-ini",
-                                 "--import-mode", "--ignore", "--ignore-glob", "--deselect", "--log-level",
-                                 "--log-file", "--timeout"})
-
-
-def _collects_whole_file(command: str, file: str) -> bool:
-    """Whether a recorded command line, run from the project root, collects
-    the test file whole, reconstructed here from the command text alone
-    (no disk, no engine): pytest naming the file as a whole operand, a
-    directory operand that is a path prefix of it, or no path operand at
-    all, with no ``-o``/``--override-ini``; or the plain ``python -m
-    unittest <module>`` form whose module is this file. A ``::`` operand, a
-    filter, a selection inside a module, ``unittest discover`` (its receipt
-    records an unestablished selection), a wrapper or any other shape
-    establishes nothing. The
-    engine additionally reads the project's pytest configuration, which
-    the record does not carry; this reading is as strong as the record."""
-    import posixpath
-    import shlex
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        return False
-    if not argv or _filtered(command) or not file.endswith(".py"):
-        return False
-    head = Path(argv[0]).name
-    is_python = bool(_PYTHON_HEAD.fullmatch(head))
-    if head in ("pytest", "py.test") or (is_python and argv[1:3] == ["-m", "pytest"]):
-        tokens = argv[1:] if head in ("pytest", "py.test") else argv[3:]
-        if any(t in ("-o", "--override-ini") or t.startswith(("-o", "--override-ini=")) for t in tokens):
-            return False
-        operands, skip = [], False
-        for token in tokens:
-            if skip:
-                skip = False
-                continue
-            if token.startswith("--quadratus-report"):
-                continue
-            if token.startswith("-"):
-                skip = token in _PYTEST_VALUE_FLAGS
-                continue
-            operands.append(token[2:] if token.startswith("./") else token)
-        if not operands:
-            return True
-        for operand in operands:
-            if "::" in operand:
-                return False
-            if operand == file or operand in (".", "") or file.startswith(posixpath.normpath(operand).rstrip("/") + "/"):
-                return True
-        return False
-    if is_python and argv[1:3] == ["-m", "unittest"]:
-        modules = _unittest_modules(_python_args(command))
-        return bool(modules) and file in [m.replace(".", "/") + ".py" for m in modules]
-    return False
-
-
 def _class_not_run_cleared(entry, checks, record) -> bool:
     """A NOT RUN item the engine bound to a whole test class
     (``binding.kind == "class"``), validated from the saved record alone
@@ -491,14 +435,19 @@ def _class_not_run_cleared(entry, checks, record) -> bool:
     non-empty list of case ids directly under the class and the typed
     cases are exactly that floor (a subset is a forgery); then a later
     check on the final source under the entry's own gate and environment
-    holds a whole successful row from the project root whose command
-    collects the file whole (``_collects_whole_file``, reconstructed from
-    the command text), whose parsed report says its passed list is
-    complete, and whose passed cases include at least one case directly
-    under the class and every declared one. A selective command, a
-    truncated report, a case under a longer class name, a nested class or
-    a missing declared method never clears it (class-claim batch,
-    2026-10-30)."""
+    holds a whole successful row from the project root whose parsed report
+    says its passed list and its class list are complete, attests this
+    class's membership (``classes``: the ``test*`` members the runner read
+    from the live class, inherited and dynamic ones included, written by
+    the harness producer inside the run), and whose passed cases include
+    every attested member and every declared one directly under the
+    class. Nothing is read from the command text, a configuration file or
+    the module source: a run whose report attests nothing for the class,
+    or whose attestation names a member the passed list lacks (a
+    ``load_tests`` hook or a configured pattern left it out), never clears
+    it, nor does a truncated report, a case under a longer class name, a
+    nested class or a missing declared method (class-claim batch and root's
+    review of 93536ab, 2026-10-30)."""
     binding = entry.get("binding")
     if not isinstance(binding, dict) or binding.get("kind") != "class":
         return False
@@ -535,7 +484,12 @@ def _class_not_run_cleared(entry, checks, record) -> bool:
         for row in _rows(check):
             if not _row_ok(row) or row["report"].get("passed_truncated") is not False:
                 continue
-            if not _collects_whole_file(row["command"], file):
+            if row["report"].get("classes_truncated") is not False or not isinstance(row["report"].get("classes"), list):
+                continue
+            attested = [c for c in row["report"]["classes"]
+                        if isinstance(c, dict) and c.get("id") == class_id and isinstance(c.get("members"), list)]
+            if len(attested) != 1 or not attested[0]["members"] or not all(
+                    isinstance(m, str) and _CLASS_MEMBER.match(m) and "[" not in m for m in attested[0]["members"]):
                 continue
             shown = set()
             for name in row["report"].get("passed_cases") or ():
@@ -546,7 +500,8 @@ def _class_not_run_cleared(entry, checks, record) -> bool:
                 if "::" in member or not _CLASS_MEMBER.match(member):
                     continue
                 shown.add(f"{prefix}{member.split('[', 1)[0]}")
-            if shown and set(declared) <= shown:
+            members = {f"{prefix}{m}" for m in attested[0]["members"]}
+            if shown and members <= shown and set(declared) <= shown:
                 return True
     return False
 

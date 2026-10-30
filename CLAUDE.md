@@ -2738,63 +2738,73 @@ Key design decisions already settled:
   No cap, allowance, review, grader or baseline changed. Controls:
   `tests/test_completion_workflow_units.py`,
   `tests/lifecycle/test_completion_workflow.py`.
-- **A whole-class NOT RUN claim is discharged by scope proved, never by
-  the passed list** (class-claim batch, Davis, 2026-10-30, after
-  completion-workflow-02 ended with R14 to R16 NOT MET on t6's `NOT RUN:
-  tests/test_api.py::HandlerDependencyTests`, bound to nothing while both
-  final gate receipts showed all eight methods passed, and after root's
-  counterexample on 6527479725 falsified the first proposal). The first
-  proposal bound the class to the methods its body declares and cleared it
-  when those were among a complete run's passed cases. Root's case:
-  `Target(Parent).test_own` passes, the inherited `test_inherited` fails,
-  and `python -m unittest tests.test_sample.Target.test_own` reports one
-  method with passed 1, skipped 0, failed 0, errors 0 and a complete list;
-  `_complete_run` is true (execution success, not selection scope), the
-  declared set is among the passed prefix, and the whole class would have
-  cleared. So the rule has two halves and the passed list decides
-  neither. An item that is exactly `<file>.py::<Class>` (`_CLASS_CLAIM`)
-  binds under kind `class` to the methods the class body declares
-  (`_class_declaration`, ast, never run) as a floor, and is held with a
-  named problem when the class is not defined exactly once at the top
-  level, the module defines `load_tests` (unittest lets it replace the
-  collected set), or the body declares no test case (inherited-only or
-  dynamic membership has no floor and is held explicitly, never read from
-  the passed list). A class beside any other claim, a bare class name, a
-  nested class, `Class.extra` and a parametrised class are held as
-  written. Discharge (`_class_run_cases`) needs a later complete run from
-  the project root on the current source, gate and environment whose
-  command collects the file whole as read from its argv and the
-  configuration (`integration.whole_file_collected`: pytest naming the
-  file as a whole operand, a directory on disk holding it, or no path at
-  all, with no `-o`/`--override-ini` in argv or `PYTEST_ADDOPTS` and no
-  `python_files`/`python_classes`/`python_functions` key in a
-  configuration file between cwd and root; or the plain `python -m
-  unittest <module>` form whose module file is the file), whose own
-  parsed report has a complete passed list naming at least one case
-  directly under `file::Class::`, with every method the claim recorded
-  and every method the class declares now among them. The discharged set
-  is the runner's population under the class (the inherited method rides
-  along because whole-file collection plus a complete report established
-  it), never the floor alone. A selection inside a module, a `::`
-  operand, a filter, `unittest discover` (its receipt records an
-  unestablished selection and the rule does not read it), a wrapper, a
-  truncated report, a skip, a missing declared method, a class whose
-  membership changed since the claim (a method added, one removed, a
-  `load_tests` added) clears nothing, and nothing is rebound. For root's
-  gap itself, `unittest_modules`/`runner_of` with a root resolve a dotted
-  token to an existing module file first, so `tests.test_sample.Target.test_own`
-  is a selection inside a module: not a recognised runner, selection not
-  established, no whole-file operand. `tools/truth_check.py`
-  (`_class_not_run_cleared`, `_collects_whole_file`) reconstructs the
-  scope from the row's command text and report alone, requires the typed
-  cases to equal the recorded floor, and never reads an engine mark; it
-  cannot read configuration files, so the engine's `python_*` key check
-  is the one reading the record does not carry. The lead's prompt names
+- **A whole-class NOT RUN claim is discharged by the runner's own
+  attestation of the class, never by the passed list, the command's syntax
+  or a static read of the file** (class-claim batch, Davis, 2026-10-30,
+  after completion-workflow-02 ended with R14 to R16 NOT MET on t6's `NOT
+  RUN: tests/test_api.py::HandlerDependencyTests`, bound to nothing while
+  both final gate receipts showed all eight methods passed; corrected after
+  root's reviews on 6527479725 and 6528355944). Two proposals fell before
+  it. The first bound the class to the methods its body declares and
+  cleared it when they were among a complete run's passed cases; root's
+  `python -m unittest tests.test_sample.Target.test_own` reports one
+  passing method with a complete list and reads as a complete run by
+  execution success (completeness is not selection scope). The second
+  read the collection scope from the command's argv and the pytest
+  configuration files; root ran `from helper import choose as
+  load_tests`, a conditional `load_tests`, `pytest -c custom.ini` with
+  `python_functions = test_own` and the same key in a default
+  `pytest.ini`, each a real run that omitted an inherited failing test,
+  and the first three cleared in both consumers while the fourth split
+  them (engine held, checker cleared) because the checker cannot read
+  configuration. One cause: the receipt carried no collection facts, and
+  syntax plus an AST floor cannot prove membership. So the harness
+  producers now attest it inside the run: for each class of a collected
+  or held test, `classes[] = {id, members}` where members are every
+  `test*` callable on the live class object (`_class_members`: inherited
+  and dynamically attached ones included, the same set
+  `TestLoader.getTestCaseNames` and pytest's default prefix read),
+  bounded (1000 classes, 1000 members, else `classes_truncated` and
+  nothing attested), validated by the parser (`quadratus-pytest/7`,
+  `quadratus-unittest/3`; a report without the field is still valid and
+  attests nothing). An item that is exactly `<file>.py::<Class>`
+  (`_CLASS_CLAIM`) binds under kind `class` to the methods the class body
+  declares (`_class_declaration`, ast) as a floor and typed case list,
+  held with a named problem when the class is not defined exactly once at
+  top level or declares no test case in its body; a class beside any other
+  claim, a bare name, a nested class or `Class.extra` is held as written.
+  Discharge (`_class_run_cases`) needs a later complete run from the
+  project root on the current source, gate and environment whose own
+  parsed report, with its passed list and class list complete, attests
+  this class and shows every attested member, every method the claim
+  recorded and every method the class declares now among the cases passed
+  directly under `file::Class::`; the discharged set is the attested
+  population (inherited and dynamic members ride along because the runner
+  attested them, not because a file was named). A hook or pattern that
+  left a member out is a member attested and not passed; a selection
+  inside a module attests the whole class and passes part of it; an
+  unattested, truncated, skipping, filtered or `::`-selected run, a nested
+  class's case, a longer class name, or a class whose membership changed
+  since the claim clears nothing, and nothing is rebound. For root's first
+  gap, `unittest_modules`/`runner_of` with a root resolve a dotted token
+  to an existing module file first, so a dotted selection is an
+  unrecognised runner with an unestablished selection. The typed row takes
+  the ordinary gate route and runs only on such a receipt.
+  `tools/truth_check.py` (`_class_not_run_cleared`) reads the same
+  attestation off the row's report, requires the typed cases to equal the
+  recorded floor, refuses two records for one class, a parametrised or
+  non-`test` member name, a truncated or absent field, and never reads an
+  engine mark, the command text (beyond the shared filter rule, which now
+  counts a `::` operand as the engine does), a configuration file or the
+  module source: engine and checker read one fact. The lead's prompt names
   the class form. No permission, model, role, limit or extra call. On the
-  sealed completion-workflow-02 record the rebinding of t6's item
-  discharges on the final check's pytest receipt (whole-file operand) and
-  not on its discover receipt. Controls in the two completion-workflow
-  files, section 7 and 8.
+  sealed completion-workflow-02 record (written before the producers
+  attested) the item binds and nothing discharges it: an old receipt
+  attests nothing, which is the honest reading. Controls: real runs of all
+  four of root's cases and of inherited and dynamic positives under the
+  shipped producers in `tests/test_completion_workflow_units.py` section
+  9, the attestation rules in sections 7 and 8, and the controller in
+  `tests/lifecycle/test_completion_workflow.py` section 7.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

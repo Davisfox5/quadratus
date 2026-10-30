@@ -1495,7 +1495,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
                         cwd=row["cwd"], command=row["command"], interpreter=row.get("interpreter"),
-                        report_cases=_report_cases(row["report"]),
+                        report_cases=_report_cases(row["report"]), report_classes=_report_classes(row["report"]),
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
@@ -1688,6 +1688,19 @@ def _report_cases(report) -> set:
     if not isinstance(report, dict) or report.get("state") != "parsed" or report.get("passed_truncated") is not False:
         return set()
     return {str(n) for n in report.get("passed_cases") or ()}
+
+
+def _report_classes(report) -> dict:
+    """The class membership a parsed own report attests, ``class id ->
+    sorted member names``; empty when the report attests none, is not
+    parsed, or flags its class list truncated (which attests nothing)."""
+    if not isinstance(report, dict) or report.get("state") != "parsed" or report.get("classes_truncated") is not False:
+        return {}
+    out = {}
+    for record in report.get("classes") or ():
+        if isinstance(record, dict) and isinstance(record.get("id"), str) and isinstance(record.get("members"), list):
+            out[record["id"]] = sorted(str(m) for m in record["members"])
+    return out
 
 
 def _run_passed_cases(run: dict) -> set:
@@ -1894,14 +1907,15 @@ def _class_declaration(root, file: str, class_name: str) -> Tuple[List[str], str
     the ``test*`` methods the class body itself declares, as
     ``file::Class::test``. The declared set is a floor, not the population
     (unittest and pytest also collect inherited and dynamically attached
-    methods); the population is what a complete whole-file run reports.
-    A problem is named, and nothing is declared, when the file is outside
-    the project, unreadable or unparsable; the class is not defined exactly
-    once at the module's top level; the module defines ``load_tests``
-    (unittest lets it replace the collected set, so no whole-file run
-    establishes the class's membership); or the class body declares no
-    test case (an inherited-only or dynamic membership has no floor, so the
-    claim is held explicitly rather than read from the passed list)."""
+    methods); the population is what the runner's own report attests
+    (``classes``) and shows passed. A problem is named, and nothing is
+    declared, when the file is outside the project, unreadable or
+    unparsable; the class is not defined exactly once at the module's top
+    level; or the class body declares no test case (an inherited-only or
+    dynamic membership has no floor and no typed case list, so the claim is
+    held explicitly rather than read from the passed list). Nothing here
+    reads ``load_tests``, configuration or the command: what a run really
+    collected is the runner's to attest (root's review of 93536ab)."""
     import ast
     import posixpath
     if root is None:
@@ -1917,12 +1931,6 @@ def _class_declaration(root, file: str, class_name: str) -> Tuple[List[str], str
     if len(classes) != 1:
         return [], (f"{class_name} is not defined at the top level of {rel}" if not classes
                     else f"{class_name} is defined {len(classes)} times in {rel}")
-    for node in tree.body:
-        names = ([node.name] if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else
-                 [t.id for t in getattr(node, "targets", []) if isinstance(t, ast.Name)] if isinstance(node, ast.Assign) else
-                 [node.target.id] if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) else [])
-        if "load_tests" in names:
-            return [], f"{rel} defines load_tests, which can change what a run of the module collects"
     declared = sorted({f"{rel}::{class_name}::{inner.name}" for inner in classes[0].body
                        if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner.name.startswith("test")})
     if not declared:
@@ -1931,31 +1939,32 @@ def _class_declaration(root, file: str, class_name: str) -> Tuple[List[str], str
     return declared, ""
 
 
-def _class_run_cases(run: dict, binding: dict, current_declared, root) -> List[str]:
+def _class_run_cases(run: dict, binding: dict, current_declared, root=None) -> List[str]:
     """The case ids one complete recorded run shows passed for a
-    whole-class claim, or [] when the run does not establish it: the run
-    is from the project root and its command collects the class's file
-    whole (``integration.whole_file_collected``, read from the argv and
-    the configuration, never the output); its own parsed report, with its
-    passed list complete, names at least one case directly under
-    ``file::Class::`` (a nested class's cases are not the class's); and
-    every method the claim recorded as declared and every method the class
-    declares now is among them. The returned set is what the report shows
-    under the class, each id with and without its parameter, so the
-    population is the runner's, bounded below by the declared floor and
-    never defined by the passed list alone."""
-    import shlex
-
-    from .integration import whole_file_collected
+    whole-class claim, or [] when the run does not establish it. The run
+    is from the project root; its own parsed report attests the class's
+    membership (``classes``, written by the harness producer inside the
+    runner from the live class object: every default ``test*`` member,
+    inherited and dynamic ones included, whatever a ``load_tests`` hook,
+    a configured pattern, a filter or a collection hook then left out) and
+    its passed list is complete; every attested member, every method the
+    claim recorded as declared and every method the class declares now is
+    among the cases the report shows passed directly under
+    ``file::Class::`` (a nested class's cases are not the class's). The
+    returned set is what the report shows under the class, each id with
+    and without its parameter. No command syntax, configuration file or
+    static read of the module decides it (root's review of 93536ab:
+    ``from helper import choose as load_tests`` and ``-c custom.ini`` with
+    ``python_functions`` omitted an inherited failing test from real runs
+    that cleared under the syntax rule); a report that attests nothing for
+    the class, or is truncated, establishes nothing."""
     if (run.get("cwd") or ".") not in ("", "."):
         return []
-    try:
-        argv = shlex.split(str(run.get("command") or ""))
-    except ValueError:
+    class_id = str(binding.get("class_id") or "")
+    attested = (run.get("report_classes") or {}).get(class_id)
+    if not attested:
         return []
-    if not whole_file_collected(argv, binding.get("file") or "", root, run.get("cwd") or "."):
-        return []
-    prefix = f"{binding.get('class_id')}::"
+    prefix = f"{class_id}::"
     shown, stripped = set(), set()
     for name in run.get("report_cases") or ():
         name = str(name)
@@ -1968,8 +1977,9 @@ def _class_run_cases(run: dict, binding: dict, current_declared, root) -> List[s
         stripped.add(f"{prefix}{member.split('[', 1)[0]}")
     if not shown:
         return []
-    floor = {str(c) for c in (binding.get("declared") or ())} | {str(c) for c in current_declared}
-    if not floor or not floor <= stripped:
+    floor = ({f"{prefix}{m}" for m in attested} | {str(c) for c in (binding.get("declared") or ())}
+             | {str(c) for c in current_declared})
+    if not floor <= stripped:
         return []
     return sorted(shown | stripped)
 
@@ -11082,11 +11092,11 @@ class Session:
             # class whose eight methods both gate receipts showed passed,
             # and the item bound to nothing). It binds to the methods the
             # class body declares, as a floor, and is discharged only by a
-            # later complete run from the project root whose command
-            # collects the file whole and whose own complete report shows
-            # the class's cases passed, every declared one among them
-            # (``_class_run_cases``). A selection inside the module, an
-            # unrecognised command or a changed class never discharges it.
+            # later complete run from the project root whose own report
+            # attests the class's membership and shows every attested and
+            # declared member passed (``_class_run_cases``). A selection
+            # inside the module, a hook or pattern that left a member out,
+            # an unattested run or a changed class never discharges it.
             file = whole_class.group(1)[2:] if whole_class.group(1).startswith("./") else whole_class.group(1)
             declared, problem = _class_declaration(self.project, file, whole_class.group(2))
             binding.update(kind="class", class_id=f"{file}::{whole_class.group(2)}", file=file,
@@ -11227,25 +11237,6 @@ class Session:
             joined = " ".join(shlex.quote(str(a)) for a in candidate.argv)
             run = dict(command=joined, interpreter=_command_interpreter(joined, cwd))
             if cwd == root and _same_python_command(run, binding):
-                return True
-        return False
-
-    def _gate_collects_file(self, file) -> bool:
-        """Whether one of the effective gate's commands, run from the project
-        root, collects the test file whole (``integration.whole_file_collected``),
-        so the harness's own gate can discharge a whole-class claim on it."""
-        gate = self._current_gate()
-        if gate is None or not self.project or not file:
-            return False
-        from .integration import _gate_commands, whole_file_collected
-        root = Path(self.project).resolve()
-        try:
-            commands = [c for c in (_gate_commands(gate, root) or []) if not c.skip_reason]
-        except Exception:  # noqa: BLE001 -- an unreadable gate runs nothing
-            return False
-        for candidate in commands:
-            cwd = (root / candidate.cwd).resolve() if candidate.cwd else root
-            if cwd == root and whole_file_collected(list(candidate.argv), str(file), root, "."):
                 return True
         return False
 
@@ -11795,10 +11786,6 @@ class Session:
                 # Only the gate running exactly that command can discharge
                 # it; the same cases under another runner are not its execution.
                 runner = "gate" if bound and self._gate_runs_command(entry.get("binding") or {}) else None
-            elif (entry.get("binding") or {}).get("kind") == "class":
-                # Only a gate command that collects the class's file whole
-                # can show the class ran whole.
-                runner = "gate" if bound and self._gate_collects_file((entry.get("binding") or {}).get("file")) else None
             else:
                 runner = ("gate" if self._gate_can_run(_item_paths(behavior))
                           or (bound and self._current_gate() is not None) else None)

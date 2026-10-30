@@ -26,6 +26,12 @@ file relative to the working directory (pytest's node id form), so a quiet
 run still shows exactly which cases executed and passed; a test whose file
 cannot be placed under the working directory keeps unittest's dotted id,
 which names no file. A subtest is never one of them (root review of 5ca254c).
+
+For each class of a test the run holds (``classes``), it attests that
+class's default membership (``_class_members``), so a whole-class claim can
+be checked against what the runner would collect rather than against the
+command's syntax or a static read of the file. The list is bounded; past
+the bound it is flagged truncated and attests nothing.
 """
 
 import hashlib
@@ -35,9 +41,11 @@ import os
 import sys
 import unittest
 
-PRODUCER = "quadratus-unittest/2"
+PRODUCER = "quadratus-unittest/3"
 MAX_FAILURES = 200
 MAX_PASSED = 3000
+MAX_CLASSES = 1000
+MAX_CLASS_MEMBERS = 1000
 __unittest = True  # unittest hides this module's frames from its tracebacks, as its own
 
 
@@ -65,16 +73,48 @@ def _type_name(kind):
     return None if kind is None else f"{kind.__module__}.{kind.__qualname__}"
 
 
-def _case_id(test):
+def _class_id(kind):
+    """``file::Qualified::Class`` for a test class the working directory
+    holds, or None when its file cannot be placed there."""
     try:
-        source = inspect.getsourcefile(type(test))
+        source = inspect.getsourcefile(kind)
         relative = os.path.relpath(os.path.realpath(source), os.path.realpath(os.getcwd())) if source else None
     except (TypeError, ValueError, OSError):
         relative = None
     if not relative or relative.startswith(os.pardir) or os.path.isabs(relative):
+        return None
+    return f"{relative.replace(os.sep, '/')}::{'::'.join(kind.__qualname__.split('.'))}"
+
+
+def _case_id(test):
+    prefix = _class_id(type(test))
+    if prefix is None:
         return test.id()[:300]
-    name = "::".join(type(test).__qualname__.split("."))
-    return f"{relative.replace(os.sep, '/')}::{name}::{getattr(test, '_testMethodName', '')}"[:300]
+    return f"{prefix}::{getattr(test, '_testMethodName', '')}"[:300]
+
+
+def _class_members(kind):
+    """The test methods a runner collects under a class by the default
+    rule, read from the live class object: every attribute whose name
+    starts with ``test`` and resolves to a callable that is not itself a
+    class, inherited and dynamically attached ones included (the same set
+    ``unittest.TestLoader.getTestCaseNames`` reads, without name patterns;
+    the same prefix pytest's default ``python_functions`` reads). What a
+    ``load_tests`` hook, a configured pattern, a filter or a collection hook
+    then left out is visible as a member the run did not report passed
+    (class-claim correction, 2026-10-30: root's load_tests and
+    python_functions counterexamples)."""
+    names = set()
+    for name in dir(kind):
+        if not name.startswith("test"):
+            continue
+        try:
+            attribute = getattr(kind, name)
+        except Exception:  # noqa: BLE001 -- an attribute that will not resolve is not a test
+            continue
+        if callable(attribute) and not isinstance(attribute, type):
+            names.add(name[:300])
+    return sorted(names)
 
 
 def _is_failed_import(test):
@@ -97,6 +137,31 @@ class _Recorder:
         self.collected, self.collect_errors, self.subtests = 0, 0, dict(passed=0, failed=0, skipped=0)
         self.ran, self.tests = False, {}
         self.passed_cases, self.passed_truncated = [], False
+        self.classes, self.classes_truncated = [], False
+
+    def attest(self, suite):
+        """One membership record per class of a test the suite holds, in
+        first-seen order; a class whose file cannot be placed under the
+        working directory, or whose membership is over the bound, is not
+        attested, and past MAX_CLASSES the list is flagged truncated."""
+        seen = set()
+        for leaf in _leaves(suite):
+            if _is_failed_import(leaf) or not isinstance(leaf, unittest.TestCase):
+                continue
+            kind = type(leaf)
+            if kind in seen:
+                continue
+            seen.add(kind)
+            class_id = _class_id(kind)
+            if class_id is None or len(class_id) > 300:
+                continue
+            members = _class_members(kind)
+            if not members or len(members) > MAX_CLASS_MEMBERS:
+                continue
+            if len(self.classes) >= MAX_CLASSES:
+                self.classes_truncated = True
+                return
+            self.classes.append(dict(id=class_id, members=members))
 
     def _state(self, test):
         return self.tests.setdefault(id(test), dict(test=test, errors=[], unexpected=False, skipped=False))
@@ -163,7 +228,8 @@ class _Recorder:
                     module_file=os.path.realpath(__file__), module_sha256=digest, exitstatus=exitstatus,
                     collected=self.collected, collect_errors=self.collect_errors, counts=self.counts,
                     failures=self.failures, truncated=self.truncated, subtests=self.subtests,
-                    passed_cases=self.passed_cases, passed_truncated=self.passed_truncated)
+                    passed_cases=self.passed_cases, passed_truncated=self.passed_truncated,
+                    classes=self.classes, classes_truncated=self.classes_truncated)
         with open(path, "w", encoding="utf-8") as out:
             json.dump(data, out)
 
@@ -210,6 +276,7 @@ class _Runner(unittest.TextTestRunner):
 
     def run(self, test):
         _RECORDER.collected = sum(1 for leaf in _leaves(test) if not _is_failed_import(leaf))
+        _RECORDER.attest(test)
         _RECORDER.ran = True
         return super().run(test)
 

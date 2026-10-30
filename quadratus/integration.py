@@ -43,7 +43,7 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 REPORT_TOKEN = "{report}"
 #: How a command declares the harness report in its argv.
 REPORT_TOKEN_PREFIX = "--quadratus-report"
-PRODUCER = "quadratus-pytest/6"
+PRODUCER = "quadratus-pytest/7"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
 #: passing, because a node check had no producer and so no fix call). A
@@ -59,7 +59,7 @@ PRODUCER_NODE = "quadratus-node/1"
 #: the same interpreter through the shipped runner module, which is
 #: ``unittest.main(module=None)`` with a recording result class, and writes
 #: this invocation's own report. Undeclared, unittest stays unattributable.
-PRODUCER_UNITTEST = "quadratus-unittest/2"
+PRODUCER_UNITTEST = "quadratus-unittest/3"
 PRODUCERS = (PRODUCER, PRODUCER_NODE, PRODUCER_UNITTEST)
 _PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
 _NODE_PRODUCER_FILE = _PRODUCER_FILE.with_suffix(".mjs")
@@ -72,6 +72,10 @@ _COUNTS = ("passed", "failed", "errors", "skipped")
 _REPORT_MAX_BYTES = 1024 * 1024
 #: The producers' bound on named passed cases (MAX_PASSED in each).
 _REPORT_PASSED = 3000
+#: The producers' bounds on attested classes and members (MAX_CLASSES,
+#: MAX_CLASS_MEMBERS in each).
+_REPORT_CLASSES = 1000
+_REPORT_CLASS_MEMBERS = 1000
 
 
 #: How much command output a failed gate carries back. The tail, because test
@@ -283,6 +287,27 @@ def _malformed(data) -> str:
         if (len(named) != counts["passed"]) if not cut else (len(named) != _REPORT_PASSED
                                                               or counts["passed"] <= _REPORT_PASSED):
             return "passed cases do not match the counts"
+        if "classes" in data or "classes_truncated" in data:
+            # Attested class membership (class-claim correction, 2026-10-30):
+            # distinct class ids, each with a distinct non-empty bounded list
+            # of ``test*`` member names; a report that states the field
+            # states it whole or flags it truncated.
+            classes, cut = data.get("classes"), data.get("classes_truncated")
+            if (not isinstance(classes, list) or type(cut) is not bool or len(classes) > _REPORT_CLASSES
+                    or (cut and len(classes) != _REPORT_CLASSES)):
+                return "classes"
+            ids = []
+            for record in classes:
+                members = record.get("members") if isinstance(record, dict) else None
+                if (not isinstance(record, dict) or not isinstance(record.get("id"), str)
+                        or not 0 < len(record["id"]) <= 300 or "::" not in record["id"]
+                        or not isinstance(members, list) or not 0 < len(members) <= _REPORT_CLASS_MEMBERS
+                        or not all(isinstance(m, str) and m.startswith("test") and 0 < len(m) <= 300 for m in members)
+                        or len(set(members)) != len(members)):
+                    return "a class record"
+                ids.append(record["id"])
+            if len(set(ids)) != len(ids):
+                return "duplicate class records"
     return ""
 
 
@@ -318,7 +343,10 @@ def read_report(path, expected) -> dict:
                           for f in data["failures"]],
                 truncated=data["truncated"],
                 **({"passed_cases": list(data["passed_cases"]), "passed_truncated": data["passed_truncated"]}
-                   if "passed_cases" in data and data.get("producer") in (PRODUCER, PRODUCER_UNITTEST) else {}))
+                   if "passed_cases" in data and data.get("producer") in (PRODUCER, PRODUCER_UNITTEST) else {}),
+                **({"classes": [dict(id=c["id"], members=list(c["members"])) for c in data["classes"]],
+                    "classes_truncated": data["classes_truncated"]}
+                   if "classes" in data and data.get("producer") in (PRODUCER, PRODUCER_UNITTEST) else {}))
 
 
 def _report_reasons(gid, status, reason, returncode, report) -> list:
@@ -1458,152 +1486,6 @@ def runner_of(argv, root=None, cwd='.') -> Optional[str]:
     if unittest_modules(argv, root, cwd) is not None:
         return 'unittest'
     return None
-
-
-#: pytest options that take their value as the next argument, so the value
-#: is not read as a path operand when the collected scope is reconstructed.
-_PYTEST_VALUE_FLAGS = frozenset({'-p', '-o', '-c', '-W', '-n', '-r', '--tb', '--rootdir', '--confcutdir', '--basetemp',
-                                 '--junitxml', '--maxfail', '--durations', '--color', '--override-ini',
-                                 '--import-mode', '--ignore', '--ignore-glob', '--deselect', '--log-level',
-                                 '--log-file', '--timeout'})
-#: pytest configuration keys that change which files, classes or functions
-#: a whole-file run collects; a command under any of them has a collection
-#: the harness does not model, so no whole-class claim is established.
-_PYTEST_COLLECTION_KEYS = ('python_files', 'python_classes', 'python_functions')
-
-
-def _pytest_collection_override(root, cwd) -> Optional[str]:
-    """The first pytest configuration file from ``cwd`` up to ``root`` that
-    sets a collection key (``python_files``, ``python_classes``,
-    ``python_functions``), as ``file: key``; '' when none does; None when a
-    file exists and cannot be read (unknown, never none)."""
-    import configparser
-    try:
-        base, here = Path(root).resolve(), Path(cwd).resolve()
-    except OSError:
-        return None
-    if not here.is_relative_to(base):
-        return None
-    while True:
-        for name in _PYTEST_CONFIGS:
-            path = here / name
-            if not path.is_file():
-                continue
-            try:
-                text = path.read_text(encoding='utf-8')
-                if name == 'pyproject.toml':
-                    import tomllib
-                    tool = tomllib.loads(text).get('tool', {}) or {}
-                    pytest_table = tool.get('pytest', {}) if isinstance(tool, dict) else {}
-                    tables = [pytest_table.get('ini_options', {}), pytest_table] if isinstance(pytest_table, dict) else []
-                    for table in tables:
-                        for key in _PYTEST_COLLECTION_KEYS:
-                            if isinstance(table, dict) and key in table:
-                                return f'{path.relative_to(base).as_posix()}: {key}'
-                    continue
-                parser = configparser.RawConfigParser()
-                parser.read_string(text)
-                sections = {'setup.cfg': ('tool:pytest',), 'tox.ini': ('pytest', 'tool:pytest')}.get(name, ('pytest',))
-                for section in sections:
-                    for key in _PYTEST_COLLECTION_KEYS:
-                        if parser.has_section(section) and parser.has_option(section, key):
-                            return f'{path.relative_to(base).as_posix()}: {key}'
-            except Exception:  # noqa: BLE001 -- unreadable collection is unknown collection
-                return None
-        if here == base:
-            return ''
-        here = here.parent
-
-
-def _overrides_ini(tokens) -> bool:
-    return any(t in ('-o', '--override-ini') or t.startswith(('-o', '--override-ini=')) for t in tokens)
-
-
-def whole_file_collected(argv, file: str, root, cwd='.') -> bool:
-    """Whether a command, run from ``cwd`` under ``root``, collects the test
-    file ``file`` (project-relative) whole, as far as that can be read from
-    the argv, the project's pytest configuration and the environment, never
-    from the run's output: the scope half of a whole-class discharge
-    (class-claim batch, 2026-10-30; root's counterexample on 6527479725:
-    a complete run proves execution success, not selection scope).
-
-    Established for exactly these forms, each unfiltered (``is_filtered``):
-    pytest naming the file as a whole operand, naming a directory on disk
-    that holds it, or naming no path at all (whole discovery from the
-    root), with no ``-o``/``--override-ini`` in argv or ``PYTEST_ADDOPTS``
-    and no ``python_files``/``python_classes``/``python_functions`` key in
-    a configuration file between the cwd and the root; and the plain
-    ``python -m unittest <module>`` form whose module file is this one. A
-    selection inside a module, a ``::`` operand, a filter, ``python -m
-    unittest discover`` (``runner_of`` does not recognise it, so its
-    receipt records an unestablished selection and is never a complete
-    run; the rule does not read it either), an unrecognised runner, a
-    wrapper or any other shape establishes nothing. Whether the collected
-    file's cases actually ran is the run's own report's to show; this
-    reads scope only."""
-    import posixpath
-    argv = [str(a) for a in argv]
-    file = str(file or '')
-    if not argv or not file or root is None or is_filtered(argv):
-        return False
-    try:
-        base = Path(root).resolve()
-        here = Path(cwd).resolve() if posixpath.isabs(str(cwd or '.')) else (base / str(cwd or '.')).resolve()
-        rel_cwd = here.relative_to(base).as_posix() if here.is_relative_to(base) else None
-    except OSError:
-        return False
-    if rel_cwd is None:
-        return False
-
-    def project_relative(token: str) -> str:
-        token = token[len(str(base)) + 1:] if token.startswith(str(base) + '/') else token
-        return posixpath.normpath(posixpath.join(rel_cwd, token)) if not posixpath.isabs(token) else token
-
-    def under(directory: str) -> bool:
-        directory = project_relative(directory)
-        return file == directory or directory in ('.', '') or file.startswith(directory.rstrip('/') + '/')
-
-    if _is_pytest(argv):
-        tokens = _runner_args(argv)
-        if _overrides_ini(tokens) or _overrides_ini(shlex.split(os.environ.get('PYTEST_ADDOPTS', '') or '')
-                                                    if _shell_ok(os.environ.get('PYTEST_ADDOPTS', '')) else ['-o']):
-            return False
-        if _pytest_collection_override(base, here) != '':
-            return False
-        operands, skip = [], False
-        for token in tokens:
-            if skip:
-                skip = False
-                continue
-            if token.startswith(REPORT_TOKEN_PREFIX):
-                continue
-            if token.startswith('-'):
-                skip = token in _PYTEST_VALUE_FLAGS
-                continue
-            operands.append(token)
-        if not operands:
-            return True
-        for operand in operands:
-            if '::' in operand:
-                return False
-            if project_relative(operand) == file:
-                return True
-            target = base / project_relative(operand)
-            if target.is_dir() and under(operand):
-                return True
-        return False
-    if _is_unittest(argv):
-        modules = unittest_modules(argv, base, rel_cwd)
-        return modules is not None and file in [_module_file(m, base, rel_cwd) for m in modules]
-    return False
-
-
-def _shell_ok(text: str) -> bool:
-    try:
-        shlex.split(text or '')
-        return True
-    except ValueError:
-        return False
 
 
 def _case_lines(output: str, runner: Optional[str] = None):
