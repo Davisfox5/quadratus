@@ -182,6 +182,10 @@ def _paths_cleared(entry, checks, record) -> bool:
                 operands = [a[2:] if a.startswith("./") else a for a in shlex.split(row["command"])]
             except ValueError:
                 continue
+            modules = _unittest_modules(_python_args(row["command"]))
+            if modules:
+                # A whole module is its file, as the engine reads it.
+                operands = [m.replace(".", "/") + ".py" for m in modules]
             passed_files = {c.split("::", 1)[0] for c in _row_passed_cases(row) if "::" in c}
             if all(f in operands and f in passed_files for f in files):
                 return True
@@ -224,11 +228,13 @@ def _rows(check):
                 selection = "; ".join(x for x in (selection, str(check.get("selection"))) if x)
             rows.append(dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
                              command=str(r.get("command") or ""), cwd=str(r.get("cwd") or check.get("command_cwd") or "."),
-                             selection=selection, report=r.get("report"), tests=r.get("tests")))
+                             selection=selection, report=r.get("report"), tests=r.get("tests"),
+                             interpreter=r.get("interpreter")))
         return rows
     return [dict(id="check", passed=bool(check.get("passed")), required=True,
                  command=str(check.get("command") or ""), cwd=str(check.get("command_cwd") or "."),
-                 selection=str(check.get("selection") or ""), report=check.get("report"), tests=None)]
+                 selection=str(check.get("selection") or ""), report=check.get("report"), tests=None,
+                 interpreter=check.get("interpreter"))]
 
 
 def _row_ok(row) -> bool:
@@ -402,6 +408,22 @@ def _python_args(command: str):
     return [a for a in argv[1:] if not a.startswith("--quadratus-report")]
 
 
+def _unittest_modules(args):
+    """The modules of a plain ``-m unittest <module>...`` argument list (the
+    runner's plain flags and the engine's report token aside), or None for
+    any other form: the same reading the engine makes."""
+    if not isinstance(args, list) or args[:2] != ["-m", "unittest"]:
+        return None
+    modules = []
+    for token in args[2:]:
+        if token in _UNITTEST_FLAGS or token.startswith("--quadratus-report"):
+            continue
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            return None
+        modules.append(token)
+    return modules or None
+
+
 def _command_not_run_cleared(entry, checks, record) -> bool:
     """A NOT RUN item the engine bound to a ``python -m unittest <module>``
     command (``binding.kind == "command"``), validated from the saved record
@@ -423,16 +445,16 @@ def _command_not_run_cleared(entry, checks, record) -> bool:
         return False
     args = _python_args(str(entry.get("item") or ""))
     declared = _python_args(str(binding.get("command") or ""))
-    if args is None or declared is None or args != declared or args[:2] != ["-m", "unittest"] or len(args) < 3:
+    if args is None or declared is None or args != declared:
         return False
-    modules = []
-    for token in args[2:]:
-        if token in _UNITTEST_FLAGS:
-            continue
-        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
-            return False
-        modules.append(token)
+    modules = _unittest_modules(args)
     if not modules or sorted(m.replace(".", "/") + ".py" for m in modules) != sorted(files):
+        return False
+    # The interpreter the engine resolved when it bound the item; a row
+    # matches only with the same resolved interpreter recorded when it ran
+    # (never a basename).
+    interpreter = binding.get("interpreter")
+    if not isinstance(interpreter, str) or not interpreter:
         return False
     if any(c.split("::", 1)[0] not in files for c in cases):
         return False
@@ -448,7 +470,8 @@ def _command_not_run_cleared(entry, checks, record) -> bool:
                 and check.get("gate") == gate and check.get("environment") == environment):
             continue
         for row in _rows(check):
-            if _row_ok(row) and _python_args(row["command"]) == declared and set(cases) <= _row_passed_cases(row):
+            if (_row_ok(row) and _python_args(row["command"]) == declared and row.get("interpreter") == interpreter
+                    and set(cases) <= _row_passed_cases(row)):
                 return True
     return False
 

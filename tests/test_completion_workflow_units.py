@@ -12,6 +12,9 @@ exactly that command. No controller run here; the whole-run controls are
 in tests/lifecycle/test_completion_workflow.py."""
 
 import inspect
+import os
+import shutil
+import sys
 
 import pytest
 
@@ -34,6 +37,10 @@ UNITTEST_FILES = {
 }
 MODULE_CASES = ["tests/test_app.py::AddTests::test_add", "tests/test_app.py::AddTests::test_zero"]
 COMMAND = "python3 -m unittest tests.test_app -v"
+#: The interpreter ``python3`` resolves to here, as the engine resolves it.
+PYTHON3 = os.path.realpath(shutil.which("python3"))
+EXACT = f"{sys.executable} -m unittest tests.test_app -v"
+EXECUTABLE = os.path.realpath(sys.executable)
 
 
 def _session(tmp_path, *, project=None, gate=None, survey=None, requirements=("R1", "R2"), replies=("DONE",)):
@@ -135,11 +142,11 @@ def test_a_task_over_owed_requirements_or_files_without_continues_is_sent_back_n
     assert route == "refuse" and problem.startswith("t2 overlaps work still owed by t1 (requirements R1)")
     assert "The harness never infers a takeover" in problem and "'CONTINUES: <task id>'" in problem
     assert "2 of 2 left" in problem
-    route, problem = session._closure_route_problem(_spec("t2", paths=("app.py",)), None, None, ["R2"])
-    assert route == "refuse" and "t1 (files app.py)" in problem
     route, problem = session._closure_route_problem(_spec("t2", paths=("app.py",)), None, None, ["R1"])
-    assert "t1 (requirements R1; files app.py)" in problem
+    assert route == "refuse" and "t1 (requirements R1)" in problem and "files" not in problem
     assert session._closure_route_problem(_spec("t2", paths=("README.md",)), None, None, ["R2"]) == ("", "")
+    assert session._closure_route_problem(_spec("t2", paths=("app.py",)), None, None, ["R2"]) == ("", ""), \
+        "first coverage of another requirement in the same file is ordinary work (root review of d48014d)"
     assert session._closure_route_problem(_spec("t2", paths=("app.py",)), "t1", None, ["R1"]) == ("", "")
     assert session._closure_route_problem(_spec("t2", paths=("app.py",)), None, ["RFT1-1"], ["R1"]) == ("", ""), \
         "a RESOLVES of the owed task's finding takes it over explicitly"
@@ -153,11 +160,13 @@ def test_with_the_allowance_spent_an_overlap_stops_the_run_naming_the_owed_work_
     route, problem = session._closure_route_problem(_spec("t2"), None, None, ["R1"])
     assert route == "stop"
     assert problem.startswith("SurveyAllowanceSpent: the recovery allowance of 1 task(s) is spent and t2 overlaps "
-                              "work still owed by t1 (requirements R1; files app.py)")
+                              "work still owed by t1 (requirements R1)")
     assert "Owed work: t1: covers R1; files app.py; open findings RFT1-1" in problem
     assert problem.endswith("Work preserved.")
     assert session._closure_route_problem(_spec("t2", paths=("README.md",)), None, None, ["R2"]) == ("", ""), \
-        "work that does not overlap the owed task still runs on a survey"
+        "work that does not cover the owed requirement still runs on a survey"
+    assert session._closure_route_problem(_spec("t2", paths=("app.py",)), None, None, ["R2"]) == ("", ""), \
+        "and so does first coverage in the same file; t1 stays owed"
     plain = _session(tmp_path / "plain")
     _capped(plain, "t1")
     route, problem = plain._closure_route_problem(_spec("t2"), None, None, ["R1"])
@@ -177,11 +186,11 @@ def test_the_owed_report_and_the_planner_note_name_the_route_and_the_charging_ru
     assert "Owed work: t1: covers R1; files app.py; open findings RFT1-1" in note
     assert "the harness never infers a takeover" in note
     assert "a RESOLVES that names only findings on closed work is ordinary coverage and is not charged" in note
-    assert "a task over its requirements or files stops the run before any call" not in note
+    assert "a task over its requirements stops the run before any call" not in note
     session.survey["recovery_used"] = 1
     spent = session._unfinished_state_note()
     assert "Recovery tasks (CONTINUES or RESOLVES) used: 1 of 1; none is left, and naming one stops the run" in spent
-    assert "a task over its requirements or files stops the run before any call" in spent
+    assert "a task over its requirements stops the run before any call, serial or in a batch" in spent
     text = session._review_resolves_note([_review("RFT1-1", "claude:opus", "t1")])
     assert "a recovery and is charged to the recovery allowance, once with any CONTINUES" in text
     assert "naming only findings on closed work is ordinary coverage and is not charged" in text
@@ -193,6 +202,10 @@ def test_the_dispatch_validates_ownership_and_the_closure_route_before_any_call(
     assert "route, problem = self._closure_route_problem(spec, continues, resolves, covers)" in source
     head = source.index("self._continues_problem(continues)")
     assert head < source.index("summary = self.run_task(spec)"), "validated before the task's first call"
+    batch = inspect.getsource(Session._run_batch)
+    assert "route, problem = self._closure_route_problem(spec, None, None, covers)" in batch
+    assert batch.index("_closure_route_problem") < batch.index("pool.submit(child.run_task"), \
+        "a batch block is admitted before any child's writer call"
 
 
 # -- 3. one finding id: deferrals carry it, closes are atomic, a rechecked deferral is debt ------
@@ -284,11 +297,30 @@ def test_only_a_plain_unittest_module_command_is_read_as_one(item, parsed):
     assert S._unittest_module_command(item) == parsed
 
 
-def test_the_same_python_command_ignores_the_interpreter_path_and_the_report_token_only():
-    assert S._same_python_command("/opt/venv/bin/python -m unittest tests.test_app -v --quadratus-report=/tmp/r.json", COMMAND)
-    assert not S._same_python_command("python3 -m unittest tests.test_app", COMMAND), "-v is part of the command"
-    assert not S._same_python_command("python3 -m pytest tests/test_app.py", COMMAND)
-    assert not S._same_python_command("sh -c 'python3 -m unittest tests.test_app -v'", COMMAND)
+def test_the_same_python_command_needs_the_same_arguments_and_the_same_resolved_interpreter():
+    binding = dict(command=COMMAND, interpreter="/real/python3.11")
+    run = dict(command="/opt/venv/bin/python -m unittest tests.test_app -v --quadratus-report=/tmp/r.json",
+               interpreter="/real/python3.11")
+    assert S._same_python_command(run, binding), "the report token is left out; the resolved interpreter decides"
+    assert not S._same_python_command(dict(run, interpreter="/other/python3.11"), binding)
+    assert not S._same_python_command(dict(run, interpreter=None), binding), "an unresolved interpreter matches nothing"
+    assert not S._same_python_command(run, dict(binding, interpreter=None))
+    assert not S._same_python_command(dict(run, command="python3 -m unittest tests.test_app"), binding), "-v is part of it"
+    assert not S._same_python_command(dict(run, command="python3 -m pytest tests/test_app.py"), binding)
+    assert not S._same_python_command(dict(run, command="sh -c 'python3 -m unittest tests.test_app -v'"), binding)
+
+
+def test_an_interpreter_is_resolved_as_the_shell_would_and_never_by_its_basename(tmp_path, monkeypatch):
+    assert S._resolved_interpreter(sys.executable) == EXECUTABLE
+    assert S._resolved_interpreter("python3") == PYTHON3
+    assert S._resolved_interpreter("/nonexistent/location/python") is None
+    assert S._resolved_interpreter("pytest") is None and S._resolved_interpreter("") is None
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert S._resolved_interpreter("python3") is None, "an alias nothing resolves is no interpreter"
+    monkeypatch.setattr(shutil, "which", lambda name: sys.executable)
+    assert S._resolved_interpreter("python3.99") == EXECUTABLE, "an alias matches by what it resolves to"
+    assert S._command_interpreter("/nonexistent/location/python -m unittest tests.test_app -v") is None
+    assert S._command_interpreter(f"{sys.executable} -m unittest x") == EXECUTABLE
 
 
 def test_a_unittest_module_item_binds_to_the_module_s_cases_under_the_command_route(tmp_path):
@@ -297,7 +329,10 @@ def test_a_unittest_module_item_binds_to_the_module_s_cases_under_the_command_ro
     entry = _entry(session, COMMAND)
     assert entry["binding"]["kind"] == "command" and entry["binding"]["problem"] == ""
     assert entry["binding"]["command"] == COMMAND and entry["binding"]["files"] == ["tests/test_app.py"]
-    assert entry["cases"] == MODULE_CASES
+    assert entry["binding"]["interpreter"] == PYTHON3 and entry["cases"] == MODULE_CASES
+    ghost = _entry(session, "/nonexistent/location/python -m unittest tests.test_app -v")
+    assert ghost["binding"]["kind"] == "command" and ghost["cases"] == [] and ghost["binding"]["interpreter"] is None
+    assert ghost["binding"]["problem"].startswith("interpreter /nonexistent/location/python cannot be resolved")
     missing = _entry(session, "python3 -m unittest tests.test_missing -v")
     assert missing["binding"]["kind"] == "command" and missing["cases"] == []
     assert missing["binding"]["problem"] == "tests.test_missing is not a test module file in the project"
@@ -306,30 +341,42 @@ def test_a_unittest_module_item_binds_to_the_module_s_cases_under_the_command_ro
         "a selection inside a module is not the module and binds nothing"
 
 
-def test_the_command_route_is_discharged_only_by_exactly_that_command_from_the_root(tmp_path):
+def test_the_command_route_is_discharged_only_by_exactly_that_command_on_the_same_interpreter(tmp_path):
     root = _project(tmp_path, UNITTEST_FILES)
     session = _session(tmp_path, project=root, gate=IntegrationGate(["python3", "-m", "pytest", "-q"], cwd=root))
     entry = _entry(session, COMMAND)
     session.unexecuted_acceptance.append(entry)
     row = session._register_obligation(entry, kind="not_run")
     assert row["runner"] is None, "the gate runs pytest, not this command: a prerequisite"
-    session.checks.append(_check(session, MODULE_CASES, command="python3 -m pytest -q"))
+
+    def ran(cases, command, interpreter=PYTHON3, **over):
+        return dict(_check(session, cases, command=command, **over), interpreter=interpreter)
+    session.checks.append(ran(MODULE_CASES, "python3 -m pytest -q"))
     assert session._discharge_record(entry) is None, "the same cases under pytest are not this command's execution"
-    session.checks.append(_check(session, MODULE_CASES[:1], command="/opt/venv/bin/python -m unittest tests.test_app -v"))
+    session.checks.append(ran(MODULE_CASES[:1], "/opt/venv/bin/python -m unittest tests.test_app -v"))
     assert session._discharge_record(entry) is None, "one case short"
-    session.checks.append(_check(session, MODULE_CASES, command="python -m unittest tests.test_app -v", cwd="tests"))
+    session.checks.append(ran(MODULE_CASES, "python -m unittest tests.test_app -v", cwd="tests"))
     assert session._discharge_record(entry) is None, "not from the project root"
-    session.checks.append(_check(session, MODULE_CASES, command="/opt/venv/bin/python -m unittest tests.test_app -v "
-                                                                "--quadratus-report=/tmp/r.json"))
-    assert session._discharge_record(entry) == dict(index=3, run="check", cases=MODULE_CASES)
+    session.checks.append(ran(MODULE_CASES, "/opt/venv/bin/python -m unittest tests.test_app -v", interpreter="/opt/venv/bin/python3.12"))
+    assert session._discharge_record(entry) is None, "another resolved interpreter, whatever the basename"
+    session.checks.append(ran(MODULE_CASES, "python3 -m unittest tests.test_app -v", interpreter=None))
+    assert session._discharge_record(entry) is None, "an interpreter the run could not resolve"
+    session.checks.append(ran(MODULE_CASES, f"{sys.executable} -m unittest tests.test_app -v --quadratus-report=/tmp/r.json"))
+    assert session._discharge_record(entry) == dict(index=5, run="check", cases=MODULE_CASES), \
+        "the same arguments on the interpreter python3 resolves to here"
     session._refresh_obligations()
-    assert entry["discharge_display"] == "bound/1" and entry["discharged_at"] == 3
+    assert entry["discharge_display"] == "bound/1" and entry["discharged_at"] == 5
     assert entry["discharged_run"] == "check" and entry["discharged_cases"] == MODULE_CASES
     exact = _session(tmp_path / "exact", project=root,
-                     gate=IntegrationGate(["python3", "-m", "unittest", "tests.test_app", "-v"], cwd=root))
-    fresh = _entry(exact, COMMAND)
+                     gate=IntegrationGate([sys.executable, "-m", "unittest", "tests.test_app", "-v"], cwd=root))
+    fresh = _entry(exact, EXACT)
+    assert fresh["binding"]["interpreter"] == EXECUTABLE
     assert exact._register_obligation(fresh, kind="not_run")["runner"] == "gate", \
-        "a gate that runs exactly the command is its runner"
+        "a gate that runs exactly the command on the same interpreter is its runner"
+    ghost = _session(tmp_path / "ghost", project=root,
+                     gate=IntegrationGate(["/nonexistent/location/python", "-m", "unittest", "tests.test_app", "-v"], cwd=root))
+    assert ghost._register_obligation(_entry(ghost, COMMAND), kind="not_run")["runner"] is None, \
+        "a configured interpreter that does not exist runs nothing (root's negative)"
     assert session._register_obligation(_entry(session, COMMAND), kind="not_run")["oid"] == row["oid"], \
         "the same item registers once while its row is not shown run"
 
@@ -379,15 +426,16 @@ def _command_entry(**over):
     entry = dict(task="t5", role="lead", author="codex:sol", item=COMMAND, why="not on the approved list",
                  requirements=["R1"], after_check=0, gate="g1", environment="e1",
                  binding=dict(kind="command", scenario=None, cases=MODULE_CASES, problem="",
-                              command=COMMAND, files=["tests/test_app.py"]),
+                              command=COMMAND, files=["tests/test_app.py"], interpreter="/real/python3.11"),
                  cases=list(MODULE_CASES), discharge_display="bound/1", discharged_at=None)
     entry.update(over)
     return entry
 
 
-def _truth_check(command, cases, *, source="f" * 64, gate="g1", environment="e1", cwd=".", passed=True):
+def _truth_check(command, cases, *, source="f" * 64, gate="g1", environment="e1", cwd=".", passed=True,
+                 interpreter="/real/python3.11"):
     return dict(passed=passed, command=command, output="", command_cwd=cwd, source=source, gate=gate,
-                environment=environment, receipts=[],
+                environment=environment, receipts=[], interpreter=interpreter,
                 report=dict(state="parsed", passed_cases=list(cases), passed_truncated=False,
                             counts=dict(passed=len(cases), failed=0, errors=0, skipped=0)))
 
@@ -406,6 +454,9 @@ def test_the_checker_clears_a_command_item_only_by_exactly_that_command_and_ever
         "another source": _truth_check("python3 -m unittest tests.test_app -v", MODULE_CASES, source="0" * 64),
         "another gate": _truth_check("python3 -m unittest tests.test_app -v", MODULE_CASES, gate="g2"),
         "failed": _truth_check("python3 -m unittest tests.test_app -v", MODULE_CASES, passed=False),
+        "another interpreter": _truth_check("python3 -m unittest tests.test_app -v", MODULE_CASES,
+                                            interpreter="/other/python3.11"),
+        "no interpreter recorded": _truth_check("python3 -m unittest tests.test_app -v", MODULE_CASES, interpreter=None),
     }
     for name, bad in rejected.items():
         assert not truth._not_run_cleared(entry, [bad], _record([bad], [entry])), name
@@ -418,6 +469,7 @@ def test_the_checker_clears_a_command_item_only_by_exactly_that_command_and_ever
         "item and binding disagree": _command_entry(item="python3 -m unittest tests.test_other -v"),
         "no files": _command_entry(binding=dict(_command_entry()["binding"], files=[])),
         "no gate": _command_entry(gate=None),
+        "no interpreter bound": _command_entry(binding=dict(_command_entry()["binding"], interpreter=None)),
     }
     for name, bad in forged.items():
         assert not truth._not_run_cleared(bad, [good], _record([good], [bad])), name

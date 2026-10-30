@@ -2706,7 +2706,8 @@
         "tests/lifecycle/test_evidence_lifecycle.py",
         "CLAUDE.md",
         "quadratus/project_run.py",
-        "tests/lifecycle/test_step2_recovery.py"
+        "tests/lifecycle/test_step2_recovery.py",
+        "quadratus/integration.py"
       ],
       "author": "claude",
       "reviewer": "codex",
@@ -2721,7 +2722,8 @@
       "blockers": [],
       "decisions": [
         "claude: scope extended to quadratus/project_run.py",
-        "claude: scope extended to tests/lifecycle/test_step2_recovery.py"
+        "claude: scope extended to tests/lifecycle/test_step2_recovery.py",
+        "claude: scope extended to quadratus/integration.py"
       ]
     }
   ],

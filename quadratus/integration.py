@@ -41,6 +41,8 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: runners have no producer: their failures are never attributable, so never
 #: repaired.
 REPORT_TOKEN = "{report}"
+#: How a command declares the harness report in its argv.
+REPORT_TOKEN_PREFIX = "--quadratus-report"
 PRODUCER = "quadratus-pytest/6"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
@@ -1151,6 +1153,11 @@ def operand_paths(argv, root=None, cwd='.') -> List[str]:
     read from the command's ``cwd`` (R5)."""
     import posixpath
     out = []
+    modules = unittest_modules(argv)
+    if modules is not None:
+        # A whole module is its file: ``tests.test_app`` names
+        # tests/test_app.py (root review of d48014d, 2026-10-30).
+        return [m.replace('.', '/') + '.py' for m in modules]
     for arg in _runner_args(argv):
         arg = str(arg)
         if arg.startswith('-') or '::' in arg:
@@ -1371,14 +1378,44 @@ def case_key(name: str) -> str:
     return f"{name[:200]}\u2026sha256:{hashlib.sha256(name.encode('utf-8', 'surrogatepass')).hexdigest()}"
 
 
+_UNITTEST_PLAIN_FLAGS = frozenset({'-v', '--verbose', '-q', '--quiet', '-b', '--buffer', '-f', '--failfast',
+                                   '-c', '--catch'})
+_MODULE_NAME = re.compile(r'^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$')
+
+
+def unittest_modules(argv) -> Optional[List[str]]:
+    """The modules a plain ``python -m unittest <module>...`` command runs
+    whole (only the runner's plain flags and the harness report token
+    beside them), or None for any other unittest form (``discover``, a
+    file path, a selection inside a module, a filter): the one unittest
+    form whose selection the harness can establish, so a declared report
+    of it can discharge what names those modules (root review of d48014d,
+    2026-10-30)."""
+    argv = [str(a) for a in argv]
+    if not _is_unittest(argv):
+        return None
+    modules = []
+    for token in argv[3:]:
+        if token in _UNITTEST_PLAIN_FLAGS or token.startswith(REPORT_TOKEN_PREFIX):
+            continue
+        if token.startswith('-') or token == 'discover' or not _MODULE_NAME.match(token):
+            return None
+        modules.append(token)
+    return modules or None
+
+
 def runner_of(argv) -> Optional[str]:
     """Which test runner a command starts: 'pytest', 'node' (``node
-    --test``) or None when neither can be told from its argv."""
+    --test``), 'unittest' (the plain module form ``python -m unittest
+    <module>...``, whose selection is its modules whole) or None when none
+    can be told from its argv."""
     argv = [str(a) for a in argv]
     if _is_pytest(argv):
         return 'pytest'
     if argv and Path(argv[0]).name.startswith('node') and '--test' in argv:
         return 'node'
+    if unittest_modules(argv) is not None:
+        return 'unittest'
     return None
 
 

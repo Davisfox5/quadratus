@@ -1465,6 +1465,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
     if receipts:
         rows = [dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
                      command=str(r.get("command") or ""), output=r.get("output") or "", report=r.get("report"),
+                     interpreter=r.get("interpreter"),
                      tests=r.get("tests"), cwd=r.get("cwd") or check.get("command_cwd") or ".",
                      selection="; ".join(x for x in (r.get("selection") or "", direct if r.get("id") in (
                          "check", "original-tests:check") else "") if x), cases=r.get("cases"))
@@ -1472,7 +1473,8 @@ def _check_runs(check: dict, root=None) -> List[dict]:
     else:
         rows = [dict(id="check", passed=bool(check.get("passed")), required=True,
                      command=str(check.get("command") or ""), output=check.get("output") or "",
-                     report=check.get("report"), tests=None, cwd=check.get("command_cwd") or ".",
+                     report=check.get("report"), interpreter=check.get("interpreter"), tests=None,
+                     cwd=check.get("command_cwd") or ".",
                      selection=direct, cases=check.get("cases"))]
     out = []
     for row in rows:
@@ -1492,7 +1494,8 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
-                        cwd=row["cwd"], command=row["command"], report_cases=_report_cases(row["report"]),
+                        cwd=row["cwd"], command=row["command"], interpreter=row.get("interpreter"),
+                        report_cases=_report_cases(row["report"]),
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
@@ -1805,22 +1808,63 @@ def _unittest_module_command(item: str):
     return (argv, modules) if modules else None
 
 
-def _same_python_command(recorded: str, declared: str) -> bool:
-    """Whether a receipt's command is the declared ``python -m ...`` command:
-    the same arguments after a python interpreter head, the harness's own
-    report token left out, nothing else normalised."""
+def _python_args(text: str):
+    """The arguments after a python interpreter head, the harness's own
+    report token left out; None for anything else."""
     import shlex
+    try:
+        argv = shlex.split(str(text or ""))
+    except ValueError:
+        return None
+    if not argv or not _PYTHON_HEAD.fullmatch(Path(argv[0]).name):
+        return None
+    return [a for a in argv[1:] if not a.startswith("--quadratus-report")]
 
-    def parts(text):
-        try:
-            argv = shlex.split(str(text or ""))
-        except ValueError:
-            return None
-        if not argv or not _PYTHON_HEAD.fullmatch(Path(argv[0]).name):
-            return None
-        return [a for a in argv[1:] if not a.startswith("--quadratus-report")]
-    first, second = parts(recorded), parts(declared)
-    return first is not None and second is not None and first == second
+
+def _resolved_interpreter(head: str, cwd=None) -> Optional[str]:
+    """The real path of the interpreter a command head names, resolved the
+    way the shell would run it (``shutil.which`` from ``cwd`` for a bare
+    name, the path itself otherwise), or None when it names nothing that
+    exists here. Identity is this resolution, never the basename (root
+    review of d48014d, 2026-10-30: a nonexistent path and the configured
+    venv interpreter both read as ``python``)."""
+    import shutil
+    head = str(head or "")
+    if not head or not _PYTHON_HEAD.fullmatch(Path(head).name):
+        return None
+    if "/" in head:
+        candidate = Path(cwd or ".") / head if not Path(head).is_absolute() else Path(head)
+        found = str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
+    else:
+        found = shutil.which(head)
+    if not found:
+        return None
+    try:
+        return os.path.realpath(found)
+    except OSError:
+        return None
+
+
+def _command_interpreter(command: str, cwd=None) -> Optional[str]:
+    """The resolved interpreter of a recorded command line, or None."""
+    import shlex
+    try:
+        argv = shlex.split(str(command or ""))
+    except ValueError:
+        return None
+    return _resolved_interpreter(argv[0], cwd) if argv else None
+
+
+def _same_python_command(run: dict, binding: dict) -> bool:
+    """Whether a recorded run is the declared ``python -m ...`` command: the
+    same arguments after the interpreter (the report token left out) and
+    the same resolved interpreter on both sides, each recorded when it was
+    measured; an unresolved interpreter on either side matches nothing."""
+    first, second = _python_args(run.get("command")), _python_args(binding.get("command"))
+    if first is None or second is None or first != second:
+        return False
+    mine, theirs = run.get("interpreter"), binding.get("interpreter")
+    return bool(mine) and bool(theirs) and mine == theirs
 
 
 def _item_paths(item: str) -> List[str]:
@@ -4977,18 +5021,17 @@ class Session:
         if not owed:
             return "", ""
         taking = set(self._recovery_decision(spec, continues, resolves)["recovers"])
-        mine = {str(p).strip("./") for p in (spec.scope.permitted_paths if spec.scope is not None else ())}
         overlaps = []
         for tid in sorted(owed - taking):
+            # The declared requirement relationship decides, never a shared
+            # file: first coverage of another requirement that touches the
+            # same file is ordinary work and leaves the owed task owed (root
+            # review of d48014d, 2026-10-30).
             outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == tid), None)
             theirs = set(outcome.covers or ()) if outcome is not None else set()
-            record = self.turn_limited_records.get(tid) or self.failed_records.get(tid) or {}
-            files = {str(p).strip("./") for p in (record.get("changed") or ())}
-            shared_r, shared_f = sorted(theirs & set(covers or ())), sorted(files & mine)
-            if shared_r or shared_f:
-                overlaps.append(f"{tid} (" + "; ".join(x for x in (
-                    f"requirements {', '.join(shared_r)}" if shared_r else "",
-                    f"files {', '.join(shared_f)}" if shared_f else "") if x) + ")")
+            shared = sorted(theirs & set(covers or ()))
+            if shared:
+                overlaps.append(f"{tid} (requirements {', '.join(shared)})")
         if not overlaps:
             return "", ""
         detail = ", ".join(overlaps)
@@ -4996,15 +5039,15 @@ class Session:
         if survey is not None and self.survey["recovery_used"] >= survey.recovery_tasks:
             return "stop", (f"SurveyAllowanceSpent: the recovery allowance of {survey.recovery_tasks} task(s) is "
                             f"spent and {spec.task_id} overlaps work still owed by {detail}; no task can continue "
-                            "it, and a task over the same requirements or files without CONTINUES could not close "
-                            f"that work, so nothing is spent on it. Owed work: {self._owed_report()}. Work preserved.")
+                            "it, and a task over the same requirements without CONTINUES could not close that "
+                            f"work, so nothing is spent on it. Owed work: {self._owed_report()}. Work preserved.")
         left = (f"; {max(0, survey.recovery_tasks - self.survey['recovery_used'])} of {survey.recovery_tasks} left"
                 if survey is not None else "")
         return "refuse", (f"{spec.task_id} overlaps work still owed by {detail}. The harness never infers a "
                           "takeover: that work closes only through a task whose description carries "
                           "'CONTINUES: <task id>' on its own line (a recovery, charged to the recovery "
                           f"allowance{left}), which inherits its open findings for their reviewers. Name the task "
-                          "again with CONTINUES, or name work that does not overlap it.")
+                          "again with CONTINUES, or name work that does not cover its requirements.")
 
     def _prepare_dispatch(self, spec: TaskSpec) -> None:
         """This task's own scope and gate, settled before its contract is
@@ -6698,8 +6741,8 @@ class Session:
         text = ("\n\nUnfinished work as the harness holds it now (this supersedes the 'not done' and "
                 "'CONTINUES' notes in older task records): ")
         text += (f"still owed: {', '.join(still)}; a task that takes one over says CONTINUES with its id. "
-                 f"Owed work: {self._owed_report()}. A task that covers one of those requirements or names one "
-                 "of those files without CONTINUES is sent back: the harness never infers a takeover. "
+                 f"Owed work: {self._owed_report()}. A task that covers one of those requirements without "
+                 "CONTINUES is sent back: the harness never infers a takeover. "
                  if still else "nothing is owed. ")
         if settled:
             text += (f"No longer owed: {', '.join(settled)} (a later task took the debt over); their records "
@@ -6714,8 +6757,9 @@ class Session:
                        "coverage and is not charged.")
             if used >= total and still:
                 text += (" With none left the owed work cannot be continued and the run cannot complete while "
-                         "it is owed: a task over its requirements or files stops the run before any call. "
-                         "Name only work that does not overlap it, or DONE; the debt is reported as it stands.")
+                         "it is owed: a task over its requirements stops the run before any call, serial or in "
+                         "a batch. Name only work that does not cover them, or DONE; the debt is reported as it "
+                         "stands.")
         return text.rstrip()
 
     def _slots_note(self) -> str:
@@ -6900,6 +6944,9 @@ class Session:
                     ran = self._run_batch(batch)
                 finally:
                     self._last_wave = False
+                if not ran and self.stop_reason:
+                    # Stopped at intake, before any child's call.
+                    break
                 if not ran:
                     # Sent back before any lead call (map G6): the same as a
                     # serial send-back, one slot spent, not one per task, and
@@ -8315,6 +8362,16 @@ class Session:
                 problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
             else:
                 problem = problem or self._capture_problem(spec, None)
+            if not problem:
+                # The same ownership and closure admission as the serial
+                # intake, before any child's writer call (root review of
+                # d48014d, 2026-10-30: a batch refusing explicit CONTINUES
+                # still paid a child that re-did owed work unlinked).
+                route, problem = self._closure_route_problem(spec, None, None, covers)
+                if route == "stop":
+                    self._stop_with("budget", problem)
+                    self._note("owed work has no closure route left; stopping before a parallel duplicate")
+                    return False
             if problem:
                 self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} Name the "
                                       "tasks again with COVERS lines using the listed requirement ids.")
@@ -10891,6 +10948,9 @@ class Session:
             # execution of the same cases never stands in for it.
             argv, modules = command
             files, problems = [], []
+            interpreter = _resolved_interpreter(argv[0], self.project)
+            if interpreter is None:
+                problems.append(f"interpreter {argv[0]} cannot be resolved in this environment")
             for module in modules:
                 rel = module.replace(".", "/") + ".py"
                 if self.project and (Path(self.project) / rel).is_file():
@@ -10900,7 +10960,7 @@ class Session:
             cases = self._module_case_ids(files) if not problems else []
             if not problems and not cases:
                 problems.append("the named module defines no test case")
-            binding.update(kind="command", command=" ".join(argv), files=files,
+            binding.update(kind="command", command=" ".join(argv), files=files, interpreter=interpreter,
                            cases=sorted(cases) if not problems else [], problem="; ".join(problems)[:300])
             entry["binding"], entry["cases"] = binding, list(binding["cases"])
             if binding["problem"]:
@@ -11005,12 +11065,13 @@ class Session:
                             out.append(f"{rel}::{node.name}::{inner.name}")
         return sorted(set(out))
 
-    def _gate_runs_command(self, command: str) -> bool:
+    def _gate_runs_command(self, binding: dict) -> bool:
         """Whether the effective gate runs exactly the declared python
-        command from the project root (``_same_python_command``), so the
-        harness itself can discharge an item bound to it."""
+        command from the project root, on the same resolved interpreter
+        (``_same_python_command``), so the harness itself can discharge an
+        item bound to it."""
         gate = self._current_gate()
-        if gate is None or not self.project or not command:
+        if gate is None or not self.project or not (binding or {}).get("command"):
             return False
         import shlex
 
@@ -11022,7 +11083,9 @@ class Session:
             return False
         for candidate in commands:
             cwd = (root / candidate.cwd).resolve() if candidate.cwd else root
-            if cwd == root and _same_python_command(" ".join(shlex.quote(str(a)) for a in candidate.argv), command):
+            joined = " ".join(shlex.quote(str(a)) for a in candidate.argv)
+            run = dict(command=joined, interpreter=_command_interpreter(joined, cwd))
+            if cwd == root and _same_python_command(run, binding):
                 return True
         return False
 
@@ -11571,8 +11634,7 @@ class Session:
             if (entry.get("binding") or {}).get("kind") == "command":
                 # Only the gate running exactly that command can discharge
                 # it; the same cases under another runner are not its execution.
-                runner = ("gate" if bound and self._gate_runs_command(str((entry.get("binding") or {}).get("command") or ""))
-                          else None)
+                runner = "gate" if bound and self._gate_runs_command(entry.get("binding") or {}) else None
             else:
                 runner = ("gate" if self._gate_can_run(_item_paths(behavior))
                           or (bound and self._current_gate() is not None) else None)
@@ -11800,9 +11862,9 @@ class Session:
                     return dict(index=index, run=run["id"], cases=[])
                 continue
             if (entry.get("binding") or {}).get("kind") == "command":
-                declared = str((entry.get("binding") or {}).get("command") or "")
+                declared = entry.get("binding") or {}
                 if bound and check.get("passed"):
-                    run = next((r for r in runs if _same_python_command(r["command"], declared)
+                    run = next((r for r in runs if _same_python_command(r, declared)
                                 and (r.get("cwd") or ".") in ("", ".") and set(bound) <= _run_passed_cases(r)), None)
                     if run is not None:
                         return dict(index=index, run=run["id"], cases=list(bound))
@@ -16170,7 +16232,15 @@ class Session:
                             # A single-command gate's parsed report (a suite's
                             # receipts carry their own), for the audit.
                             "report": result.report,
-                            "receipts": [dataclasses.asdict(r) for r in result.receipts]})
+                            # The interpreter each python command ran under,
+                            # resolved as the shell resolved it, recorded
+                            # when it ran: the identity an exact-command
+                            # binding is matched on (root review of d48014d).
+                            "interpreter": _command_interpreter(result.command, self.project),
+                            "receipts": [dict(dataclasses.asdict(r),
+                                              interpreter=_command_interpreter(
+                                                  r.command, Path(self.project) / (r.cwd or ".") if self.project else None))
+                                         for r in result.receipts]})
         self._discharge_named()
         self._refresh_obligations()
         # A passing check makes every earlier check failure in the same task
@@ -16360,7 +16430,11 @@ class Session:
         self.checks.append({"passed": False, "command": result.command, "output": result.output,
                             "cases": result.cases,
                             **self._consumed_identity(self._last_check_identity),
-                            "receipts": [dataclasses.asdict(r) for r in result.receipts]})
+                            "interpreter": _command_interpreter(result.command, self.project),
+                            "receipts": [dict(dataclasses.asdict(r),
+                                              interpreter=_command_interpreter(
+                                                  r.command, Path(self.project) / (r.cwd or ".") if self.project else None))
+                                         for r in result.receipts]})
         if self._outcome is not None:
             self._outcome.edge("checks", False)
         task.record("user", "The check failure is not attributable to the application; handed to the "

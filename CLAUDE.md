@@ -2666,8 +2666,9 @@ Key design decisions already settled:
 - **A recovery is charged once, for owed work only; ownership is declared,
   never inferred; one finding id closes everywhere** (completion workflow,
   Davis, 2026-10-30, after evidence-authority-02 ended `FindingsOpen` with
-  every contract behaviour delivered and the audit never asked). Three
-  shared causes, one batch. (1) t3's `RESOLVES` of two findings on a task
+  the storage, HTTP and CLI contract delivered, the README requirement
+  never covered and the final audit never run). Three shared causes, one
+  batch. (1) t3's `RESOLVES` of two findings on a task
   that had closed clean was charged to the survey allowance, so the
   allowance was spent before any work had failed; `_recovery_decision`
   now charges a task once when it `CONTINUES` owed work (capped, failed or
@@ -2685,7 +2686,12 @@ Key design decisions already settled:
   takeover from an overlap), and when the allowance is spent it stops the
   run `SurveyAllowanceSpent` naming the owed work (`_owed_report`: covers,
   files, open finding ids) before any lead call is spent on a duplicate
-  the run could not close; non-overlapping work still runs on a survey.
+  the run could not close; work over other requirements still runs on a
+  survey, in the same file or not (root's review of d48014d: a shared file
+  is not a takeover, and the declared requirement relationship is the only
+  admission signal), and a parallel block meets the same admission at
+  intake before any child's writer (root: a batch refusing explicit
+  CONTINUES still paid an unlinked child that re-did owed work).
   The planner's unfinished-state note and the RESOLVES note state both
   rules, and `_open_work` names the requirements no task covered at a
   stop. (3) t6's reviewer deferred a finding to its sibling; the child's
@@ -2704,9 +2710,19 @@ Key design decisions already settled:
   with the record either way; and a documented `python -m unittest
   <module>` NOT RUN item (t5's, bound to nothing) binds to the module's
   cases under a `command` binding that only a complete run of exactly that
-  command from the project root discharges, in the engine and the checker
-  alike; the same cases under pytest never stand in. No cap, allowance,
-  review, grader or baseline changed. Controls:
+  command from the project root, on the same resolved interpreter,
+  discharges, in the engine and the checker alike; the same cases under
+  pytest never stand in. Interpreter identity is what the head resolves to
+  (`_resolved_interpreter`: `shutil.which` then the real path, recorded on
+  the binding when the item is bound and on every check receipt when it
+  ran), never the basename: a nonexistent path and the configured venv
+  interpreter both read as `python` (root's review of d48014d). For the
+  declared route to work end to end, `integration.runner_of` names the
+  plain module form `python -m unittest <module>...` (`unittest_modules`),
+  so its selection is established and `operand_paths` reads a whole module
+  as its file; `discover`, a file path, a selection inside a module and a
+  filter stay unrecognised, and an undeclared report still shows no case.
+  No cap, allowance, review, grader or baseline changed. Controls:
   `tests/test_completion_workflow_units.py`,
   `tests/lifecycle/test_completion_workflow.py`.
 - **The run monitor is read-only, and that is the whole design**
