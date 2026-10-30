@@ -270,8 +270,9 @@ def test_the_lead_is_told_the_identity_forms_the_harness_can_discharge(tmp_path)
     import inspect
     text = inspect.getsource(Session._configured_checks_guidance) if hasattr(Session, "_configured_checks_guidance") \
         else inspect.getsource(Session)
-    assert "'NOT RUN: P<n> - <why>' for a declared scenario, or " in text
-    assert "'NOT RUN: <file>::<Class>::<test> - <why>' for a case; a report naming neither is " in text
+    assert "'NOT RUN: P<n> - <why>' for a declared scenario, " in text
+    assert "'NOT RUN: <file>::<Class>::<test> - <why>' for a case, or 'NOT RUN: <file>::<Class> - <why>' " in text
+    assert "a report naming none of these is " in text
     assert "kept as written and nothing can discharge it" in text
 
 

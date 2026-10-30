@@ -2725,6 +2725,33 @@
         "claude: scope extended to tests/lifecycle/test_step2_recovery.py",
         "claude: scope extended to quadratus/integration.py"
       ]
+    },
+    {
+      "id": "T-class-claims",
+      "purpose": "Bounded whole-class NOT RUN claims (Davis, 2026-10-30, after root's selective-command counterexample on 6527479725): a 'file::Class' item binds to the class as a declared floor and is discharged only by a later complete whole-file run on the current identity whose own complete report shows the class's cases passed; a selective or unrecognised command, a load_tests module, a truncated report or a drifted class never clears it; a dotted unittest token must resolve to a module file before it reads as whole-module selection; truth_check reconstructs the scope from the raw rows. No permission, model, role, limit or call change. Base 3e4b93f is the #73 head",
+      "base": "3e4b93f74fc52e85a7a1f9c0e62bb4ac6ff03e7c",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/integration.py",
+        "tools/truth_check.py",
+        "tests/test_completion_workflow_units.py",
+        "tests/lifecycle/test_completion_workflow.py",
+        "tests/test_execution_scope.py",
+        "CLAUDE.md",
+        "docs/dev-record.json",
+        "tests/test_evidence_lifecycle_units.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-30T16:21:20Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: scope extended to tests/test_evidence_lifecycle_units.py"
+      ]
     }
   ],
   "receipts": [

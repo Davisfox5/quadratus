@@ -424,6 +424,133 @@ def _unittest_modules(args):
     return modules or None
 
 
+_CLASS_ID = re.compile(r"^[\w./-]+\.py::(?!test)[A-Za-z_]\w*$")
+_CLASS_MEMBER = re.compile(r"^test\w*(?:\[.*\])?$")
+_PYTEST_VALUE_FLAGS = frozenset({"-p", "-o", "-c", "-W", "-n", "-r", "--tb", "--rootdir", "--confcutdir", "--basetemp",
+                                 "--junitxml", "--maxfail", "--durations", "--color", "--override-ini",
+                                 "--import-mode", "--ignore", "--ignore-glob", "--deselect", "--log-level",
+                                 "--log-file", "--timeout"})
+
+
+def _collects_whole_file(command: str, file: str) -> bool:
+    """Whether a recorded command line, run from the project root, collects
+    the test file whole, reconstructed here from the command text alone
+    (no disk, no engine): pytest naming the file as a whole operand, a
+    directory operand that is a path prefix of it, or no path operand at
+    all, with no ``-o``/``--override-ini``; or the plain ``python -m
+    unittest <module>`` form whose module is this file. A ``::`` operand, a
+    filter, a selection inside a module, ``unittest discover`` (its receipt
+    records an unestablished selection), a wrapper or any other shape
+    establishes nothing. The
+    engine additionally reads the project's pytest configuration, which
+    the record does not carry; this reading is as strong as the record."""
+    import posixpath
+    import shlex
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not argv or _filtered(command) or not file.endswith(".py"):
+        return False
+    head = Path(argv[0]).name
+    is_python = bool(_PYTHON_HEAD.fullmatch(head))
+    if head in ("pytest", "py.test") or (is_python and argv[1:3] == ["-m", "pytest"]):
+        tokens = argv[1:] if head in ("pytest", "py.test") else argv[3:]
+        if any(t in ("-o", "--override-ini") or t.startswith(("-o", "--override-ini=")) for t in tokens):
+            return False
+        operands, skip = [], False
+        for token in tokens:
+            if skip:
+                skip = False
+                continue
+            if token.startswith("--quadratus-report"):
+                continue
+            if token.startswith("-"):
+                skip = token in _PYTEST_VALUE_FLAGS
+                continue
+            operands.append(token[2:] if token.startswith("./") else token)
+        if not operands:
+            return True
+        for operand in operands:
+            if "::" in operand:
+                return False
+            if operand == file or operand in (".", "") or file.startswith(posixpath.normpath(operand).rstrip("/") + "/"):
+                return True
+        return False
+    if is_python and argv[1:3] == ["-m", "unittest"]:
+        modules = _unittest_modules(_python_args(command))
+        return bool(modules) and file in [m.replace(".", "/") + ".py" for m in modules]
+    return False
+
+
+def _class_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item the engine bound to a whole test class
+    (``binding.kind == "class"``), validated from the saved record alone
+    and never from an engine mark: the item is exactly ``file::Class``
+    and the binding names that file and class; the declared floor is a
+    non-empty list of case ids directly under the class and the typed
+    cases are exactly that floor (a subset is a forgery); then a later
+    check on the final source under the entry's own gate and environment
+    holds a whole successful row from the project root whose command
+    collects the file whole (``_collects_whole_file``, reconstructed from
+    the command text), whose parsed report says its passed list is
+    complete, and whose passed cases include at least one case directly
+    under the class and every declared one. A selective command, a
+    truncated report, a case under a longer class name, a nested class or
+    a missing declared method never clears it (class-claim batch,
+    2026-10-30)."""
+    binding = entry.get("binding")
+    if not isinstance(binding, dict) or binding.get("kind") != "class":
+        return False
+    file, class_name = binding.get("file"), binding.get("class_name")
+    if not isinstance(file, str) or not isinstance(class_name, str) or not file or not class_name:
+        return False
+    class_id = f"{file}::{class_name}"
+    if not _CLASS_ID.match(class_id) or binding.get("class_id") != class_id:
+        return False
+    item = str(entry.get("item") or "").strip()
+    if (item[2:] if item.startswith("./") else item) != class_id:
+        return False
+    declared, cases = binding.get("declared"), entry.get("cases")
+    if not isinstance(declared, list) or not declared or not isinstance(cases, list) or sorted(cases) != sorted(declared):
+        return False
+    prefix = class_id + "::"
+    for case in declared:
+        if not isinstance(case, str) or not case.startswith(prefix) or not _CASE_ID.match(case):
+            return False
+        member = case[len(prefix):]
+        if "::" in member or "[" in member or not _CLASS_MEMBER.match(member):
+            return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    if not isinstance(gate, str) or not isinstance(environment, str):
+        return False
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment):
+            continue
+        for row in _rows(check):
+            if not _row_ok(row) or row["report"].get("passed_truncated") is not False:
+                continue
+            if not _collects_whole_file(row["command"], file):
+                continue
+            shown = set()
+            for name in row["report"].get("passed_cases") or ():
+                name = str(name)
+                if not name.startswith(prefix):
+                    continue
+                member = name[len(prefix):]
+                if "::" in member or not _CLASS_MEMBER.match(member):
+                    continue
+                shown.add(f"{prefix}{member.split('[', 1)[0]}")
+            if shown and set(declared) <= shown:
+                return True
+    return False
+
+
 def _command_not_run_cleared(entry, checks, record) -> bool:
     """A NOT RUN item the engine bound to a ``python -m unittest <module>``
     command (``binding.kind == "command"``), validated from the saved record
@@ -495,6 +622,8 @@ def _not_run_cleared(entry, checks, record=None) -> bool:
             # The engine's command binding is validated whole by its own
             # route; the item's text alone never decides it.
             return _command_not_run_cleared(entry, checks, record)
+        if isinstance(binding, dict) and binding.get("kind") == "class":
+            return _class_not_run_cleared(entry, checks, record)
         claim = _claim(str(entry.get("item") or ""))
         if claim == "identity":
             if not isinstance(binding, dict) or binding.get("kind") not in ("scenario", "case", "mixed"):

@@ -1881,6 +1881,99 @@ def _same_python_command(run: dict, binding: dict) -> bool:
     return bool(mine) and bool(theirs) and mine == theirs
 
 
+#: A NOT RUN item that is exactly one whole test class, ``<file>.py::<Class>``:
+#: the class segment is not itself a case name (``file::test_x`` is a case).
+_CLASS_CLAIM = re.compile(r"^((?:\./)?[\w./-]+\.py)::((?!test)[A-Za-z_]\w*)$")
+_CLASS_CITATION = re.compile(r"(?<![\w./:-])(?:\./)?[\w./-]+\.py::(?!test)[A-Za-z_]\w*(?![\w\[:.-])")
+_CLASS_MEMBER = re.compile(r"^test\w*(?:\[.*\])?$")
+
+
+def _class_declaration(root, file: str, class_name: str) -> Tuple[List[str], str]:
+    """``(declared case ids, problem)`` for a whole-class claim, read with
+    ``ast`` from the file as it stands under ``root`` and never executed:
+    the ``test*`` methods the class body itself declares, as
+    ``file::Class::test``. The declared set is a floor, not the population
+    (unittest and pytest also collect inherited and dynamically attached
+    methods); the population is what a complete whole-file run reports.
+    A problem is named, and nothing is declared, when the file is outside
+    the project, unreadable or unparsable; the class is not defined exactly
+    once at the module's top level; the module defines ``load_tests``
+    (unittest lets it replace the collected set, so no whole-file run
+    establishes the class's membership); or the class body declares no
+    test case (an inherited-only or dynamic membership has no floor, so the
+    claim is held explicitly rather than read from the passed list)."""
+    import ast
+    import posixpath
+    if root is None:
+        return [], "no project to read the class from"
+    rel = posixpath.normpath(file[2:] if file.startswith("./") else file)
+    if posixpath.isabs(rel) or rel.startswith("..") or not rel.endswith(".py"):
+        return [], f"{file} is not a project test file"
+    try:
+        tree = ast.parse((Path(root) / rel).read_text(errors="ignore"))
+    except (OSError, SyntaxError, ValueError):
+        return [], f"{rel} cannot be read as a Python test module"
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name]
+    if len(classes) != 1:
+        return [], (f"{class_name} is not defined at the top level of {rel}" if not classes
+                    else f"{class_name} is defined {len(classes)} times in {rel}")
+    for node in tree.body:
+        names = ([node.name] if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else
+                 [t.id for t in getattr(node, "targets", []) if isinstance(t, ast.Name)] if isinstance(node, ast.Assign) else
+                 [node.target.id] if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) else [])
+        if "load_tests" in names:
+            return [], f"{rel} defines load_tests, which can change what a run of the module collects"
+    declared = sorted({f"{rel}::{class_name}::{inner.name}" for inner in classes[0].body
+                       if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner.name.startswith("test")})
+    if not declared:
+        return [], (f"{class_name} declares no test case in its body; an inherited-only or dynamic "
+                    "membership is not bound")
+    return declared, ""
+
+
+def _class_run_cases(run: dict, binding: dict, current_declared, root) -> List[str]:
+    """The case ids one complete recorded run shows passed for a
+    whole-class claim, or [] when the run does not establish it: the run
+    is from the project root and its command collects the class's file
+    whole (``integration.whole_file_collected``, read from the argv and
+    the configuration, never the output); its own parsed report, with its
+    passed list complete, names at least one case directly under
+    ``file::Class::`` (a nested class's cases are not the class's); and
+    every method the claim recorded as declared and every method the class
+    declares now is among them. The returned set is what the report shows
+    under the class, each id with and without its parameter, so the
+    population is the runner's, bounded below by the declared floor and
+    never defined by the passed list alone."""
+    import shlex
+
+    from .integration import whole_file_collected
+    if (run.get("cwd") or ".") not in ("", "."):
+        return []
+    try:
+        argv = shlex.split(str(run.get("command") or ""))
+    except ValueError:
+        return []
+    if not whole_file_collected(argv, binding.get("file") or "", root, run.get("cwd") or "."):
+        return []
+    prefix = f"{binding.get('class_id')}::"
+    shown, stripped = set(), set()
+    for name in run.get("report_cases") or ():
+        name = str(name)
+        if not name.startswith(prefix):
+            continue
+        member = name[len(prefix):]
+        if "::" in member or not _CLASS_MEMBER.match(member):
+            continue
+        shown.add(name)
+        stripped.add(f"{prefix}{member.split('[', 1)[0]}")
+    if not shown:
+        return []
+    floor = {str(c) for c in (binding.get("declared") or ())} | {str(c) for c in current_declared}
+    if not floor or not floor <= stripped:
+        return []
+    return sorted(shown | stripped)
+
+
 def _item_paths(item: str) -> List[str]:
     """The file paths a NOT RUN item names; none for a runner name or prose."""
     import shlex
@@ -7454,8 +7547,10 @@ class Session:
                 "drop it and do not prescribe it: ASK, naming the command and the configured checks as "
                 "a configuration conflict. A lead that cannot run a case where it works (a sandbox "
                 "that denies a socket, a missing dependency) reports it by identity, so the harness's "
-                "own run can discharge it: 'NOT RUN: P<n> - <why>' for a declared scenario, or "
-                "'NOT RUN: <file>::<Class>::<test> - <why>' for a case; a report naming neither is "
+                "own run can discharge it: 'NOT RUN: P<n> - <why>' for a declared scenario, "
+                "'NOT RUN: <file>::<Class>::<test> - <why>' for a case, or 'NOT RUN: <file>::<Class> - <why>' "
+                "for a whole test class (discharged only by a check that collects that file whole and shows "
+                "every method of the class passed); a report naming none of these is "
                 "kept as written and nothing can discharge it.")
 
     def _verification_note(self) -> str:
@@ -10980,11 +11075,43 @@ class Session:
             if binding["problem"]:
                 self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
             return
+        whole_class = _CLASS_CLAIM.match(item.strip())
+        if whole_class is not None:
+            # A whole test class, ``file::Class`` (class-claim batch,
+            # 2026-10-30; completion-workflow-02 t6: the item named the
+            # class whose eight methods both gate receipts showed passed,
+            # and the item bound to nothing). It binds to the methods the
+            # class body declares, as a floor, and is discharged only by a
+            # later complete run from the project root whose command
+            # collects the file whole and whose own complete report shows
+            # the class's cases passed, every declared one among them
+            # (``_class_run_cases``). A selection inside the module, an
+            # unrecognised command or a changed class never discharges it.
+            file = whole_class.group(1)[2:] if whole_class.group(1).startswith("./") else whole_class.group(1)
+            declared, problem = _class_declaration(self.project, file, whole_class.group(2))
+            binding.update(kind="class", class_id=f"{file}::{whole_class.group(2)}", file=file,
+                           class_name=whole_class.group(2), declared=list(declared), cases=list(declared),
+                           problem=problem[:300])
+            entry["binding"], entry["cases"] = binding, list(binding["cases"])
+            if binding["problem"]:
+                self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
         scenarios = list(dict.fromkeys(re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", item)))
         explicit = _cited_cases(item)
         rest = _CASE_CITATION.sub(" ", item)
         names = list(dict.fromkeys(m.group(1) for m in _CASE_NAME.finditer(rest)))
         leftover = _CASE_NAME.sub(" ", rest)
+        if _CLASS_CITATION.search(leftover):
+            # A whole-class citation beside other claims (a scenario, a
+            # case, a second class): bound only when it is the whole item,
+            # so a mixed claim is held as written rather than shrunk to the
+            # part the harness can read.
+            binding.update(kind="case", problem="names a whole test class beside other claims; a class is "
+                                                 "bound only when it is the whole item: "
+                                                 + " ".join(item.split())[:120])
+            entry["binding"], entry["cases"] = binding, []
+            self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
         # A word shaped like a case outside any path operand (``Class.test_x
         # .extra``) is a claim the harness cannot read whole, not a path.
         unreadable = any(re.search(r"\btest\w*", tok) for tok in leftover.split()
@@ -11100,6 +11227,25 @@ class Session:
             joined = " ".join(shlex.quote(str(a)) for a in candidate.argv)
             run = dict(command=joined, interpreter=_command_interpreter(joined, cwd))
             if cwd == root and _same_python_command(run, binding):
+                return True
+        return False
+
+    def _gate_collects_file(self, file) -> bool:
+        """Whether one of the effective gate's commands, run from the project
+        root, collects the test file whole (``integration.whole_file_collected``),
+        so the harness's own gate can discharge a whole-class claim on it."""
+        gate = self._current_gate()
+        if gate is None or not self.project or not file:
+            return False
+        from .integration import _gate_commands, whole_file_collected
+        root = Path(self.project).resolve()
+        try:
+            commands = [c for c in (_gate_commands(gate, root) or []) if not c.skip_reason]
+        except Exception:  # noqa: BLE001 -- an unreadable gate runs nothing
+            return False
+        for candidate in commands:
+            cwd = (root / candidate.cwd).resolve() if candidate.cwd else root
+            if cwd == root and whole_file_collected(list(candidate.argv), str(file), root, "."):
                 return True
         return False
 
@@ -11649,6 +11795,10 @@ class Session:
                 # Only the gate running exactly that command can discharge
                 # it; the same cases under another runner are not its execution.
                 runner = "gate" if bound and self._gate_runs_command(entry.get("binding") or {}) else None
+            elif (entry.get("binding") or {}).get("kind") == "class":
+                # Only a gate command that collects the class's file whole
+                # can show the class ran whole.
+                runner = "gate" if bound and self._gate_collects_file((entry.get("binding") or {}).get("file")) else None
             else:
                 runner = ("gate" if self._gate_can_run(_item_paths(behavior))
                           or (bound and self._current_gate() is not None) else None)
@@ -11831,7 +11981,7 @@ class Session:
         typed receipt (``_obligation_receipt``) carries exactly this record,
         never a re-reading of the run under another rule and never the
         claim itself."""
-        claim = (entry.get("binding") or {}).get("kind") in ("scenario", "case", "mixed", "command")
+        claim = (entry.get("binding") or {}).get("kind") in ("scenario", "case", "mixed", "command", "class")
         # An identity claim, valid or not, is discharged by its cases or by
         # nothing: the file-level route is for items that name only paths
         # (root's controls on bd0164f: an undefined case cleared when its
@@ -11882,6 +12032,22 @@ class Session:
                                 and (r.get("cwd") or ".") in ("", ".") and set(bound) <= _run_passed_cases(r)), None)
                     if run is not None:
                         return dict(index=index, run=run["id"], cases=list(bound))
+                continue
+            if (entry.get("binding") or {}).get("kind") == "class":
+                binding = entry.get("binding") or {}
+                if not bound or not check.get("passed"):
+                    continue
+                # The class as it stands now must still be readable and is
+                # held to the same floor: a method removed, added, or a
+                # module that gained load_tests since the claim leaves the
+                # claim standing rather than shrinking it.
+                now, problem = _class_declaration(self.project, binding.get("file") or "", binding.get("class_name") or "")
+                if problem:
+                    continue
+                for run in runs:
+                    shown = _class_run_cases(run, binding, now, self.project)
+                    if shown:
+                        return dict(index=index, run=run["id"], cases=shown)
                 continue
             if paths:
                 run = next((r for r in runs if all(p in r["files"] for p in paths)), None)

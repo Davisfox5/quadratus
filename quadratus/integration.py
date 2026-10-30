@@ -1153,14 +1153,21 @@ def operand_paths(argv, root=None, cwd='.') -> List[str]:
     read from the command's ``cwd`` (R5)."""
     import posixpath
     out = []
-    modules = unittest_modules(argv)
+    modules = unittest_modules(argv, root, cwd)
     if modules is not None:
         # A whole module is its file: ``tests.test_app`` names
         # tests/test_app.py (root review of d48014d, 2026-10-30).
-        return [m.replace('.', '/') + '.py' for m in modules]
+        return [_module_file(m, root, cwd) if root is not None else m.replace('.', '/') + '.py' for m in modules]
+    unittest = _is_unittest([str(a) for a in argv])
     for arg in _runner_args(argv):
         arg = str(arg)
         if arg.startswith('-') or '::' in arg:
+            continue
+        if unittest and _MODULE_NAME.match(arg):
+            # A dotted unittest token that did not read as a whole module
+            # above is a selection inside one (``pkg.module.Class.test``) or a
+            # module this project does not hold: it names no file whole
+            # (root's counterexample on 6527479725, 2026-10-30).
             continue
         if root is not None and arg.startswith(str(root).rstrip('/') + '/'):
             arg = arg[len(str(root).rstrip('/')) + 1:]
@@ -1245,7 +1252,7 @@ def config_selection(argv, cwd, root) -> str:
     # wrapper around python still loads conftest hooks, and none of the pytest
     # checks below apply to it. Its selection is unknown, never empty (Codex
     # review of 0d834bd, Y1).
-    if runner_of(argv) is None:
+    if runner_of(argv, root, cwd) is None:
         found.append('test runner not recognised from argv; selection not established')
     names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
     # Plugins named in PYTEST_PLUGINS load into every pytest the gate starts
@@ -1383,14 +1390,45 @@ _UNITTEST_PLAIN_FLAGS = frozenset({'-v', '--verbose', '-q', '--quiet', '-b', '--
 _MODULE_NAME = re.compile(r'^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$')
 
 
-def unittest_modules(argv) -> Optional[List[str]]:
+def _module_file(module: str, root, cwd='.') -> Optional[str]:
+    """The project-relative ``.py`` file a dotted unittest token names when
+    that file exists under ``root`` (read from the command's ``cwd``), else
+    None: a package, a missing module or a ``module.Class.test`` selection
+    resolves to no file. Read only; nothing is imported."""
+    import posixpath
+    if root is None:
+        return None
+    cwd = str(cwd or '.')
+    try:
+        base = Path(root).resolve()
+        if posixpath.isabs(cwd):
+            here = Path(cwd).resolve()
+            rel_cwd = here.relative_to(base).as_posix() if here.is_relative_to(base) else None
+        else:
+            rel_cwd = posixpath.normpath(cwd)
+        if rel_cwd is None:
+            return None
+        rel = posixpath.normpath(posixpath.join(rel_cwd, module.replace('.', '/') + '.py'))
+        if rel.startswith('..'):
+            return None
+        return rel if (base / rel).is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def unittest_modules(argv, root=None, cwd='.') -> Optional[List[str]]:
     """The modules a plain ``python -m unittest <module>...`` command runs
     whole (only the runner's plain flags and the harness report token
     beside them), or None for any other unittest form (``discover``, a
     file path, a selection inside a module, a filter): the one unittest
     form whose selection the harness can establish, so a declared report
     of it can discharge what names those modules (root review of d48014d,
-    2026-10-30)."""
+    2026-10-30). With ``root``, a dotted token is a module only when it
+    resolves to an existing ``.py`` file under the project from the
+    command's ``cwd``: ``tests.test_sample.Target.test_own`` is a selection
+    inside a module and read as one, so a run of it is never a whole-module
+    run (root's counterexample on 6527479725, 2026-10-30). Without a root
+    the token's shape alone is read, as before."""
     argv = [str(a) for a in argv]
     if not _is_unittest(argv):
         return None
@@ -1400,23 +1438,172 @@ def unittest_modules(argv) -> Optional[List[str]]:
             continue
         if token.startswith('-') or token == 'discover' or not _MODULE_NAME.match(token):
             return None
+        if root is not None and _module_file(token, root, cwd) is None:
+            return None
         modules.append(token)
     return modules or None
 
 
-def runner_of(argv) -> Optional[str]:
+def runner_of(argv, root=None, cwd='.') -> Optional[str]:
     """Which test runner a command starts: 'pytest', 'node' (``node
     --test``), 'unittest' (the plain module form ``python -m unittest
-    <module>...``, whose selection is its modules whole) or None when none
-    can be told from its argv."""
+    <module>...``, whose selection is its modules whole; with ``root`` the
+    modules must resolve to files) or None when none can be told from its
+    argv."""
     argv = [str(a) for a in argv]
     if _is_pytest(argv):
         return 'pytest'
     if argv and Path(argv[0]).name.startswith('node') and '--test' in argv:
         return 'node'
-    if unittest_modules(argv) is not None:
+    if unittest_modules(argv, root, cwd) is not None:
         return 'unittest'
     return None
+
+
+#: pytest options that take their value as the next argument, so the value
+#: is not read as a path operand when the collected scope is reconstructed.
+_PYTEST_VALUE_FLAGS = frozenset({'-p', '-o', '-c', '-W', '-n', '-r', '--tb', '--rootdir', '--confcutdir', '--basetemp',
+                                 '--junitxml', '--maxfail', '--durations', '--color', '--override-ini',
+                                 '--import-mode', '--ignore', '--ignore-glob', '--deselect', '--log-level',
+                                 '--log-file', '--timeout'})
+#: pytest configuration keys that change which files, classes or functions
+#: a whole-file run collects; a command under any of them has a collection
+#: the harness does not model, so no whole-class claim is established.
+_PYTEST_COLLECTION_KEYS = ('python_files', 'python_classes', 'python_functions')
+
+
+def _pytest_collection_override(root, cwd) -> Optional[str]:
+    """The first pytest configuration file from ``cwd`` up to ``root`` that
+    sets a collection key (``python_files``, ``python_classes``,
+    ``python_functions``), as ``file: key``; '' when none does; None when a
+    file exists and cannot be read (unknown, never none)."""
+    import configparser
+    try:
+        base, here = Path(root).resolve(), Path(cwd).resolve()
+    except OSError:
+        return None
+    if not here.is_relative_to(base):
+        return None
+    while True:
+        for name in _PYTEST_CONFIGS:
+            path = here / name
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding='utf-8')
+                if name == 'pyproject.toml':
+                    import tomllib
+                    tool = tomllib.loads(text).get('tool', {}) or {}
+                    pytest_table = tool.get('pytest', {}) if isinstance(tool, dict) else {}
+                    tables = [pytest_table.get('ini_options', {}), pytest_table] if isinstance(pytest_table, dict) else []
+                    for table in tables:
+                        for key in _PYTEST_COLLECTION_KEYS:
+                            if isinstance(table, dict) and key in table:
+                                return f'{path.relative_to(base).as_posix()}: {key}'
+                    continue
+                parser = configparser.RawConfigParser()
+                parser.read_string(text)
+                sections = {'setup.cfg': ('tool:pytest',), 'tox.ini': ('pytest', 'tool:pytest')}.get(name, ('pytest',))
+                for section in sections:
+                    for key in _PYTEST_COLLECTION_KEYS:
+                        if parser.has_section(section) and parser.has_option(section, key):
+                            return f'{path.relative_to(base).as_posix()}: {key}'
+            except Exception:  # noqa: BLE001 -- unreadable collection is unknown collection
+                return None
+        if here == base:
+            return ''
+        here = here.parent
+
+
+def _overrides_ini(tokens) -> bool:
+    return any(t in ('-o', '--override-ini') or t.startswith(('-o', '--override-ini=')) for t in tokens)
+
+
+def whole_file_collected(argv, file: str, root, cwd='.') -> bool:
+    """Whether a command, run from ``cwd`` under ``root``, collects the test
+    file ``file`` (project-relative) whole, as far as that can be read from
+    the argv, the project's pytest configuration and the environment, never
+    from the run's output: the scope half of a whole-class discharge
+    (class-claim batch, 2026-10-30; root's counterexample on 6527479725:
+    a complete run proves execution success, not selection scope).
+
+    Established for exactly these forms, each unfiltered (``is_filtered``):
+    pytest naming the file as a whole operand, naming a directory on disk
+    that holds it, or naming no path at all (whole discovery from the
+    root), with no ``-o``/``--override-ini`` in argv or ``PYTEST_ADDOPTS``
+    and no ``python_files``/``python_classes``/``python_functions`` key in
+    a configuration file between the cwd and the root; and the plain
+    ``python -m unittest <module>`` form whose module file is this one. A
+    selection inside a module, a ``::`` operand, a filter, ``python -m
+    unittest discover`` (``runner_of`` does not recognise it, so its
+    receipt records an unestablished selection and is never a complete
+    run; the rule does not read it either), an unrecognised runner, a
+    wrapper or any other shape establishes nothing. Whether the collected
+    file's cases actually ran is the run's own report's to show; this
+    reads scope only."""
+    import posixpath
+    argv = [str(a) for a in argv]
+    file = str(file or '')
+    if not argv or not file or root is None or is_filtered(argv):
+        return False
+    try:
+        base = Path(root).resolve()
+        here = Path(cwd).resolve() if posixpath.isabs(str(cwd or '.')) else (base / str(cwd or '.')).resolve()
+        rel_cwd = here.relative_to(base).as_posix() if here.is_relative_to(base) else None
+    except OSError:
+        return False
+    if rel_cwd is None:
+        return False
+
+    def project_relative(token: str) -> str:
+        token = token[len(str(base)) + 1:] if token.startswith(str(base) + '/') else token
+        return posixpath.normpath(posixpath.join(rel_cwd, token)) if not posixpath.isabs(token) else token
+
+    def under(directory: str) -> bool:
+        directory = project_relative(directory)
+        return file == directory or directory in ('.', '') or file.startswith(directory.rstrip('/') + '/')
+
+    if _is_pytest(argv):
+        tokens = _runner_args(argv)
+        if _overrides_ini(tokens) or _overrides_ini(shlex.split(os.environ.get('PYTEST_ADDOPTS', '') or '')
+                                                    if _shell_ok(os.environ.get('PYTEST_ADDOPTS', '')) else ['-o']):
+            return False
+        if _pytest_collection_override(base, here) != '':
+            return False
+        operands, skip = [], False
+        for token in tokens:
+            if skip:
+                skip = False
+                continue
+            if token.startswith(REPORT_TOKEN_PREFIX):
+                continue
+            if token.startswith('-'):
+                skip = token in _PYTEST_VALUE_FLAGS
+                continue
+            operands.append(token)
+        if not operands:
+            return True
+        for operand in operands:
+            if '::' in operand:
+                return False
+            if project_relative(operand) == file:
+                return True
+            target = base / project_relative(operand)
+            if target.is_dir() and under(operand):
+                return True
+        return False
+    if _is_unittest(argv):
+        modules = unittest_modules(argv, base, rel_cwd)
+        return modules is not None and file in [_module_file(m, base, rel_cwd) for m in modules]
+    return False
+
+
+def _shell_ok(text: str) -> bool:
+    try:
+        shlex.split(text or '')
+        return True
+    except ValueError:
+        return False
 
 
 def _case_lines(output: str, runner: Optional[str] = None):

@@ -560,3 +560,443 @@ def test_the_checker_reports_a_discharge_display_that_disagrees_with_the_record(
     legacy = _command_entry()
     del legacy["discharge_display"]
     assert not any("the engine shows" in u for u in unshown([legacy], [good])), "a record with no display is read as before"
+
+
+# -- 7. whole-class claims: bound to a declared floor, discharged only with the scope proved -------
+#    (class-claim batch, 2026-10-30; root's counterexample on 6527479725)
+
+CLASS_FILES = {
+    "app.py": "def add(a, b):\n    return a + b\n",
+    "tests/__init__.py": "",
+    "tests/test_app.py": (
+        "import unittest\n\nfrom app import add\n\n\nclass Parent(unittest.TestCase):\n"
+        "    def test_inherited(self):\n        self.assertEqual(add(2, 2), 4)\n\n\n"
+        "class AddTests(Parent):\n"
+        "    def test_add(self):\n        self.assertEqual(add(1, 2), 3)\n\n"
+        "    def test_zero(self):\n        self.assertEqual(add(0, 0), 0)\n\n\n"
+        "class AddTestsExtra(unittest.TestCase):\n"
+        "    def test_extra(self):\n        self.assertEqual(add(3, 3), 6)\n\n\n"
+        "class Bare(Parent):\n    pass\n\n\n"
+        "def helper():\n    return 1\n"),
+    "tests/test_sample.py": (
+        "import unittest\n\n\nclass Parent(unittest.TestCase):\n"
+        "    def test_inherited(self):\n        self.fail('inherited failure')\n\n\n"
+        "class Target(Parent):\n"
+        "    def test_own(self):\n        self.assertTrue(True)\n"),
+    "tests/test_loaded.py": (
+        "import unittest\n\n\nclass Loaded(unittest.TestCase):\n"
+        "    def test_one(self):\n        self.assertTrue(True)\n\n\n"
+        "def load_tests(loader, tests, pattern):\n    return unittest.TestSuite()\n"),
+}
+CLASS_ID = "tests/test_app.py::AddTests"
+DECLARED = ["tests/test_app.py::AddTests::test_add", "tests/test_app.py::AddTests::test_zero"]
+INHERITED = "tests/test_app.py::AddTests::test_inherited"
+#: What a whole-file run of tests/test_app.py reports (unittest and pytest
+#: both collect the inherited method under the subclass's name).
+WHOLE_FILE = sorted(DECLARED + [INHERITED, "tests/test_app.py::Parent::test_inherited",
+                                "tests/test_app.py::AddTestsExtra::test_extra", "tests/test_app.py::Bare::test_inherited"])
+
+
+def _class_session(tmp_path, gate=("python3", "-m", "pytest", "-q")):
+    root = _project(tmp_path, CLASS_FILES)
+    return root, _session(tmp_path, project=root, gate=IntegrationGate(list(gate), cwd=root))
+
+
+@pytest.mark.parametrize("item, kind, cases, problem", [
+    (CLASS_ID, "class", DECLARED, ""),
+    ("./" + CLASS_ID, "class", DECLARED, ""),
+    ("tests/test_app.py::Missing", "class", [], "Missing is not defined at the top level of tests/test_app.py"),
+    ("tests/test_app.py::Bare", "class", [], "Bare declares no test case in its body; an inherited-only or dynamic"),
+    ("tests/test_loaded.py::Loaded", "class", [], "tests/test_loaded.py defines load_tests"),
+    ("tests/test_absent.py::AddTests", "class", [], "tests/test_absent.py cannot be read as a Python test module"),
+    ("../outside/test_x.py::AddTests", "class", [], "is not a project test file"),
+    ("tests/test_app.py::AddTests.extra", "case", [], "names a case id the harness cannot read whole"),
+    ("tests/test_app.py::AddTests::", "case", [], "names a case id the harness cannot read whole"),
+    ("P1 and tests/test_app.py::AddTests", "case", [], "names a whole test class beside other claims"),
+    ("tests/test_app.py::AddTests tests/test_app.py::AddTestsExtra", "case", [],
+     "names a whole test class beside other claims"),
+    ("tests/test_app.py::AddTests and tests/test_app.py::AddTests::test_add", "case", [],
+     "names a whole test class beside other claims"),
+    ("AddTests", "none", [], "names no scenario, case or path the harness can identify"),
+    ("tests/test_app.py::test_helper_free", "case", [], "is not defined where it says"),
+])
+def test_a_whole_class_item_binds_to_the_class_s_declared_floor_or_is_held_explicitly(tmp_path, item, kind, cases, problem):
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, item)
+    assert entry["binding"]["kind"] == kind, entry["binding"]
+    assert entry["cases"] == cases and entry["binding"]["cases"] == cases
+    assert problem in entry["binding"]["problem"], entry["binding"]["problem"]
+    if kind == "class" and not problem:
+        assert entry["binding"]["class_id"] == CLASS_ID and entry["binding"]["file"] == "tests/test_app.py"
+        assert entry["binding"]["class_name"] == "AddTests" and entry["binding"]["declared"] == DECLARED
+
+
+def test_a_class_defined_twice_or_under_a_bare_name_is_held_and_a_nested_class_is_not_its_parent(tmp_path):
+    root, session = _class_session(tmp_path)
+    (root / "tests" / "test_twice.py").write_text(
+        "import unittest\n\nclass Dup(unittest.TestCase):\n    def test_a(self):\n        pass\n\n"
+        "class Dup(unittest.TestCase):\n    def test_b(self):\n        pass\n")
+    twice = _entry(session, "tests/test_twice.py::Dup")
+    assert twice["cases"] == [] and twice["binding"]["problem"] == "Dup is defined 2 times in tests/test_twice.py"
+    (root / "tests" / "test_nested.py").write_text(
+        "import unittest\n\nclass Outer(unittest.TestCase):\n    def test_outer(self):\n        pass\n\n"
+        "    class Inner(unittest.TestCase):\n        def test_inner(self):\n            pass\n")
+    outer = _entry(session, "tests/test_nested.py::Outer")
+    assert outer["cases"] == ["tests/test_nested.py::Outer::test_outer"], "a nested class's method is not the parent's floor"
+    binding = outer["binding"]
+    run = dict(id="check", cwd=".", command="python3 -m pytest -q tests/test_nested.py",
+               report_cases={"tests/test_nested.py::Outer::Inner::test_inner"})
+    assert S._class_run_cases(run, binding, outer["cases"], root) == [], "only the nested class's case ran"
+    run["report_cases"].add("tests/test_nested.py::Outer::test_outer")
+    assert S._class_run_cases(run, binding, outer["cases"], root) == ["tests/test_nested.py::Outer::test_outer"]
+
+
+def _class_check(session, cases, command, **over):
+    return _check(session, cases, command=command, **over)
+
+
+@pytest.mark.parametrize("command", [
+    "python3 -m pytest -q tests/test_app.py",
+    "python3 -m pytest -q -p no:cacheprovider tests/test_app.py --quadratus-report=/tmp/r.json",
+    "python3 -m pytest -q ./tests/test_app.py",
+    "python3 -m pytest -q tests",
+    "python3 -m pytest -q tests/",
+    "python3 -m pytest -q",
+    "python3 -m pytest -q -p no:cacheprovider",
+    "python3 -m unittest tests.test_app -v",
+])
+def test_a_whole_class_claim_is_discharged_by_a_complete_whole_file_run_that_shows_the_class_passed(tmp_path, command):
+    """The positive, including the inherited method: the command collects
+    tests/test_app.py whole, the complete report lists every case the
+    runner collected under AddTests, the declared floor is among them, and
+    the discharged set is the runner's population (declared plus the
+    inherited method), never the floor alone."""
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, CLASS_ID)
+    session.unexecuted_acceptance.append(entry)
+    session.checks.append(_class_check(session, WHOLE_FILE, command))
+    decided = session._discharge_record(entry)
+    assert decided == dict(index=0, run="check", cases=sorted(DECLARED + [INHERITED])), command
+    session._refresh_obligations()
+    assert entry["discharged_at"] == 0 and entry["discharged_cases"] == sorted(DECLARED + [INHERITED])
+
+
+def test_root_s_selective_unittest_counterexample_never_clears_the_whole_class(tmp_path):
+    """Root's control (6527479725): Target(Parent).test_own passes while the
+    inherited test_inherited fails; ``python -m unittest
+    tests.test_sample.Target.test_own`` runs one method, its report names
+    Target::test_own with passed 1, skipped 0, failed 0, errors 0 and a
+    complete passed list, so the row is a complete run by execution
+    success. The declared floor {test_own} is among the passed prefix, and
+    an ast-only rule would clear the whole class. The scope rule refuses:
+    a selection inside a module collects no file whole."""
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, "tests/test_sample.py::Target")
+    assert entry["cases"] == ["tests/test_sample.py::Target::test_own"]
+    session.unexecuted_acceptance.append(entry)
+    selective = "python3 -m unittest tests.test_sample.Target.test_own -v"
+    check = _class_check(session, ["tests/test_sample.py::Target::test_own"], selective)
+    session.checks.append(check)
+    runs = S._check_runs(check, root)
+    assert len(runs) == 1 and S._complete_run(runs[0]), "execution success alone reads complete (root's point)"
+    assert runs[0]["files"] == set(), "but the selective token names no file whole"
+    assert session._discharge_record(entry) is None
+    from quadratus.integration import (
+        config_selection,
+        runner_of,
+        unittest_modules,
+        whole_file_collected,
+    )
+    argv = selective.split()
+    assert unittest_modules(argv, root) is None and runner_of(argv, root) is None
+    assert unittest_modules(argv) == ["tests.test_sample.Target.test_own"], "without a root the shape alone is read, as before"
+    assert config_selection(argv, root, root).startswith("test runner not recognised from argv; selection not established")
+    assert not whole_file_collected(argv, "tests/test_sample.py", root)
+    assert whole_file_collected("python3 -m unittest tests.test_sample -v".split(), "tests/test_sample.py", root)
+    assert unittest_modules("python3 -m unittest tests.test_sample -v".split(), root) == ["tests.test_sample"]
+    assert unittest_modules("python3 -m unittest tests -v".split(), root) is None, "a package is not a module file"
+    # The same items as whole-file execution: the real run would fail on the
+    # inherited case; a report that showed the whole file passed clears it.
+    whole = _class_check(session, ["tests/test_sample.py::Parent::test_inherited", "tests/test_sample.py::Target::test_own",
+                                   "tests/test_sample.py::Target::test_inherited"], "python3 -m unittest tests.test_sample -v")
+    session.checks.append(whole)
+    assert session._discharge_record(entry) == dict(index=1, run="check", cases=[
+        "tests/test_sample.py::Target::test_inherited", "tests/test_sample.py::Target::test_own"])
+
+
+@pytest.mark.parametrize("name, command, cases, over", [
+    ("-k filter", "python3 -m pytest -q tests/test_app.py -k add", WHOLE_FILE, {}),
+    ("a :: operand", "python3 -m pytest -q tests/test_app.py::AddTests", WHOLE_FILE, {}),
+    ("a case operand", "python3 -m pytest -q tests/test_app.py::AddTests::test_add", WHOLE_FILE, {}),
+    ("another directory", "python3 -m pytest -q docs", WHOLE_FILE, {}),
+    ("another file", "python3 -m pytest -q tests/test_sample.py", WHOLE_FILE, {}),
+    ("-o override", "python3 -m pytest -q -o python_functions=test_add tests/test_app.py", WHOLE_FILE, {}),
+    ("--override-ini", "python3 -m pytest -q --override-ini=python_classes=AddTests tests/test_app.py", WHOLE_FILE, {}),
+    ("unittest discover, whose runner config_selection does not recognise", "python3 -m unittest discover -s tests", WHOLE_FILE, {}),
+    ("discover with a pattern", "python3 -m unittest discover -s tests -p test_a*.py", WHOLE_FILE, {}),
+    ("a wrapper", "make test", WHOLE_FILE, {}),
+    ("a selective module token", "python3 -m unittest tests.test_app.AddTests -v", WHOLE_FILE, {}),
+    ("a declared method missing", "python3 -m pytest -q tests/test_app.py", [c for c in WHOLE_FILE if not c.endswith("test_zero")], {}),
+    ("the class not collected", "python3 -m pytest -q tests/test_app.py",
+     ["tests/test_app.py::AddTestsExtra::test_extra", "tests/test_app.py::Parent::test_inherited"], {}),
+    ("a longer class name only", "python3 -m pytest -q tests/test_app.py",
+     ["tests/test_app.py::AddTestsExtra::test_extra", "tests/test_app.py::AddTestsExtra::test_add",
+      "tests/test_app.py::AddTestsExtra::test_zero"], {}),
+    ("a skipped case", "python3 -m pytest -q tests/test_app.py", WHOLE_FILE, dict(skipped=1)),
+    ("a failed check", "python3 -m pytest -q tests/test_app.py", WHOLE_FILE, dict(passed=False)),
+    ("another source", "python3 -m pytest -q tests/test_app.py", WHOLE_FILE, dict(source="0" * 64)),
+    ("another gate", "python3 -m pytest -q tests/test_app.py", WHOLE_FILE, dict(gate="other")),
+    ("another environment", "python3 -m pytest -q tests/test_app.py", WHOLE_FILE, dict(environment="other")),
+    ("from another cwd", "python3 -m pytest -q test_app.py", WHOLE_FILE, dict(cwd="tests")),
+])
+def test_a_whole_class_claim_is_never_cleared_without_the_scope_the_floor_and_the_identity(tmp_path, name, command, cases, over):
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, CLASS_ID)
+    session.unexecuted_acceptance.append(entry)
+    session.checks.append(_class_check(session, cases, command, **over))
+    assert session._discharge_record(entry) is None, name
+    session._refresh_obligations()
+    assert entry["discharged_at"] is None and entry["discharge_display"] == "bound/1", name
+
+
+def test_a_truncated_or_unparsed_report_and_a_collection_override_in_the_configuration_clear_nothing(tmp_path):
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, CLASS_ID)
+    session.unexecuted_acceptance.append(entry)
+    check = _class_check(session, WHOLE_FILE, "python3 -m pytest -q tests/test_app.py")
+    session.checks.append(check)
+    assert session._discharge_record(entry) is not None
+    check["report"]["passed_truncated"] = True
+    assert session._discharge_record(entry) is None, "a passed list cut at the bound credits nothing"
+    check["report"]["passed_truncated"] = False
+    check["report"]["state"] = "invalid"
+    assert session._discharge_record(entry) is None
+    check["report"]["state"] = "parsed"
+    assert session._discharge_record(entry) is not None
+    def configured(name, text):
+        # A configuration file is source: the check is re-stamped to the
+        # source as it stands, so only the collection rule is under test.
+        for stale in ("pytest.ini", "pyproject.toml", "setup.cfg"):
+            (root / stale).unlink(missing_ok=True)
+        if name:
+            (root / name).write_text(text)
+        check["source"] = session._source_fingerprint()
+        return session._discharge_record(entry)
+    assert configured("pytest.ini", "[pytest]\npython_functions = test_a*\n") is None, \
+        "a collection key in the configuration is an unmodelled collection"
+    assert configured("pytest.ini", "[pytest]\naddopts = -q\n") is not None, \
+        "a configuration without a collection key is read as before"
+    assert configured("pyproject.toml", "[tool.pytest.ini_options]\npython_classes = ['Add*']\n") is None
+    assert configured("setup.cfg", "[tool:pytest]\npython_files = check_*.py\n") is None
+    assert configured("", "") is not None
+    import os
+    before = os.environ.get("PYTEST_ADDOPTS")
+    try:
+        os.environ["PYTEST_ADDOPTS"] = "-o python_functions=test_a*"
+        assert session._discharge_record(entry) is None, "an override from the environment is read too"
+    finally:
+        if before is None:
+            os.environ.pop("PYTEST_ADDOPTS", None)
+        else:
+            os.environ["PYTEST_ADDOPTS"] = before
+
+
+def test_a_class_that_changed_since_the_claim_leaves_the_claim_standing(tmp_path):
+    """Source drift: a method added to the class after the claim joins the
+    floor, so a report that predates it clears nothing; a declared method
+    removed, or a load_tests added to the module, is a class the harness
+    can no longer read against the claim, and the claim stands rather than
+    shrinking. Nothing is rebound."""
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, CLASS_ID)
+    session.unexecuted_acceptance.append(entry)
+    text = (root / "tests" / "test_app.py").read_text()
+    grown = text.replace("    def test_zero(self):", "    def test_new(self):\n        pass\n\n    def test_zero(self):")
+    (root / "tests" / "test_app.py").write_text(grown)
+    session.checks.append(_class_check(session, WHOLE_FILE, "python3 -m pytest -q tests/test_app.py"))
+    assert entry["binding"]["declared"] == DECLARED, "the claim's own floor is as recorded"
+    assert session._discharge_record(entry) is None, "the class now declares test_new, which the report does not show"
+    session.checks.append(_class_check(session, WHOLE_FILE + ["tests/test_app.py::AddTests::test_new"],
+                                       "python3 -m pytest -q tests/test_app.py"))
+    assert session._discharge_record(entry) == dict(index=1, run="check",
+                                                   cases=sorted(DECLARED + [INHERITED, "tests/test_app.py::AddTests::test_new"]))
+    shrunk = text.replace("    def test_zero(self):\n        self.assertEqual(add(0, 0), 0)\n", "")
+    (root / "tests" / "test_app.py").write_text(shrunk)
+    session.checks.append(_class_check(session, [c for c in WHOLE_FILE if not c.endswith("test_zero")],
+                                       "python3 -m pytest -q tests/test_app.py"))
+    assert session._discharge_record(entry) is None, "a declared method the claim recorded is gone: the claim stands"
+    (root / "tests" / "test_app.py").write_text(text + "\n\ndef load_tests(loader, tests, pattern):\n    return tests\n")
+    session.checks.append(_class_check(session, WHOLE_FILE, "python3 -m pytest -q tests/test_app.py"))
+    assert session._discharge_record(entry) is None, "load_tests added since the claim"
+    assert entry["binding"]["kind"] == "class" and entry["cases"] == DECLARED, "nothing was rebound"
+
+
+def test_a_class_claim_s_typed_row_is_the_gate_s_only_when_a_gate_command_collects_the_file_whole(tmp_path):
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, CLASS_ID)
+    session.unexecuted_acceptance.append(entry)
+    row = session._register_obligation(entry, kind="not_run")
+    assert row["runner"] == "gate" and list(row["cases"]) == DECLARED, "pytest -q from the root discovers the file"
+    session.checks.append(dict(_class_check(session, WHOLE_FILE, "python3 -m pytest -q"), requirements={"R1": 1, "R2": 1}))
+    session._refresh_obligations()
+    row = next(o for o in session.evidence_obligations if o["oid"] == row["oid"])
+    assert row["execution"] == "ran" and list(row["receipts"]) == ["check-1"], row
+    assert session._obligation_receipt(row)["passed_cases"] == sorted(DECLARED + [INHERITED])
+    assert session._standing_not_run() == [] and session._not_run_block() == ""
+    selective = _class_session(tmp_path / "sel", gate=("python3", "-m", "unittest", "tests.test_app.AddTests.test_add", "-v"))[1]
+    held = _entry(selective, CLASS_ID)
+    selective.unexecuted_acceptance.append(held)
+    assert selective._register_obligation(held, kind="not_run")["runner"] is None, "a selective gate is no runner for it"
+    other = _class_session(tmp_path / "other", gate=("python3", "-m", "pytest", "-q", "tests/test_sample.py"))[1]
+    held = _entry(other, CLASS_ID)
+    other.unexecuted_acceptance.append(held)
+    assert other._register_obligation(held, kind="not_run")["runner"] is None
+    block = other._not_run_block()
+    assert "reported NOT RUN: tests/test_app.py::AddTests" in block and "[bound to " + ", ".join(DECLARED) in block
+    route = other._evidence_route("R1")
+    assert route["kind"] == "execution debt" and ", ".join(DECLARED) in route["route"]
+
+
+# -- 8. the independent checker reconstructs the class scope from the rows alone -----------------
+
+def _class_entry(**over):
+    entry = dict(task="t6", role="lead", author="openai:sol", item=CLASS_ID, why="the sandbox denies sockets",
+                 requirements=["R14"], after_check=0, gate="g1", environment="e1",
+                 binding=dict(kind="class", scenario=None, cases=list(DECLARED), problem="", class_id=CLASS_ID,
+                              file="tests/test_app.py", class_name="AddTests", declared=list(DECLARED)),
+                 cases=list(DECLARED), discharge_display="bound/1", discharged_at=None)
+    entry.update(over)
+    return entry
+
+
+def _suite_check(receipts, *, source="f" * 64, gate="g1", environment="e1", passed=True):
+    """A gate-suite check in the shape the sealed completion-workflow-02
+    record has: an aggregate ``gate suite`` row with one receipt per
+    command, each with its own command, cwd, status and parsed report."""
+    return dict(passed=passed, command="gate suite", output="", command_cwd=".", source=source, gate=gate,
+                environment=environment, report=None, receipts=[
+                    dict(id=rid, status="passed" if ok else "failed", required=True, command=command, cwd=".",
+                         output="", tests=len(cases), interpreter="/real/python3.12 env=base",
+                         report=dict(state="parsed", passed_cases=list(cases), passed_truncated=truncated,
+                                     counts=dict(passed=len(cases), failed=0, errors=0, skipped=0)))
+                    for rid, command, cases, ok, truncated in receipts])
+
+
+HISTORICAL = sorted(f"tests/test_api.py::HandlerDependencyTests::test_{i}" for i in "abcdefgh")
+OTHERS = sorted(f"tests/test_api.py::DispatchDependencyTests::test_{i}" for i in "abcdefgh") + [
+    "tests/test_cli.py::CliTests::test_x", "tests/test_dependencies.py::DepTests::test_y", "tests/test_existing.py::OldTests::test_z"]
+
+
+def test_the_checker_reconstructs_the_historical_class_shape_and_clears_it_from_the_rows_alone():
+    """The offline reconstruction of completion-workflow-02 t6's shape, in
+    synthetic names: a ``file::Class`` item, the class's eight methods as
+    the floor, and a final gate suite of two receipts, ``python3 -m
+    unittest discover -s tests`` and a pytest run naming the file whole,
+    each with a complete parsed report listing every method. Either
+    receipt alone establishes it; the sealed run had both."""
+    truth = _truth()
+    floor = list(HISTORICAL)
+    entry = _class_entry(item="tests/test_api.py::HandlerDependencyTests", requirements=["R14", "R15", "R16"],
+                         cases=floor, binding=dict(kind="class", scenario=None, cases=floor, problem="",
+                                                   class_id="tests/test_api.py::HandlerDependencyTests",
+                                                   file="tests/test_api.py", class_name="HandlerDependencyTests",
+                                                   declared=floor))
+    everything = sorted(HISTORICAL + OTHERS)
+    both = _suite_check([
+        ("public-unittest", "python3 -m unittest discover -s tests --quadratus-report=/tmp/u.json", everything, True, False),
+        ("public-pytest", "/runtime/bin/python -m pytest -v tests/test_api.py tests/test_cli.py tests/test_dependencies.py "
+                          "tests/test_existing.py --quadratus-report=/tmp/p.json", everything, True, False)])
+    # As the engine recorded it: the discover receipt's selection says the
+    # runner was not recognised, so that row is never whole.
+    both["receipts"][0]["selection"] = "test runner not recognised from argv; selection not established"
+    assert truth._class_not_run_cleared(entry, [both], _record([both], [entry]))
+    assert truth._not_run_cleared(entry, [both], _record([both], [entry]))
+    unittest_alone, pytest_alone = (dict(both, receipts=[both["receipts"][i]]) for i in (0, 1))
+    assert truth._not_run_cleared(entry, [pytest_alone], _record([pytest_alone], [entry])), "the pytest receipt names the file whole"
+    assert not truth._not_run_cleared(entry, [unittest_alone], _record([unittest_alone], [entry])), \
+        "the discover receipt is not a whole run the record can show (as the engine decided on the sealed record)"
+    del unittest_alone["receipts"][0]["selection"]
+    assert not truth._not_run_cleared(entry, [unittest_alone], _record([unittest_alone], [entry])), \
+        "and discover is not a form the scope rule reads"
+    # Root's counterexample, in the record's own shape: a selective dotted
+    # command whose complete report names the one method it ran.
+    selective = _suite_check([("public-unittest", "python3 -m unittest tests.test_api.HandlerDependencyTests.test_a -v",
+                               ["tests/test_api.py::HandlerDependencyTests::test_a"], True, False)])
+    narrow = _class_entry(item="tests/test_api.py::HandlerDependencyTests", cases=floor[:1],
+                          binding=dict(entry["binding"], cases=floor[:1], declared=floor[:1]))
+    assert truth._row_ok(truth._rows(selective)[0]), "execution success reads whole (root's point)"
+    assert not truth._not_run_cleared(narrow, [selective], _record([selective], [narrow]))
+    assert not truth._collects_whole_file("python3 -m unittest tests.test_api.HandlerDependencyTests.test_a -v", "tests/test_api.py")
+
+
+def test_the_checker_refuses_every_class_row_that_does_not_prove_the_scope_the_floor_or_the_identity():
+    truth = _truth()
+    entry = _class_entry()
+    whole = sorted(DECLARED + [INHERITED, "tests/test_app.py::AddTestsExtra::test_extra"])
+    good = _suite_check([("check", "python3 -m pytest -q tests/test_app.py --quadratus-report=/tmp/r.json", whole, True, False)])
+    assert truth._not_run_cleared(entry, [good], _record([good], [entry]))
+    rows = {
+        "-k": "python3 -m pytest -q tests/test_app.py -k add",
+        ":: operand": "python3 -m pytest -q tests/test_app.py::AddTests",
+        "another file": "python3 -m pytest -q tests/test_sample.py",
+        "another directory": "python3 -m pytest -q docs",
+        "-o": "python3 -m pytest -q -o python_functions=test_add tests/test_app.py",
+        "selective unittest": "python3 -m unittest tests.test_app.AddTests -v",
+        "discover with pattern": "python3 -m unittest discover -s tests -p 'test_a*.py'",
+        "discover": "python3 -m unittest discover -s tests",
+        "a wrapper": "make test",
+    }
+    for name, command in rows.items():
+        bad = _suite_check([("check", command, whole, True, False)])
+        assert not truth._not_run_cleared(entry, [bad], _record([bad], [entry])), name
+    shapes = {
+        "truncated passed list": _suite_check([("check", "python3 -m pytest -q tests/test_app.py", whole, True, True)]),
+        "a declared method missing": _suite_check([("check", "python3 -m pytest -q tests/test_app.py",
+                                                    [c for c in whole if not c.endswith("test_zero")], True, False)]),
+        "the class not collected": _suite_check([("check", "python3 -m pytest -q tests/test_app.py",
+                                                  ["tests/test_app.py::AddTestsExtra::test_extra"], True, False)]),
+        "a longer class name": _suite_check([("check", "python3 -m pytest -q tests/test_app.py",
+                                             ["tests/test_app.py::AddTestsExtra::test_add", "tests/test_app.py::AddTestsExtra::test_zero"],
+                                             True, False)]),
+        "failed receipt": _suite_check([("check", "python3 -m pytest -q tests/test_app.py", whole, False, False)]),
+        "another source": _suite_check([("check", "python3 -m pytest -q tests/test_app.py", whole, True, False)], source="0" * 64),
+        "another gate": _suite_check([("check", "python3 -m pytest -q tests/test_app.py", whole, True, False)], gate="g2"),
+        "another environment": _suite_check([("check", "python3 -m pytest -q tests/test_app.py", whole, True, False)], environment="e2"),
+    }
+    for name, bad in shapes.items():
+        assert not truth._not_run_cleared(entry, [bad], _record([bad], [entry])), name
+    skipped = _suite_check([("check", "python3 -m pytest -q tests/test_app.py", whole, True, False)])
+    skipped["receipts"][0]["report"]["counts"]["skipped"] = 1
+    assert not truth._not_run_cleared(entry, [skipped], _record([skipped], [entry])), "a skip"
+    elsewhere = _suite_check([("check", "python3 -m pytest -q test_app.py", whole, True, False)])
+    elsewhere["receipts"][0]["cwd"] = "tests"
+    assert not truth._not_run_cleared(entry, [elsewhere], _record([elsewhere], [entry])), "another cwd"
+    forged = {
+        "a declared subset as the typed cases": _class_entry(cases=DECLARED[:1]),
+        "an empty floor": _class_entry(cases=[], binding=dict(_class_entry()["binding"], declared=[], cases=[])),
+        "a floor outside the class": _class_entry(cases=["tests/test_app.py::AddTestsExtra::test_extra"],
+                                                 binding=dict(_class_entry()["binding"], declared=["tests/test_app.py::AddTestsExtra::test_extra"])),
+        "a nested id in the floor": _class_entry(cases=["tests/test_app.py::AddTests::Inner::test_x"],
+                                                binding=dict(_class_entry()["binding"], declared=["tests/test_app.py::AddTests::Inner::test_x"])),
+        "item and binding disagree": _class_entry(item="tests/test_app.py::AddTestsExtra"),
+        "a mixed item": _class_entry(item="P1 and tests/test_app.py::AddTests"),
+        "class id disagrees": _class_entry(binding=dict(_class_entry()["binding"], class_id="tests/test_app.py::Other")),
+        "a case-shaped class": _class_entry(item="tests/test_app.py::test_add", binding=dict(_class_entry()["binding"],
+                                                                                         class_id="tests/test_app.py::test_add",
+                                                                                         class_name="test_add")),
+        "no gate": _class_entry(gate=None),
+        "no after_check": _class_entry(after_check=None),
+        "an engine mark without a row": _class_entry(discharged_at=0, discharged_run="check", discharged_cases=DECLARED),
+    }
+    for name, bad in forged.items():
+        checks = [] if name == "an engine mark without a row" else [good]
+        assert not truth._not_run_cleared(bad, checks, _record(checks, [bad])), name
+    # The typed cases must be the recorded floor; a floor understated in
+    # both places is not a forgery the record can show, and the clearance
+    # does not rest on it: the row's whole-file scope and complete report
+    # are what clear the class, the floor only refuses a row that misses a
+    # method the engine read as declared.
+    understated = _class_entry(cases=DECLARED[:1], binding=dict(_class_entry()["binding"], declared=DECLARED[:1],
+                                                                cases=DECLARED[:1]))
+    assert truth._class_not_run_cleared(understated, [good], _record([good], [understated]))
+    assert truth._class_not_run_cleared(_class_entry(), [good], _record([good], [_class_entry()]))

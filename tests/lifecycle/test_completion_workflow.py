@@ -531,3 +531,71 @@ def test_an_independent_parallel_batch_still_runs_beside_owed_work(tmp_path, mon
     record = H.result_json(replay)
     assert record["parallel_batches"] and record["parallel_batches"][0]["tasks"] == ["t2", "t3"]
     assert record["turn_limited_tasks"] == ["t1"] and _survey(replay)["recovery_used"] == 0
+
+
+# -- 7. whole-class claims on the real controller (class-claim batch, 2026-10-30) -------------------
+
+CLASS_ITEM = "tests/test_app.py::AddTests"
+SELECTIVE_GATE = f"{sys.executable} -m unittest tests.test_app.AddTests.test_add -v --quadratus-report={{report}}"
+
+
+@pytest.mark.requirements_ledger
+def test_a_whole_class_not_run_item_is_discharged_by_the_gate_that_collects_its_file_whole(tmp_path, monkeypatch):
+    """The historical shape (completion-workflow-02 t6) on the real
+    controller: the lead reports a whole class it could not run; the
+    configured gate is pytest's whole discovery from the project root with
+    its declared report; the report names the class's methods; the item
+    binds to the class's declared floor and is discharged by that run in
+    the engine, the typed row and the independent checker."""
+    replay = H.run(tmp_path, monkeypatch, _module_script(CLASS_ITEM), files=UNITTEST_FILES, max_tasks=2,
+                   record_complete=False)
+    record = H.result_json(replay)
+    entry = _entry_for(replay, CLASS_ITEM)
+    assert entry["binding"]["kind"] == "class" and entry["binding"]["problem"] == ""
+    assert entry["binding"]["declared"] == MODULE_CASES and entry["cases"] == MODULE_CASES
+    assert entry["discharge_display"] == "bound/1" and entry["discharged_at"] is not None
+    assert entry["discharged_cases"] == MODULE_CASES
+    check = record["checks"][entry["discharged_at"]]
+    receipt = check["receipts"][0] if check.get("receipts") else check
+    assert receipt["report"]["state"] == "parsed" and receipt["report"]["passed_truncated"] is False
+    assert set(MODULE_CASES) <= set(receipt["report"]["passed_cases"]) and receipt.get("selection", "") == ""
+    row = _not_run_row(replay)
+    assert row["runner"] == "gate" and row["execution"] == "ran" and list(row["cases"]) == MODULE_CASES, row
+    from tools import truth_check
+    verdict = truth_check.judge(replay.result.run_dir, None)
+    assert not any("reported NOT RUN" in u or "the engine shows the NOT RUN item" in u for u in verdict["unverified"]), \
+        verdict["unverified"]
+
+
+@pytest.mark.requirements_ledger
+def test_a_whole_class_not_run_item_is_not_cleared_by_a_selective_unittest_gate(tmp_path, monkeypatch):
+    """Root's counterexample on the real controller: the gate runs one
+    method of the class by its dotted name with the declared report. The
+    run passes, its report names that method, and the receipt's selection
+    says the runner was not recognised (a dotted token that is not a module
+    file is a selection inside one), so the class claim stands undischarged
+    in the engine, the typed row and the checker."""
+    replay = H.run(tmp_path, monkeypatch, _module_script(CLASS_ITEM), files=UNITTEST_FILES, max_tasks=2,
+                   record_complete=False, check=SELECTIVE_GATE)
+    record = H.result_json(replay)
+    passed = next(c for c in record["checks"] if c.get("passed"))
+    receipts = {("check" if "unittest" in r["command"] else "scanned"): r for r in passed["receipts"]}
+    receipt = receipts["check"]
+    assert receipt["report"]["state"] == "parsed" and receipt["report"]["passed_cases"] == [MODULE_CASES[0]]
+    assert receipt.get("selection", "").startswith("test runner not recognised from argv; selection not established")
+    # The suite also carries the scanned ``pytest -q`` from the root, which
+    # collects the file whole but declares no report, so it names no case:
+    # the row has a runner and no execution.
+    scanned = receipts["scanned"]
+    assert "pytest" in scanned["command"] and not (isinstance(scanned.get("report"), dict)
+                                                   and scanned["report"].get("state") == "parsed")
+    entry = _entry_for(replay, CLASS_ITEM)
+    assert entry["binding"]["kind"] == "class" and entry["cases"] == MODULE_CASES
+    assert entry["discharged_at"] is None and entry["discharge_display"] == "bound/1"
+    row = _not_run_row(replay)
+    assert row["runner"] == "gate" and row["execution"] != "ran", row
+    from tools import truth_check
+    verdict = truth_check.judge(replay.result.run_dir, None)
+    assert any(f"reported NOT RUN and no later check shows it ran: {CLASS_ITEM}" in u for u in verdict["unverified"])
+    assert not any("the engine shows the NOT RUN item" in u for u in verdict["unverified"]), "display and record agree"
+    assert not replay.result.completed

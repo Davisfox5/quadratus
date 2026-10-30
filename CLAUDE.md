@@ -2738,6 +2738,63 @@ Key design decisions already settled:
   No cap, allowance, review, grader or baseline changed. Controls:
   `tests/test_completion_workflow_units.py`,
   `tests/lifecycle/test_completion_workflow.py`.
+- **A whole-class NOT RUN claim is discharged by scope proved, never by
+  the passed list** (class-claim batch, Davis, 2026-10-30, after
+  completion-workflow-02 ended with R14 to R16 NOT MET on t6's `NOT RUN:
+  tests/test_api.py::HandlerDependencyTests`, bound to nothing while both
+  final gate receipts showed all eight methods passed, and after root's
+  counterexample on 6527479725 falsified the first proposal). The first
+  proposal bound the class to the methods its body declares and cleared it
+  when those were among a complete run's passed cases. Root's case:
+  `Target(Parent).test_own` passes, the inherited `test_inherited` fails,
+  and `python -m unittest tests.test_sample.Target.test_own` reports one
+  method with passed 1, skipped 0, failed 0, errors 0 and a complete list;
+  `_complete_run` is true (execution success, not selection scope), the
+  declared set is among the passed prefix, and the whole class would have
+  cleared. So the rule has two halves and the passed list decides
+  neither. An item that is exactly `<file>.py::<Class>` (`_CLASS_CLAIM`)
+  binds under kind `class` to the methods the class body declares
+  (`_class_declaration`, ast, never run) as a floor, and is held with a
+  named problem when the class is not defined exactly once at the top
+  level, the module defines `load_tests` (unittest lets it replace the
+  collected set), or the body declares no test case (inherited-only or
+  dynamic membership has no floor and is held explicitly, never read from
+  the passed list). A class beside any other claim, a bare class name, a
+  nested class, `Class.extra` and a parametrised class are held as
+  written. Discharge (`_class_run_cases`) needs a later complete run from
+  the project root on the current source, gate and environment whose
+  command collects the file whole as read from its argv and the
+  configuration (`integration.whole_file_collected`: pytest naming the
+  file as a whole operand, a directory on disk holding it, or no path at
+  all, with no `-o`/`--override-ini` in argv or `PYTEST_ADDOPTS` and no
+  `python_files`/`python_classes`/`python_functions` key in a
+  configuration file between cwd and root; or the plain `python -m
+  unittest <module>` form whose module file is the file), whose own
+  parsed report has a complete passed list naming at least one case
+  directly under `file::Class::`, with every method the claim recorded
+  and every method the class declares now among them. The discharged set
+  is the runner's population under the class (the inherited method rides
+  along because whole-file collection plus a complete report established
+  it), never the floor alone. A selection inside a module, a `::`
+  operand, a filter, `unittest discover` (its receipt records an
+  unestablished selection and the rule does not read it), a wrapper, a
+  truncated report, a skip, a missing declared method, a class whose
+  membership changed since the claim (a method added, one removed, a
+  `load_tests` added) clears nothing, and nothing is rebound. For root's
+  gap itself, `unittest_modules`/`runner_of` with a root resolve a dotted
+  token to an existing module file first, so `tests.test_sample.Target.test_own`
+  is a selection inside a module: not a recognised runner, selection not
+  established, no whole-file operand. `tools/truth_check.py`
+  (`_class_not_run_cleared`, `_collects_whole_file`) reconstructs the
+  scope from the row's command text and report alone, requires the typed
+  cases to equal the recorded floor, and never reads an engine mark; it
+  cannot read configuration files, so the engine's `python_*` key check
+  is the one reading the record does not carry. The lead's prompt names
+  the class form. No permission, model, role, limit or extra call. On the
+  sealed completion-workflow-02 record the rebinding of t6's item
+  discharges on the final check's pytest receipt (whole-file operand) and
+  not on its discover receipt. Controls in the two completion-workflow
+  files, section 7 and 8.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
