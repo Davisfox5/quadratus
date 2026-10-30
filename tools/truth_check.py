@@ -427,6 +427,34 @@ def _unittest_modules(args):
 
 _CLASS_ID = re.compile(r"^[\w./-]+\.py::(?!test)[A-Za-z_]\w*$")
 _CLASS_MEMBER = re.compile(r"^test\w*(?:\[.*\])?$")
+def _report_consistent_command(command: str, passed_cases) -> bool:
+    """The engine's cheap command/report consistency rule, read here from
+    the command text and the report alone: a runner with a producer
+    (pytest, or ``python -m unittest``), and no dotted unittest operand
+    extending the module of a case the report names. Never membership."""
+    import shlex
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    head = Path(argv[0]).name
+    is_python = bool(_PYTHON_HEAD.fullmatch(head))
+    if head in ("pytest", "py.test") or (is_python and argv[1:3] == ["-m", "pytest"]):
+        return True
+    if not (is_python and argv[1:3] == ["-m", "unittest"]):
+        return False
+    modules = {str(c).split("::", 1)[0][:-3].replace("/", ".") for c in passed_cases or ()
+               if str(c).split("::", 1)[0].endswith(".py")}
+    for token in argv[3:]:
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            continue
+        if any(token.startswith(module + ".") for module in modules):
+            return False
+    return True
+
+
 def _class_not_run_cleared(entry, checks, record) -> bool:
     """A NOT RUN item the engine bound to a whole test class
     (``binding.kind == "class"``), validated from the saved record alone
@@ -485,6 +513,8 @@ def _class_not_run_cleared(entry, checks, record) -> bool:
             if not _row_ok(row) or row["report"].get("passed_truncated") is not False:
                 continue
             if row["report"].get("classes_truncated") is not False or not isinstance(row["report"].get("classes"), list):
+                continue
+            if not _report_consistent_command(row["command"], row["report"].get("passed_cases") or ()):
                 continue
             attested = [c for c in row["report"]["classes"]
                         if isinstance(c, dict) and c.get("id") == class_id and isinstance(c.get("members"), list)]

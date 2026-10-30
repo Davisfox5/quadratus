@@ -44,6 +44,10 @@ MAX_FAILURES = 200
 MAX_PASSED = 3000
 MAX_CLASSES = 1000
 MAX_CLASS_MEMBERS = 1000
+#: The whole serialized report, attestation included, may not pass this;
+#: over it the attestation is dropped and flagged and the core report is
+#: written as it would be without the field (root's review of 55e07d4).
+MAX_REPORT_BYTES_WITH_CLASSES = 900_000
 
 import pytest  # noqa: E402 -- after the constants a reader of this file wants first
 
@@ -110,26 +114,38 @@ def _type_name(excinfo):
 
 def _class_members(kind):
     """The test methods a runner collects under a class by the default
-    rule, read from the live class object: every attribute whose name
-    starts with ``test`` and resolves to a callable that is not itself a
-    class, inherited and dynamically attached ones included (the same set
-    ``unittest.TestLoader.getTestCaseNames`` reads, without name patterns;
-    the same prefix pytest's default ``python_functions`` reads). What a
-    ``load_tests`` hook, a configured pattern, a filter or a collection hook
-    then left out is visible as a member the run did not report passed
-    (class-claim correction, 2026-10-30: root's load_tests and
-    python_functions counterexamples)."""
-    names = set()
-    for name in dir(kind):
-        if not name.startswith("test"):
-            continue
-        try:
-            attribute = getattr(kind, name)
-        except Exception:  # noqa: BLE001 -- an attribute that will not resolve is not a test
-            continue
-        if callable(attribute) and not isinstance(attribute, type):
-            names.add(name[:300])
-    return sorted(names)
+    rule, or None when the class cannot be read whole (then nothing is
+    attested for it). Read statically: the names in the ``__dict__`` of
+    each class on the MRO (``object`` aside) that start with ``test`` and
+    resolve through ``inspect.getattr_static`` to a callable that is not
+    itself a class, a ``staticmethod``/``classmethod`` unwrapped. That is
+    the set ``unittest.TestLoader.getTestCaseNames`` and pytest's default
+    prefix collect, inherited and dynamically attached members included,
+    without calling the class's ``__dir__`` or any descriptor: optional
+    reporting must not run project code or change the run it observes
+    (root's review of 55e07d4: a metaclass ``__dir__`` that raised on its
+    second call aborted a passing run). A metaclass that customises
+    ``__dir__`` or ``__mro__`` is not modelled: any exception here is
+    "cannot read", never a smaller membership. What a ``load_tests`` hook,
+    a configured pattern, a filter or a collection hook then left out is
+    visible as a member the run did not report passed."""
+    import inspect
+    try:
+        names = set()
+        for base in kind.__mro__:
+            if base is object:
+                continue
+            names.update(k for k in vars(base) if isinstance(k, str) and k.startswith("test"))
+        members = []
+        for name in names:
+            attribute = inspect.getattr_static(kind, name)
+            if isinstance(attribute, (staticmethod, classmethod)):
+                attribute = attribute.__func__
+            if callable(attribute) and not isinstance(attribute, type):
+                members.append(name[:300])
+        return sorted(members)
+    except Exception:  # noqa: BLE001 -- unreadable attests nothing, never a smaller set
+        return None
 
 
 class _Recorder:
@@ -150,24 +166,32 @@ class _Recorder:
 
     def pytest_collection_finish(self, session):
         self.collected = len(session.items)
-        seen = set()
-        for item in session.items:
-            kind = getattr(item, "cls", None)
-            if not isinstance(kind, type) or kind in seen or "::" not in item.nodeid:
-                continue
-            seen.add(kind)
-            # The class id as pytest's own node ids spell it: the item's
-            # node id without its last segment (its method and parameter).
-            class_id = item.nodeid.rsplit("::", 1)[0]
-            if len(class_id) > 300:
-                continue
-            members = _class_members(kind)
-            if not members or len(members) > MAX_CLASS_MEMBERS:
-                continue
-            if len(self.classes) >= MAX_CLASSES:
-                self.classes_truncated = True
-                break
-            self.classes.append(dict(id=class_id, members=members))
+        # Optional and contained: a class whose identity or membership
+        # cannot be read is not attested, past MAX_CLASSES the list is
+        # flagged truncated, and any failure of the whole pass leaves an
+        # empty, flagged list. Nothing here may raise into the session.
+        try:
+            seen = set()
+            for item in session.items:
+                kind = getattr(item, "cls", None)
+                nodeid = getattr(item, "nodeid", None)
+                if not isinstance(kind, type) or kind in seen or not isinstance(nodeid, str) or "::" not in nodeid:
+                    continue
+                seen.add(kind)
+                # The class id as pytest's own node ids spell it: the item's
+                # node id without its last segment (its method and parameter).
+                class_id = nodeid.rsplit("::", 1)[0]
+                if len(class_id) > 300:
+                    continue
+                members = _class_members(kind)
+                if not members or len(members) > MAX_CLASS_MEMBERS:
+                    continue
+                if len(self.classes) >= MAX_CLASSES:
+                    self.classes_truncated = True
+                    break
+                self.classes.append(dict(id=class_id, members=members))
+        except Exception:  # noqa: BLE001 -- the attestation is optional; the run is not
+            self.classes, self.classes_truncated = [], True
 
     @pytest.hookimpl(hookwrapper=True)
     def pytest_runtest_makereport(self, item, call):
@@ -240,5 +264,11 @@ class _Recorder:
                     failures=self.failures, truncated=self.truncated, subtests=self.subtests,
                     passed_cases=self.passed_cases, passed_truncated=self.passed_truncated,
                     classes=self.classes, classes_truncated=self.classes_truncated)
+        body = json.dumps(data)
+        if self.classes and len(body.encode("utf-8")) > MAX_REPORT_BYTES_WITH_CLASSES:
+            # The optional field may not cost the core report: dropped and
+            # flagged, the rest written exactly as without it.
+            data["classes"], data["classes_truncated"] = [], True
+            body = json.dumps(data)
         with open(self.path, "w", encoding="utf-8") as out:
-            json.dump(data, out)
+            out.write(body)

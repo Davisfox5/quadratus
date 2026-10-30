@@ -1117,3 +1117,207 @@ def test_a_real_whole_run_attests_inherited_and_dynamic_members_and_discharges_t
     row = next(o for o in session.evidence_obligations if o["kind"] == "not_run")
     assert row["execution"] == "ran", (name, row)
     assert _checker_clears(session, entry, check), name
+
+
+# -- 10. optional reporting never damages the run it observes (root's review of 55e07d4) -----------
+
+META_FILE = ("import unittest\n\n\nclass Meta(type):\n    calls = 0\n\n    def __dir__(cls):\n"
+             "        cls.calls += 1\n        if cls.calls > 1:\n"
+             "            raise RuntimeError('metadata enumeration not repeatable')\n        return super().__dir__()\n\n\n"
+             "class Target(unittest.TestCase, metaclass=Meta):\n    def test_ok(self):\n        pass\n")
+GHOST_FILE = ("import unittest\n\n\nGhost = type('Ghost', (unittest.TestCase,), "
+              "{'test_g': lambda self: None, '__module__': 'nowhere.at.all'})\n\n\n"
+              "class Placed(unittest.TestCase):\n    def test_p(self):\n        pass\n")
+
+
+def _big_module(classes=20, members=1000):
+    """Root's size fixture: within both count bounds, about 1.8 MB of
+    member names; ``load_tests`` keeps the first method of each class."""
+    lines = ["import unittest", "", ""]
+    for c in range(classes):
+        lines += [f"class C{c:02d}(unittest.TestCase):", "    pass", ""]
+    lines += ["", "def _ok(self):", "    pass", "", "",
+              "for _cls in [" + ", ".join(f"C{c:02d}" for c in range(classes)) + "]:",
+              f"    for _i in range({members}):",
+              "        setattr(_cls, 'test%04d_details_%s' % (_i, 'x' * 70), _ok)",
+              "del _cls", "", "",
+              "def load_tests(loader, tests, pattern):",
+              "    suite = unittest.TestSuite()",
+              "    for group in tests:",
+              "        first = next(iter(group), None)",
+              "        if first is not None:",
+              "            suite.addTest(first)",
+              "    return suite", ""]
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize("runner", ["unittest", "pytest"])
+def test_a_metaclass_that_breaks_on_enumeration_does_not_break_the_run_and_the_class_is_still_attested(tmp_path, runner):
+    """Root's P2 fixture: ``__dir__`` raises on its second call. The
+    producer never calls ``__dir__`` (the membership is read from the MRO
+    dictionaries through ``getattr_static``), so the run passes, the report
+    parses, the class is attested from what the loader collected and a
+    claim on it discharges."""
+    gate = ((PY, "-m", "unittest", "tests.test_meta", TOKEN) if runner == "unittest"
+            else (PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_meta.py", TOKEN))
+    session, entry, check = _real_run(tmp_path, gate, "tests/test_meta.py::Target",
+                                      files={"tests/__init__.py": "", "tests/test_meta.py": META_FILE})
+    report = check["report"]
+    assert check["passed"] and report["state"] == "parsed", (runner, report, check["output"])
+    assert report["counts"] == dict(passed=1, failed=0, errors=0, skipped=0)
+    assert report["passed_cases"] == ["tests/test_meta.py::Target::test_ok"]
+    assert report["classes"] == [dict(id="tests/test_meta.py::Target", members=["test_ok"])] and report["classes_truncated"] is False
+    assert session._discharge_record(entry) is not None and _checker_clears(session, entry, check)
+
+
+def test_a_class_the_producer_cannot_place_or_read_attests_nothing_and_the_run_is_intact(tmp_path):
+    session, entry, check = _real_run(tmp_path, (PY, "-m", "unittest", "tests.test_ghost", TOKEN), "tests/test_ghost.py::Placed",
+                                      files={"tests/__init__.py": "", "tests/test_ghost.py": GHOST_FILE})
+    report = check["report"]
+    assert check["passed"] and report["state"] == "parsed", (report, check["output"])
+    assert report["counts"] == dict(passed=2, failed=0, errors=0, skipped=0)
+    assert sorted(report["passed_cases"]) == ["nowhere.at.all.Ghost.test_g", "tests/test_ghost.py::Placed::test_p"], \
+        "a class whose module cannot be placed keeps unittest's dotted id"
+    assert report["classes"] == [dict(id="tests/test_ghost.py::Placed", members=["test_p"])], "Ghost is not attested"
+    assert session._discharge_record(entry) is not None, "the placed class is still discharged"
+
+
+def test_metadata_within_the_count_bounds_never_costs_the_core_report(tmp_path):
+    """Root's P2 size fixture: 20 classes of 1000 long-named members are
+    within MAX_CLASSES and MAX_CLASS_MEMBERS and serialize to about 1.8
+    MB; ``load_tests`` runs 20 methods. The producer drops the attestation
+    and flags it, the core report parses with its 20 passes, nothing is
+    attested, and a class claim on the deliberately partial run stays
+    held."""
+    session, entry, check = _real_run(tmp_path, (PY, "-m", "unittest", "tests.test_big", TOKEN), "tests/test_big.py::C00",
+                                      files={"tests/__init__.py": "", "tests/test_big.py": _big_module()})
+    report = check["report"]
+    assert check["passed"] and report["state"] == "parsed", (report.get("detail"), check["output"][-300:])
+    assert report["counts"] == dict(passed=20, failed=0, errors=0, skipped=0) and len(report["passed_cases"]) == 20
+    assert report["classes"] == [] and report["classes_truncated"] is True
+    assert entry["binding"]["kind"] == "class" and entry["cases"] == [], "setattr members declare no body floor"
+    assert entry["binding"]["problem"].startswith("C00 declares no test case in its body")
+    assert session._discharge_record(entry) is None and not _checker_clears(session, entry, check)
+
+
+def _producer(name):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(f"qp_{name}", Path("quadratus/_gate_producer") / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("name", ["quadratus_unittest_report", "quadratus_gate_report"])
+def test_the_producers_read_membership_statically_and_an_unreadable_class_attests_nothing(name):
+    producer = _producer(name)
+    import unittest
+
+    class Base(unittest.TestCase):
+        def test_inherited(self):
+            pass
+
+        @staticmethod
+        def test_static():
+            pass
+
+        @property
+        def test_property(self):
+            return 1
+
+        test_attr = 3
+
+        class TestInner:
+            def test_nested(self):
+                pass
+
+    class Child(Base):
+        def test_own(self):
+            pass
+
+    class Dir(type):
+        def __dir__(cls):
+            raise RuntimeError("never called")
+
+    class Loud(unittest.TestCase, metaclass=Dir):
+        def test_loud(self):
+            pass
+
+    class Broken(type):
+        __mro__ = property(lambda cls: (_ for _ in ()).throw(RuntimeError("unreadable")))
+
+    class Unreadable(unittest.TestCase, metaclass=Broken):
+        def test_u(self):
+            pass
+    assert producer._class_members(Child) == ["test_inherited", "test_own", "test_static"], \
+        "inherited and static members count; a property, a plain attribute and a nested class do not"
+    assert producer._class_members(Loud) == ["test_loud"], "__dir__ is never called"
+    assert producer._class_members(Unreadable) is None, "an unreadable class attests nothing, never a smaller set"
+    assert producer.MAX_REPORT_BYTES_WITH_CLASSES < 1024 * 1024
+
+
+def test_the_unittest_producer_s_whole_attestation_pass_is_contained(monkeypatch):
+    import unittest
+    producer = _producer("quadratus_unittest_report")
+
+    class One(unittest.TestCase):
+        def test_one(self):
+            pass
+    recorder = producer._Recorder()
+    recorder.attest(unittest.TestSuite([One("test_one")]))
+    assert recorder.classes and recorder.classes_truncated is False
+    recorder = producer._Recorder()
+    monkeypatch.setattr(producer, "_class_members", lambda kind: (_ for _ in ()).throw(RuntimeError("boom")))
+    recorder.attest(unittest.TestSuite([One("test_one")]))
+    assert recorder.classes == [] and recorder.classes_truncated is True, "a failure of the pass attests nothing and raises nothing"
+
+
+def test_the_parser_accepts_a_dropped_attestation_and_the_engine_reads_it_as_none():
+    from quadratus.integration import _malformed
+    base = dict(producer="quadratus-unittest/3", exitstatus=0, collected=2, collect_errors=0,
+                counts=dict(passed=2, failed=0, errors=0, skipped=0), failures=[], truncated=False,
+                passed_cases=["tests/test_app.py::AddTests::test_add", "tests/test_app.py::AddTests::test_zero"],
+                passed_truncated=False)
+    assert _malformed(dict(base, classes=[], classes_truncated=True)) == "", "dropped and flagged is a valid report"
+    assert _malformed(dict(base, classes=[dict(id=CLASS_ID, members=["test_add"])], classes_truncated=True)) == "", \
+        "a flagged partial list is valid too, and attests nothing"
+    assert _malformed(dict(base, classes=[dict(id=CLASS_ID, members=["test_add"])], classes_truncated=False)) == ""
+    assert _malformed(dict(base, classes=[dict(id=CLASS_ID, members=[])], classes_truncated=False)) == "a class record"
+    assert _malformed(dict(base, classes=[dict(id=CLASS_ID, members=["nope"])], classes_truncated=False)) == "a class record"
+    assert _malformed(dict(base, classes=[dict(id=CLASS_ID, members=["test_a"])] * 2, classes_truncated=False)) == "duplicate class records"
+    assert _malformed(dict(base, classes="x", classes_truncated=False)) == "classes"
+    assert _malformed(base) == "", "a report without the field is valid and attests nothing"
+    assert S._report_classes(dict(state="parsed", classes=[dict(id=CLASS_ID, members=["test_add"])], classes_truncated=True)) == {}
+    assert S._report_classes(dict(state="parsed", classes=[dict(id=CLASS_ID, members=["test_add"])], classes_truncated=False)) == {CLASS_ID: ["test_add"]}
+
+
+def test_a_contradictory_saved_command_clears_nothing_in_either_consumer(tmp_path):
+    """Root's record-consistency controls: a true complete attested receipt
+    whose saved command was replaced by ``python -c unrelated`` or by a
+    method selection ``python -m unittest tests.test_app.AddTests.test_add``.
+    Neither command could have produced that report: the first starts no
+    runner with a producer, the second selects inside a module the report
+    names. A cheap command/report consistency check refuses both without
+    reading membership from argv; the plain module form still clears."""
+    from quadratus.integration import report_consistent_command
+    root, session = _class_session(tmp_path)
+    entry = _entry(session, CLASS_ID)
+    session.unexecuted_acceptance.append(entry)
+    truth = _truth()
+    for command in ("python3 -c unrelated", "python3 -m unittest tests.test_app.AddTests.test_add -v",
+                    "python3 -m unittest tests.test_app.AddTests -v", "make test"):
+        check = _class_check(session, WHOLE_FILE, command)
+        session.checks = [check]
+        assert session._discharge_record(entry) is None, command
+        row = _suite_check([("check", command, WHOLE_FILE, True, False)])
+        assert not truth._not_run_cleared(_class_entry(), [row], _record([row], [_class_entry()])), command
+        assert not report_consistent_command(command.split(), WHOLE_FILE), command
+    for command in ("python3 -m unittest tests.test_app -v", "python3 -m pytest -q tests/test_app.py", "python3 -m pytest -q"):
+        session.checks = [_class_check(session, WHOLE_FILE, command)]
+        assert session._discharge_record(entry) is not None, command
+        row = _suite_check([("check", command, WHOLE_FILE, True, False)])
+        assert truth._not_run_cleared(_class_entry(), [row], _record([row], [_class_entry()])), command
+        assert report_consistent_command(command.split(), WHOLE_FILE), command
+    assert report_consistent_command("python3 -m unittest tests.other_module".split(), WHOLE_FILE), \
+        "an operand that names no reported module is left alone (no membership is read from argv)"

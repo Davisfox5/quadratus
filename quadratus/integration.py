@@ -185,6 +185,35 @@ def _is_unittest(argv) -> bool:
     return bool(re.fullmatch(r"python(\d+(\.\d+)*)?", head)) and list(argv[1:3]) == ["-m", "unittest"]
 
 
+def report_consistent_command(argv, passed_cases) -> bool:
+    """Whether a recorded command could have produced a harness report
+    naming ``passed_cases``, read cheaply from the argv and the report
+    alone, never from disk and never as membership: the command starts a
+    runner with a producer (pytest, or ``python -m unittest``), and no
+    dotted unittest operand extends the module of a case the report names
+    (``tests.test_sample.Target.test_first`` beside a case in
+    ``tests/test_sample.py`` is a selection inside that module, whatever
+    the report attests). A contradictory saved record, a command edited
+    after a true receipt, clears nothing (root's record-consistency
+    controls on 55e07d4)."""
+    argv = [str(a) for a in argv]
+    if _is_pytest(argv):
+        return True
+    if not _is_unittest(argv):
+        return False
+    modules = set()
+    for case in passed_cases or ():
+        file = str(case).split("::", 1)[0]
+        if file.endswith(".py"):
+            modules.add(file[:-3].replace("/", "."))
+    for token in argv[3:]:
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            continue
+        if any(token.startswith(module + ".") for module in modules):
+            return False
+    return True
+
+
 def _is_node_test(argv) -> bool:
     """A ``node --test`` invocation (the runner is node and ``--test`` is an
     argument of its own), the only non-pytest runner with a producer."""
@@ -292,9 +321,10 @@ def _malformed(data) -> str:
             # distinct class ids, each with a distinct non-empty bounded list
             # of ``test*`` member names; a report that states the field
             # states it whole or flags it truncated.
+            # A truncated list may be any length: the producer drops the
+            # whole field when it would cost the core report its byte bound.
             classes, cut = data.get("classes"), data.get("classes_truncated")
-            if (not isinstance(classes, list) or type(cut) is not bool or len(classes) > _REPORT_CLASSES
-                    or (cut and len(classes) != _REPORT_CLASSES)):
+            if not isinstance(classes, list) or type(cut) is not bool or len(classes) > _REPORT_CLASSES:
                 return "classes"
             ids = []
             for record in classes:

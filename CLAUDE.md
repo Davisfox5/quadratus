@@ -2805,6 +2805,43 @@ Key design decisions already settled:
   shipped producers in `tests/test_completion_workflow_units.py` section
   9, the attestation rules in sections 7 and 8, and the controller in
   `tests/lifecycle/test_completion_workflow.py` section 7.
+- **Optional reporting never damages the run it observes** (root's
+  review of 55e07d4, 2026-10-30). Two real regressions in the new
+  attestation path, both passing on 3e4b93f: a metaclass whose `__dir__`
+  raised on its second call aborted a passing unittest run inside
+  `attest -> _class_members -> dir()` before any test ran (report
+  missing), and 20 classes of 1000 long-named members, within both count
+  bounds, serialized to about 1.8 MB, put the report over the harness's 1
+  MiB read bound and erased a valid 20-pass result. One boundary, fixed
+  once in both producers: membership is read statically (the `test*`
+  names in each MRO class `__dict__`, resolved through
+  `inspect.getattr_static`, `staticmethod`/`classmethod` unwrapped; no
+  `__dir__`, no descriptor, no project code run), any exception while
+  reading a class's identity or membership attests nothing for that class
+  (never a smaller set), a failure of the whole pass leaves an empty
+  flagged list, and the serialized report with the attestation may not
+  pass `MAX_REPORT_BYTES_WITH_CLASSES` (900,000 bytes, under the 1 MiB
+  read bound): over it the field is dropped and flagged and the core
+  report is written exactly as without it. The parser accepts a flagged
+  list of any length (empty when dropped) and reads it as attesting
+  nothing; no bound was raised. Root's two record-consistency controls
+  (a true complete attested receipt whose saved command was edited to
+  `python -c unrelated` or to `python -m unittest
+  tests.test_sample.Target.test_first`) were refused by the syntax rule
+  and cleared by the attestation alone; a cheap command/report
+  consistency check (`integration.report_consistent_command`, mirrored
+  in `truth_check._report_consistent_command`) refuses a command that
+  starts no runner with a producer and a dotted unittest operand that
+  extends the module of a case the report names; it reads no membership
+  from argv and leaves an operand naming no reported module alone.
+  Controls in `tests/test_completion_workflow_units.py` section 10: root's
+  metaclass fixture under both runners (run intact, class attested, claim
+  discharged), an unplaceable class (not attested, run intact), root's
+  size fixture (core report parsed with 20 passes, attestation dropped
+  and flagged, claim held), the static membership rules and the contained
+  whole pass at the producer level, the parser's acceptance of a dropped
+  field, and the two contradictory saved commands refused in both
+  consumers while the plain module form still clears.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

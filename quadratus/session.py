@@ -1958,11 +1958,24 @@ def _class_run_cases(run: dict, binding: dict, current_declared, root=None) -> L
     ``python_functions`` omitted an inherited failing test from real runs
     that cleared under the syntax rule); a report that attests nothing for
     the class, or is truncated, establishes nothing."""
+    import shlex
+
+    from .integration import report_consistent_command
     if (run.get("cwd") or ".") not in ("", "."):
         return []
     class_id = str(binding.get("class_id") or "")
     attested = (run.get("report_classes") or {}).get(class_id)
     if not attested:
+        return []
+    try:
+        argv = shlex.split(str(run.get("command") or ""))
+    except ValueError:
+        return []
+    # A cheap consistency check between the recorded command and its
+    # report, never membership from argv: a command that cannot carry a
+    # producer report, or that selects inside a module the report names,
+    # is a contradictory record and clears nothing.
+    if not report_consistent_command(argv, run.get("report_cases") or ()):
         return []
     prefix = f"{class_id}::"
     shown, stripped = set(), set()
