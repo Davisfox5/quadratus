@@ -3,7 +3,7 @@
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
     "pr": 73,
-    "sha": "5f0bb9ed2a75847be01909d75575787f6c811d33",
+    "sha": "2ac2f852e6f8e6bfe39fe85ec52a853aee490c50",
     "gate": "Step 2 plus blueprint stage A+B records (Davis, 2026-10-18): root's review of the typed records batch, root's production wiring and durable effects, one full suite on the final connected changed batch, exact CI, then the frozen end-to-end evaluation contract. Benchmark stays paused; no automatic PASS or MET.",
     "required_receipts": [
       "ci",
@@ -2745,19 +2745,45 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "integrated",
       "claimed_at": "2026-10-30T16:21:20Z",
       "acknowledged": false,
       "delivery": {
         "sha": "d08c57ff1a44a17b9361086d042ae135f9068299",
         "at": "2026-10-30T17:54:54Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "d08c57ff1a44a17b9361086d042ae135f9068299",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6530585699 (root scoped clear: 41 external controls passed, one full local suite 4,872 passed / 15 existing skips / 0 failed on clean 2ac2f85, log sha256 34571f0b\u2026)",
+          "scope": [
+            "quadratus/session.py",
+            "quadratus/integration.py",
+            "tools/truth_check.py",
+            "quadratus/_gate_producer/quadratus_gate_report.py",
+            "quadratus/_gate_producer/quadratus_unittest_report.py",
+            "tests/test_completion_workflow_units.py",
+            "tests/lifecycle/test_completion_workflow.py",
+            "tests/test_execution_scope.py",
+            "tests/test_evidence_lifecycle_units.py",
+            "CLAUDE.md",
+            "docs/dev-record.json"
+          ],
+          "at": "2026-10-30T20:13:13Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: scope extended to tests/test_evidence_lifecycle_units.py",
         "claude: scope extended to quadratus/_gate_producer/quadratus_gate_report.py, quadratus/_gate_producer/quadratus_unittest_report.py"
-      ]
+      ],
+      "integrated": {
+        "sha": "d08c57ff1a44a17b9361086d042ae135f9068299",
+        "candidate": "2ac2f852e6f8e6bfe39fe85ec52a853aee490c50",
+        "at": "2026-10-30T20:13:16Z"
+      }
     }
   ],
   "receipts": [
@@ -2844,6 +2870,27 @@
       "state": "passed",
       "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6308323955",
       "at": "2026-10-21T04:50:43Z"
+    },
+    {
+      "kind": "review",
+      "sha": "d08c57ff1a44a17b9361086d042ae135f9068299",
+      "state": "passed",
+      "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6530585699",
+      "at": "2026-10-30T20:13:13Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "2ac2f852e6f8e6bfe39fe85ec52a853aee490c50",
+      "state": "passed",
+      "evidence": "https://github.com/Davisfox5/quadratus/actions/runs/41102383396 (CI completed, conclusion success, head 2ac2f85; verified via the Actions API 2026-10-30T18:49:50Z)",
+      "at": "2026-10-30T20:13:13Z"
+    },
+    {
+      "kind": "acceptance",
+      "sha": "2ac2f852e6f8e6bfe39fe85ec52a853aee490c50",
+      "state": "passed",
+      "evidence": "tests/test_workflow_acceptance.py in CI run 41102383396 (pytest -q over the whole tree); docs/workflow-acceptance-manifest.json",
+      "at": "2026-10-30T20:13:13Z"
     }
   ]
 }
