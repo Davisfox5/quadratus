@@ -24,12 +24,11 @@ What these controls pin:
   audit with nothing automatic.
 """
 
-import os
 import sys
 
 import pytest
 
-from quadratus.session import SurveyConfig
+from quadratus.session import SurveyConfig, _resolved_interpreter
 from tests.lifecycle import harness as H
 from tests.lifecycle import replies
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
@@ -321,7 +320,13 @@ UNITTEST_FILES = {
 MODULE_CASES = ["tests/test_app.py::AddTests::test_add", "tests/test_app.py::AddTests::test_zero"]
 MODULE_COMMAND = f"{sys.executable} -m unittest tests.test_app -v"
 DECLARED_GATE = MODULE_COMMAND + " --quadratus-report={report}"
-EXECUTABLE = os.path.realpath(sys.executable)
+EXECUTABLE = _resolved_interpreter(sys.executable)
+
+
+def _venv(root):
+    import venv
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(root)
+    return root
 
 
 def _module_script(item, *, proves=MODULE_CASES[0]):
@@ -399,6 +404,44 @@ def test_the_declared_module_route_refuses_what_it_cannot_show(tmp_path, monkeyp
         assert _not_run_row(replay)["execution"] != "ran", "no parsed report, no case shown executed"
     else:
         assert entry["cases"] == [] and entry["binding"]["problem"]
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("shape", ["distinct venv", "same venv alias", "base for a venv command"])
+def test_a_command_declared_in_another_environment_is_not_the_command_the_gate_ran(tmp_path, monkeypatch, shape):
+    """Root's P2 reproduction, on the real controller: the configured gate
+    runs in one environment with its declared report; the lead's NOT RUN
+    item names the same arguments under another venv whose bin/python is
+    a link to the same base executable. Realpath alone collapsed them and
+    cleared a command that would fail there. Now only the same invocation
+    environment discharges it; an alias inside the configured venv still
+    does."""
+    first, second = _venv(tmp_path / "first"), _venv(tmp_path / "second")
+    gate_python = str(first / "bin" / "python")
+    if shape == "distinct venv":
+        item_python, cleared = str(second / "bin" / "python"), False
+    elif shape == "same venv alias":
+        item_python, cleared = str(first / "bin" / "python3"), True
+    else:
+        gate_python, item_python, cleared = sys.executable, str(first / "bin" / "python"), False
+    item = f"{item_python} -m unittest tests.test_app -v"
+    check = f"{gate_python} -m unittest tests.test_app -v --quadratus-report={{report}}"
+    replay = H.run(tmp_path, monkeypatch, _module_script(item), files=UNITTEST_FILES, max_tasks=2,
+                   record_complete=False, check=check)
+    record = H.result_json(replay)
+    passed = next(c for c in record["checks"] if c.get("passed"))
+    receipt = passed["receipts"][0] if passed.get("receipts") else passed
+    assert receipt["interpreter"] == _resolved_interpreter(gate_python) and receipt["report"]["state"] == "parsed"
+    entry = _entry_for(replay, item)
+    assert entry["binding"]["kind"] == "command" and entry["cases"] == MODULE_CASES
+    assert entry["binding"]["interpreter"] == _resolved_interpreter(item_python)
+    assert (entry["binding"]["interpreter"] == receipt["interpreter"]) is cleared
+    assert (entry["discharged_at"] is not None) is cleared
+    assert (_not_run_row(replay)["execution"] == "ran") is cleared and (_not_run_row(replay)["runner"] == "gate") is cleared
+    from tools import truth_check
+    verdict = truth_check.judge(replay.result.run_dir, None)
+    assert any("reported NOT RUN" in u for u in verdict["unverified"]) is not cleared
+    assert not any("the engine shows the NOT RUN item" in u for u in verdict["unverified"]), "display and record agree"
 
 
 @pytest.mark.requirements_ledger

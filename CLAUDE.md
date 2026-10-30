@@ -2712,11 +2712,18 @@ Key design decisions already settled:
   cases under a `command` binding that only a complete run of exactly that
   command from the project root, on the same resolved interpreter,
   discharges, in the engine and the checker alike; the same cases under
-  pytest never stand in. Interpreter identity is what the head resolves to
-  (`_resolved_interpreter`: `shutil.which` then the real path, recorded on
-  the binding when the item is bound and on every check receipt when it
-  ran), never the basename: a nonexistent path and the configured venv
-  interpreter both read as `python` (root's review of d48014d). For the
+  pytest never stand in. Interpreter identity is the invocation's
+  (`_resolved_interpreter`: `shutil.which` for a bare name, the real path
+  of the executable, and the environment the invoked path runs under, the
+  directory holding `pyvenv.cfg` above its `bin` or the base installation,
+  recorded on the binding when the item is bound and on every check
+  receipt when it ran, so no later PATH changes the comparison), never the
+  basename and never the real path alone: a nonexistent path and the
+  configured venv interpreter both read as `python` (root's review of
+  d48014d), and two venvs whose `bin/python` links converge on one base
+  executable collapsed to one identity by real path, so a command that
+  would fail in the second venv read as cleared (root's review of 405f856).
+  Equivalence that cannot be read from the invoked path is a mismatch. For the
   declared route to work end to end, `integration.runner_of` names the
   plain module form `python -m unittest <module>...` (`unittest_modules`),
   so its selection is established and `operand_paths` reads a whole module

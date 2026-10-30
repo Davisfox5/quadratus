@@ -37,10 +37,18 @@ UNITTEST_FILES = {
 }
 MODULE_CASES = ["tests/test_app.py::AddTests::test_add", "tests/test_app.py::AddTests::test_zero"]
 COMMAND = "python3 -m unittest tests.test_app -v"
-#: The interpreter ``python3`` resolves to here, as the engine resolves it.
-PYTHON3 = os.path.realpath(shutil.which("python3"))
+#: The invocation identity ``python3`` resolves to here, as the engine resolves it.
+PYTHON3 = S._resolved_interpreter("python3")
 EXACT = f"{sys.executable} -m unittest tests.test_app -v"
-EXECUTABLE = os.path.realpath(sys.executable)
+EXECUTABLE = S._resolved_interpreter(sys.executable)
+
+
+def _venv(root):
+    """A real virtual environment whose ``bin/python`` is a link to this
+    interpreter (no pip, no provider): the shape root's control used."""
+    import venv
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(root)
+    return root
 
 
 def _session(tmp_path, *, project=None, gate=None, survey=None, requirements=("R1", "R2"), replies=("DONE",)):
@@ -312,6 +320,7 @@ def test_the_same_python_command_needs_the_same_arguments_and_the_same_resolved_
 
 def test_an_interpreter_is_resolved_as_the_shell_would_and_never_by_its_basename(tmp_path, monkeypatch):
     assert S._resolved_interpreter(sys.executable) == EXECUTABLE
+    assert EXECUTABLE.startswith(os.path.realpath(sys.executable) + " env=")
     assert S._resolved_interpreter("python3") == PYTHON3
     assert S._resolved_interpreter("/nonexistent/location/python") is None
     assert S._resolved_interpreter("pytest") is None and S._resolved_interpreter("") is None
@@ -321,6 +330,29 @@ def test_an_interpreter_is_resolved_as_the_shell_would_and_never_by_its_basename
     assert S._resolved_interpreter("python3.99") == EXECUTABLE, "an alias matches by what it resolves to"
     assert S._command_interpreter("/nonexistent/location/python -m unittest tests.test_app -v") is None
     assert S._command_interpreter(f"{sys.executable} -m unittest x") == EXECUTABLE
+
+
+def test_two_virtual_environments_on_one_base_executable_are_two_identities(tmp_path):
+    """Root's P2 on 405f856: a second venv's bin/python resolves by real
+    path to the same base executable as the configured one, but its
+    sys.prefix and packages differ; a command declared there is not the
+    command the configured gate ran. The identity keeps the invoked
+    environment, read from the invoked path's own pyvenv.cfg."""
+    first, second = _venv(tmp_path / "first"), _venv(tmp_path / "second")
+    one, two = S._resolved_interpreter(str(first / "bin" / "python")), S._resolved_interpreter(str(second / "bin" / "python"))
+    assert os.path.realpath(first / "bin" / "python") == os.path.realpath(second / "bin" / "python"), \
+        "the links converge on one base executable"
+    assert one and two and one != two
+    assert one.endswith(f" env={os.path.realpath(first)}") and two.endswith(f" env={os.path.realpath(second)}")
+    assert one.split(" env=")[0] == two.split(" env=")[0] == os.path.realpath(sys.executable)
+    assert S._resolved_interpreter(str(first / "bin" / "python3")) == one, "an alias inside the same environment"
+    assert S._resolved_interpreter(sys.executable) != one, "the base installation is not either venv"
+    base = S._resolved_interpreter(sys.executable)
+    assert base.endswith(" env=base") or base.endswith(f" env={os.path.realpath(sys.prefix)}")
+    binding = dict(command="python -m unittest tests.test_app -v", interpreter=one)
+    assert S._same_python_command(dict(command=f"{first}/bin/python3 -m unittest tests.test_app -v", interpreter=one), binding)
+    assert not S._same_python_command(dict(command=f"{second}/bin/python -m unittest tests.test_app -v", interpreter=two), binding)
+    assert not S._same_python_command(dict(command=f"{sys.executable} -m unittest tests.test_app -v", interpreter=base), binding)
 
 
 def test_a_unittest_module_item_binds_to_the_module_s_cases_under_the_command_route(tmp_path):

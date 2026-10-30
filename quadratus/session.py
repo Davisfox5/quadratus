@@ -1822,12 +1822,19 @@ def _python_args(text: str):
 
 
 def _resolved_interpreter(head: str, cwd=None) -> Optional[str]:
-    """The real path of the interpreter a command head names, resolved the
-    way the shell would run it (``shutil.which`` from ``cwd`` for a bare
-    name, the path itself otherwise), or None when it names nothing that
-    exists here. Identity is this resolution, never the basename (root
-    review of d48014d, 2026-10-30: a nonexistent path and the configured
-    venv interpreter both read as ``python``)."""
+    """The identity of the interpreter invocation a command head names, or
+    None when it names nothing that exists here: the executable the shell
+    would run (``shutil.which`` from ``cwd`` for a bare name, the path
+    itself otherwise) by its real path, and the environment that
+    invocation runs under, read from the invoked path without resolving
+    its links: the directory holding ``pyvenv.cfg`` above the invoked
+    ``bin`` (a virtual environment), else the base installation. Two
+    environments whose ``bin/python`` links converge on one base executable
+    are two identities (root review of 405f856, 2026-10-30: a distinct venv
+    collapsed to the configured one by real path, and a command that would
+    fail there read as cleared). Identity is never the basename (root
+    review of d48014d). The string is recorded when the item is bound and
+    when a check ran, so the comparison never depends on a later PATH."""
     import shutil
     head = str(head or "")
     if not head or not _PYTHON_HEAD.fullmatch(Path(head).name):
@@ -1840,9 +1847,16 @@ def _resolved_interpreter(head: str, cwd=None) -> Optional[str]:
     if not found:
         return None
     try:
-        return os.path.realpath(found)
+        invoked = Path(os.path.abspath(found))
+        executable = os.path.realpath(found)
+        # The environment is the invoked location's own: a venv's bin/python
+        # is a link to the base executable, and the base executable is
+        # not that venv.
+        marker = invoked.parent.parent / "pyvenv.cfg"
+        environment = os.path.realpath(invoked.parent.parent) if marker.is_file() else "base"
     except OSError:
         return None
+    return f"{executable} env={environment}"
 
 
 def _command_interpreter(command: str, cwd=None) -> Optional[str]:
