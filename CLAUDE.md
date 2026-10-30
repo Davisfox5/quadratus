@@ -2693,8 +2693,14 @@ Key design decisions already settled:
   intake before any child's writer (root: a batch refusing explicit
   CONTINUES still paid an unlinked child that re-did owed work).
   The planner's unfinished-state note and the RESOLVES note state both
-  rules, and `_open_work` names the requirements no task covered at a
-  stop. (3) t6's reviewer deferred a finding to its sibling; the child's
+  rules, and the terminal stop (`_stop_open_work`) appends the requirements
+  no task covered (`_uncovered_requirements`) beside the debt that stopped
+  the run. That report is never debt: `_open_work` names only what blocks
+  completion, because the verification handoff reads it and a blocker
+  there dispatches a writer (root's full suite on 7650cb0: the report line
+  placed inside `_open_work` turned a verification-only task over an
+  uncovered requirement into a writer dispatch and ten handoff controls
+  failed on the one cause). (3) t6's reviewer deferred a finding to its sibling; the child's
   own recheck resolved it on the pre-merge copy, the legacy text carried no
   id, outlived the typed record and defeated the batch close's hold. A
   deferral's registered finding is `held` out of the child's rechecks and

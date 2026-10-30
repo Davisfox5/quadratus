@@ -14590,7 +14590,16 @@ class Session:
             self._stop_open_work("CheckFailing" if failing else "FindingsOpen", "a task closed with open work")
 
     def _open_work(self) -> List[str]:
-        """What is still open, as facts from the record; each is one reason."""
+        """What still blocks completion, as facts from the record; each is
+        one reason. Only blocking debt: a failing check, a failing merge
+        gate, owed capped or failed work, open audit or review findings.
+        Read by the verification handoff (a blocker there dispatches the
+        task instead of handing its requirements to the audit), by the
+        close policy's stop reason and by the terminal stop. A requirement
+        no task has covered is not debt of this kind: it is reported at a
+        stop by ``_uncovered_requirements`` (root's full suite on 7650cb0:
+        the report line, added here, turned a verification-only task over
+        an uncovered requirement into a writer dispatch)."""
         reasons = []
         for outcome in self.task_outcomes:
             if (outcome.checks and not outcome.checks[-1]["passed"]
@@ -14605,15 +14614,6 @@ class Session:
         partial = sorted(self._partial_from_outcomes() | set(self._partial_tasks))
         if partial:
             reasons.append(f"capped or failed task(s) {', '.join(partial)} not continued to completion")
-        if self.config.requirements_ledger and self.memory.ledger.requirements and self._explicit_tasks is None:
-            # Unassigned requirements stay visible at a stop (completion
-            # workflow, 2026-10-30): a run that ends on open work says which
-            # requirements no task ever covered beside the findings.
-            status = self.memory.ledger.requirement_status
-            uncovered = [rid for rid in self.memory.ledger.requirements
-                         if not str(status.get(rid, "")).startswith(("covered", "met"))]
-            if uncovered:
-                reasons.append(f"requirements no task has covered: {', '.join(uncovered)}")
         ledger = self._open_findings_for(None)
         if ledger:
             reasons.append(f"audit findings {', '.join(ledger)} are open")
@@ -14628,7 +14628,24 @@ class Session:
         if kind in ("clean", "unverified"):
             kind = "unverified"
         reasons = self._open_work() or ["the record shows no single open item; see the task outcomes"]
+        # Reporting only (completion workflow, 2026-10-30): a run that ends
+        # on open work also says which requirements no task ever covered,
+        # beside the debt that stopped it, never as that debt.
+        uncovered = self._uncovered_requirements()
+        if uncovered:
+            reasons = reasons + [f"requirements no task has covered: {', '.join(uncovered)}"]
         self._stop_with(kind, f"{name}: {where}, but {'; '.join(reasons)[:600]}. Work preserved.")
+
+    def _uncovered_requirements(self) -> List[str]:
+        """The requirements no closed task covers and no audit found met,
+        for terminal reporting. Coverage is not MET and this is not debt:
+        the final audit judges them, and the verification handoff may hand
+        one to it from the harness's own evidence."""
+        if not (self.config.requirements_ledger and self.memory.ledger.requirements) or self._explicit_tasks is not None:
+            return []
+        status = self.memory.ledger.requirement_status
+        return [rid for rid in self.memory.ledger.requirements
+                if not str(status.get(rid, "")).startswith(("covered", "met"))]
 
     def _lead_context(self, spec: TaskSpec) -> List[str]:
         """The capped predecessor's handoff and the task's files, for a lead.

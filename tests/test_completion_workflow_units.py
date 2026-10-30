@@ -272,17 +272,48 @@ def test_the_atomic_close_is_in_the_reading_and_not_only_in_the_post_merge_loop(
 
 # -- 4. unassigned requirements are named at a stop --------------------------------------------
 
-def test_open_work_names_the_requirements_no_task_covered(tmp_path):
+def test_uncovered_requirements_are_reported_at_a_stop_and_are_never_open_work(tmp_path):
+    """Root's full suite on 7650cb0: the report line inside ``_open_work``
+    made the verification handoff treat an uncovered requirement as a
+    blocker and dispatch a writer. The report lives beside the debt, not
+    in it: ``_open_work`` names only what blocks, the stop appends the
+    uncovered list, and ``_verification_problem`` reads only the debt."""
     session = _session(tmp_path, requirements=("R1", "R2", "R3"))
     session.task_outcomes.append(_outcome("t1"))
     session.memory.ledger.requirement_status["R1"] = "covered by t1"
     _capped(session, "t2", covers=("R2",))
+    assert session._uncovered_requirements() == ["R2", "R3"]
     reasons = session._open_work()
-    assert "capped or failed task(s) t2 not continued to completion" in reasons
-    assert "requirements no task has covered: R2, R3" in reasons
+    assert reasons == ["capped or failed task(s) t2 not continued to completion"], reasons
+    assert not any("requirements no task" in r for r in reasons)
+    session._stop_open_work("FindingsOpen", "a task closed with open work")
+    assert session.stop_reason == ("FindingsOpen: a task closed with open work, but capped or failed task(s) t2 not "
+                                   "continued to completion; requirements no task has covered: R2, R3. Work preserved.")
     session.memory.ledger.requirement_status["R2"] = "met"
     session.memory.ledger.requirement_status["R3"] = "covered by t3"
-    assert not any(r.startswith("requirements no task") for r in session._open_work())
+    assert session._uncovered_requirements() == []
+    source = inspect.getsource(Session._verification_problem)
+    assert "self._open_work()" in source and "self._uncovered_requirements()" not in source, \
+        "the handoff reads blocking debt only; an uncovered requirement is the audit's to judge"
+    assert "self._uncovered_requirements()" not in inspect.getsource(Session._open_work)
+    assert "self._uncovered_requirements()" not in inspect.getsource(Session._close_policy)
+    assert "self._uncovered_requirements()" in inspect.getsource(Session._stop_open_work)
+
+
+def test_an_uncovered_requirement_alone_is_no_verification_blocker(tmp_path):
+    """The three consumers, with nothing blocking: the handoff finds no
+    problem beyond the record's own facts, the close policy records no
+    open work, and the stop still reports the uncovered requirement."""
+    from quadratus.outcome import RunOutcome
+    session = _session(tmp_path, requirements=("R1", "R2"))
+    session.task_outcomes.append(_outcome("t1"))
+    session.memory.ledger.requirement_status["R1"] = "covered by t1"
+    assert session._open_work() == []
+    assert session._uncovered_requirements() == ["R2"]
+    session.run_outcome = RunOutcome()
+    session._stop_open_work("FindingsOpen", "a task closed with open work")
+    assert session.stop_reason.endswith("but the record shows no single open item; see the task outcomes; "
+                                        "requirements no task has covered: R2. Work preserved.")
 
 
 # -- 5. the NOT RUN discharge display and the unittest module command --------------------------
