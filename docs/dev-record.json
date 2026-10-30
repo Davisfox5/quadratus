@@ -2739,7 +2739,9 @@
         "tests/test_execution_scope.py",
         "CLAUDE.md",
         "docs/dev-record.json",
-        "tests/test_evidence_lifecycle_units.py"
+        "tests/test_evidence_lifecycle_units.py",
+        "quadratus/_gate_producer/quadratus_gate_report.py",
+        "quadratus/_gate_producer/quadratus_unittest_report.py"
       ],
       "author": "claude",
       "reviewer": "codex",
@@ -2747,13 +2749,14 @@
       "claimed_at": "2026-10-30T16:21:20Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "93536ab01b0d03287f2ed75b77b4bb4e0bb0295f",
-        "at": "2026-10-30T16:48:35Z"
+        "sha": "55e07d43cdc2cae1da7198a0c06757e252ed633d",
+        "at": "2026-10-30T17:18:10Z"
       },
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "claude: scope extended to tests/test_evidence_lifecycle_units.py"
+        "claude: scope extended to tests/test_evidence_lifecycle_units.py",
+        "claude: scope extended to quadratus/_gate_producer/quadratus_gate_report.py, quadratus/_gate_producer/quadratus_unittest_report.py"
       ]
     }
   ],
