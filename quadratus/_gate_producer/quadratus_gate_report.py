@@ -26,13 +26,15 @@ quiet run still shows exactly which cases executed and passed (Davis,
 2026-10-16; root review of 5ca254c). A subtest is never one of them: its
 item is, and only when the item counted passed.
 
-For each class of a collected item (``classes``) it attests the class's
-default membership (``_class_members``, read from the live class object:
-every ``test*`` callable, inherited and dynamically attached ones included),
-so a whole-class claim is checked against what the runner would collect by
-default rather than against the command's syntax, a configured pattern or a
-static read of the file. Bounded; past the bound flagged truncated and
-attesting nothing.
+For each ordinary class of a collected item (``classes``) it attests the
+class's default membership (``_class_members``: the supported boundary is
+stated there; inherited and dynamically attached plain functions included,
+a custom metaclass or descriptor held), so a whole-class claim is checked
+against what the runner would collect by default rather than against the
+command's syntax, a configured pattern or a static read of the file. Read
+through built-in descriptors and exact type checks only. Bounded; past the
+count or byte bound flagged truncated and attesting nothing, the core report
+written as it always was.
 """
 
 import hashlib
@@ -112,37 +114,70 @@ def _type_name(excinfo):
     return f"{kind.__module__}.{kind.__qualname__}"
 
 
+#: The built-in ``type`` descriptors, invoked directly: a class's dictionary,
+#: MRO and qualified name read this way never pass through a metaclass's
+#: ``__getattribute__``, ``__dir__`` or any other project code (root's review
+#: of e916a0a: ``kind.__mro__`` and ``vars(base)`` ran a metaclass and turned
+#: a passing test into a failure).
+_TYPE_DICT = type.__dict__["__dict__"]
+_TYPE_MRO = type.__dict__["__mro__"]
+_TYPE_QUALNAME = type.__dict__["__qualname__"]
+#: Attribute kinds whose class-level access is understood without running
+#: anything: a plain function is a test method; a built-in ``staticmethod``
+#: or ``classmethod`` of one is too; a ``property`` or plain data is not
+#: (class access yields the object itself, which is not callable).
+_PLAIN_DATA = (int, float, str, bytes, bool, type(None))
+
+
+def _class_dict(kind):
+    return _TYPE_DICT.__get__(kind, type)
+
+
 def _class_members(kind):
-    """The test methods a runner collects under a class by the default
-    rule, or None when the class cannot be read whole (then nothing is
-    attested for it). Read statically: the names in the ``__dict__`` of
-    each class on the MRO (``object`` aside) that start with ``test`` and
-    resolve through ``inspect.getattr_static`` to a callable that is not
-    itself a class, a ``staticmethod``/``classmethod`` unwrapped. That is
-    the set ``unittest.TestLoader.getTestCaseNames`` and pytest's default
-    prefix collect, inherited and dynamically attached members included,
-    without calling the class's ``__dir__`` or any descriptor: optional
-    reporting must not run project code or change the run it observes
-    (root's review of 55e07d4: a metaclass ``__dir__`` that raised on its
-    second call aborted a passing run). A metaclass that customises
-    ``__dir__`` or ``__mro__`` is not modelled: any exception here is
-    "cannot read", never a smaller membership. What a ``load_tests`` hook,
-    a configured pattern, a filter or a collection hook then left out is
-    visible as a member the run did not report passed."""
-    import inspect
+    """The test methods the runner collects under a class by the default
+    rule, or None when the class is outside the supported boundary (then
+    nothing is attested for it; never a smaller set).
+
+    Supported: an ordinary class, whose metaclass is exactly ``type`` (so
+    every class on its MRO is ordinary too), each of whose ``test*``
+    attributes along the MRO (the first definition in MRO order decides,
+    as attribute lookup does) is a plain function, a built-in
+    ``staticmethod``/``classmethod`` wrapping one, a ``property`` or plain
+    data. That is the set ``unittest.TestLoader.getTestCaseNames`` and
+    pytest's default prefix collect for such a class, inherited and
+    dynamically attached plain functions included. Everything is read
+    through the built-in ``type`` descriptors and exact type checks: no
+    attribute access on the class, no descriptor invoked, no project code
+    run. Unsupported, held as a whole: a custom metaclass; a ``test*``
+    attribute of any other kind (a custom descriptor, a nested class, a
+    partial, a bound or built-in callable), whose class-level resolution
+    could change membership and cannot be known without running it
+    (root's review of e916a0a: a descriptor that raised once ``load_tests``
+    had hidden the inherited failing test was skipped as "not callable" and
+    the class cleared). No general emulation of attribute lookup."""
+    import types
     try:
-        names = set()
-        for base in kind.__mro__:
+        if type(kind) is not type:
+            return None
+        members, seen = [], set()
+        for base in _TYPE_MRO.__get__(kind, type):
             if base is object:
                 continue
-            names.update(k for k in vars(base) if isinstance(k, str) and k.startswith("test"))
-        members = []
-        for name in names:
-            attribute = inspect.getattr_static(kind, name)
-            if isinstance(attribute, (staticmethod, classmethod)):
-                attribute = attribute.__func__
-            if callable(attribute) and not isinstance(attribute, type):
-                members.append(name[:300])
+            if type(base) is not type:
+                return None
+            for name, value in list(_class_dict(base).items()):
+                if type(name) is not str or not name.startswith("test") or name in seen:
+                    continue
+                seen.add(name)
+                kind_of = type(value)
+                if kind_of is types.FunctionType:
+                    members.append(name[:300])
+                elif kind_of in (staticmethod, classmethod) and type(value.__func__) is types.FunctionType:
+                    members.append(name[:300])
+                elif kind_of is property or kind_of in _PLAIN_DATA:
+                    continue
+                else:
+                    return None
         return sorted(members)
     except Exception:  # noqa: BLE001 -- unreadable attests nothing, never a smaller set
         return None
@@ -175,9 +210,9 @@ class _Recorder:
             for item in session.items:
                 kind = getattr(item, "cls", None)
                 nodeid = getattr(item, "nodeid", None)
-                if not isinstance(kind, type) or kind in seen or not isinstance(nodeid, str) or "::" not in nodeid:
+                if not isinstance(kind, type) or id(kind) in seen or not isinstance(nodeid, str) or "::" not in nodeid:
                     continue
-                seen.add(kind)
+                seen.add(id(kind))
                 # The class id as pytest's own node ids spell it: the item's
                 # node id without its last segment (its method and parameter).
                 class_id = nodeid.rsplit("::", 1)[0]

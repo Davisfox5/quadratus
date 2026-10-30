@@ -27,11 +27,15 @@ run still shows exactly which cases executed and passed; a test whose file
 cannot be placed under the working directory keeps unittest's dotted id,
 which names no file. A subtest is never one of them (root review of 5ca254c).
 
-For each class of a test the run holds (``classes``), it attests that
-class's default membership (``_class_members``), so a whole-class claim can
-be checked against what the runner would collect rather than against the
-command's syntax or a static read of the file. The list is bounded; past
-the bound it is flagged truncated and attests nothing.
+For each ordinary class of a test the run holds (``classes``), it attests
+that class's default membership (``_class_members``: the supported boundary
+is stated there), so a whole-class claim can be checked against what the
+runner would collect rather than against the command's syntax or a static
+read of the file. Everything optional is read through built-in descriptors
+and exact type checks, never by attribute access on project classes; a
+class outside the boundary attests nothing. The list is bounded; past the
+bound, or past the report's byte bound, it is flagged truncated and attests
+nothing, and the core report is written as it always was.
 """
 
 import hashlib
@@ -82,15 +86,26 @@ def _type_name(kind):
 
 def _class_id(kind):
     """``file::Qualified::Class`` for a test class the working directory
-    holds, or None when its file cannot be placed there or its identity
-    cannot be read; never raises into the run."""
+    holds, or None when it cannot be placed or read; never raises into the
+    run and never runs project code: the module name from the class
+    dictionary and the qualified name through the built-in ``type``
+    descriptors, the module from ``sys.modules`` only when it is a plain
+    module object, its ``__file__`` a ``.py`` path under the working
+    directory. A class this cannot place keeps unittest's dotted id."""
+    import types
     try:
-        source = inspect.getsourcefile(kind)
-        relative = os.path.relpath(os.path.realpath(source), os.path.realpath(os.getcwd())) if source else None
-        if not relative or relative.startswith(os.pardir) or os.path.isabs(relative):
+        module_name = _class_dict(kind).get("__module__")
+        qualname = _TYPE_QUALNAME.__get__(kind, type)
+        if type(module_name) is not str or type(qualname) is not str or not qualname:
             return None
-        qualname = kind.__qualname__
-        if not isinstance(qualname, str) or not qualname:
+        module = sys.modules.get(module_name)
+        if type(module) is not types.ModuleType:
+            return None
+        source = module.__dict__.get("__file__")
+        if type(source) is not str or not source.endswith(".py"):
+            return None
+        relative = os.path.relpath(os.path.realpath(source), os.path.realpath(os.getcwd()))
+        if relative.startswith(os.pardir) or os.path.isabs(relative):
             return None
         return f"{relative.replace(os.sep, '/')}::{'::'.join(qualname.split('.'))}"
     except Exception:  # noqa: BLE001 -- an identity that cannot be read attests nothing
@@ -104,37 +119,70 @@ def _case_id(test):
     return f"{prefix}::{getattr(test, '_testMethodName', '')}"[:300]
 
 
+#: The built-in ``type`` descriptors, invoked directly: a class's dictionary,
+#: MRO and qualified name read this way never pass through a metaclass's
+#: ``__getattribute__``, ``__dir__`` or any other project code (root's review
+#: of e916a0a: ``kind.__mro__`` and ``vars(base)`` ran a metaclass and turned
+#: a passing test into a failure).
+_TYPE_DICT = type.__dict__["__dict__"]
+_TYPE_MRO = type.__dict__["__mro__"]
+_TYPE_QUALNAME = type.__dict__["__qualname__"]
+#: Attribute kinds whose class-level access is understood without running
+#: anything: a plain function is a test method; a built-in ``staticmethod``
+#: or ``classmethod`` of one is too; a ``property`` or plain data is not
+#: (class access yields the object itself, which is not callable).
+_PLAIN_DATA = (int, float, str, bytes, bool, type(None))
+
+
+def _class_dict(kind):
+    return _TYPE_DICT.__get__(kind, type)
+
+
 def _class_members(kind):
-    """The test methods a runner collects under a class by the default
-    rule, or None when the class cannot be read whole (then nothing is
-    attested for it). Read statically: the names in the ``__dict__`` of
-    each class on the MRO (``object`` aside) that start with ``test`` and
-    resolve through ``inspect.getattr_static`` to a callable that is not
-    itself a class, a ``staticmethod``/``classmethod`` unwrapped. That is
-    the set ``unittest.TestLoader.getTestCaseNames`` and pytest's default
-    prefix collect, inherited and dynamically attached members included,
-    without calling the class's ``__dir__`` or any descriptor: optional
-    reporting must not run project code or change the run it observes
-    (root's review of 55e07d4: a metaclass ``__dir__`` that raised on its
-    second call aborted a passing run). A metaclass that customises
-    ``__dir__`` or ``__mro__`` is not modelled: any exception here is
-    "cannot read", never a smaller membership. What a ``load_tests`` hook,
-    a configured pattern, a filter or a collection hook then left out is
-    visible as a member the run did not report passed."""
-    import inspect
+    """The test methods the runner collects under a class by the default
+    rule, or None when the class is outside the supported boundary (then
+    nothing is attested for it; never a smaller set).
+
+    Supported: an ordinary class, whose metaclass is exactly ``type`` (so
+    every class on its MRO is ordinary too), each of whose ``test*``
+    attributes along the MRO (the first definition in MRO order decides,
+    as attribute lookup does) is a plain function, a built-in
+    ``staticmethod``/``classmethod`` wrapping one, a ``property`` or plain
+    data. That is the set ``unittest.TestLoader.getTestCaseNames`` and
+    pytest's default prefix collect for such a class, inherited and
+    dynamically attached plain functions included. Everything is read
+    through the built-in ``type`` descriptors and exact type checks: no
+    attribute access on the class, no descriptor invoked, no project code
+    run. Unsupported, held as a whole: a custom metaclass; a ``test*``
+    attribute of any other kind (a custom descriptor, a nested class, a
+    partial, a bound or built-in callable), whose class-level resolution
+    could change membership and cannot be known without running it
+    (root's review of e916a0a: a descriptor that raised once ``load_tests``
+    had hidden the inherited failing test was skipped as "not callable" and
+    the class cleared). No general emulation of attribute lookup."""
+    import types
     try:
-        names = set()
-        for base in kind.__mro__:
+        if type(kind) is not type:
+            return None
+        members, seen = [], set()
+        for base in _TYPE_MRO.__get__(kind, type):
             if base is object:
                 continue
-            names.update(k for k in vars(base) if isinstance(k, str) and k.startswith("test"))
-        members = []
-        for name in names:
-            attribute = inspect.getattr_static(kind, name)
-            if isinstance(attribute, (staticmethod, classmethod)):
-                attribute = attribute.__func__
-            if callable(attribute) and not isinstance(attribute, type):
-                members.append(name[:300])
+            if type(base) is not type:
+                return None
+            for name, value in list(_class_dict(base).items()):
+                if type(name) is not str or not name.startswith("test") or name in seen:
+                    continue
+                seen.add(name)
+                kind_of = type(value)
+                if kind_of is types.FunctionType:
+                    members.append(name[:300])
+                elif kind_of in (staticmethod, classmethod) and type(value.__func__) is types.FunctionType:
+                    members.append(name[:300])
+                elif kind_of is property or kind_of in _PLAIN_DATA:
+                    continue
+                else:
+                    return None
         return sorted(members)
     except Exception:  # noqa: BLE001 -- unreadable attests nothing, never a smaller set
         return None
@@ -162,23 +210,28 @@ class _Recorder:
         self.passed_cases, self.passed_truncated = [], False
         self.classes, self.classes_truncated = [], False
 
-    def attest(self, suite):
-        """One membership record per class of a test the suite holds, in
-        first-seen order. Optional and contained: a class whose file cannot
-        be placed under the working directory, whose identity or membership
-        cannot be read, or whose membership is over the bound is not
-        attested; past MAX_CLASSES the list is flagged truncated; and any
-        failure of the whole pass leaves an empty, flagged list. Nothing
-        here may raise into, or alter, the run it observes."""
-        try:
-            seen = set()
-            for leaf in _leaves(suite):
-                if _is_failed_import(leaf) or not isinstance(leaf, unittest.TestCase):
-                    continue
+    def survey(self, suite):
+        """One pass over the suite, as the collected count always made:
+        the count of unittest's own leaves (failed imports aside) and,
+        beside it, the optional attestation, one membership record per
+        supported class in first-seen order. Contained: a class that cannot
+        be placed, read or is outside ``_class_members``' boundary is not
+        attested; past MAX_CLASSES the list is flagged truncated; any
+        failure of the attestation leaves an empty flagged list and never
+        touches the count. Classes are told apart by identity, never by
+        hashing them."""
+        seen = set()
+        for leaf in _leaves(suite):
+            if _is_failed_import(leaf):
+                continue
+            self.collected += 1
+            if self.classes_truncated:
+                continue
+            try:
                 kind = type(leaf)
-                if kind in seen:
+                if not issubclass(kind, unittest.TestCase) or id(kind) in seen:
                     continue
-                seen.add(kind)
+                seen.add(id(kind))
                 class_id = _class_id(kind)
                 if class_id is None or len(class_id) > 300:
                     continue
@@ -187,10 +240,10 @@ class _Recorder:
                     continue
                 if len(self.classes) >= MAX_CLASSES:
                     self.classes_truncated = True
-                    return
+                    continue
                 self.classes.append(dict(id=class_id, members=members))
-        except Exception:  # noqa: BLE001 -- the attestation is optional; the run is not
-            self.classes, self.classes_truncated = [], True
+            except Exception:  # noqa: BLE001 -- the attestation is optional; the run is not
+                self.classes, self.classes_truncated = [], True
 
     def _state(self, test):
         return self.tests.setdefault(id(test), dict(test=test, errors=[], unexpected=False, skipped=False))
@@ -310,8 +363,7 @@ class _Runner(unittest.TextTestRunner):
     resultclass = _Result
 
     def run(self, test):
-        _RECORDER.collected = sum(1 for leaf in _leaves(test) if not _is_failed_import(leaf))
-        _RECORDER.attest(test)
+        _RECORDER.survey(test)
         _RECORDER.ran = True
         return super().run(test)
 

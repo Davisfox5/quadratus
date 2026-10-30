@@ -2842,6 +2842,42 @@ Key design decisions already settled:
   whole pass at the producer level, the parser's acceptance of a dropped
   field, and the two contradictory saved commands refused in both
   consumers while the plain module form still clears.
+- **The attestation's boundary is ordinary classes with understood
+  attribute kinds, read through the built-in `type` descriptors; a custom
+  metaclass or an unknown `test*` attribute holds the class** (root's
+  review of e916a0a, 2026-10-30). Two cases, both passing on 3e4b93f: an
+  inherited `test_hidden` that was a custom descriptor raising once
+  `load_tests` had hidden the failing test read as "not callable" under
+  `getattr_static` and was skipped, so both consumers cleared the class;
+  and `kind.__mro__` and `vars(base)` went through a metaclass
+  `__getattribute__`, which set a flag the test asserted on, turning a
+  passing test into an attributed body failure. The prior statement "never
+  invokes any project code" was not true on e916a0a. Now `_class_members`
+  supports exactly: a class whose metaclass is `type` (so every class on
+  its MRO is ordinary), each of whose `test*` names along the MRO (first
+  definition in MRO order decides, as lookup does) is a plain function, a
+  built-in `staticmethod`/`classmethod` of one, a `property` or plain data
+  (`int`, `float`, `str`, `bytes`, `bool`, `None`). The dictionary, MRO and
+  qualified name are read by invoking `type.__dict__['__dict__']`,
+  `['__mro__']` and `['__qualname__']` directly, and the module name from
+  the class dictionary, with exact `type()` checks and no attribute access
+  on the class; classes are told apart by `id()`, never hashed. Anything
+  else (a custom metaclass, a custom descriptor, a nested class, a
+  `partial`, a bound or built-in callable) holds the whole class: unknown
+  membership is not evidence a member is not a test. Inherited and
+  dynamically attached plain functions stay supported. The unittest
+  producer's passed-case identity (`_class_id`) takes the same reads, so a
+  held class's cases are still placed, and the collected count and the
+  attestation are made in one pass over the suite, as the count always
+  was. Measured, not asserted: a metaclass that logs every attribute name
+  read through it logs the same set under the reported run as under plain
+  `python -m unittest` (`test_the_reported_unittest_run_reads_no_class_attribute_the_plain_runner_does_not`).
+  A former positive, the `__dir__` metaclass class clearing, is now an
+  explicit hold while its test still passes. Controls in
+  `tests/test_completion_workflow_units.py` section 10: root's descriptor
+  fixture (run passes 1, nothing attested, both consumers hold), both
+  metaclass fixtures under both runners (run passes, class held), the
+  parity measurement, and the attribute-kind table at the producer level.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

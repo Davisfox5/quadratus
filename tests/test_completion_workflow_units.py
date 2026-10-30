@@ -1151,23 +1151,91 @@ def _big_module(classes=20, members=1000):
     return "\n".join(lines)
 
 
-@pytest.mark.parametrize("runner", ["unittest", "pytest"])
-def test_a_metaclass_that_breaks_on_enumeration_does_not_break_the_run_and_the_class_is_still_attested(tmp_path, runner):
-    """Root's P2 fixture: ``__dir__`` raises on its second call. The
-    producer never calls ``__dir__`` (the membership is read from the MRO
-    dictionaries through ``getattr_static``), so the run passes, the report
-    parses, the class is attested from what the loader collected and a
-    claim on it discharges."""
+TOUCH_FILE = ("import unittest\n\nTOUCHED = False\n\n\nclass Meta(type):\n    def __getattribute__(cls, name):\n"
+              "        global TOUCHED\n        if name == '__mro__':\n            TOUCHED = True\n"
+              "        return super().__getattribute__(name)\n\n\n"
+              "class Target(unittest.TestCase, metaclass=Meta):\n    def test_own(self):\n        self.assertFalse(TOUCHED)\n")
+DESC_FILE = ("import unittest\n\nBLOCK = False\n\n\ndef failure(self):\n    self.fail('must not be omitted')\n\n\n"
+             "class Dynamic:\n    def __get__(self, instance, owner):\n        if BLOCK:\n"
+             "            raise RuntimeError('membership unknown')\n        return failure.__get__(instance, owner)\n\n\n"
+             "class Parent(unittest.TestCase):\n    test_hidden = Dynamic()\n\n\n"
+             "class Target(Parent):\n    def test_own(self):\n        pass\n\n\n"
+             "def load_tests(loader, tests, pattern):\n    global BLOCK\n    BLOCK = True\n"
+             "    return unittest.TestSuite([Target('test_own')])\n")
+WIDE_FILE = ("import unittest\n\nSEEN = []\n\n\nclass Meta(type):\n    def __getattribute__(cls, name):\n"
+             "        SEEN.append(name)\n        return super().__getattribute__(name)\n\n\n"
+             "class Target(unittest.TestCase, metaclass=Meta):\n    def test_own(self):\n"
+             "        import json\n        import os\n\n        with open(os.environ['TOUCH_LOG'], 'a') as f:\n"
+             "            f.write(json.dumps(sorted(set(SEEN))) + '\\n')\n")
+
+
+@pytest.mark.parametrize("runner, fixture, item", [
+    ("unittest", META_FILE, "tests/test_meta.py::Target"),
+    ("pytest", META_FILE, "tests/test_meta.py::Target"),
+    ("unittest", TOUCH_FILE, "tests/test_meta.py::Target"),
+])
+def test_a_custom_metaclass_is_held_and_its_test_still_passes_untouched(tmp_path, runner, fixture, item):
+    """Root's two metaclass fixtures (reviews of 55e07d4 and e916a0a): a
+    ``__dir__`` that raises on its second call, and a ``__getattribute__``
+    that records any read of ``__mro__`` and fails the test if one
+    happened. The run passes exactly as the plain runner's does, the report
+    parses, and the class is held (a custom metaclass is outside the
+    attestation's boundary), so the claim stands. No metaclass code is run
+    by the optional reporting. The ``__mro__`` fixture is a unittest control
+    only: plain pytest itself reads ``__mro__`` while collecting and fails
+    that test without any report."""
     gate = ((PY, "-m", "unittest", "tests.test_meta", TOKEN) if runner == "unittest"
             else (PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_meta.py", TOKEN))
-    session, entry, check = _real_run(tmp_path, gate, "tests/test_meta.py::Target",
-                                      files={"tests/__init__.py": "", "tests/test_meta.py": META_FILE})
+    session, entry, check = _real_run(tmp_path, gate, item, files={"tests/__init__.py": "", "tests/test_meta.py": fixture})
     report = check["report"]
     assert check["passed"] and report["state"] == "parsed", (runner, report, check["output"])
     assert report["counts"] == dict(passed=1, failed=0, errors=0, skipped=0)
-    assert report["passed_cases"] == ["tests/test_meta.py::Target::test_ok"]
-    assert report["classes"] == [dict(id="tests/test_meta.py::Target", members=["test_ok"])] and report["classes_truncated"] is False
-    assert session._discharge_record(entry) is not None and _checker_clears(session, entry, check)
+    assert report["passed_cases"] in (["tests/test_meta.py::Target::test_ok"], ["tests/test_meta.py::Target::test_own"])
+    assert report["classes"] == [] and report["classes_truncated"] is False, "a custom metaclass is held, not attested"
+    assert entry["binding"]["kind"] == "class" and entry["cases"]
+    assert session._discharge_record(entry) is None and not _checker_clears(session, entry, check)
+
+
+def test_the_reported_unittest_run_reads_no_class_attribute_the_plain_runner_does_not(tmp_path):
+    """The parity measurement behind the boundary: a metaclass logs every
+    class attribute name read through it; the plain ``python -m unittest``
+    run and the reported run log the same set."""
+    import json
+    import os
+    import subprocess
+    root = _project(tmp_path, {"tests/__init__.py": "", "tests/test_wide.py": WIDE_FILE})
+    direct, reported = tmp_path / "direct.log", tmp_path / "reported.log"
+    env = dict(os.environ, TOUCH_LOG=str(direct))
+    env.pop("PYTHONPATH", None)
+    plain = subprocess.run([PY, "-m", "unittest", "tests.test_wide"], cwd=root, env=env, capture_output=True, text=True)
+    assert plain.returncode == 0, plain.stderr
+    os.environ["TOUCH_LOG"] = str(reported)
+    try:
+        result = IntegrationGate([PY, "-m", "unittest", "tests.test_wide", TOKEN], cwd=root).run()
+    finally:
+        del os.environ["TOUCH_LOG"]
+    assert result.passed and result.report["state"] == "parsed" and result.report["counts"]["passed"] == 1
+    assert result.report["classes"] == [] and result.report["passed_cases"] == ["tests/test_wide.py::Target::test_own"], \
+        "held, yet the passed case is still placed through the built-in descriptors"
+    assert json.loads(direct.read_text()) == json.loads(reported.read_text()), "the producer added no class attribute read"
+
+
+def test_root_s_unknown_descriptor_holds_the_class_in_both_consumers(tmp_path):
+    """Root's P1 (review of e916a0a): an inherited ``test_hidden`` is a
+    custom descriptor that raises once ``load_tests`` has hidden the
+    failing inherited test; the run passes one method. Static lookup saw
+    an object that was "not callable" and the class cleared. A ``test*``
+    attribute of an unknown kind now holds the whole class: nothing is
+    attested for Target, the engine and the checker both refuse."""
+    session, entry, check = _real_run(tmp_path, (PY, "-m", "unittest", "tests.test_desc", TOKEN), "tests/test_desc.py::Target",
+                                      files={"tests/__init__.py": "", "tests/test_desc.py": DESC_FILE})
+    report = check["report"]
+    assert check["passed"] and report["state"] == "parsed", (report, check["output"])
+    assert report["counts"] == dict(passed=1, failed=0, errors=0, skipped=0)
+    assert report["passed_cases"] == ["tests/test_desc.py::Target::test_own"]
+    assert report["classes"] == [] and report["classes_truncated"] is False
+    assert entry["cases"] == ["tests/test_desc.py::Target::test_own"]
+    assert session._discharge_record(entry) is None and not _checker_clears(session, entry, check)
 
 
 def test_a_class_the_producer_cannot_place_or_read_attests_nothing_and_the_run_is_intact(tmp_path):
@@ -1236,6 +1304,13 @@ def test_the_producers_read_membership_statically_and_an_unreadable_class_attest
         def test_own(self):
             pass
 
+    class Shadow(Base):
+        test_inherited = 0
+
+        @classmethod
+        def test_class(cls):
+            pass
+
     class Dir(type):
         def __dir__(cls):
             raise RuntimeError("never called")
@@ -1244,17 +1319,35 @@ def test_the_producers_read_membership_statically_and_an_unreadable_class_attest
         def test_loud(self):
             pass
 
-    class Broken(type):
-        __mro__ = property(lambda cls: (_ for _ in ()).throw(RuntimeError("unreadable")))
+    class Describe:
+        def __get__(self, instance, owner):
+            raise RuntimeError("never invoked")
 
-    class Unreadable(unittest.TestCase, metaclass=Broken):
-        def test_u(self):
+    class Custom(unittest.TestCase):
+        test_custom = Describe()
+
+        def test_plain(self):
+            pass
+
+    import functools
+
+    class Partial(unittest.TestCase):
+        test_partial = functools.partial(print)
+
+    class Builtin(unittest.TestCase):
+        test_builtin = len
+
+    class Nested(unittest.TestCase):
+        class testInner:
             pass
     assert producer._class_members(Child) == ["test_inherited", "test_own", "test_static"], \
-        "inherited and static members count; a property, a plain attribute and a nested class do not"
-    assert producer._class_members(Loud) == ["test_loud"], "__dir__ is never called"
-    assert producer._class_members(Unreadable) is None, "an unreadable class attests nothing, never a smaller set"
+        "inherited and static members count; a property, a plain attribute and a Test* nested class do not"
+    assert producer._class_members(Shadow) == ["test_class", "test_static"], \
+        "the first definition in MRO order decides: data shadowing a parent's function is not a test"
+    for held in (Loud, Custom, Partial, Builtin, Nested):
+        assert producer._class_members(held) is None, held.__name__
     assert producer.MAX_REPORT_BYTES_WITH_CLASSES < 1024 * 1024
+    assert producer._TYPE_DICT is type.__dict__["__dict__"] and producer._TYPE_MRO is type.__dict__["__mro__"]
 
 
 def test_the_unittest_producer_s_whole_attestation_pass_is_contained(monkeypatch):
@@ -1265,11 +1358,12 @@ def test_the_unittest_producer_s_whole_attestation_pass_is_contained(monkeypatch
         def test_one(self):
             pass
     recorder = producer._Recorder()
-    recorder.attest(unittest.TestSuite([One("test_one")]))
-    assert recorder.classes and recorder.classes_truncated is False
+    recorder.survey(unittest.TestSuite([One("test_one")]))
+    assert recorder.collected == 1 and recorder.classes and recorder.classes_truncated is False
     recorder = producer._Recorder()
     monkeypatch.setattr(producer, "_class_members", lambda kind: (_ for _ in ()).throw(RuntimeError("boom")))
-    recorder.attest(unittest.TestSuite([One("test_one")]))
+    recorder.survey(unittest.TestSuite([One("test_one")]))
+    assert recorder.collected == 1, "the count the run always made is untouched"
     assert recorder.classes == [] and recorder.classes_truncated is True, "a failure of the pass attests nothing and raises nothing"
 
 
