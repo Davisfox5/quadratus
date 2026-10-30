@@ -2743,10 +2743,13 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-30T16:21:20Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "93536ab01b0d03287f2ed75b77b4bb4e0bb0295f",
+        "at": "2026-10-30T16:48:35Z"
+      },
       "reviews": [],
       "blockers": [],
       "decisions": [
