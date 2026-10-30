@@ -384,6 +384,75 @@ def _historical_paths_cleared(entry, checks, record) -> bool:
     return False
 
 
+_PYTHON_HEAD = re.compile(r"python(\d+(\.\d+)*)?")
+_UNITTEST_FLAGS = frozenset({"-v", "--verbose", "-q", "--quiet", "-b", "--buffer", "-f", "--failfast", "-c", "--catch"})
+_MODULE_NAME = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
+
+
+def _python_args(command: str):
+    """The arguments after a python interpreter head, the engine's report
+    token left out; None for anything else."""
+    import shlex
+    try:
+        argv = shlex.split(str(command or ""))
+    except ValueError:
+        return None
+    if not argv or not _PYTHON_HEAD.fullmatch(Path(argv[0]).name):
+        return None
+    return [a for a in argv[1:] if not a.startswith("--quadratus-report")]
+
+
+def _command_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item the engine bound to a ``python -m unittest <module>``
+    command (``binding.kind == "command"``), validated from the saved record
+    alone: the item is that command (plain runner flags only), every named
+    module is one of the binding's files, every bound case is a case id in
+    one of those files, and a later check on the final source under the
+    entry's own gate and environment holds a whole successful row of exactly
+    that command, from the project root, whose own report shows every bound
+    case passed. The same cases under another command never clear it
+    (completion workflow, 2026-10-30)."""
+    binding = entry.get("binding")
+    cases = entry.get("cases")
+    if not isinstance(binding, dict) or binding.get("kind") != "command":
+        return False
+    if not isinstance(cases, list) or not cases or not all(isinstance(c, str) and _CASE_ID.match(c) for c in cases):
+        return False
+    files = binding.get("files")
+    if not isinstance(files, list) or not files or not all(isinstance(f, str) and f.endswith(".py") for f in files):
+        return False
+    args = _python_args(str(entry.get("item") or ""))
+    declared = _python_args(str(binding.get("command") or ""))
+    if args is None or declared is None or args != declared or args[:2] != ["-m", "unittest"] or len(args) < 3:
+        return False
+    modules = []
+    for token in args[2:]:
+        if token in _UNITTEST_FLAGS:
+            continue
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            return False
+        modules.append(token)
+    if not modules or sorted(m.replace(".", "/") + ".py" for m in modules) != sorted(files):
+        return False
+    if any(c.split("::", 1)[0] not in files for c in cases):
+        return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    if not isinstance(gate, str) or not isinstance(environment, str):
+        return False
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment):
+            continue
+        for row in _rows(check):
+            if _row_ok(row) and _python_args(row["command"]) == declared and set(cases) <= _row_passed_cases(row):
+                return True
+    return False
+
+
 def _not_run_cleared(entry, checks, record=None) -> bool:
     """Cleared only by a later passing check that names the execution. The
     item's whole text decides the route (``_claim``): an identity claim (a
@@ -398,8 +467,12 @@ def _not_run_cleared(entry, checks, record=None) -> bool:
     if entry.get("kind") != "skipped":
         if record is None:
             return False
-        claim = _claim(str(entry.get("item") or ""))
         binding = entry.get("binding")
+        if isinstance(binding, dict) and binding.get("kind") == "command":
+            # The engine's command binding is validated whole by its own
+            # route; the item's text alone never decides it.
+            return _command_not_run_cleared(entry, checks, record)
+        claim = _claim(str(entry.get("item") or ""))
         if claim == "identity":
             if not isinstance(binding, dict) or binding.get("kind") not in ("scenario", "case", "mixed"):
                 return False
@@ -629,7 +702,18 @@ def judge(run_dir, project=None) -> dict:
         elif verdict.get("met") is not True:
             unshown.append(f"{rid} has no independent audit verdict of met")
     for entry in record.get("unexecuted_acceptance") or []:
-        if not _not_run_cleared(entry, checks, record):
+        cleared = _not_run_cleared(entry, checks, record)
+        if entry.get("kind") != "skipped" and entry.get("discharge_display") == "bound/1":
+            # The engine's own display of the discharge must say what this
+            # reading of the record says (completion workflow, 2026-10-30);
+            # a mark the record does not justify, or a clearance the display
+            # does not show, is a record that disagrees with itself.
+            marked = entry.get("discharged_at") is not None
+            if marked != cleared:
+                unshown.append(f"task {entry.get('task')}: the engine shows the NOT RUN item "
+                               f"{'discharged' if marked else 'not discharged'} but the record "
+                               f"{'does not show it ran' if marked else 'shows it ran'}: {str(entry.get('item'))[:120]}")
+        if not cleared:
             unshown.append(f"task {entry.get('task')} reported NOT RUN and no later check shows it ran: "
                            f"{str(entry.get('item'))[:120]}")
     for repair in record.get("test_repairs") or []:

@@ -2688,6 +2688,38 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-completion-workflow",
+      "purpose": "Completion workflow (Davis, 2026-10-30, after terminal evidence-authority-02): recovery accounting charges explicit real recovery of capped/failed work once and never a first coverage task resolving findings on closed work; continuation/resolution ownership survives dispatch, inheritance, merge, close, recheck and saved state with a legal closure route checked before spending; one finding id across typed findings, unresolved entries, legacy texts and deferrals closed atomically by designated review; unassigned requirements stay visible and planned; NOT RUN discharge display agrees with bound execution, unittest module commands bound only by exact execution; offline transition controls. Base 8a45387 is the #73 head (candidate 5f0bb9e is its ancestor)",
+      "base": "8a453875b793784e54690e99f032cc79a378002a",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/checkpoint.py",
+        "quadratus/finding_state.py",
+        "quadratus/completion_decision.py",
+        "quadratus/obligations.py",
+        "tools/truth_check.py",
+        "tests/test_completion_workflow_units.py",
+        "tests/lifecycle/test_completion_workflow.py",
+        "tests/test_evidence_lifecycle_units.py",
+        "tests/lifecycle/test_evidence_lifecycle.py",
+        "CLAUDE.md",
+        "quadratus/project_run.py",
+        "tests/lifecycle/test_step2_recovery.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-30T02:46:35Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: scope extended to quadratus/project_run.py",
+        "claude: scope extended to tests/lifecycle/test_step2_recovery.py"
+      ]
     }
   ],
   "receipts": [

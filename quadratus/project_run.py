@@ -1078,6 +1078,9 @@ def _survey_record(session, completed):
         findings=[dict(id=f["id"], kind=f.get("kind"), status=f["status"], task=f["task"]) for f in findings],
         repeats=list(session.survey.get("repeats", [])),
         hypotheses=list(session.survey.get("hypotheses", [])),
+        # Each CONTINUES or RESOLVES line's recovery decision, as the dispatch
+        # charged it (completion workflow, 2026-10-30).
+        charges=list(session.survey.get("charges", [])),
         completed=completed,
     )
 

@@ -1004,13 +1004,15 @@ def test_a_parallel_finding_on_sibling_work_is_rechecked_once_on_the_merged_sour
         assert rechecks[0]["rechecked"][0]["verdict"] == "resolved" and not still_open
     else:
         assert rechecks[0]["rechecked"][0]["verdict"].startswith("kept") and still_open
-        if shape == "blocking":
-            # A kept BLOCKING finding is held review debt: no FindingsOpen.
-            assert "FindingsOpen" not in (replay.result.error or ""), replay.result.error
-        else:
-            # A deferred entry is not disputable review debt (Session._disputable),
-            # so a kept deferral still ends the batch as before.
-            assert (replay.result.error or "").startswith("FindingsOpen"), replay.result.error
+        # A kept BLOCKING finding is held review debt: no FindingsOpen. A
+        # deferral the reviewer kept on the merged source is the same held
+        # debt under the same id (completion workflow, 2026-10-30: before, a
+        # deferred entry was never disputable, so a kept deferral ended the
+        # batch while a kept BLOCKING line did not).
+        assert "FindingsOpen" not in (replay.result.error or ""), replay.result.error
+        if shape == "deferred":
+            assert any(text.startswith("RFT2-") and "deferred by" in text
+                       for text in H.result_json(replay)["open_findings"]), "the deferral carries its id"
     assert [c.task for c in replay.of("lead")].count("t2") == 1
     after = replay.calls[replay.calls.index(merged[0]) + 1:]
     assert not [c for c in after if c.role.startswith(("lead", "revision"))], "no editing call after the merge recheck"

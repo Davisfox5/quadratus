@@ -1492,7 +1492,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
-                        cwd=row["cwd"], report_cases=_report_cases(row["report"]),
+                        cwd=row["cwd"], command=row["command"], report_cases=_report_cases(row["report"]),
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
@@ -1775,6 +1775,52 @@ def _named_skip_run(entry: dict, run: dict, texts) -> Optional[List[str]]:
                for n in need):
         return None
     return sorted(need)
+
+
+_PYTHON_HEAD = re.compile(r"python(\d+(\.\d+)*)?")
+_UNITTEST_FLAGS = frozenset({"-v", "--verbose", "-q", "--quiet", "-b", "--buffer", "-f", "--failfast", "-c", "--catch"})
+_MODULE_NAME = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
+
+
+def _unittest_module_command(item: str):
+    """``(argv, modules)`` for a ``python -m unittest <module>...`` line that
+    carries only the runner's plain flags, or None for anything else
+    (``discover``, a file path, an option the runner reads as a selection,
+    a shell wrapper): the harness binds only the form it can hold to whole
+    modules' cases (completion workflow, 2026-10-30)."""
+    import shlex
+    try:
+        argv = shlex.split(str(item or ""))
+    except ValueError:
+        return None
+    if len(argv) < 4 or not _PYTHON_HEAD.fullmatch(Path(argv[0]).name) or argv[1:3] != ["-m", "unittest"]:
+        return None
+    modules = []
+    for token in argv[3:]:
+        if token in _UNITTEST_FLAGS:
+            continue
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            return None
+        modules.append(token)
+    return (argv, modules) if modules else None
+
+
+def _same_python_command(recorded: str, declared: str) -> bool:
+    """Whether a receipt's command is the declared ``python -m ...`` command:
+    the same arguments after a python interpreter head, the harness's own
+    report token left out, nothing else normalised."""
+    import shlex
+
+    def parts(text):
+        try:
+            argv = shlex.split(str(text or ""))
+        except ValueError:
+            return None
+        if not argv or not _PYTHON_HEAD.fullmatch(Path(argv[0]).name):
+            return None
+        return [a for a in argv[1:] if not a.startswith("--quadratus-report")]
+    first, second = parts(recorded), parts(declared)
+    return first is not None and second is not None and first == second
 
 
 def _item_paths(item: str) -> List[str]:
@@ -4845,6 +4891,121 @@ class Session:
                 outcome.recover("cap")
                 outcome.recover("failed")
 
+    # -- completion workflow: ownership, recovery accounting, closure routes (2026-10-30) ----
+    def _owed_tasks(self) -> set:
+        """The tasks whose work is still owed: capped, failed or unmerged
+        and not taken over by a continuation that closed. Typed and legacy
+        together, the same set that blocks completion."""
+        return set(self._partial_tasks) | self._partial_from_outcomes()
+
+    def _continues_problem(self, continues) -> str:
+        """Why a CONTINUES line cannot stand, before any call; "" when it
+        can. It names a task this run dispatched whose work is still owed.
+        A task with no record, a task that closed, or one a continuation
+        already took over is not owed, and new work does not continue it:
+        ownership is declared against the record, never inferred."""
+        if not continues:
+            return ""
+        known = {o.task_id for o in self.task_outcomes} | {s.task_id for s in self.history}
+        if continues not in known:
+            return f"CONTINUES names {continues}, a task this run has no record of."
+        if continues in self._owed_tasks():
+            return ""
+        takers = [o.task_id for o in self.task_outcomes if o.continues == continues and o.task_id != continues]
+        return (f"CONTINUES names {continues}, whose work is not owed"
+                + (f" ({', '.join(takers)} took it over)" if takers else " (it closed)")
+                + "; new work does not continue it. Name the task without CONTINUES, or continue a task "
+                  "that is still owed.")
+
+    def _recovery_decision(self, spec, continues, resolves) -> dict:
+        """What this task's CONTINUES and RESOLVES lines take over, decided
+        against the record before its first call (evidence-authority-02:
+        t3's RESOLVES of two findings on a task that had closed clean was
+        charged as a recovery, so the allowance was spent before any work
+        had failed, and t4's real continuation was the last one allowed). A
+        recovery is a CONTINUES of owed work, or a RESOLVES naming a finding
+        raised on owed work; it is charged once whatever it names. A
+        RESOLVES naming only findings on closed work is ordinary coverage;
+        those findings still settle only through their reviewers' rechecks."""
+        owed = self._owed_tasks()
+        by_task: Dict[Optional[str], List[str]] = {}
+        for fid in resolves or []:
+            record = next((r for r in self.review_findings if r["fid"] == fid), None)
+            task = record["task"] if record is not None else next(
+                (f.get("task") for f in self.findings if f["id"] == fid), None)
+            by_task.setdefault(task, []).append(fid)
+        recovers = sorted(({continues} if continues in owed else set()) | {t for t in by_task if t in owed})
+        ordinary = {t: ids for t, ids in by_task.items() if t not in owed}
+        if recovers:
+            why = f"recovers the capped, failed or unmerged work of {', '.join(recovers)}"
+        elif ordinary:
+            why = ("resolves findings on closed work ("
+                   + "; ".join(f"{t or 'unknown task'}: {', '.join(ids)}" for t, ids in ordinary.items())
+                   + "): ordinary coverage, not charged")
+        else:
+            why = "ordinary coverage"
+        return dict(task=spec.task_id, continues=continues or None, resolves=list(resolves or []),
+                    owed=sorted(owed), recovers=recovers, recovery=bool(recovers), charged=False, why=why)
+
+    def _owed_report(self) -> str:
+        """The owed work as the record holds it, for the planner and for a
+        stop: each owed task with the requirements it covered, the files
+        its record says it changed and the review findings still open on it."""
+        parts = []
+        for tid in sorted(self._owed_tasks()):
+            outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == tid), None)
+            record = self.turn_limited_records.get(tid) or self.failed_records.get(tid) or {}
+            open_ids = [r["fid"] for r in self._finding_records(task=tid)]
+            covers = ", ".join(outcome.covers) if outcome is not None and outcome.covers else "nothing listed"
+            parts.append(f"{tid}: covers {covers}; files {', '.join(record.get('changed') or ()) or 'none recorded'}; "
+                         f"open findings {', '.join(open_ids) or 'none'}")
+        return "; ".join(parts) or "none"
+
+    def _closure_route_problem(self, spec, continues, resolves, covers) -> Tuple[str, str]:
+        """``(route, problem)`` for a task named while work is owed:
+        ``("", "")`` when the task takes the owed work over or does not
+        touch it; ``("refuse", why)`` when it covers a requirement or names
+        a file of owed work without CONTINUES, which is sent back (the
+        harness never infers a takeover from an overlap: the owed task's
+        debt and its reviewers' open findings close only through an explicit
+        continuation); ``("stop", why)`` when that continuation is one the
+        spent recovery allowance would refuse, so the run stops naming the
+        owed work before any call is spent on a duplicate it could not close
+        (evidence-authority-02: t5 re-did t4's HTTP work with the allowance
+        spent, and the batch close stopped on t4 still owed)."""
+        owed = self._owed_tasks()
+        if not owed:
+            return "", ""
+        taking = set(self._recovery_decision(spec, continues, resolves)["recovers"])
+        mine = {str(p).strip("./") for p in (spec.scope.permitted_paths if spec.scope is not None else ())}
+        overlaps = []
+        for tid in sorted(owed - taking):
+            outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == tid), None)
+            theirs = set(outcome.covers or ()) if outcome is not None else set()
+            record = self.turn_limited_records.get(tid) or self.failed_records.get(tid) or {}
+            files = {str(p).strip("./") for p in (record.get("changed") or ())}
+            shared_r, shared_f = sorted(theirs & set(covers or ())), sorted(files & mine)
+            if shared_r or shared_f:
+                overlaps.append(f"{tid} (" + "; ".join(x for x in (
+                    f"requirements {', '.join(shared_r)}" if shared_r else "",
+                    f"files {', '.join(shared_f)}" if shared_f else "") if x) + ")")
+        if not overlaps:
+            return "", ""
+        detail = ", ".join(overlaps)
+        survey = self.config.survey
+        if survey is not None and self.survey["recovery_used"] >= survey.recovery_tasks:
+            return "stop", (f"SurveyAllowanceSpent: the recovery allowance of {survey.recovery_tasks} task(s) is "
+                            f"spent and {spec.task_id} overlaps work still owed by {detail}; no task can continue "
+                            "it, and a task over the same requirements or files without CONTINUES could not close "
+                            f"that work, so nothing is spent on it. Owed work: {self._owed_report()}. Work preserved.")
+        left = (f"; {max(0, survey.recovery_tasks - self.survey['recovery_used'])} of {survey.recovery_tasks} left"
+                if survey is not None else "")
+        return "refuse", (f"{spec.task_id} overlaps work still owed by {detail}. The harness never infers a "
+                          "takeover: that work closes only through a task whose description carries "
+                          "'CONTINUES: <task id>' on its own line (a recovery, charged to the recovery "
+                          f"allowance{left}), which inherits its open findings for their reviewers. Name the task "
+                          "again with CONTINUES, or name work that does not overlap it.")
+
     def _prepare_dispatch(self, spec: TaskSpec) -> None:
         """This task's own scope and gate, settled before its contract is
         built (map P3.4): the contract then describes the gate and scope the
@@ -6500,6 +6661,7 @@ class Session:
         except BaseException as exc:
             self._note_exception(exc)
             self._finalise_findings(exc)
+            self._mark_not_run_display_safely()
             raise
         try:
             self._finish_run()
@@ -6536,6 +6698,8 @@ class Session:
         text = ("\n\nUnfinished work as the harness holds it now (this supersedes the 'not done' and "
                 "'CONTINUES' notes in older task records): ")
         text += (f"still owed: {', '.join(still)}; a task that takes one over says CONTINUES with its id. "
+                 f"Owed work: {self._owed_report()}. A task that covers one of those requirements or names one "
+                 "of those files without CONTINUES is sent back: the harness never infers a takeover. "
                  if still else "nothing is owed. ")
         if settled:
             text += (f"No longer owed: {', '.join(settled)} (a later task took the debt over); their records "
@@ -6544,7 +6708,14 @@ class Session:
             total = self.config.survey.recovery_tasks
             used = min(int(self.survey.get("recovery_used", 0) or 0), total)
             text += (f"Recovery tasks (CONTINUES or RESOLVES) used: {used} of {total}"
-                     + ("; none is left, and naming one stops the run." if used >= total else "."))
+                     + ("; none is left, and naming one stops the run." if used >= total else ".")
+                     + " A recovery is a CONTINUES of owed work or a RESOLVES naming a finding raised on it, "
+                       "charged once; a RESOLVES that names only findings on closed work is ordinary "
+                       "coverage and is not charged.")
+            if used >= total and still:
+                text += (" With none left the owed work cannot be continued and the run cannot complete while "
+                         "it is owed: a task over its requirements or files stops the run before any call. "
+                         "Name only work that does not overlap it, or DONE; the debt is reported as it stands.")
         return text.rstrip()
 
     def _slots_note(self) -> str:
@@ -6656,6 +6827,7 @@ class Session:
             # The record says what holds at the end, whatever stopped the run.
             self._recheck_resolved_findings()
             self._annotate_open_findings(self.stop_reason[:240] or "the run ended incomplete")
+        self._mark_not_run_display_safely()
 
     def _run_tasks(self, max_tasks: int) -> List[TaskSummary]:
         self.completed = False
@@ -6873,16 +7045,53 @@ class Session:
                 self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
                 previous_description = None
                 continue
+            problem = self._continues_problem(continues)
+            if problem:
+                # Ownership is declared against the record and validated
+                # before any call (completion workflow, 2026-10-30): a
+                # CONTINUES names a dispatched task whose work is still owed.
+                self._refuse_listed(spec, problem)
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming CONTINUES on work it cannot take over: {problem}")
+                self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
+                previous_description = None
+                continue
+            route, problem = self._closure_route_problem(spec, continues, resolves, covers)
+            if route == "stop":
+                # No legal closure route is left for the owed work this task
+                # overlaps: the owed work is reported now, before any call
+                # is spent on a duplicate the run could not close.
+                self._stop_with("budget", problem)
+                self._note("owed work has no closure route left; stopping before spending on a duplicate")
+                break
+            if problem:
+                self._refuse_listed(spec, problem)
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled("the orchestrator kept naming work over owed work without taking it over: "
+                                     + problem)
+                self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
+                previous_description = None
+                continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
             self._resolution_candidate = None
-            if self.config.survey is not None and (continues or resolves):
-                if self.survey["recovery_used"] >= self.config.survey.recovery_tasks:
-                    self._stop_with("budget", (f"SurveyAllowanceSpent: the recovery allowance of "
-                                               f"{self.config.survey.recovery_tasks} task(s) is spent and "
-                                               f"{spec.task_id} would be another. Work preserved."))
-                    self._note("the survey recovery allowance is spent; stopping before the next repair")
-                    break
-                self.survey["recovery_used"] += 1
+            decision = self._recovery_decision(spec, continues, resolves)
+            if self.config.survey is not None:
+                # Charged once, for a real recovery of capped, failed or
+                # unmerged work; a RESOLVES of findings on closed work is
+                # ordinary coverage (completion workflow, 2026-10-30).
+                if decision["recovery"]:
+                    if self.survey["recovery_used"] >= self.config.survey.recovery_tasks:
+                        self._stop_with("budget", (f"SurveyAllowanceSpent: the recovery allowance of "
+                                                   f"{self.config.survey.recovery_tasks} task(s) is spent and "
+                                                   f"{spec.task_id} would be another ({decision['why']}). "
+                                                   f"Owed work: {self._owed_report()}. Work preserved."))
+                        self._note("the survey recovery allowance is spent; stopping before the next repair")
+                        break
+                    self.survey["recovery_used"] += 1
+                    decision["charged"] = True
+                self.survey.setdefault("charges", []).append(decision)
             checks_before, open_before = len(self.checks), len(self.open_findings)
             self._continues = continues
             if self._explicit_tasks is not None:
@@ -8503,6 +8712,11 @@ class Session:
                     self._settle_completion(spec, peer, "recheck", reading.judged_any, outcome=outcome)
                     verdict = completed
             new = self._apply_review_reading(spec, peer, "recheck", reading, binding)
+            for entry in group:
+                if entry.get("deferred"):
+                    # Rechecked on the merged source, as its own words
+                    # required: from here it is held debt like any other.
+                    entry["deferred_rechecked"] = True
             if rows:
                 # After the findings' reading: registering a NOT SHOWN row's
                 # finding first would move the bound identity the reading is
@@ -10069,7 +10283,8 @@ class Session:
                 out[rid] = dict(kind="audit", reviewer=audit["auditor"], finding=f"{rid}: NOT MET - {why}",
                                 disposition="NOT MET", identity=rid)
         for number, entry in enumerate(self.unresolved_reviews, 1):
-            if entry.get("deferred") or entry.get("text") not in self.open_findings:
+            if (entry.get("deferred") and not entry.get("deferred_rechecked")) or \
+                    entry.get("text") not in self.open_findings:
                 continue
             finding = (entry.get("finding") or entry["text"]).strip()
             out[f"U{number}"] = dict(kind="review", reviewer=entry["peer"], finding=finding,
@@ -10664,6 +10879,33 @@ class Session:
         not, never falls back to a path."""
         item = str(entry.get("item") or "")
         binding = dict(kind="none", scenario=None, cases=[], problem="")
+        command = _unittest_module_command(item)
+        if command is not None:
+            # A documented ``python -m unittest <module>`` command (completion
+            # workflow, 2026-10-30; evidence-authority-02 t5: the item named a
+            # module, not a file, and bound to nothing while the file's cases
+            # ran under other rows). It binds to every case the named module
+            # files define and is discharged only by a complete run of exactly
+            # that command, from the project root, on the current source,
+            # whose own report shows those cases passed; another runner's
+            # execution of the same cases never stands in for it.
+            argv, modules = command
+            files, problems = [], []
+            for module in modules:
+                rel = module.replace(".", "/") + ".py"
+                if self.project and (Path(self.project) / rel).is_file():
+                    files.append(rel)
+                else:
+                    problems.append(f"{module} is not a test module file in the project")
+            cases = self._module_case_ids(files) if not problems else []
+            if not problems and not cases:
+                problems.append("the named module defines no test case")
+            binding.update(kind="command", command=" ".join(argv), files=files,
+                           cases=sorted(cases) if not problems else [], problem="; ".join(problems)[:300])
+            entry["binding"], entry["cases"] = binding, list(binding["cases"])
+            if binding["problem"]:
+                self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
         scenarios = list(dict.fromkeys(re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", item)))
         explicit = _cited_cases(item)
         rest = _CASE_CITATION.sub(" ", item)
@@ -10741,6 +10983,75 @@ class Session:
                         row.update(execution="missing", receipts=[], source_digest=None,
                                    reason="the scenario was rebound after the execution")
                     self._sync_obligation(row)
+
+    def _module_case_ids(self, files) -> List[str]:
+        """Every ``file::[Class::]test`` a test module file defines, read with
+        ``ast`` and never executed, for a command bound to whole modules."""
+        import ast
+        if not self.project:
+            return []
+        out = []
+        for rel in files:
+            try:
+                tree = ast.parse((Path(self.project) / rel).read_text(errors="ignore"))
+            except (OSError, SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                    out.append(f"{rel}::{node.name}")
+                elif isinstance(node, ast.ClassDef):
+                    for inner in node.body:
+                        if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner.name.startswith("test"):
+                            out.append(f"{rel}::{node.name}::{inner.name}")
+        return sorted(set(out))
+
+    def _gate_runs_command(self, command: str) -> bool:
+        """Whether the effective gate runs exactly the declared python
+        command from the project root (``_same_python_command``), so the
+        harness itself can discharge an item bound to it."""
+        gate = self._current_gate()
+        if gate is None or not self.project or not command:
+            return False
+        import shlex
+
+        from .integration import _gate_commands
+        root = Path(self.project).resolve()
+        try:
+            commands = [c for c in (_gate_commands(gate, root) or []) if not c.skip_reason]
+        except Exception:  # noqa: BLE001 -- an unreadable gate runs nothing
+            return False
+        for candidate in commands:
+            cwd = (root / candidate.cwd).resolve() if candidate.cwd else root
+            if cwd == root and _same_python_command(" ".join(shlex.quote(str(a)) for a in candidate.argv), command):
+                return True
+        return False
+
+    def _mark_not_run_display(self) -> None:
+        """The display of a NOT RUN item's discharge, written from the one
+        discharge decision (``_discharge_record``) on the current source,
+        gate and environment, and cleared when that decision no longer holds
+        (completion workflow, 2026-10-30; evidence-authority-02: the typed
+        rows showed t6's bound cases ran under the merge gate while
+        ``unexecuted_acceptance[].discharged_at`` stayed null). Skip facts
+        keep the decision ``_discharge_named`` wrote. The mark is display
+        only: nothing reads it as evidence, and the independent checker
+        reports a mark the record does not justify."""
+        for entry in self.unexecuted_acceptance:
+            if entry.get("kind") == "skipped":
+                continue
+            decided = self._discharge_record(entry)
+            entry["discharge_display"] = "bound/1"
+            if decided is None:
+                entry.update(discharged_at=None, discharged_run=None, discharged_cases=None)
+            else:
+                entry.update(discharged_at=decided["index"], discharged_run=decided["run"],
+                             discharged_cases=list(decided["cases"]))
+
+    def _mark_not_run_display_safely(self) -> None:
+        try:
+            self._mark_not_run_display()
+        except Exception:  # noqa: BLE001 -- a display never fails the run's end
+            log.warning("could not refresh the NOT RUN discharge display", exc_info=True)
 
     def _resolve_case_ids(self, names) -> Tuple[List[str], str]:
         """``(case ids, problem)``: each name resolved to exactly one
@@ -11257,8 +11568,14 @@ class Session:
             # the gate's own case record can show executed (``_bind_not_run``);
             # otherwise a prerequisite.
             bound = tuple(str(c) for c in (entry.get("cases") or ()))
-            runner = ("gate" if self._gate_can_run(_item_paths(behavior))
-                      or (bound and self._current_gate() is not None) else None)
+            if (entry.get("binding") or {}).get("kind") == "command":
+                # Only the gate running exactly that command can discharge
+                # it; the same cases under another runner are not its execution.
+                runner = ("gate" if bound and self._gate_runs_command(str((entry.get("binding") or {}).get("command") or ""))
+                          else None)
+            else:
+                runner = ("gate" if self._gate_can_run(_item_paths(behavior))
+                          or (bound and self._current_gate() is not None) else None)
             # The binding is the item's identity and survives a runner-less
             # registration (a parallel child has no gate; the parent re-bases
             # the row to its own and needs the cases to do it).
@@ -11438,7 +11755,7 @@ class Session:
         typed receipt (``_obligation_receipt``) carries exactly this record,
         never a re-reading of the run under another rule and never the
         claim itself."""
-        claim = (entry.get("binding") or {}).get("kind") in ("scenario", "case", "mixed")
+        claim = (entry.get("binding") or {}).get("kind") in ("scenario", "case", "mixed", "command")
         # An identity claim, valid or not, is discharged by its cases or by
         # nothing: the file-level route is for items that name only paths
         # (root's controls on bd0164f: an undefined case cleared when its
@@ -11482,6 +11799,14 @@ class Session:
                 if run is not None:
                     return dict(index=index, run=run["id"], cases=[])
                 continue
+            if (entry.get("binding") or {}).get("kind") == "command":
+                declared = str((entry.get("binding") or {}).get("command") or "")
+                if bound and check.get("passed"):
+                    run = next((r for r in runs if _same_python_command(r["command"], declared)
+                                and (r.get("cwd") or ".") in ("", ".") and set(bound) <= _run_passed_cases(r)), None)
+                    if run is not None:
+                        return dict(index=index, run=run["id"], cases=list(bound))
+                continue
             if paths:
                 run = next((r for r in runs if all(p in r["files"] for p in paths)), None)
                 if run is not None:
@@ -11512,6 +11837,7 @@ class Session:
         every identity checked); an execution on another source or a
         superseded requirement revision is stale (delivery.refresh). Nothing
         here judges sufficiency."""
+        self._mark_not_run_display()
         if not self.evidence_obligations:
             return
         current_source = self._source_fingerprint() if self.project else None
@@ -13162,7 +13488,10 @@ class Session:
                 "closes clean with its checks passing on the current source; the resolving task's lead cannot "
                 "clear it, no other reviewer judges it, a finding whose reviewer is unavailable cannot be named, "
                 "and the harness never marks its requirement met. A task that CONTINUES the task holding a "
-                "finding inherits it, and the same recheck follows its clean close without naming it.")
+                "finding inherits it, and the same recheck follows its clean close without naming it. On a "
+                "survey run a RESOLVES naming a finding raised on a capped, failed or unmerged task is a "
+                "recovery and is charged to the recovery allowance, once with any CONTINUES; naming only "
+                "findings on closed work is ordinary coverage and is not charged.")
 
     def _recheck_resolved_findings(self) -> None:
         """Reopen each resolved finding whose resolving renders no longer
@@ -14200,6 +14529,15 @@ class Session:
         partial = sorted(self._partial_from_outcomes() | set(self._partial_tasks))
         if partial:
             reasons.append(f"capped or failed task(s) {', '.join(partial)} not continued to completion")
+        if self.config.requirements_ledger and self.memory.ledger.requirements and self._explicit_tasks is None:
+            # Unassigned requirements stay visible at a stop (completion
+            # workflow, 2026-10-30): a run that ends on open work says which
+            # requirements no task ever covered beside the findings.
+            status = self.memory.ledger.requirement_status
+            uncovered = [rid for rid in self.memory.ledger.requirements
+                         if not str(status.get(rid, "")).startswith(("covered", "met"))]
+            if uncovered:
+                reasons.append(f"requirements no task has covered: {', '.join(uncovered)}")
         ledger = self._open_findings_for(None)
         if ledger:
             reasons.append(f"audit findings {', '.join(ledger)} are open")
@@ -14851,13 +15189,28 @@ class Session:
             sibling, condition = match.group(1).strip(" .,:"), match.group(2).strip()
             if sibling not in siblings or not condition:
                 continue
-            text = (f"Task {spec.task_id}: deferred by {peer} to parallel task {sibling}, unverified until "
-                    f"rechecked on the merged source: {condition}")
+            line = f"BLOCKING: {condition} (deferred to {sibling})"
+            registered = self._register_review_findings(spec, peer, line)
+            record = registered[0] if registered else next(
+                (r for r in self.review_findings if r["task"] == spec.task_id and r["author"] == peer
+                 and r.get("text") == line), None)
+            fid = record["fid"] if record is not None else None
+            if record is not None and not record.get("closed"):
+                # One identity, never closed in the child (completion
+                # workflow, 2026-10-30; evidence-authority-02 t6: the child's
+                # own recheck resolved RFT6-1 on its pre-merge copy, the text
+                # built here carried no id, so it outlived the typed record
+                # and defeated the batch close's hold). A deferral's own words
+                # condition it on the merged source: it is held out of the
+                # child's rechecks and judged once, there, by its reviewer.
+                record["held"] = (f"deferred to parallel task {sibling}: rechecked by {peer} on the merged "
+                                  "source, never in the child")
+            text = ((f"{fid}: " if fid else "")
+                    + f"Task {spec.task_id}: deferred by {peer} to parallel task {sibling}, unverified until "
+                      f"rechecked on the merged source: {condition}")
             self._open_finding("unverified", text)
-            registered = self._register_review_findings(spec, peer, f"BLOCKING: {condition} (deferred to {sibling})")
             self.unresolved_reviews.append(dict(task=spec.task_id, peer=peer, finding=match.group(0).strip(),
-                                                text=text, deferred=sibling,
-                                                finding_id=registered[0]["fid"] if registered else None))
+                                                text=text, deferred=sibling, finding_id=fid))
 
     def _snapshot_scratch_bindings(self, spec) -> None:
         """Before a reviewer runs: the task's explicitly bound test
@@ -15108,6 +15461,14 @@ class Session:
             row["text"] = prior.get("text", f.claim)
             rebuilt.append(row)
         self.review_findings = rebuilt
+        # Closing is atomic across every representation (completion
+        # workflow, 2026-10-30): a finding its designated judge closed here
+        # closes its held entries, its legacy texts and its facts in the
+        # same step, wherever the recheck ran.
+        for fid, record in before.items():
+            now = next((r for r in self.review_findings if r["fid"] == fid), None)
+            if now is not None and now.get("closed") and not record.get("closed"):
+                self._close_review_finding_by_id(fid, f"{now['state']} by {peer} on {role}")
         new = [r for r in self.review_findings if r["fid"] not in before]
         for record in new:
             record["text"] = f"BLOCKING: {record['claim']}"

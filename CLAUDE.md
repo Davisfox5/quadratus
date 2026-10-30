@@ -2663,6 +2663,52 @@ Key design decisions already settled:
   `tests/lifecycle/test_truth_canaries.py` drive the real run with scripted
   replies through the known bad cases. Review priority and batching rules are
   in `docs/DEVELOPMENT_PROCESS.md` ("Spending less per fix").
+- **A recovery is charged once, for owed work only; ownership is declared,
+  never inferred; one finding id closes everywhere** (completion workflow,
+  Davis, 2026-10-30, after evidence-authority-02 ended `FindingsOpen` with
+  every contract behaviour delivered and the audit never asked). Three
+  shared causes, one batch. (1) t3's `RESOLVES` of two findings on a task
+  that had closed clean was charged to the survey allowance, so the
+  allowance was spent before any work had failed; `_recovery_decision`
+  now charges a task once when it `CONTINUES` owed work (capped, failed or
+  unmerged, `_owed_tasks`) or `RESOLVES` a finding raised on it, and a
+  `RESOLVES` naming only findings on closed work is ordinary coverage
+  (those findings still settle only through their reviewers' rechecks);
+  every decision is recorded on `survey.charges` and in `result.json`. A
+  batch still refuses `CONTINUES` and `RESOLVES` at intake, so the serial
+  charge is the only one. (2) t5 re-did t4's HTTP work without `CONTINUES`
+  with the allowance spent, and the batch close stopped on t4 still owed.
+  `_continues_problem` sends back a `CONTINUES` naming a task with no
+  record, one that closed, or one a continuation already took over;
+  `_closure_route_problem` sends back a task that covers a requirement or
+  names a file of owed work without `CONTINUES` (the harness never infers a
+  takeover from an overlap), and when the allowance is spent it stops the
+  run `SurveyAllowanceSpent` naming the owed work (`_owed_report`: covers,
+  files, open finding ids) before any lead call is spent on a duplicate
+  the run could not close; non-overlapping work still runs on a survey.
+  The planner's unfinished-state note and the RESOLVES note state both
+  rules, and `_open_work` names the requirements no task covered at a
+  stop. (3) t6's reviewer deferred a finding to its sibling; the child's
+  own recheck resolved it on the pre-merge copy, the legacy text carried no
+  id, outlived the typed record and defeated the batch close's hold. A
+  deferral's registered finding is `held` out of the child's rechecks and
+  judged once on the merged source; its text starts with its id; a reading
+  that closes a finding (`_apply_review_reading`) closes its held entries,
+  legacy texts and facts in the same step, wherever the recheck ran; and a
+  deferral its reviewer kept on the merged source is held review debt like
+  any other (`deferred_rechecked`), not a batch stop. Also from the same
+  terminal: `unexecuted_acceptance[].discharged_at` stayed null while the
+  typed rows showed t6's bound cases ran. `_mark_not_run_display` writes
+  the display from the one discharge decision on every refresh and at the
+  run's end, and `tools/truth_check.py` reports a display that disagrees
+  with the record either way; and a documented `python -m unittest
+  <module>` NOT RUN item (t5's, bound to nothing) binds to the module's
+  cases under a `command` binding that only a complete run of exactly that
+  command from the project root discharges, in the engine and the checker
+  alike; the same cases under pytest never stand in. No cap, allowance,
+  review, grader or baseline changed. Controls:
+  `tests/test_completion_workflow_units.py`,
+  `tests/lifecycle/test_completion_workflow.py`.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
