@@ -6518,6 +6518,9 @@ class Session:
                 self._verify_security_json(spec, task, draft, excursion.worker, verifier)
             else:
                 verdict = None
+                # The identity an owed verification would be settled on,
+                # taken before the call and compared after it.
+                verifier_binding = self._judgment_binding(spec, verifier, "verifier")
                 try:
                     with invocation(spec.task_id, "verifier"):
                         verdict = self._invoke_model(
@@ -6542,7 +6545,15 @@ class Session:
                 if verdict is not None:
                     task.record("assistant", f"[{verifier}] {verdict}")
                     task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
-                    self._settle_owed_by_judgment(spec, verifier, "verification")
+                    # Owed verification settles only on a judgment the
+                    # verifier actually wrote (its VERDICT line, or a prefixed
+                    # finding) on an unchanged identity; narration, an empty
+                    # or malformed reply leaves it owed (root's review of
+                    # a7f9c6c, R2). The older reading below is unchanged.
+                    recognised = _security_verdict_line(verdict) is not None or _has_prefixed_finding(verdict)
+                    current = self._judgment_binding(spec, verifier, "verifier")["identity"]
+                    if recognised and current == verifier_binding["identity"]:
+                        self._settle_owed_by_judgment(spec, verifier, "verification")
                 # A finding is a marker as written, not the word in prose (map
                 # G7): the old substring test read "no BLOCKING findings" as
                 # one. Semantics taken from the reviewed helper on 90cc5d9.
@@ -9597,11 +9608,23 @@ class Session:
                     d["rechecked"] = "kept: none of its rows is on the record"
                 continue
             ids = [r["fid"] for r in records]
+            # How long each finding's history was before this recheck: a
+            # verdict is one this recheck wrote (owner debt, below).
+            history_before = {r["fid"]: len(r.get("history") or ()) for r in records}
+            # Findings already owed to this author: this recheck is an owner
+            # settlement of them, recorded as one on their occurrence.
+            owed_before = [r["fid"] for r in records if r.get("owed_recheck")]
+
             self._recheck_impact, self._fix_cycle_now = (_worst_impact(records) if records else None), 1
             # The child's own proof rows, as the merged source and the merge
             # gate's receipt now hold them (the active spec is not this task).
             instructions = self._recheck_instructions(ids, spec=spec)
             binding = self._judgment_binding(spec, peer, "recheck")
+            def settled(fid: str, result: str, peer: str = peer, binding: dict = binding) -> None:
+                occurrence = next((r for r in reversed(self.recoveries) if fid in (r.get("debt") or ())), None)
+                self._recovery_attempt(occurrence, "owner_settlement", result, task=spec.task_id, role="recheck",
+                                       peer=peer, site=f"settlement recheck in {spec.task_id}",
+                                       source=binding.get("source"))
             origins = [e for e in group if e.get("task") and e["task"] != spec.task_id and e.get("description")]
             reviewed = "".join(f"Task {e['task']}, as you reviewed it: {e['description'][:1500]}\n\n"
                                for e in {e["task"]: e for e in origins}.values())
@@ -9617,20 +9640,37 @@ class Session:
                 with invocation(spec.task_id, "recheck"):
                     verdict = self._invoke_model(peer, prompt)
             except TurnLimitReached as exc:
-                # The findings are already held under their ids; the capped
-                # settlement is recorded as an occurrence and keeps them.
+                # No verdict: the same typed owner-debt transition as a
+                # capped recheck in the task (``_owe_review`` with the ids):
+                # the findings stay their author's, never carried to the audit
+                # in its place (root's review of a7f9c6c, R1).
                 rv = self._recovery_open(spec, role="recheck", seat=peer, kind="recheck", outcome_class="recheck_capped",
                                          question=f"{peer}'s settlement recheck of {', '.join(ids)}",
                                          event=self._call_event(spec.task_id, "recheck", peer), exc=exc)
-                rv["eligible"], rv["decision"], rv["debt"] = ["hold_owned_debt"], "hold_owned_debt", list(ids)
-                self._recovery_result(rv, "held: the findings stay open under their own ids")
+                rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
+                for fid in owed_before:
+                    settled(fid, "capped: no verdict")
+                if ids:
+                    self._owe_review(spec, peer, "recheck", f"its settlement recheck stopped at {exc.turns or 'its'} "
+                                     "rounds with no verdict", role="recheck", outcome=outcome, record=rv, fids=ids)
+                else:
+                    self._recovery_result(rv, "held: nothing to recheck by id")
                 row["verdict"] = "kept: recheck capped"
                 for d in deferrals.get(peer, ()):
                     d["rechecked"] = "kept: recheck capped"
                 continue
             except FinishReserved as exc:
-                # Not rechecked: the findings stay open exactly as they were.
+                # Not rechecked: the findings stay open, their author's debt.
                 self._finish_refused(spec, f"post-merge recheck by {peer}", exc, outcome=outcome)
+                for fid in owed_before:
+                    settled(fid, "not attempted: refused to keep the finish")
+                if ids:
+                    rv = self._recovery_open(spec, role="recheck", seat=peer, kind="recheck",
+                                             outcome_class="judgment_refused_finish", observe=False,
+                                             question=f"{peer}'s settlement recheck of {', '.join(ids)}")
+                    rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt: the finish is held"
+                    self._owe_review(spec, peer, "recheck", "its settlement recheck was refused to keep the finish",
+                                     role="recheck", outcome=outcome, record=rv, fids=ids)
                 row["verdict"] = "kept: recheck refused to keep the finish"
                 for d in deferrals.get(peer, ()):
                     d["rechecked"] = "kept: recheck refused to keep the finish"
@@ -9659,6 +9699,26 @@ class Session:
                 # compared against and void every disposition.
                 row["new"].extend(self._read_deferred_rows(spec, peer, rows, deferrals.get(peer, ()), verdict, outcome))
             current = {r["fid"]: r for r in self.review_findings}
+            # An id this recheck gave no verdict on (missing, malformed,
+            # duplicated, refused): the author's debt, as in the task.
+            unjudged = [fid for fid in ids if not current[fid]["closed"] and all(
+                d.get("state") == "unjudged" for d in (current[fid].get("history") or [])[history_before[fid]:])]
+            for fid in owed_before:
+                state = "no verdict" if fid in unjudged else str(current[fid].get("state"))
+                settled(fid, f"recheck: {state}")
+                if fid not in unjudged and not current[fid]["closed"]:
+                    occurrence = next((r for r in reversed(self.recoveries) if fid in (r.get("debt") or ())), None)
+                    self._recovery_result(occurrence, f"settled by its owner: {fid} {state}, an ordinary open "
+                                                      "finding from here")
+            if unjudged:
+                rv = self._recovery_open(spec, role="recheck", seat=peer, kind="recheck",
+                                         outcome_class="recheck_unfinished",
+                                         question=f"{peer}'s settlement verdict on {', '.join(unjudged)}",
+                                         event=self._call_event(spec.task_id, "recheck", peer))
+                rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
+                self._owe_review(spec, peer, "recheck", "its settlement recheck gave no valid verdict on "
+                                 + ", ".join(unjudged), role="recheck", outcome=outcome, record=rv, fids=unjudged)
+                current = {r["fid"]: r for r in self.review_findings}
             for fid in ids:
                 record = current[fid]
                 if record["closed"]:
@@ -11116,10 +11176,14 @@ class Session:
             if not debt or not str(occurrence.get("result") or "").startswith("held"):
                 continue
             if all(fid in closed for fid in debt):
-                how = "; ".join(f"{fid} {closed[fid].get('state')} by "
-                                f"{((closed[fid].get('history') or [{}])[-1] or {}).get('author') or 'unknown'}"
-                                for fid in debt)
-                occurrence["result"] = f"recovered: its judge closed the owned debt ({how})"[:300]
+                judges = {fid: ((closed[fid].get("history") or [{}])[-1] or {}) for fid in debt}
+                how = "; ".join(f"{fid} {closed[fid].get('state')} by {judges[fid].get('author') or 'unknown'} "
+                                f"({judges[fid].get('role') or 'unknown'})" for fid in debt)
+                # Recovered only by the debt's own owner; any other closing
+                # is recorded as what it was, never as a recovery.
+                owned = all(judges[fid].get("author") == closed[fid].get("author") for fid in debt)
+                occurrence["result"] = (("recovered: its owner closed the owned debt (" if owned else
+                                         "closed, not by its owner (") + how + ")")[:300]
 
     # -- evidence loop -------------------------------------------------------
     def _finish_pending_evidence(self) -> None:
@@ -13798,7 +13862,10 @@ class Session:
                          "form; it is kept on the record unchanged and is not repeated here.")
         if not call:
             pass
-        elif obs.get("status") == "observed":
+        elif obs.get("status") in ("observed", "partial"):
+            if obs.get("status") == "partial":
+                lines.append(f"The harness read that call's tool record only in part ({obs.get('reason')}): every "
+                             "count below is a lower bound, and anything not listed may still have happened.")
             read = list(obs.get("files_read") or [])
             outcomes = ", ".join(f"{k} {v}" for k, v in (obs.get("command_outcomes") or {}).items()) or "none"
             lines.append(f"Observed in that call's own tool record: {obs.get('tool_calls', 0)} tool call(s); "
@@ -14052,6 +14119,12 @@ class Session:
         saved_covers = self._current_covers if hasattr(self, "_current_covers") else None
         self._current_covers = list(record.get("covers") or [])
 
+        # The full identity the owner judges (source, checks, requirement
+        # texts, contract, packet), taken before the call and compared after
+        # it, as on the completion and recheck routes (root's review of
+        # a7f9c6c, R3). Every attempt carries the pre-call source.
+        binding = self._judgment_binding(owner_spec, owner, "collaborator")
+
         def attempt(result: str, *, called: bool = True) -> None:
             self._recovery_attempt(occurrence, "owner_settlement", result, site=site, source=source,
                                    **(dict(task=task_id, role="collaborator", peer=owner) if called else {}))
@@ -14072,9 +14145,11 @@ class Session:
                 row["verdict"] = "kept: refused to keep the finish"
                 return row
             self.store.put(reply, kind=f"review:{owner}", author=owner)
-            if self._source_fingerprint() != source:
-                attempt("void: the source changed during the review")
-                row["verdict"] = "kept: the source changed during the owner's review"
+            after = self._judgment_binding(owner_spec, owner, "collaborator")
+            if after["identity"] != binding["identity"]:
+                changed = sorted(k for k in binding if k != "identity" and binding[k] != after.get(k))
+                attempt(f"void: the bound identity changed during the review ({', '.join(changed)})")
+                row["verdict"] = f"kept: the bound identity changed during the owner's review ({', '.join(changed)})"
                 return row
             rids = [rid for rid, _ in self._covered_texts()]
             verdicts = _requirement_verdicts(reply)
@@ -14085,10 +14160,20 @@ class Session:
                 attempt("no valid verdict")
                 row["verdict"] = "kept: the owner's reply gave no valid verdict"
                 return row
-            # A covered requirement the owner calls NOT MET is a BLOCKING
-            # finding, exactly as on the ordinary review route.
-            note = reply + "".join(f"\nBLOCKING: {rid} is NOT MET (the reviewer's own verdict line)." for rid in unmet
-                                   if not _has_blocking_finding(reply))
+            # The ordinary review qualification, exactly as on the review
+            # route (root's review of a7f9c6c, R4): a NOT MET line is a
+            # BLOCKING finding, and a MET on an error or refusal requirement
+            # counts only on executed negative-path evidence (a cited source
+            # file is not that). The owner's own call set the scratch proof
+            # it demonstrated, as a review call does; notes land on the owed
+            # task's own outcome.
+            holder = next((o for o in reversed(self.task_outcomes) if o.task_id == task_id), None)
+            saved_outcome = self._outcome
+            self._outcome = holder or outcome or self._outcome
+            try:
+                note = self._judge_goal_review(owner_spec, owner, reply, record=occurrence)
+            finally:
+                self._outcome = saved_outcome
             new = self._register_review_findings(owner_spec, owner, note, role="collaborator")
             for made in new:
                 verdict = f"{made['fid']}: UNRESOLVED (raised by {owner} in its owed review): {made['text']}"
@@ -14208,18 +14293,13 @@ class Session:
             spec = SimpleNamespace(task_id=task_id, description=description, scope=None, kind="review",
                                    complexity="simple", lead=None, needs=frozenset())
             holder = next((o for o in reversed(self.task_outcomes) if o.task_id == task_id), None)
-            got = self._recheck_open_findings(
+            # The recheck records itself as the owner settlement of each owed
+            # finding (``_recheck_open_findings``), with its pre-call source.
+            rows.append(self._recheck_open_findings(
                 spec, entries, holder or self.run_outcome,
                 situation=(f"No task is left to name a settlement ({site}). Your recheck of these findings gave no "
                            "verdict; this is the one recheck the harness makes before the run's finish, on the "
-                           "source as it now stands."))
-            states = {r["fid"]: r.get("state") for r in self.review_findings}
-            for entry in entries:
-                fid = entry["finding_id"]
-                occurrence = next((r for r in reversed(self.recoveries) if fid in (r.get("debt") or ())), None)
-                self._recovery_attempt(occurrence, "owner_settlement", f"recheck at {site}: {states.get(fid)}",
-                                       task=task_id, role="recheck", peer=entry.get("peer"), site=site, source=source)
-            rows.append(got)
+                           "source as it now stands.")))
         return rows
 
     def _record_stop_rule(self, reason: str) -> None:
@@ -14329,6 +14409,9 @@ class Session:
         around it. Whether the reply is a judgment is decided by the caller's
         strict reader (``_settle_completion``), never here."""
         binding = self._judgment_binding(spec, peer, role)
+        # The source the completion is bound to: every attempt it records,
+        # a void or a stop included, names this one (root's review, L2).
+        pre = binding.get("source")
         record = dict(task=spec.task_id, seat=peer, kind=kind, role=role, gaps=list(gaps), binding=binding,
                       claimed=False, outcome="", judgment="")
         raw_ref = self.store.put(raw or "(no reply: the call stopped before answering)",
@@ -14343,7 +14426,7 @@ class Session:
                                                                 source=binding["source"])):
             record["outcome"] = "not attempted: " + ("turned off" if limit <= 0 else "the job's allowance is spent")
             self._note(f"{spec.task_id}: {peer}'s {kind} gave no valid verdict; completion {record['outcome']}")
-            self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"])
+            self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"], source=pre)
             return None
         record["claimed"] = True
         self.store.put(json.dumps(record), kind="judgment-completion-intent", author="harness")
@@ -14352,7 +14435,7 @@ class Session:
         if self._judgment_binding(spec, peer, role) != binding:
             record["outcome"] = "void before the call: the bound identity changed"
             self._note(f"{spec.task_id}: {peer}'s {kind} completion {record['outcome']}")
-            self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"])
+            self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"], source=pre)
             return None
         missing = "; ".join(gaps)
         # The previous reply is never repeated: it is model output, kept on
@@ -14373,11 +14456,17 @@ class Session:
             record["outcome"] = "refused to keep the finish"
         except BaseException as exc:
             # A refusal by the seat, transport, integrity or anything else:
-            # recorded, then raised as the review call's own failure is.
-            record["outcome"] = f"stopped: {type(exc).__name__}: {str(exc)[:160]}"
+            # recorded, then raised as the review call's own failure is. The
+            # message can carry vendor or model text: it is kept as a private
+            # artifact and only its type is exported (root's review of
+            # a7f9c6c, L1).
+            record["outcome"] = f"stopped: {type(exc).__name__}"
+            record["error_artifact"] = self.store.put(str(exc), kind=f"judgment-completion-error:{kind}:{peer}",
+                                                      author="harness").id
             self.store.put(json.dumps(record), kind="judgment-completion-stopped", author="harness")
             self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"], task=spec.task_id,
-                                   role=role, peer=peer)
+                                   role=role, peer=peer, source=pre)
+            self._recovery_result(recovery_record, f"stopped: {type(exc).__name__}")
             raise
         else:
             after = self._judgment_binding(spec, peer, role)
@@ -14388,10 +14477,10 @@ class Session:
                 ref = self.store.put(reply, kind=f"judgment-completion:{kind}:{peer}", author=peer)
                 record.update(outcome="answered", reply_artifact=ref.id)
                 self._recovery_attempt(recovery_record, "complete_judgment", "answered", task=spec.task_id,
-                                       role=role, peer=peer)
+                                       role=role, peer=peer, source=pre)
                 return reply
         self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"], task=spec.task_id,
-                               role=role, peer=peer)
+                               role=role, peer=peer, source=pre)
         self._note(f"{spec.task_id}: {peer}'s {kind} judgment completion gave nothing: {record['outcome']}")
         return None
 

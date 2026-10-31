@@ -3591,7 +3591,16 @@ Key design decisions already settled:
     (`_settle_owed`): at most two attempts and never twice on the same
     source, both counted over every occurrence that names the record
     (`_owed_settlements`), each attempt stamped with the source the owner
-    was shown; the owner only; a source change during the call voids it.
+    was shown; the owner only; a change to the full judgment identity
+    during the call (source, checks, requirement texts, contract, packet:
+    `_judgment_binding`) voids it. The reply passes the ordinary review
+    qualification (`_judge_goal_review`, the executed negative-path rule
+    included) before any finding is registered or any cap is lifted. Every
+    recheck route, the post-merge and settlement rechecks included, takes
+    the same typed transition for a cap, a refusal or a missing or malformed
+    verdict (`_owe_review` with the ids), and records itself as the owner
+    settlement of findings already owed. An occurrence reads "recovered"
+    only when the debt's own author closed it.
     A completed review closes the record by the owner's RESOLVED
     disposition with the settling call's id; its BLOCKING lines and every
     covered requirement it calls NOT MET open as new held findings. Owed
@@ -3600,7 +3609,9 @@ Key design decisions already settled:
     would have (`_lift_final_cap`). A design review or verification is
     settled only by the same owner's own completed judgment of the same
     kind (APPROVED or its own BLOCKING line, on renders delivered and not
-    stale; a harness-written verdict judges nothing). DONE and the cap
+    stale; a harness-written verdict judges nothing; for a verification,
+    its own VERDICT line or prefixed finding on an unchanged identity, so
+    narration settles nothing). DONE and the cap
     never complete over it, and the auditor's MET does not lift it. An
     occurrence's result is re-read from the registry when its debt closes.
   - *Context is harness facts, never model text.* The completion and the
@@ -3615,7 +3626,17 @@ Key design decisions already settled:
     changed files left unread, and the source binding; observations from an
     earlier source are labelled history. The trace is read while the run is
     live (`project_run._live_call_trace`), because `build_traces` runs only
-    after Session exits; when it is missing the prompt says so.
+    after Session exits; when it is missing the prompt says so. The reader
+    measures the transcript's own integrity (`_transcript_integrity`):
+    `observed` only for a record read whole, `partial` with its reason and
+    lower-bound counts for unreadable lines, missing files or the size
+    bound, `unavailable` for none readable. A completion's attempts carry
+    its pre-call source; a stopped completion exports only the exception
+    type (the message is a private artifact) and the occurrence reads
+    stopped. Carried, not fixed: a single-seat claude envelope with no
+    auxiliary `modelUsage` loses `model_calls` and cache metadata in
+    `cli_providers._ending_only` (unchanged since before this batch; the
+    token totals stay right).
   - *Proposals, not causes.* `result.json` carries `recoveries` and
     `improvement` (families by class, role and vendor; evidence; cost from
     `InvocationEvent`s, each outer call once, unknown usage counted and

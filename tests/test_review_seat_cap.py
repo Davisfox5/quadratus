@@ -422,13 +422,31 @@ def test_an_owed_design_review_is_settled_only_by_the_same_owners_completed_desi
     assert not [f for f in session.open_findings if owed["fid"] in f]
 
 
-def test_a_capped_text_verification_is_owed_by_its_verifier_and_its_completed_verification_settles_it(store):
+class VerifierSeat(CappedSeat):
+    """The verifier caps once, then answers each later verification with the
+    next scripted reply."""
+
+    def __init__(self, replies):
+        super().__init__("verifier", times=1)
+        self.replies = list(replies)
+
+    def __call__(self, model, prompt, system=None):
+        role = (invocation_context.get() or {}).get("role")
+        if role == "verifier" and self.capped >= self.times and self.replies:
+            self.calls.append({"model": model, "prompt": prompt, "role": role})
+            return self.replies.pop(0)
+        return super().__call__(model, prompt, system)
+
+
+def test_a_capped_text_verification_is_owed_by_its_verifier_and_only_its_verdict_settles_it(store):
     """Recovery lifecycle (2026-10-31): a capped security verifier gives no
     verdict, so the edge stays unset and the verification is owed review
-    debt for that verifier; its own completed verification of the work
-    closes it."""
+    debt for that verifier. Narration from the same verifier on the same
+    work settles nothing (root's review of a7f9c6c, R2); its own VERDICT
+    line does."""
     from quadratus.task_kinds import TaskKind
-    rec = CappedSeat("verifier", times=1)
+    rec = VerifierSeat(["I still need to inspect the authorization paths before giving a verdict.",
+                        "Checked the token handling against the report.\nVERDICT: ACCEPT"])
     session = Session("Build a JSON parser", store, rec)
     spec = TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY)
     session.run_task(spec)
@@ -438,6 +456,8 @@ def test_a_capped_text_verification_is_owed_by_its_verifier_and_its_completed_ve
     rv = next(r for r in session.recoveries if r["outcome_class"] == "verification_capped")
     assert rv["seat"] == verifier and rv["debt"] == [owed["fid"]]
     assert session._settle_owed_by_judgment(spec, "grok:default", "verification") == [], "another seat settles nothing"
-    session.run_task(spec)  # the same work verified again, this time to a verdict
+    session.run_task(spec)  # the same work again: the verifier narrates and gives no verdict
+    assert not owed["closed"], "narration is not a completed verification"
+    session.run_task(spec)  # and again: this time its VERDICT line
     assert owed["closed"] and owed["history"][-1]["author"] == verifier
     assert rv["result"].startswith("recovered")

@@ -1277,7 +1277,53 @@ def _live_call_trace(event):
     source = _trace.locate(vendor, sid, _trace.session_roots())
     if source is None:
         return None
-    return _trace.trace_call(vendor, source, None, origin=source)
+    record = _trace.trace_call(vendor, source, None, origin=source)
+    # How much of the transcript could be read, measured here: the parsers
+    # skip a line they cannot read, so an empty tool list alone cannot tell
+    # "no tools used" from "nothing readable" (root's review of a7f9c6c, L3).
+    record['integrity'] = _transcript_integrity(Path(source))
+    return record
+
+
+#: Bound on the bytes read when measuring a transcript's integrity.
+_INTEGRITY_BYTES = 64 * 1024 * 1024
+
+
+def _transcript_integrity(source: Path) -> dict:
+    """Lines, unreadable lines and missing files of one call's transcript (a
+    JSONL file, or a grok session folder's two JSONL files). Counts only;
+    nothing of the content is kept. ``complete`` only when every expected
+    file was read whole and every non-blank line was a JSON object."""
+    files = [source] if source.is_file() else [source / 'events.jsonl', source / 'chat_history.jsonl']
+    lines = invalid = missing = 0
+    truncated = False
+    for path in files:
+        try:
+            if not path.is_file():
+                missing += 1
+                continue
+            read = 0
+            with open(path, 'rb') as handle:
+                for raw in handle:
+                    read += len(raw)
+                    if read > _INTEGRITY_BYTES:
+                        truncated = True
+                        break
+                    text = raw.strip()
+                    if not text:
+                        continue
+                    lines += 1
+                    try:
+                        value = json.loads(text)
+                    except ValueError:
+                        invalid += 1
+                        continue
+                    if not isinstance(value, dict):
+                        invalid += 1
+        except OSError:
+            missing += 1
+    return dict(lines=lines, invalid=invalid, missing_files=missing, truncated=truncated,
+                complete=bool(lines) and not invalid and not missing and not truncated)
 
 
 def _improvement_record(session):

@@ -448,9 +448,15 @@ def test_a_completion_whose_bound_identity_drifts_is_void_and_spends_the_claim(t
         stop = next(r for r in result["recoveries"] if r["kind"] == "run")
         assert stop["outcome_class"] == "stop_rule" and stop["failed_call"] is None, "no call caused this stop"
     else:
-        (closing,) = [d for d in owed["history"] if d["state"] == "resolved"]
-        assert settled and closing["call"] == settled[-1]["call"]["invocation_id"]
-        assert closing["call"] != void["call"]["invocation_id"], "the void answer closes nothing"
+        # The rewording fires again during the owner's settlement (its prompt
+        # carries the same recovery context), so that settlement is void too
+        # (root's review of a7f9c6c, R3) and nothing a drifted call said
+        # closes the debt.
+        assert not settled and not owed["closed"]
+        assert not [d for d in owed["history"] if d["state"] == "resolved"]
+        voids = [a for a in rv["attempts"] if a["action"] == "owner_settlement"]
+        assert voids and voids[-1]["outcome"].startswith("void: the bound identity changed during the review")
+        assert "covered" in voids[-1]["outcome"]
         assert replay.result.error.startswith("RequirementsUnmet")
     assert _budget(replay)["judgment_completions"] == 1
 

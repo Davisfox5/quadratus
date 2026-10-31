@@ -38,7 +38,8 @@ def test_only_successful_reads_of_existing_project_files_pass_and_nothing_else_i
         dict(name="Bash", target="pytest -q", outcome="error"),
         dict(name="Edit", target="app.py", outcome="denied by policy"),
         dict(name="mcp__weird", target="anything", outcome="success"),
-    ], files_read=["API_KEY=[A-Z0-9]+"], reasoning=["hidden"], texts=["narration"])
+    ], files_read=["API_KEY=[A-Z0-9]+"], reasoning=["hidden"], texts=["narration"],
+        integrity=dict(lines=12, invalid=0, missing_files=0, truncated=False, complete=True))
     obs = recovery.safe_observations(trace, project_root=tmp_path)
     assert obs["status"] == "observed"
     assert obs["files_read"] == ["app.py", "tests/test_app.py"]

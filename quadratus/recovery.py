@@ -136,6 +136,13 @@ def safe_observations(trace: Optional[dict], *, project_root=None, unavailable: 
     reviewed."""
     if not trace or unavailable:
         return dict(status="unavailable", reason=(unavailable or "no tool record was found for the call")[:200])
+    if trace.get("error"):
+        # The parser itself failed: its message is not repeated.
+        kind = str(trace.get("error")).split(":", 1)[0][:60]
+        return dict(status="unavailable", reason=f"the call's transcript could not be parsed ({kind})")
+    integrity = trace.get("integrity") if isinstance(trace.get("integrity"), dict) else None
+    if integrity is not None and not integrity.get("lines"):
+        return dict(status="unavailable", reason="the call's transcript held no readable record")
     root = Path(project_root) if project_root else None
     cwd = trace.get("cwd") if isinstance(trace.get("cwd"), str) else None
     tools: Dict[str, Dict[str, int]] = {}
@@ -161,7 +168,22 @@ def safe_observations(trace: Optional[dict], *, project_root=None, unavailable: 
             command_outcomes[outcome] = command_outcomes.get(outcome, 0) + 1
         elif name in _WRITE:
             writes += 1
-    return dict(status="observed", tool_calls=sum(sum(v.values()) for v in tools.values()),
+    # ``observed`` only for a transcript read whole; anything less is
+    # ``partial`` with the reason, and its counts are lower bounds. A
+    # transcript whose completeness was never measured is not called whole.
+    if integrity is None:
+        status, reason = "partial", "the transcript's completeness was not measured"
+    elif not integrity.get("complete"):
+        parts = [f"{int(integrity.get('invalid') or 0)} of {int(integrity.get('lines') or 0)} line(s) unreadable"
+                 if integrity.get("invalid") else "",
+                 f"{int(integrity.get('missing_files') or 0)} expected file(s) missing"
+                 if integrity.get("missing_files") else "",
+                 "read stopped at its size bound" if integrity.get("truncated") else ""]
+        status, reason = "partial", "; ".join(p for p in parts if p) or "the transcript was not read whole"
+    else:
+        status, reason = "observed", ""
+    return dict(status=status, **({"reason": reason} if reason else {}),
+                tool_calls=sum(sum(v.values()) for v in tools.values()),
                 tools={k: dict(v) for k, v in sorted(tools.items())}, files_read=read[:60],
                 searches=searches, commands=commands, command_outcomes=dict(sorted(command_outcomes.items())),
                 writes_attempted=writes)
