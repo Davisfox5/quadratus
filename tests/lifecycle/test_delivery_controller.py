@@ -117,11 +117,13 @@ def test_a_kept_finding_blocks_acceptance_while_the_fixed_one_stays_closed(tmp_p
 def test_a_duplicate_or_missing_line_settles_nothing_and_is_not_a_fix_round(tmp_path, monkeypatch):
     """R24's shape per id: a reply that judges one finding twice and the
     other not at all. Neither is resolved, neither buys a fix round, both
-    are recorded as not re-checked by id, and the run stops on them."""
+    are held under their ids for their author (recovery lifecycle,
+    2026-10-31), and the job's completion decision refuses over them."""
     replay = H.run(tmp_path, monkeypatch, _recheck_script([
         "RFT2-1: RESOLVED\nRFT2-1: RESOLVED again\nI believe RFT2-2 is fine as well.",
     ]), files=FILES, max_tasks=2, record_complete=False)
-    assert not replay.result.completed and replay.result.error.startswith("FindingsOpen")
+    assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
+    assert "RFT2-1" in replay.result.error and "RFT2-2" in replay.result.error
     findings = _findings(replay)
     assert findings["RFT2-1"]["history"][-1]["state"] == "unjudged" and "duplicate" in findings["RFT2-1"]["history"][-1]["why"]
     assert findings["RFT2-2"]["history"][-1]["why"] == "no line judged it"

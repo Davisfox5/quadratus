@@ -145,14 +145,19 @@ def test_a_review_copy_without_checks_or_a_worker_errand_gets_no_check_block(mon
 
 
 def test_a_capped_collaborator_is_recorded_as_unverified_and_its_narration_is_not_a_finding(store):
+    # Recovery lifecycle (2026-10-31): the cap is owned review debt held
+    # under its own id for the capped seat, never a bare string; the one
+    # bounded completion is the same seat, and it capped too here.
     rec = CappedSeat("collaborator")
     session, summary = _run(store, rec)
-    assert rec.capped >= 1
+    assert rec.capped == 2, "the first review and its one bounded completion"
     assert not any("Check only your BLOCKING" in c["prompt"] for c in rec.calls), \
         "narration at the cap is never read as a BLOCKING finding"
-    unverified = [f for f in session.open_findings if "did not finish within its turn cap" in f]
-    assert unverified and "no verdict" in unverified[0]
-    assert any("surrogate" not in f for f in session.open_findings)
+    owed = [f for f in session.open_findings if "UNREVIEWED: the review of t1 by claude:opus" in f]
+    assert owed and "stopped at 20 rounds with no verdict" in owed[0]
+    assert not any("I was about to" in f for f in session.open_findings)
+    record = next(r for r in session.review_findings if r["fid"] in owed[0])
+    assert record["kind"] == "unreviewed" and record["author"] == "claude:opus" and not record["closed"]
     assert summary is not None
 
 
@@ -165,17 +170,17 @@ def test_a_capped_review_alone_buys_no_revision_round(store):
 def test_a_capped_recheck_buys_no_fix_round_and_keeps_the_named_blocker(store):
     rec = CappedSeat("recheck")
     session, got = _run(store, rec)
-    assert rec.capped == 1
+    assert rec.capped == 2, "the recheck and its one bounded completion"
     fixes = [c for c in rec.calls if "blocking findings remain unresolved" in c["prompt"].lower()]
     assert fixes == []
-    assert any("recheck by" in f and "did not finish within its turn cap" in f for f in session.open_findings)
     # Codex review of 0983dac: the reviewer's own finding is the unresolved
-    # defect; the cap fact alone would retire it from the record.
-    assert any("not re-checked" in f and "BLOCKING: the escaping drops surrogate pairs" in f
-               for f in session.open_findings)
+    # defect; the cap fact alone would retire it from the record. It is held
+    # under its own id for its author (recovery lifecycle, 2026-10-31).
+    assert any(f.startswith("RFT1-1: UNRESOLVED (no verdict at its recheck by claude:opus")
+               and "BLOCKING: the escaping drops surrogate pairs" in f for f in session.open_findings)
     # The harness record carries the open finding to the planner (no model
     # close-out since 2026-10-21): the named blocker, not only the cap fact.
-    assert "not re-checked after the revision" in got.summary and "surrogate pairs" in got.summary
+    assert "no verdict at its recheck" in got.summary and "surrogate pairs" in got.summary
     assert not any("The task is finished" in c["prompt"] for c in rec.calls)
 
 
@@ -211,8 +216,8 @@ def test_a_reply_with_no_verdict_is_an_unfinished_review_not_a_cap(store):
     rec = WordyReviewer("UNFINISHED: did not reach a verdict")
     session, _ = _run(store, rec)
     assert any("Revise your work" in c["prompt"] for c in rec.calls)
-    assert any("ended without a verdict" in f and "unfinished review" in f for f in session.open_findings)
-    assert not any("turn cap" in f for f in session.open_findings)
+    assert any("ended without a verdict" in f and "UNREVIEWED: the review of t1" in f for f in session.open_findings)
+    assert not any("turn cap" in f or "rounds with no verdict" in f for f in session.open_findings)
 
 
 @pytest.mark.parametrize("review", ["NO FINDINGS", "No findings.",
@@ -238,7 +243,7 @@ def test_a_capped_recheck_keeps_multiline_and_mixed_format_findings(store):
                                        "Reproduce with a non-BMP character.\n"
                                        "- **BLOCKING:** the parser accepts malformed numbers")
     session, _ = _run(store, rec)
-    kept = [f for f in session.open_findings if "not re-checked" in f]
+    kept = [f for f in session.open_findings if "no verdict at its recheck" in f]
     assert kept and "non-BMP character" in kept[0] and "malformed numbers" in kept[0]
 
 
@@ -286,8 +291,8 @@ def test_a_capped_design_review_is_a_review_with_no_verdict(tmp_path, monkeypatc
     record = session.design_checks[-1]
     assert record["final_review"]["verdict"].startswith("UNFINISHED: the design review stopped at 20 rounds")
     joined = " ".join(session.open_findings)
-    assert "did not finish within its turn cap" in joined
-    assert "gave no verdict" in joined
+    assert "UNREVIEWED: the design review of t6 by claude:opus" in joined
+    assert "stopped at 20 rounds with no verdict" in joined
     assert "the header" not in joined, "the capped reviewer's narration is not a finding"
 
 
@@ -347,3 +352,38 @@ def test_a_declaration_role_gets_the_small_cap_never_above_the_lead_cap(monkeypa
         fleet.invoke("grok:default", "p")
     assert views[0].max_turns == expected
     assert DECLARATION_MAX_TURNS < 20
+
+
+def test_an_owed_design_review_is_settled_only_by_the_same_owners_completed_design_review(tmp_path, monkeypatch):
+    """Recovery lifecycle (2026-10-31): a capped design review is owed
+    review debt held for its seat. Another seat's verdict does not touch it;
+    the same seat's completed design review of the same task closes it."""
+    from quadratus.memory import TaskMemory
+    from tests.test_preferences_in_product import _design_session, _fake_evidence, _ui
+
+    replies = iter([TurnLimitReached("capped", partial_text="BLOCKING: the header", turns=20), "APPROVED"])
+
+    def invoke(model, prompt, **k):
+        role = (invocation_context.get() or {}).get("role")
+        if role == "design-review":
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        return "tried"
+
+    session = _design_session(tmp_path, invoke)
+    _fake_evidence(tmp_path)
+    monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: False)
+    memory = TaskMemory("t6", "grok:default", session.store)
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    (owed,) = [r for r in session.review_findings if r.get("kind") == "unreviewed"]
+    assert owed["owed_kind"] == "design review" and owed["author"] == "claude:opus" and not owed["closed"]
+    # Another seat's completed design review settles nothing it does not own.
+    assert session._settle_owed_by_judgment(_ui(), "openai:sol", "design review") == []
+    assert not owed["closed"]
+    _fake_evidence(tmp_path)  # a fresh capture of the source as it now stands
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    assert session.design_checks[-1]["final_review"]["approved"]
+    assert owed["closed"] and owed["history"][-1]["author"] == "claude:opus"
+    assert not [f for f in session.open_findings if owed["fid"] in f]

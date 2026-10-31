@@ -154,6 +154,15 @@ BASIS_KINDS = ("requirement", "reproduction", "evidence", "none")
 IMMEDIATE_RISKS = frozenset({"data-loss", "integrity", "security", "irreversible"})
 IMPACTS = IMMEDIATE_RISKS | {"correctness", "contract", "other", "unstated"}
 DISPOSITION_STATES = (RESOLVED, UNRESOLVED, INVALIDATED, "unjudged")
+#: What a registered finding is. ``defect``: a reviewer's claim about the
+#: work (every finding before 2026-10-31). ``unreviewed``: owned review
+#: debt, the record that a required judgment by its author did not finish
+#: (a review, recheck, design review or verification that stopped at its
+#: round cap, gave no valid verdict or could not be made). It is not a
+#: defect and not an approval: only its author's completed judgment on the
+#: current source settles it (RESOLVED), never the audit, another seat, an
+#: INVALIDATED line or the harness (recovery lifecycle, 2026-10-31).
+FINDING_KINDS = ("defect", "unreviewed")
 #: The roles in which a seat judges a finding. ``recheck`` and
 #: ``reassessment`` belong to the seat that raised it; ``audit`` to the final
 #: auditor, and only for a concern carried to the audit.
@@ -209,9 +218,12 @@ class Finding:
     task: str = ""
     requirement: Optional[Tuple[str, int]] = None
     history: Tuple[Disposition, ...] = ()
+    kind: str = "defect"
 
     def __post_init__(self):
         _check_id(self.fid, "finding id")
+        if self.kind not in FINDING_KINDS:
+            raise ValueError(f"{self.fid} kind must be one of {FINDING_KINDS}, not {self.kind!r}")
         _text(self.claim, f"{self.fid} claim")
         _text(self.author, f"{self.fid} author")
         _text(self.source_digest, f"{self.fid} source")
@@ -236,13 +248,14 @@ class Finding:
     @property
     def holds_effects(self) -> bool:
         """An open immediate risk holds the affected effect, basis or not."""
-        return not self.closed and self.impact in IMMEDIATE_RISKS
+        return not self.closed and self.kind == "defect" and self.impact in IMMEDIATE_RISKS
 
     @property
     def audit_carried(self) -> bool:
         """Open, no basis, not an immediate risk: examined by the audit by id,
-        never a note and never an accepted task."""
-        return not self.closed and self.basis.kind == "none" and not self.holds_effects
+        never a note and never an accepted task. Owned review debt is never
+        carried: the audit is not the seat whose judgment it is owed."""
+        return not self.closed and self.kind == "defect" and self.basis.kind == "none" and not self.holds_effects
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -260,7 +273,8 @@ class Finding:
                    task=data.get("task", ""),
                    requirement=(requirement[0], int(requirement[1])) if requirement else None,
                    history=tuple(Disposition(**{k: v for k, v in h.items() if k in Disposition.__dataclass_fields__})
-                                 for h in data.get("history") or ()))
+                                 for h in data.get("history") or ()),
+                   kind=data.get("kind") or "defect")
 
 
 def designated_judge(finding: Finding, author: str, role: str) -> str:
@@ -274,6 +288,11 @@ def designated_judge(finding: Finding, author: str, role: str) -> str:
     if author != finding.author:
         return f"{finding.fid} was raised by {finding.author}; {author} does not judge it"
     return ""
+
+
+def owed_review(finding: Finding) -> bool:
+    """Whether ``finding`` is owned review debt (``kind == "unreviewed"``)."""
+    return finding.kind == "unreviewed"
 
 
 _SEGMENT = re.compile(r"\s*\|\s*(basis|impact)\s*:\s*", re.IGNORECASE)
@@ -355,6 +374,13 @@ def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, autho
             state, why = "unjudged", refusal
         elif verdict.state == INVALID:
             state, why = "unjudged", verdict.why
+        elif finding.kind == "unreviewed":
+            # Owed review debt has one closing judgment: its author's
+            # completed review, read whole by the harness, which records it
+            # (Session._close_owed). An id line, RESOLVED or not, is not that
+            # review and decides nothing.
+            state, why = "unjudged", (f"{finding.fid} is owed review debt: only {finding.author}'s completed "
+                                      "review on the current source settles it, never an id line")
         elif verdict.state == RESOLVED and role == "audit":
             # The audit judges a carried concern by id: it invalidates on
             # evidence or keeps it. Nothing was revised for the audit, so a

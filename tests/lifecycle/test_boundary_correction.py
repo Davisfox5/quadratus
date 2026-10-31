@@ -142,7 +142,11 @@ def test_an_invalidated_line_naming_nothing_on_the_record_keeps_the_finding_open
     replay = H.run(tmp_path, monkeypatch, _recheck_script([
         "RFT2-1: INVALIDATED the `UTF8` handling covers it\nRFT2-2: RESOLVED reworded",
     ]), files=FILES, max_tasks=2, record_complete=False)
-    assert not replay.result.completed and replay.result.error.startswith("FindingsOpen")
+    # Recovery lifecycle (2026-10-31): the finding is held under its id for
+    # its author, so the job reaches its cap and the requirements decision
+    # refuses completion over it, rather than stopping at the task's close.
+    assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
+    assert "RFT2-1" in replay.result.error and "RFT2-2" not in replay.result.error
     findings = _findings(replay)
     assert findings["RFT2-2"]["state"] == "resolved"
     assert findings["RFT2-1"]["state"] == "open" and findings["RFT2-1"]["history"][-1]["state"] == "unjudged"

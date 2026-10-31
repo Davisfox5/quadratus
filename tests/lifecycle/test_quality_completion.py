@@ -313,7 +313,14 @@ def test_a_capped_revision_with_slots_left_meets_its_reviewer_once_and_closes_on
     assert writers == ["lead", "revision"], "the capped writer is never called again"
     assert _ledger(replay)[0] == ("charged", ("t1",), 1)
     if case in ("resolved", "unresolved", "source-changed", "recheck-capped"):
-        assert len(rechecks) == 1 and "with task slots left in the job" in rechecks[0].prompt
+        # A capped recheck is completed once by the same seat with the
+        # harness's context (recovery lifecycle, 2026-10-31): the job's one
+        # completion, never a second recheck or writer.
+        assert len(rechecks) == (2 if case == "recheck-capped" else 1)
+        assert "with task slots left in the job" in rechecks[0].prompt
+        if case == "recheck-capped":
+            assert "## Recovery context" in rechecks[1].prompt and rechecks[1].vendor == rechecks[0].vendor
+            assert json.loads((replay.result.run_dir / "budget.json").read_text())["judgment_completions"] == 1
         assert FINDING in rechecks[0].prompt
         assert "in the harness's own observation" in rechecks[0].prompt
         assert replay.artifacts("capped-checked-revision") and not replay.artifacts("capped-final-revision")

@@ -39,7 +39,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import delivery, judgment, obligations
+from . import delivery, judgment, obligations, recovery
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
 from .completion_decision import (
@@ -579,6 +579,14 @@ class SessionConfig:
     #: vendor-native children and vendor-internal auxiliary activity, and
     #: carrying what the harness cannot observe or bound. Observational only.
     delegation_ledger: Optional["DelegationLedger"] = None
+    #: Reads one finished call's own tool record while the run is live, from
+    #: its ledger event (the vendor's session store, read-only), and returns
+    #: the trace dict (quadratus.trace.trace_call) or None. Only facts that
+    #: pass quadratus.recovery.safe_observations ever reach a prompt or a
+    #: record. None (no reader) is recorded as "unavailable", never as "no
+    #: tools ran" (recovery lifecycle, 2026-10-31: the end-of-run trace export
+    #: cannot inform a recovery call made during the run).
+    call_trace: Optional[Callable[[Any], Optional[dict]]] = None
     #: Additional operator bounds, intersected with each task declaration. None
     #: leaves such a task unbounded, which is at least recorded as unbounded.
     default_scope: Optional["TaskScope"] = None
@@ -2904,6 +2912,31 @@ def _has_blocking_finding(text: str) -> bool:
     return judgment.has_blocking(text)
 
 
+#: The recovery class of a required judgment that did not finish, by the
+#: judgment's kind and whether its call reached the round cap (True) or an
+#: arrived reply carried no valid verdict (False). quadratus.recovery.
+_NO_VERDICT_CLASSES = {
+    ("review", True): "review_capped", ("review", False): "review_unfinished",
+    ("recheck", True): "recheck_capped", ("recheck", False): "recheck_unfinished",
+    ("design review", True): "design_review_capped", ("verification", True): "verification_capped",
+}
+
+#: How many owner judgments one owed-review record may draw after the one
+#: in-task completion, each on a different source: bounded, so a seat that
+#: never finishes cannot loop the run (recovery lifecycle, 2026-10-31).
+_OWED_SETTLEMENT_ATTEMPTS = 2
+
+#: The verdict form an owed review is answered in: the ordinary review's
+#: own grammar, so the owner judges as it would have the first time.
+_OWED_REVIEW_GRAMMAR = (
+    "Start each finding that must be fixed before this work is acceptable on its own line with 'BLOCKING:', "
+    "ending ' | basis: <requirement id, the command that shows it, or the file and line> | impact: "
+    "<data-loss|integrity|security|irreversible|correctness|contract|other>'. If you genuinely find nothing "
+    "worth changing, reply exactly 'NO FINDINGS' and nothing else. Otherwise end your reply with exactly one "
+    "line, REVIEW: COMPLETE, once you have read the whole work and reported everything. A reply with no "
+    "BLOCKING finding and no such line is recorded as an unfinished review and settles nothing.")
+
+
 def _review_disposition(note: str, capped: bool, rids) -> str:
     """How one review ended, in the record's words, for a factual close-out."""
     if capped:
@@ -2971,6 +3004,12 @@ class Session:
         #: Mandatory judgments that ended without a valid verdict and were not
         #: completed: the obligation view names them (session._judgment_gap).
         self.judgment_gaps: List[dict] = []
+        #: Recovery occurrences (quadratus.recovery): one per operation that
+        #: did not give its caller the outcome it needed, with the decision
+        #: taken and its measured result. A decision log, never a source of
+        #: debt: the debt stays on the review registry and the typed facts.
+        #: Also the job's memory of what was tried (``_recovery_tried``).
+        self.recoveries: List[dict] = []
         #: The last obligation view shown to the planner or the audit.
         self.obligation_view: dict = {}
         #: Typed delivery records (quadratus.delivery), JSON-safe and carried
@@ -5483,40 +5522,55 @@ class Session:
         capped: set = set()
         for peer in collaborators:
             self._snapshot_scratch_bindings(spec)
+            prompt = self._collaborator_prompt(spec, draft, peer)
+            rv = None
             try:
                 with invocation(spec.task_id, "collaborator"):
-                    note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+                    note = self._invoke_model(peer, prompt)
             except TurnLimitReached as exc:
                 # The cap is a transport fact kept here, never read back from
                 # the text (Codex review of 0983dac: an ordinary reply that
                 # happened to begin UNFINISHED: was dropped as if capped).
-                capped.add(peer)
-                note = self._capped_review(spec, peer, "review", exc)
-            else:
+                # Recovered once with what the call did carried, or held as
+                # owned review debt (recovery lifecycle, 2026-10-31).
+                recovered, rv = self._recover_judgment(spec, peer, "review", role="collaborator", prompt=prompt,
+                                                       task=task, exc=exc)
+                if recovered is not None and not self._review_gaps(recovered):
+                    self._settle_completion(spec, peer, "review", True)
+                    self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
+                    note = recovered
+                else:
+                    if recovered is not None:
+                        self._settle_completion(spec, peer, "review", False)
+                    capped.add(peer)
+                    note = self._capped_review(spec, peer, "review", exc)
+                    self._owe_review(spec, peer, "review", f"stopped at {exc.turns or 'its'} rounds with no verdict"
+                                     + ("; its completion gave none either" if recovered is not None else ""),
+                                     role="collaborator", record=rv)
+            if peer not in capped:
                 gaps = self._review_gaps(note)
-                if gaps:
+                if gaps and rv is None:
                     # An arrived reply without a valid verdict: its own scratch
                     # evidence is recorded first, then the same seat may
-                    # complete its judgment once (the job's allowance).
+                    # complete its judgment once (the job's allowance), told
+                    # what the harness observed, never shown its own reply.
                     self._record_scratch_evidence(spec, peer)
-                    completed = self._complete_judgment(
-                        spec, peer, "review", note, gaps, role="collaborator",
-                        prompt=self._collaborator_prompt(spec, draft, peer), task=task)
+                    completed, rv = self._recover_judgment(spec, peer, "review", role="collaborator", prompt=prompt,
+                                                           task=task, raw=note, gaps=gaps)
                     if completed is not None:
                         self._settle_completion(spec, peer, "review", not self._review_gaps(completed))
                         note = completed
-                note = self._judge_goal_review(spec, peer, note)
+                note = self._judge_goal_review(spec, peer, note, record=rv)
                 self._record_deferred(spec, peer, note)
                 self._record_scratch_evidence(spec, peer)
                 if not _review_complete(note) and not _clean_goal_review(note, [r for r, _ in self._covered_texts()]):
-                    # A reply arrived; a review did not finish. Recorded as
-                    # unverified; the text still reaches the lead as a note.
-                    self._open_finding("unverified", f"Task {spec.task_id}: review by {peer} ended "
-                                                     "without a verdict (no NO FINDINGS, no BLOCKING "
-                                                     f"finding, no {_REVIEW_COMPLETE} line); recorded as "
-                                                     "an unfinished review.")
-                    self._judgment_gap(spec, peer, "review", "ended without a verdict")
-                    self._note(f"task {spec.task_id}: review by {peer} gave no verdict; recorded as unverified")
+                    # A reply arrived; a review did not finish. Held as owned
+                    # review debt; the text still reaches the lead as a note.
+                    self._owe_review(spec, peer, "review", "ended without a verdict (no NO FINDINGS, no BLOCKING "
+                                     f"finding, no {_REVIEW_COMPLETE} line)", role="collaborator", record=rv)
+                    self._note(f"task {spec.task_id}: review by {peer} gave no verdict; held as owned review debt")
+                elif rv is not None and rv.get("result") == "pending":
+                    self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
@@ -5753,7 +5807,8 @@ class Session:
         self.history.append(summary)
         return summary
 
-    def _hold_open_finding(self, spec, peer: str, verdict: str, *, record=None, original=None, outcome=None) -> None:
+    def _hold_open_finding(self, spec, peer: str, verdict: str, *, record=None, original=None, outcome=None,
+                           carry: bool = True) -> None:
         """One review finding left open at a close, into the debt accounting
         every later reader uses: the legacy open text (or, for a finding
         with no basis and no immediate risk, the note that carries it to the
@@ -5766,7 +5821,7 @@ class Session:
         # a parent names for a child it is holding findings for (a raised or
         # unmerged child, 2026-10-29).
         holder = outcome if outcome is not None else self._outcome
-        if (record is not None and record.get("audit_carried")
+        if (carry and record is not None and record.get("audit_carried")
                 and self.config.requirements_ledger and self.memory.ledger.requirements):
             # Carried only where an audit will read it: with no requirements
             # ledger there is no final audit, so the finding stays an open
@@ -5802,6 +5857,10 @@ class Session:
         held = {e.get("finding_id") for e in self.unresolved_reviews}
         for record in self._finding_records(task=spec.task_id):
             if record["fid"] in held:
+                # Already held (owned debt from a recheck with no verdict):
+                # not held twice, but the close's own reason is recorded.
+                if (reasons or {}).get(record["fid"]) and not record.get("hold"):
+                    record["hold"] = reasons[record["fid"]]
                 continue
             why_here = (reasons or {}).get(record["fid"]) or why
             record["hold"] = why_here
@@ -6466,13 +6525,24 @@ class Session:
                         )
                 except TurnLimitReached as exc:
                     # No verdict: the verification edge stays unset, as for any
-                    # other interrupted verifier, and the record says so.
+                    # other interrupted verifier, and the record says so. The
+                    # verification is owed by this verifier as review debt
+                    # (recovery lifecycle, 2026-10-31), settled only by its own
+                    # completed verification of this work.
                     capped = self._capped_review(spec, verifier, "verification", exc)
+                    rv = self._recovery_open(spec, role="verifier", seat=verifier, kind="verification",
+                                             outcome_class="verification_capped",
+                                             question=f"{verifier}'s security verification of {spec.task_id}",
+                                             event=self._call_event(spec.task_id, "verifier", verifier), exc=exc)
+                    rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
+                    self._owe_review(spec, verifier, "verification", f"stopped at {exc.turns or 'its'} rounds with "
+                                     "no verdict", role="verifier", record=rv)
                     task.record("assistant", f"[{verifier}] {capped}")
                     task.keep(capped, kind=f"verify:{verifier}", author=verifier)
                 if verdict is not None:
                     task.record("assistant", f"[{verifier}] {verdict}")
                     task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
+                    self._settle_owed_by_judgment(spec, verifier, "verification")
                 # A finding is a marker as written, not the word in prose (map
                 # G7): the old substring test read "no BLOCKING findings" as
                 # one. Semantics taken from the reviewed helper on 90cc5d9.
@@ -7474,9 +7544,15 @@ class Session:
                                        f"{type(exc).__name__} ({type(failure).__name__})")
 
     def _note_exception(self, exc: BaseException) -> None:
-        """The typed fact for an exception that ends the run."""
+        """The typed fact for an exception that ends the run, and its
+        recovery occurrence: classified, protective or to be reconciled,
+        never retried (recovery lifecycle, 2026-10-31)."""
         self.run_outcome.note(classify(exc), f"{type(exc).__name__}: {str(exc)[:300]}",
                               legacy=type(exc).__name__, full=f"{type(exc).__name__}: {exc}")
+        try:
+            self._record_terminal_recovery(exc)
+        except Exception:  # noqa: BLE001 -- a record never changes how the run ends
+            log.debug("could not record the terminal recovery occurrence", exc_info=True)
 
     def _finish_run(self) -> None:
         """The end-of-run dependency check and the final findings record."""
@@ -7635,6 +7711,11 @@ class Session:
                     break
                 continue
             if spec is None:
+                if self._explicit_tasks is not None and self._owed_open():
+                    # An operator list has no planner to name a settlement:
+                    # its end makes the one owner attempt per owed review
+                    # before the list's completion is decided.
+                    self._settle_owed_reviews("the list's end")
                 # One completion decision (quadratus.completion_decision, map
                 # P3.4): the session makes its steps and applies the result.
                 self._findings_block_done()
@@ -7980,6 +8061,12 @@ class Session:
             # left to repay them and the goal question is not asked; it is asked
             # only with no capped or audit debt, requirements only after a
             # confirmed goal.
+            if self._owed_open() and self._explicit_tasks is None:
+                # No slot is left to name a settlement: the one owner attempt
+                # per owed review, before the cap's finishing judgments (the
+                # finish hold keeps their capacity; a refused attempt keeps
+                # the debt).
+                self._settle_owed_reviews("the cap")
             self._recheck_resolved_findings()
             partial = sorted(self._partial_from_outcomes() | set(self._partial_tasks))
             self.close_decisions.append(dict(
@@ -8628,8 +8715,14 @@ class Session:
                                               approved=not blocking,
                                               blocking=[line.strip()[:300] for line in blocking])
                 record["review_text"] = verdict
+                owed_cap = str(verdict or "").startswith("UNFINISHED: the design review")
                 for line in blocking:
+                    if owed_cap and "gave no verdict" in line:
+                        # Filed as owned review debt by _final_design_review.
+                        continue
                     self._open_finding("unverified", f"Task {spec.task_id} design: {line.strip()}")
+                if not owed_cap:
+                    self._settle_owed_by_judgment(spec, reviewer, "design review")
                 self._edge("reviewer", not blocking)
                 if not blocking and self._current_resolves:
                     # Committed only once the whole task has passed, and only
@@ -8965,10 +9058,18 @@ class Session:
         except TurnLimitReached as exc:
             # The model ran, so the renders reached its copy: delivery is
             # recorded before the capped call is filed (Codex review comment
-            # 4226680387 on #53). Neither APPROVED nor a BLOCKING line: the
-            # caller files it as a review that gave no verdict (unverified),
-            # not as a design defect.
+            # 4226680387 on #53). Neither APPROVED nor a BLOCKING line, and
+            # not a design defect: the design review is owed by this reviewer
+            # as review debt (recovery lifecycle, 2026-10-31), settled by its
+            # own completed design review of this work, never a bare string.
             self._record_delivery(reviewer, hashes)
+            rv = self._recovery_open(spec, role="design-review", seat=reviewer, kind="design review",
+                                     outcome_class="design_review_capped",
+                                     question=f"{reviewer}'s design review of {spec.task_id}",
+                                     event=self._call_event(spec.task_id, "design-review", reviewer), exc=exc)
+            rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
+            self._owe_review(spec, reviewer, "design review", f"stopped at {exc.turns or 'its'} rounds with no "
+                             "verdict", role="design-review", record=rv)
             return self._capped_review(spec, reviewer, "design review", exc)
         except EvidenceNotDelivered as exc:
             self._edge("delivered", False)
@@ -9195,6 +9296,9 @@ class Session:
                 self.finish_refusals.extend(child.finish_refusals)
                 self.judgment_completions.extend(child.judgment_completions)
                 self.judgment_gaps.extend(child.judgment_gaps)
+                # The child's recovery occurrences come back whole: their ids
+                # are per task, and the owed debt they name is settled here.
+                self.recoveries.extend(child.recoveries)
                 # A child's execution facts come back with it, re-based to the
                 # parent's checks: only a check the parent runs after the merge
                 # can discharge them (Codex review of b6ba3ba, F5).
@@ -9418,6 +9522,18 @@ class Session:
         # child's rows were re-based to wait for: settled before the
         # reviewer is handed them (workflow repair, 2026-10-24).
         self._refresh_obligations()
+        # Owed review debt is judged, not rechecked: its owner reviews the
+        # work as it stands (``_settle_owed``), under the same owner,
+        # availability and source bounds (recovery lifecycle, 2026-10-31).
+        owed_ids = []
+        for entry in entries:
+            record = self._owed_record(entry.get("finding_id"))
+            if record is not None and record["fid"] not in owed_ids:
+                owed_ids.append(record["fid"])
+                result["rechecked"].append(self._settle_owed(spec, record, situation=situation, outcome=outcome,
+                                                             site=f"settlement in {spec.task_id}"))
+        owed_all = {r.get("fid") for r in self.review_findings if r.get("kind") == "unreviewed"}
+        entries = [e for e in entries if e.get("finding_id") not in owed_all]
         by_peer: Dict[str, List[dict]] = {}
         for entry in entries:
             by_peer.setdefault(entry["peer"], []).append(entry)
@@ -9472,7 +9588,14 @@ class Session:
             try:
                 with invocation(spec.task_id, "recheck"):
                     verdict = self._invoke_model(peer, prompt)
-            except TurnLimitReached:
+            except TurnLimitReached as exc:
+                # The findings are already held under their ids; the capped
+                # settlement is recorded as an occurrence and keeps them.
+                rv = self._recovery_open(spec, role="recheck", seat=peer, kind="recheck", outcome_class="recheck_capped",
+                                         question=f"{peer}'s settlement recheck of {', '.join(ids)}",
+                                         event=self._call_event(spec.task_id, "recheck", peer), exc=exc)
+                rv["eligible"], rv["decision"], rv["debt"] = ["hold_owned_debt"], "hold_owned_debt", list(ids)
+                self._recovery_result(rv, "held: the findings stay open under their own ids")
                 row["verdict"] = "kept: recheck capped"
                 for d in deferrals.get(peer, ()):
                     d["rechecked"] = "kept: recheck capped"
@@ -9656,9 +9779,22 @@ class Session:
         self._current_covers = list(covers)
         try:
             if peer is None:
-                self._open_finding("unverified", f"Task {spec.task_id} stopped at its lead's turn limit in the "
-                                                 "final parallel batch and no reviewer from another vendor was "
-                                                 "available; held unverified, not waived.")
+                # Owed to the first cross-vendor seat, unavailable now: held as
+                # owned debt that reaches the cap's finish, never a bare string
+                # that stops the run before it (recovery lifecycle, 2026-10-31).
+                owner = next((p for p in self.brain_trust if p.partition(":")[0] != vendor), None)
+                rv = self._recovery_open(spec, role="collaborator", seat=owner, kind="review",
+                                         outcome_class="reviewer_unavailable", observe=False,
+                                         question=f"a cross-vendor review of {spec.task_id}'s capped final work")
+                rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt: no reviewer is available"
+                if owner is not None:
+                    self._owe_review(spec, owner, "review", "no reviewer from another vendor was available",
+                                     role="collaborator", outcome=outcome, record=rv)
+                else:
+                    self._open_finding("unverified", f"Task {spec.task_id} stopped at its lead's turn limit in the "
+                                                     "final parallel batch and no reviewer from another vendor "
+                                                     "exists; held unverified, not waived.")
+                    self._recovery_result(rv, "stopped: no seat can owe this review")
                 result["verdict"] = "held: no reviewer"
                 return result
             changed = ", ".join(capped.get("changed") or []) or "no files"
@@ -9671,15 +9807,26 @@ class Session:
                        "the whole task, the original goal and the covered requirements.")
             self._record_selection(spec, peer, "collaborator")
             self._snapshot_scratch_bindings(spec)
+            prompt = self._collaborator_prompt(spec, draft, peer)
+            rv = None
             try:
                 with invocation(spec.task_id, "collaborator"):
-                    note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+                    note = self._invoke_model(peer, prompt)
             except TurnLimitReached as exc:
-                note = self._capped_review(spec, peer, "review", exc)
-                self._open_finding("unverified", f"Task {spec.task_id}: the review of its capped final work "
-                                                 f"by {peer} stopped at its turn limit; held unverified.")
-                result.update(reviewer=peer, verdict="held: review capped")
-                return result
+                recovered, rv = self._recover_judgment(spec, peer, "review", role="collaborator", prompt=prompt,
+                                                       outcome=outcome, exc=exc)
+                if recovered is None or self._review_gaps(recovered):
+                    if recovered is not None:
+                        self._settle_completion(spec, peer, "review", False, outcome=outcome)
+                    self._capped_review(spec, peer, "review", exc)
+                    self._owe_review(spec, peer, "review", f"its review of the capped final work stopped at "
+                                     f"{exc.turns or 'its'} rounds with no verdict", role="collaborator",
+                                     outcome=outcome, record=rv)
+                    result.update(reviewer=peer, verdict="held: review capped")
+                    return result
+                self._settle_completion(spec, peer, "review", True, outcome=outcome)
+                self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
+                note = recovered
             except FinishReserved as exc:
                 # The cap stands: no review ran, nothing is lifted.
                 self._finish_refused(spec, f"review of the capped final work by {peer}", exc, outcome=outcome)
@@ -9687,13 +9834,18 @@ class Session:
                 return result
             self.store.put(note, kind=f"review:{peer}", author=peer)
             gaps = self._review_gaps(note)
-            if gaps:
-                completed = self._complete_judgment(spec, peer, "review", note, gaps, role="collaborator",
-                                                    prompt=self._collaborator_prompt(spec, draft, peer),
-                                                    outcome=outcome)
+            if gaps and rv is None:
+                completed, rv = self._recover_judgment(spec, peer, "review", role="collaborator", prompt=prompt,
+                                                       outcome=outcome, raw=note, gaps=gaps)
                 if completed is not None:
                     self._settle_completion(spec, peer, "review", not self._review_gaps(completed), outcome=outcome)
                     note = completed
+                if self._review_gaps(note):
+                    self._owe_review(spec, peer, "review", "its review of the capped final work gave no valid "
+                                     "verdict", role="collaborator", outcome=outcome, record=rv)
+                    result.update(reviewer=peer, verdict="held: review gave no verdict")
+                    return result
+                self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
             note = self._judge_goal_review(spec, peer, note)
             rids = [rid for rid, _ in self._covered_texts()]
             clean = _approving_review(note, rids)
@@ -9714,11 +9866,19 @@ class Session:
                 result["verdict"] = "clean"
                 self._note(f"{spec.task_id}: capped final work reviewed clean by {peer}; its cap is lifted")
             else:
-                self._open_finding("unverified", f"Task {spec.task_id}: the review of its capped final work by "
-                                                 f"{peer} did not clear it, and no task can continue it: "
-                                                 + note.strip()[:600])
+                # The reviewer's findings are registered under their own ids
+                # and held for it, like any review's (recovery lifecycle,
+                # 2026-10-31: a bare string here bypassed the cap's finish).
+                made = self._register_review_findings(spec, peer, note, role="collaborator")
+                for record_ in made:
+                    self._hold_open_finding(spec, peer, f"{record_['fid']}: UNRESOLVED (raised on {spec.task_id}'s "
+                                                        f"capped final work; no task can continue it): "
+                                                        f"{record_['text']}", record=record_, outcome=outcome)
+                if not made:
+                    self._owe_review(spec, peer, "review", "its review of the capped final work neither cleared it "
+                                     "nor named a BLOCKING finding", role="collaborator", outcome=outcome, record=rv)
                 result["verdict"] = "held: findings"
-                self._note(f"{spec.task_id}: capped final work not cleared by {peer}; held unverified")
+                self._note(f"{spec.task_id}: capped final work not cleared by {peer}; its findings are held")
             return result
         finally:
             self._current_covers = saved
@@ -11132,9 +11292,14 @@ class Session:
                 why = (audit["verdicts"].get(rid) or {}).get("why", "")
                 out[rid] = dict(kind="audit", reviewer=audit["auditor"], finding=f"{rid}: NOT MET - {why}",
                                 disposition="NOT MET", identity=rid)
+        owed = {r.get("fid") for r in self.review_findings if r.get("kind") == "unreviewed"}
         for number, entry in enumerate(self.unresolved_reviews, 1):
             if (entry.get("deferred") and not entry.get("deferred_rechecked")) or \
                     entry.get("text") not in self.open_findings:
+                continue
+            if entry.get("finding_id") in owed:
+                # Owed review debt is settled by its owner's judgment, never
+                # disputed by a test (recovery lifecycle, 2026-10-31).
                 continue
             finding = (entry.get("finding") or entry["text"]).strip()
             out[f"U{number}"] = dict(kind="review", reviewer=entry["peer"], finding=finding,
@@ -13392,8 +13557,576 @@ class Session:
         body["identity"] = h(json.dumps(body, sort_keys=True))
         return body
 
+    # -- recovery lifecycle (quadratus.recovery, 2026-10-31) --------------------
+
+    def _call_event(self, task, role: str, peer: Optional[str]):
+        """The newest invoked ledger event for ``task``/``role`` by ``peer``:
+        the outer call the harness just made, with its invocation identity
+        and nullable usage. None when the run keeps no ledger."""
+        ledger = getattr(self.config, "delegation_ledger", None)
+        for event in reversed(list(getattr(ledger, "events", None) or [])):
+            if not getattr(event, "invoked", False) or str(getattr(event, "task", "")) != str(task):
+                continue
+            if (getattr(event, "role", "") or "").split(":")[0] != role:
+                continue
+            if peer is not None and peer not in (getattr(event, "requested_model", None),
+                                                 getattr(event, "canonical_model", None)):
+                continue
+            return event
+        return None
+
+    def _call_observations(self, event) -> dict:
+        """The allowlisted facts of what ``event``'s call did (its own tool
+        record, read while the run is live), or an explicit reason they are
+        unavailable. Never raw text, never a search pattern or a command."""
+        if event is None:
+            return recovery.safe_observations(None, unavailable="the call has no invocation record in this run")
+        reader = getattr(self.config, "call_trace", None)
+        if reader is None:
+            return recovery.safe_observations(None, unavailable="no transcript reader is configured for this run")
+        try:
+            trace_record = reader(event)
+        except Exception as exc:  # noqa: BLE001 -- an observation never fails a run
+            return recovery.safe_observations(None, unavailable=f"the call's transcript could not be read "
+                                                                f"({type(exc).__name__})")
+        if not trace_record:
+            return recovery.safe_observations(None, unavailable="the call's transcript was not found in this "
+                                                                "environment")
+        return recovery.safe_observations(trace_record, project_root=self.project)
+
+    def _recovery_allowance(self) -> dict:
+        """What is actually left when a recovery is decided: calls, reported
+        tokens, the job's judgment completions, task slots, and the held
+        finish. None where the run sets no such bound."""
+        budget = self._budget()
+        snap = budget.snapshot() if budget is not None else {}
+        limits = snap.get("limits") or {}
+        limit = int(getattr(self.config, "max_judgment_completions", 0) or 0)
+        claimed = snap.get("judgment_completions")
+        total = getattr(self, "_max_tasks", None)
+        calls = limits.get("max_calls")
+        tokens = limits.get("max_reported_tokens")
+        return dict(
+            calls_left=(max(0, int(calls) - int(snap.get("reserved_attempts") or 0)) if calls else None),
+            tokens_left=(max(0, int(tokens) - int(snap.get("reported_tokens") or 0)) if tokens else None),
+            judgment_completions_left=(max(0, limit - int(claimed)) if isinstance(claimed, int) else
+                                       (limit if budget is None else None)),
+            slots_left=(max(0, int(total) - int(getattr(self, "_slots_used", 0) or 0)) if total else None),
+            finish_held=list((snap.get("finish_protection") or {}).get("pending") or []))
+
+    def _recovery_open(self, spec, *, role: str, seat: Optional[str], kind: str, outcome_class: str,
+                       question: str, event=None, exc=None, observe: bool = True) -> dict:
+        """One recovery occurrence, written when a production path sees an
+        operation not give its caller the outcome it needed: identity, the
+        source it was bound to, the class, the failed call's measured cost,
+        the allowlisted observations, the prior attempts on the same
+        identity, the question still open and the allowance left. The
+        decision and result are filled in by the caller as they happen."""
+        task_id = str(getattr(spec, "task_id", None) or "run")
+        identity = f"{task_id}|{role}|{seat or '-'}|{kind}"
+        prefix = f"RV{task_id}-"
+        number = sum(1 for r in self.recoveries if str(r.get("id", "")).startswith(prefix)) + 1
+        record = dict(
+            id=f"{prefix}{number}", identity=identity, task=task_id, role=role, seat=seat, kind=kind,
+            outcome_class=outcome_class, meaning=recovery.OUTCOME_CLASSES.get(outcome_class, ""),
+            protective=outcome_class in recovery.PROTECTIVE,
+            source=self._source_fingerprint() if self.project else None,
+            question=str(question)[:400],
+            prior_attempts=[r["id"] for r in self.recoveries if r.get("identity") == identity],
+            failed_call=recovery.call_cost(event),
+            observations=(self._call_observations(event) if observe else
+                          recovery.safe_observations(None, unavailable="not read for this outcome")),
+            allowance=self._recovery_allowance(), eligible=[], decision="", attempts=[], result="pending",
+            debt=[], detail=(f"{type(exc).__name__}: {str(exc)[:200]}" if exc is not None else ""))
+        self.recoveries.append(record)
+        self._note(f"{task_id}: recovery {record['id']}: {outcome_class} ({role} by {seat or '-'})")
+        return record
+
+    def _recovery_tried(self, record: dict, action: str) -> bool:
+        """Whether this identity already had ``action`` attempted on the same
+        source: the job's memory, so nothing is tried twice unchanged."""
+        for other in self.recoveries:
+            if other is record or other.get("identity") != record.get("identity"):
+                continue
+            if other.get("source") != record.get("source"):
+                continue
+            if any(a.get("action") == action for a in other.get("attempts") or ()):
+                return True
+        return False
+
+    def _recovery_attempt(self, record: Optional[dict], action: str, outcome: str, *, task=None, role=None,
+                          peer=None, site: str = "") -> None:
+        """One attempted action on an occurrence, with the outer call it made
+        (its own ledger event: identity and measured cost; none when no call
+        was made)."""
+        if record is None:
+            return
+        event = self._call_event(task, role, peer) if task is not None and role else None
+        call = recovery.call_cost(event)
+        failed = (record.get("failed_call") or {}).get("invocation_id")
+        known = {failed} | {(a.get("call") or {}).get("invocation_id") for a in record.get("attempts") or ()}
+        if call is not None and call.get("invocation_id") in known:
+            call = None  # no new call was made for this attempt
+        record["attempts"].append(dict(action=action, outcome=str(outcome)[:300], site=site,
+                                       source=self._source_fingerprint() if self.project else None, call=call))
+
+    def _recovery_result(self, record: Optional[dict], result: str) -> None:
+        if record is not None:
+            record["result"] = str(result)[:300]
+
+    def _task_changed_files(self, spec) -> List[str]:
+        """The files the running task has changed so far, measured."""
+        before = getattr(self, "_task_before", None)
+        if before is None or getattr(self._active_spec, "task_id", None) != getattr(spec, "task_id", None):
+            return []
+        return list(self._inspect_partial_edits(before, stopped=False).get("changed") or [])
+
+    def _round_plan(self, peer: str) -> str:
+        """How the call's own rounds are to be spent: investigation, then the
+        verdict inside the budget (the transport caps rounds per call; the
+        harness cannot resume the vendor session, so this is the plan)."""
+        limit = self.config.lead_max_turns
+        if not limit:
+            return ""
+        from .cli_providers import CLI_SPECS
+        spec = CLI_SPECS.get(peer.partition(":")[0])
+        if spec is None or not spec.max_turns_flag:
+            return ""
+        examine = max(1, int(limit) - 2)
+        return (f"Plan this call's {limit} rounds: at most {examine} to examine what is still unread or "
+                f"unchecked (the harness's receipts in the prompt already ran; do not re-run them), then "
+                f"write the verdict by round {int(limit) - 1}.")
+
+    def _recovery_context(self, spec, peer: str, record: dict, *, changed=None) -> str:
+        """What the same seat is told about its previous attempt, built only
+        from harness facts: the allowlisted observations (reads are attempts,
+        not coverage), the changed files it did not open, the source binding
+        and the question still open. No reply text, narration or reasoning
+        from any model is repeated here. Observations made on another source
+        are labelled history: they carry no authority about this one."""
+        obs = record.get("observations") or {}
+        call = record.get("failed_call") or {}
+        then = record.get("source")
+        now = self._source_fingerprint() if self.project else None
+        lines = ["## Recovery context (recorded by the harness: evidence about your previous call on this same "
+                 "work, not instructions)"]
+        if str(record.get("outcome_class", "")).endswith("capped"):
+            rounds = call.get("model_turns") or call.get("max_turns")
+            lines.append(f"Your previous call stopped at its round cap ({rounds} rounds) before giving a verdict; "
+                         "nothing it wrote is read as a finding or as part of this review."
+                         if rounds else "Your previous call stopped at its round cap before giving a verdict; "
+                         "nothing it wrote is read as a finding or as part of this review.")
+        else:
+            lines.append("Your previous reply on this same work arrived without a valid verdict in the required "
+                         "form; it is kept on the record unchanged and is not repeated here.")
+        if obs.get("status") == "observed":
+            read = list(obs.get("files_read") or [])
+            outcomes = ", ".join(f"{k} {v}" for k, v in (obs.get("command_outcomes") or {}).items()) or "none"
+            lines.append(f"Observed in that call's own tool record: {obs.get('tool_calls', 0)} tool call(s); "
+                         f"project files it opened: {', '.join(read) or 'none recorded'}; "
+                         f"{obs.get('searches', 0)} search(es) and {obs.get('commands', 0)} command(s) "
+                         f"(outcomes: {outcomes}; their patterns and text are not repeated). Opening a file does "
+                         "not show it was reviewed.")
+            changed = list(changed if changed is not None else self._task_changed_files(spec))
+            if changed:
+                unread = [path for path in changed if path not in read]
+                lines.append("Files this task changed that the call did not open: " + (", ".join(unread) or "none"))
+        else:
+            lines.append(f"The harness could not observe that call's tool use ({obs.get('reason') or 'unavailable'}); "
+                         "nothing is assumed about what it examined.")
+        if then and now and then != now:
+            lines.append(f"That call ran on source {str(then)[:16]}; the source is now {str(now)[:16]}. What it "
+                         "observed is history about an earlier source: it shows nothing about the source you judge "
+                         "now and approves nothing.")
+        lines.append(f"This judgment is bound to source {str(now or then or 'unavailable')[:16]}: a changed source "
+                     "voids it before it is read.")
+        lines.append("Still open: " + str(record.get("question") or "your verdict"))
+        plan = self._round_plan(peer)
+        if plan:
+            lines.append(plan)
+        return "\n".join(lines) + "\n\n"
+
+    def _recover_judgment(self, spec, peer: str, kind: str, *, role: str, prompt: str, task=None, outcome=None,
+                          exc=None, raw: str = "", gaps=()) -> Tuple[Optional[str], dict]:
+        """A required review or recheck by ``peer`` that did not finish (its
+        call reached the round cap: ``exc``; or a reply arrived without a
+        valid verdict: ``raw`` and ``gaps``). The occurrence is recorded with
+        what the call did; then, once per identity and source, the same seat
+        completes its judgment with that context carried
+        (``_complete_judgment``: the job's completion allowance, claimed
+        before the call and never refunded; the finish hold, the source
+        binding and the seat's own turn cap all apply). Returns the new
+        reply (the caller's strict reader decides whether it is a verdict)
+        or None, with the occurrence; the caller records the result."""
+        capped = exc is not None
+        outcome_class = _NO_VERDICT_CLASSES.get((kind, capped), "review_capped" if capped else "review_unfinished")
+        event = self._call_event(spec.task_id, role, peer)
+        question = (f"{peer}'s verdict on {spec.task_id}'s {kind}"
+                    + (f" ({'; '.join(str(g) for g in gaps)})" if gaps else ""))
+        record = self._recovery_open(spec, role=role, seat=peer, kind=kind, outcome_class=outcome_class,
+                                     question=question, event=event, exc=exc)
+        if capped and getattr(exc, "partial_text", None):
+            # Narration of unfinished work: kept on the record, never read as
+            # a result and never placed in a prompt.
+            record["narration_artifact"] = self.store.put(exc.partial_text, kind=f"capped-narration:{kind}:{peer}",
+                                                          author=peer).id
+        record["eligible"] = ["complete_judgment", "hold_owned_debt"]
+        if self._recovery_tried(record, "complete_judgment"):
+            record["decision"] = "hold_owned_debt: a completion was already attempted for this judgment on this source"
+            return None, record
+        if not self._available(peer):
+            record["decision"] = "hold_owned_debt: the seat that owes the judgment is unavailable"
+            return None, record
+        record["decision"] = "complete_judgment"
+        missing = [str(g) for g in gaps] or ["a verdict: the previous call stopped at its round cap"]
+        reply = self._complete_judgment(spec, peer, kind, raw or "", missing, role=role, prompt=prompt, task=task,
+                                        outcome=outcome, context=self._recovery_context(spec, peer, record),
+                                        recovery_record=record)
+        return reply, record
+
+    def _owed_record(self, fid) -> Optional[dict]:
+        """The open owed-review record ``fid`` names, or None."""
+        record = next((r for r in self.review_findings if r.get("fid") == fid), None)
+        if record is None or record.get("closed") or record.get("kind") != "unreviewed":
+            return None
+        return record
+
+    def _owe_review(self, spec, peer: str, kind: str, why: str, *, role: str, outcome=None,
+                    record: Optional[dict] = None, fids=(), original: str = "") -> List[str]:
+        """A required judgment by ``peer`` that did not finish, held as owned
+        review debt (never a bare open string): for a recheck, the findings it
+        was asked about stay open under their own ids, held for their author;
+        for a review, design review or verification, one ``unreviewed``
+        record (delivery.FINDING_KINDS) is registered for the owner, bound to
+        this source and the task's covers. Either way the debt is in the
+        held entries every later reader uses (the close policy, the planner,
+        RESOLVES and CONTINUES, the post-merge recheck, DONE and the cap),
+        and only the owner's completed judgment settles it."""
+        held: List[str] = []
+        if fids:
+            # The reviewer's whole original finding stays on the record beside
+            # the ids (Codex review of 0983dac): a multi-line finding whose
+            # BLOCKING line carried no text of its own registers no record,
+            # and it must not leave the record with the cap.
+            extra = (original or "").strip()
+            for fid in fids:
+                existing = next((r for r in self.review_findings if r.get("fid") == fid), None)
+                if existing is None or existing.get("closed"):
+                    continue
+                if not any(e.get("finding_id") == fid for e in self.unresolved_reviews
+                           if e.get("text") in self.open_findings):
+                    shown = str(existing.get("text") or existing["claim"])
+                    verdict = f"{fid}: UNRESOLVED (no verdict at its recheck by {peer}: {why}): {shown}"
+                    if extra and extra != shown.strip():
+                        verdict += f" [the reviewer's original findings, not re-checked: {extra[:2000]}]"
+                        extra = ""
+                    # Never carried to the audit in place of its author: a
+                    # recheck that gave no verdict is the author's debt, and
+                    # the task that holds it closed with an open finding.
+                    self._hold_open_finding(spec, peer, verdict, record=existing, outcome=outcome, carry=False)
+                held.append(fid)
+        elif any(r.get("kind") == "unreviewed" and not r.get("closed") and r.get("task") == str(spec.task_id)
+                 and r.get("author") == peer and r.get("owed_kind") == kind for r in self.review_findings):
+            # The same judgment is already owed by the same seat for this
+            # task: one record, never a second for the same debt.
+            existing = next(r for r in self.review_findings if r.get("kind") == "unreviewed" and not r.get("closed")
+                            and r.get("task") == str(spec.task_id) and r.get("author") == peer
+                            and r.get("owed_kind") == kind)
+            held.append(existing["fid"])
+        else:
+            prefix = self._finding_prefix(spec)
+            numbers = [int(r["fid"][len(prefix):]) for r in self.review_findings
+                       if str(r.get("fid", "")).startswith(prefix) and str(r["fid"][len(prefix):]).isdigit()]
+            fid = f"{prefix}{max(numbers, default=0) + 1}"
+            covers = list(getattr(self, "_current_covers", []) or [])
+            revisions = self._requirement_revisions()
+            requirement = (covers[0], revisions.get(covers[0], 1)) if len(covers) == 1 else None
+            claim = (f"UNREVIEWED: the {kind} of {spec.task_id} by {peer} did not finish ({why}); its judgment of "
+                     "this work is owed")
+            finding = delivery.Finding(fid, peer, role, claim, delivery.FindingBasis("none"), "unstated",
+                                       self._source_fingerprint() or "unavailable", str(spec.task_id), requirement,
+                                       (), "unreviewed")
+            row = dict(finding.to_dict(), text=claim, owed_kind=kind, owed_role=role, covers=covers,
+                       description=str(getattr(spec, "description", "") or "")[:2000],
+                       changed=self._task_changed_files(spec))
+            self.review_findings.append(row)
+            verdict = f"{fid}: UNRESOLVED (owed {kind} by {peer}: {why}): {claim}"
+            self._hold_open_finding(spec, peer, verdict, record=row, outcome=outcome)
+            held.append(fid)
+        # The held entry carries the typed fact (``_hold_open_finding``), so
+        # the owner's settlement recovers it atomically; no second fact is
+        # added that nothing could close.
+        self._judgment_gap(spec, peer, kind, why)
+        if record is not None:
+            record["debt"] = sorted(set(record.get("debt") or []) | set(held))
+            held = list(record["debt"])
+            if "hold_owned_debt" not in str(record.get("decision") or ""):
+                record["decision"] = (record.get("decision") + "; then " if record.get("decision") else "") + \
+                    "hold_owned_debt"
+            self._recovery_result(record, "held: owned review debt " + (", ".join(held) or "(already closed)"))
+        return held
+
+    def _owed_texts(self) -> set:
+        """The held open texts that are owed review debt (an ``unreviewed``
+        record, or a finding whose recheck gave no verdict): settled by the
+        owner's judgment, not by the evidence loop."""
+        out = set()
+        for entry in self.unresolved_reviews:
+            text = entry.get("text")
+            if text not in self.open_findings:
+                continue
+            fid = entry.get("finding_id")
+            record = next((r for r in self.review_findings if r.get("fid") == fid), None)
+            if record is None or record.get("closed"):
+                continue
+            if record.get("kind") == "unreviewed" or "(no verdict at its recheck by " in str(text):
+                out.add(text)
+        return out
+
+    def _owed_review_prompt(self, spec, record: dict, situation: str) -> str:
+        """The owner's review of work it owes a judgment on, as the source
+        now stands: the task as it was described, the files measured as
+        changed, the contract its findings are held to, the review grammar,
+        and the harness's recovery context. The settling task's own text is
+        not the subject."""
+        task_id = record.get("task")
+        changed = ", ".join(record.get("changed") or []) or "not recorded"
+        last = next((r for r in reversed(self.recoveries) if record["fid"] in (r.get("debt") or ())), None)
+        context = (self._recovery_context(spec, record["author"], last, changed=record.get("changed") or [])
+                   if last is not None else "")
+        return (self._role_packet(spec, "reviewer") + "\n\n"
+                f"## The work you owe a judgment on ({record['fid']})\n"
+                f"Task {task_id}, as you were asked to review it: {str(record.get('description') or '')[:1500]}\n"
+                f"Files it changed (measured by the harness): {changed}.\n"
+                f"Your {record.get('owed_kind') or 'review'} of it did not finish, so it was never reviewed by you. "
+                f"{situation} Review that work as it stands now in your working directory, against the original "
+                "goal and the requirements below.\n\n" + context
+                + _OWED_REVIEW_GRAMMAR + self._goal_authority(record["author"])
+                + self._review_turn_budget_note(record["author"]))
+
+    def _settle_owed(self, spec, record: dict, *, situation: str, outcome=None, site: str = "") -> dict:
+        """One owner judgment of an owed-review record on the current source.
+        Only the record's author, only while that seat is available, at most
+        ``_OWED_SETTLEMENT_ATTEMPTS`` times per record and never twice on the
+        same source. A completed review closes the record (RESOLVED by its
+        author, the harness recording the completion) and registers every
+        BLOCKING line as a new held finding of the original task; a capped,
+        refused or verdict-less reply leaves it open, with the attempt on the
+        record. Returns the row the settlement reports."""
+        fid, owner = record["fid"], record["author"]
+        row = dict(peer=owner, findings=1, verdict=None, resolved=[], kept=[], new=[], owed=fid)
+        occurrence = next((r for r in reversed(self.recoveries) if fid in (r.get("debt") or ())), None)
+        if occurrence is None:
+            occurrence = self._recovery_open(SimpleNamespace(task_id=record.get("task")), role="owner-review",
+                                             seat=owner, kind=record.get("owed_kind") or "review",
+                                             outcome_class="review_capped", question=f"{owner}'s judgment owed on "
+                                             f"{record.get('task')} ({fid})", observe=False)
+            occurrence["debt"] = [fid]
+        source = self._source_fingerprint() if self.project else None
+        tried = [a for a in occurrence.get("attempts") or () if a.get("action") == "owner_settlement"
+                 and not str(a.get("outcome") or "").startswith("not attempted")]
+        if record.get("owed_kind") not in ("review", None):
+            reason = (f"kept: a {record.get('owed_kind')} is settled by its owner's completed "
+                      f"{record.get('owed_kind')} of a continuation of {record.get('task')}, not by a code review")
+        elif not self._available(owner):
+            reason = "kept: the owner is unavailable"
+        elif any(a.get("source") == source for a in tried):
+            reason = "kept: the owner already judged this exact source without a verdict"
+        elif len(tried) >= _OWED_SETTLEMENT_ATTEMPTS:
+            reason = f"kept: the owner's {_OWED_SETTLEMENT_ATTEMPTS} settlement attempts are spent"
+        else:
+            reason = ""
+        if reason:
+            row["verdict"] = reason
+            self._recovery_attempt(occurrence, "owner_settlement", "not attempted: " + reason[6:], site=site)
+            return row
+        owner_spec = SimpleNamespace(task_id=record.get("task"), description=record.get("description") or "")
+        saved_covers = self._current_covers if hasattr(self, "_current_covers") else None
+        self._current_covers = list(record.get("covers") or [])
+        try:
+            prompt = self._owed_review_prompt(spec, record, situation)
+            try:
+                with invocation(record.get("task") or spec.task_id, "collaborator"):
+                    reply = self._invoke_model(owner, prompt)
+            except TurnLimitReached:
+                self._recovery_attempt(occurrence, "owner_settlement", "capped: no verdict", task=record.get("task")
+                                       or spec.task_id, role="collaborator", peer=owner, site=site)
+                row["verdict"] = "kept: the owner's review stopped at its round cap again"
+                return row
+            except FinishReserved as exc:
+                self._finish_refused(spec, f"owed review of {record.get('task')} by {owner}", exc, outcome=outcome)
+                self._recovery_attempt(occurrence, "owner_settlement", "refused to keep the finish", site=site)
+                row["verdict"] = "kept: refused to keep the finish"
+                return row
+            self.store.put(reply, kind=f"review:{owner}", author=owner)
+            if self._source_fingerprint() != source:
+                self._recovery_attempt(occurrence, "owner_settlement", "void: the source changed during the review",
+                                       task=record.get("task") or spec.task_id, role="collaborator", peer=owner,
+                                       site=site)
+                row["verdict"] = "kept: the source changed during the owner's review"
+                return row
+            if self._review_gaps(reply) or not _review_complete(reply) and not _clean_goal_review(
+                    reply, [rid for rid, _ in self._covered_texts()]):
+                self._recovery_attempt(occurrence, "owner_settlement", "no valid verdict",
+                                       task=record.get("task") or spec.task_id, role="collaborator", peer=owner,
+                                       site=site)
+                row["verdict"] = "kept: the owner's reply gave no valid verdict"
+                return row
+            new = self._register_review_findings(owner_spec, owner, reply, role="collaborator")
+            for made in new:
+                verdict = f"{made['fid']}: UNRESOLVED (raised by {owner} in its owed review): {made['text']}"
+                self._hold_open_finding(owner_spec, owner, verdict, record=made, outcome=outcome)
+                row["new"].append(made["fid"])
+            settling = self._call_event(record.get("task") or spec.task_id, "collaborator", owner)
+            self._close_owed(record, owner, f"completed review on source {str(source)[:16]}"
+                             + (f"; new findings {', '.join(row['new'])}" if row["new"] else "; no findings"),
+                             call=getattr(settling, "invocation_id", "") or "")
+            row["resolved"].append(fid)
+            row["verdict"] = "reviewed" + (f": new {', '.join(row['new'])}" if row["new"] else ": no findings")
+            self._recovery_attempt(occurrence, "owner_settlement", row["verdict"],
+                                   task=record.get("task") or spec.task_id, role="collaborator", peer=owner, site=site)
+            self._recovery_result(occurrence, "recovered: the owner completed the owed review"
+                                  + (f"; new findings {', '.join(row['new'])} are held" if row["new"] else ""))
+            return row
+        finally:
+            self._current_covers = saved_covers
+
+    def _close_owed(self, record: dict, owner: str, why: str, *, call: str = "") -> None:
+        """Close an owed-review record on its author's completed review: one
+        RESOLVED disposition by that author (delivery.designated_judge holds),
+        then every held text and fact for it, atomically."""
+        finding = delivery.Finding.from_dict(record)
+        refusal = delivery.designated_judge(finding, owner, "recheck")
+        if refusal:
+            raise ValueError(refusal)
+        source = self._source_fingerprint() or "unavailable"
+        settled = replace(finding, history=finding.history + (
+            delivery.Disposition(finding.fid, delivery.RESOLVED, why[:300], owner, "recheck", source, source,
+                                 str(call or "")),))
+        record.update(settled.to_dict())
+        self._close_review_finding_by_id(finding.fid, f"reviewed by {owner}: {why[:160]}")
+
+    def _settle_owed_by_judgment(self, spec, peer: str, kind: str) -> List[str]:
+        """An owed design review or verification settles when its owner
+        completes the same kind of judgment on the current source for this
+        task, a task that continues it, or a task that names it in RESOLVES:
+        the owner's own completed judgment, never another seat's and never a
+        code review standing in for it. Returns the ids closed."""
+        chain = set(self._continuation_chain(getattr(self, "_continues", None))) | {str(spec.task_id)}
+        named = set(getattr(self, "_current_resolves", None) or [])
+        closed = []
+        for record in [r for r in self.review_findings if r.get("kind") == "unreviewed" and not r.get("closed")
+                       and r.get("owed_kind") == kind and r.get("author") == peer]:
+            if record.get("task") not in chain and record["fid"] not in named:
+                continue
+            self._close_owed(record, peer, f"completed {kind} in {spec.task_id}")
+            occurrence = next((r for r in reversed(self.recoveries) if record["fid"] in (r.get("debt") or ())), None)
+            self._recovery_attempt(occurrence, "owner_settlement", f"completed {kind} in {spec.task_id}",
+                                   site=f"{kind} in {spec.task_id}")
+            self._recovery_result(occurrence, f"recovered: {peer} completed the owed {kind}")
+            closed.append(record["fid"])
+        return closed
+
+    def _owed_attempts(self, fid: str) -> int:
+        """Owner settlements already attempted for the owed record ``fid``."""
+        return sum(1 for r in self.recoveries if fid in (r.get("debt") or ())
+                   for a in r.get("attempts") or () if a.get("action") == "owner_settlement"
+                   and not str(a.get("outcome") or "").startswith("not attempted"))
+
+    def _owed_open(self) -> List[dict]:
+        """The open owed-review records."""
+        return [r for r in self.review_findings if r.get("kind") == "unreviewed" and not r.get("closed")]
+
+    def _settle_owed_reviews(self, site: str) -> List[dict]:
+        """Before a terminal decision with no planner after it (an explicit
+        list's end, the cap): one owner judgment of each open owed review on
+        the current source, under the same bounds as any settlement. Nothing
+        is accepted here; a review that settles only removes the debt it
+        owed, and anything it finds is held."""
+        rows = []
+        for record in [r for r in self.review_findings if r.get("kind") == "unreviewed" and not r.get("closed")]:
+            spec = SimpleNamespace(task_id=record.get("task"), description=record.get("description") or "",
+                                   scope=None, kind="review", complexity="simple", lead=None, needs=frozenset())
+            holder = next((o for o in reversed(self.task_outcomes) if o.task_id == record.get("task")), None)
+            rows.append(self._settle_owed(spec, record, outcome=holder or self.run_outcome, site=site,
+                                          situation=f"No task is left to name a settlement ({site}): this is the one "
+                                                    "owner review the harness makes before the run's finish."))
+        return rows
+
+    def _record_stop_rule(self, reason: str) -> None:
+        """The occurrence for a stop the session chose rather than one an
+        exception forced (``stop_reason``: open findings, unmet requirements,
+        a failed check, a breaker): its own rule, recorded for the
+        improvement loop, never retried and never reconciled."""
+        name = str(reason or "").split(":", 1)[0].strip() or "stop"
+        if any(r.get("kind") == "run" and r.get("result") == f"stopped: {name}" for r in self.recoveries):
+            return
+        record = self._recovery_open(SimpleNamespace(task_id="run"), role="run", seat=None, kind="run",
+                                     outcome_class="stop_rule", question=f"the run ended on {name}", observe=False)
+        record["detail"] = str(reason)[:200]
+        record["eligible"], record["decision"] = ["stop"], "stop: the run's own stop rule"
+        self._recovery_result(record, f"stopped: {name}")
+
+    def _record_terminal_recovery(self, exc: BaseException) -> None:
+        """The occurrence for an exception that ends the run: classified,
+        bound to the call that raised it where the ledger names one, marked
+        protective or uncertain. A protective stop stays a stop; an uncertain
+        outcome names reconciliation; neither is retried."""
+        name = type(exc).__name__
+        names = {klass.__name__ for klass in type(exc).__mro__}
+        reason = str(getattr(self._budget(), "_reason", "") or "") if self._budget() is not None else ""
+        if "PartialWorkStopped" in names or "PartialWorkSuspected" in names:
+            cls = "uncertain_write"
+        elif names & {"DependencyTreeChanged", "DependencyIdentityUnavailable", "EvidenceIdentityMismatch",
+                      "JobStoreUnavailable", "CheckpointRefused"}:
+            cls = "integrity"
+        elif names & {"CapabilityUnavailable", "ProviderRefusal"}:
+            cls = "permission"
+        elif names & {"KeyboardInterrupt", "CancelledError"}:
+            cls = "cancelled"
+        elif "WindowExhausted" in names or "window_exhausted" in reason:
+            cls = "provider_quota"
+        elif "unknown_usage" in str(exc) or reason == "unknown_usage":
+            cls = "unknown_usage"
+        elif names & {"TimeoutError", "_GateTimeout"} or "timed out" in str(exc).lower():
+            cls = "provider_timeout"
+        elif "FinishReserved" in names or "RunBudgetExceeded" in names:
+            cls = "capacity_exhausted"
+        elif "OperatorInputNeeded" in names:
+            cls = "operator_input"
+        elif "RunStalled" in names:
+            cls = "stalled"
+        elif "ProviderError" in names:
+            cls = "provider_error"
+        elif str(getattr(type(exc), "__module__", "")).startswith("quadratus"):
+            # One of the run's own deterministic stop rules (a failed or
+            # unattributable check, unverified evidence, open findings,
+            # unmet requirements, a breaker): known, not uncertain.
+            cls = "stop_rule"
+        else:
+            cls = "unknown"
+        call = dict(getattr(self, "_active_call", {}) or {})
+        task = call.get("task") or getattr(self._active_spec, "task_id", None) or "run"
+        role = str(call.get("role") or "run")
+        seat = call.get("model")
+        ledger = getattr(self.config, "delegation_ledger", None)
+        last = next((e for e in reversed(list(getattr(ledger, "events", None) or [])) if getattr(e, "invoked", False)),
+                    None)
+        event = last if last is not None and str(getattr(last, "task", "")) == str(task) else None
+        record = self._recovery_open(SimpleNamespace(task_id=task), role=role, seat=seat, kind="run",
+                                     outcome_class=cls, question=f"the run ended on {name}", event=event, exc=exc,
+                                     observe=False)
+        record["eligible"] = ["reconcile", "stop"] if cls in ("unknown_usage", "provider_timeout", "uncertain_write",
+                                                              "unknown") else ["stop"]
+        record["decision"] = ("stop: protective" if cls in recovery.PROTECTIVE else
+                              "reconcile: the call's usage or effect is unknown; an operator reconciles it from the "
+                              "retained evidence before any resume" if "reconcile" in record["eligible"] else
+                              "stop: the run's own stop rule")
+        self._recovery_result(record, f"stopped: {name}")
+
     def _complete_judgment(self, spec, peer: str, kind: str, raw: str, gaps: List[str], *, role: str,
-                           prompt: str, task: Optional[TaskMemory] = None, outcome=None) -> Optional[str]:
+                           prompt: str, task: Optional[TaskMemory] = None, outcome=None, context: str = "",
+                           recovery_record: Optional[dict] = None) -> Optional[str]:
         """One same-seat judgment completion for an ARRIVED reply that is not
         a judgment (strategy reset, 2026-10-16). Returns the seat's new reply,
         or None when nothing new may be relied on.
@@ -13413,8 +14146,11 @@ class Session:
         binding = self._judgment_binding(spec, peer, role)
         record = dict(task=spec.task_id, seat=peer, kind=kind, role=role, gaps=list(gaps), binding=binding,
                       claimed=False, outcome="", judgment="")
-        raw_ref = self.store.put(raw, kind=f"judgment-raw:{kind}:{peer}", author=peer)
+        raw_ref = self.store.put(raw or "(no reply: the call stopped before answering)",
+                                 kind=f"judgment-raw:{kind}:{peer}", author=peer)
         record["raw_artifact"] = raw_ref.id
+        if recovery_record is not None:
+            record["recovery"] = recovery_record["id"]
         self.judgment_completions.append(record)
         limit = int(getattr(self.config, "max_judgment_completions", 0) or 0)
         if limit <= 0 or not self._claim_judgment(limit, dict(task=spec.task_id, seat=peer, kind=kind, role=role,
@@ -13422,6 +14158,7 @@ class Session:
                                                                 source=binding["source"])):
             record["outcome"] = "not attempted: " + ("turned off" if limit <= 0 else "the job's allowance is spent")
             self._note(f"{spec.task_id}: {peer}'s {kind} gave no valid verdict; completion {record['outcome']}")
+            self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"])
             return None
         record["claimed"] = True
         self.store.put(json.dumps(record), kind="judgment-completion-intent", author="harness")
@@ -13430,13 +14167,17 @@ class Session:
         if self._judgment_binding(spec, peer, role) != binding:
             record["outcome"] = "void before the call: the bound identity changed"
             self._note(f"{spec.task_id}: {peer}'s {kind} completion {record['outcome']}")
+            self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"])
             return None
         missing = "; ".join(gaps)
-        ask = ("Your previous reply on this same work arrived without a valid verdict in the required "
-               f"form. It lacked: {missing}. It is kept on the record unchanged:\n--- previous reply ---\n"
-               f"{raw.strip()[:6000]}\n--- end of previous reply ---\n"
-               "The work and the source are unchanged. Give your judgment now in the required form "
-               "below; judge the work itself, and do not quote or repeat the previous reply.\n\n")
+        # The previous reply is never repeated: it is model output, kept on
+        # the record (``raw_artifact``), and repeating it would promote
+        # unfiltered text into the prompt (root's context audit on 1dbbf9f,
+        # L2). What the seat is told comes from harness facts only.
+        ask = (context or ("Your previous reply on this same work arrived without a valid verdict in the "
+                           "required form; it is kept on the record unchanged and is not repeated here.\n\n"))
+        ask += (f"It lacked: {missing}. The work and the source are unchanged. Give your judgment now in the "
+                "required form below; judge the work itself.\n\n")
         try:
             with invocation(spec.task_id, role):
                 reply = self._invoke_model(peer, ask + prompt)
@@ -13450,6 +14191,8 @@ class Session:
             # recorded, then raised as the review call's own failure is.
             record["outcome"] = f"stopped: {type(exc).__name__}: {str(exc)[:160]}"
             self.store.put(json.dumps(record), kind="judgment-completion-stopped", author="harness")
+            self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"], task=spec.task_id,
+                                   role=role, peer=peer)
             raise
         else:
             after = self._judgment_binding(spec, peer, role)
@@ -13459,7 +14202,11 @@ class Session:
             else:
                 ref = self.store.put(reply, kind=f"judgment-completion:{kind}:{peer}", author=peer)
                 record.update(outcome="answered", reply_artifact=ref.id)
+                self._recovery_attempt(recovery_record, "complete_judgment", "answered", task=spec.task_id,
+                                       role=role, peer=peer)
                 return reply
+        self._recovery_attempt(recovery_record, "complete_judgment", record["outcome"], task=spec.task_id,
+                               role=role, peer=peer)
         self._note(f"{spec.task_id}: {peer}'s {kind} judgment completion gave nothing: {record['outcome']}")
         return None
 
@@ -14401,6 +15148,12 @@ class Session:
         if away:
             return ("RESOLVES names review findings only their own reviewer can close, and that seat is "
                     "unavailable now: " + ", ".join(f"{r} ({reviews[r]['author']})" for r in away) + ".")
+        spent = [r for r in review if reviews[r].get("kind") == "unreviewed" and self._owed_attempts(r)
+                 >= _OWED_SETTLEMENT_ATTEMPTS]
+        if spent:
+            return (f"RESOLVES names owed review debt whose owner has already been asked "
+                    f"{_OWED_SETTLEMENT_ATTEMPTS} times without a verdict: {', '.join(spent)}. No further owner "
+                    "attempt is made; it stays open and the run cannot complete over it.")
         wanted = {rid for r in audit for rid in by_id[r]["requirements"]}
         wanted |= {reviews[r]["requirement"][0] for r in review if reviews[r].get("requirement")}
         missing = sorted(wanted - set(covers))
@@ -14452,7 +15205,24 @@ class Session:
                 "finding inherits it, and the same recheck follows its clean close without naming it. On a "
                 "survey run a RESOLVES naming a finding raised on a capped, failed or unmerged task is a "
                 "recovery and is charged to the recovery allowance, once with any CONTINUES; naming only "
-                "findings on closed work is ordinary coverage and is not charged.")
+                "findings on closed work is ordinary coverage and is not charged."
+                + self._owed_resolves_note(reviews))
+
+    def _owed_resolves_note(self, reviews: List[dict]) -> str:
+        """For owed review debt among ``reviews``: what it is and how it
+        settles, said once (recovery lifecycle, 2026-10-31)."""
+        owed = [r for r in reviews if r.get("kind") == "unreviewed"]
+        if not owed:
+            return ""
+        ids = ", ".join(f"{r['fid']} ({r.get('owed_kind') or 'review'} of {r['task']} owed by {r['author']})"
+                        for r in owed)
+        return (f" Owed review debt: {ids}. Each is a required judgment that did not finish, not a defect and not "
+                "an approval. Only its owner's completed judgment of that work on the current source settles it: "
+                "for a review, the owner reviews the work once when a task naming its id in RESOLVES (or "
+                "continuing its task) closes clean; for a design review or a verification, when a task that "
+                "continues its task completes that judgment by the same owner. At most "
+                f"{_OWED_SETTLEMENT_ATTEMPTS} owner attempts are made, never twice on the same source; DONE and the "
+                "cap never complete over it.")
 
     def _recheck_resolved_findings(self) -> None:
         """Reopen each resolved finding whose resolving renders no longer
@@ -15085,7 +15855,11 @@ class Session:
                      "now stands. Nothing here says your findings are addressed: read the source.")
         record["rechecks"] = self._recheck_open_findings(spec, entries, outcome, situation=situation)
         current = {r["fid"]: r for r in self.review_findings}
-        return [fid for fid in named if not current.get(fid, {}).get("closed")]
+        # Owed review debt its owner did not settle is still owed, not judged
+        # unresolved: it stays held under its attempt bound and never stops
+        # the run as an unresolved RESOLVES (recovery lifecycle, 2026-10-31).
+        return [fid for fid in named if not current.get(fid, {}).get("closed")
+                and current.get(fid, {}).get("kind") != "unreviewed"]
 
     def _ledger_at_settlement(self, spec, reasons) -> None:
         """Compare the ledger this task was dispatched under with the live one
@@ -15179,11 +15953,23 @@ class Session:
         an empty typed set passed a vacuous all()). The closing task's COVERS
         are not required: inherited debt is still debt. Whether a slot is
         left is the close policy's question, not this rule's."""
-        if not (self.config.requirements_ledger and self._explicit_tasks is None and self.open_findings
-                and self._discovering_checks()):
+        if not self.open_findings:
+            return ""
+        # Owed review debt (an unfinished review or recheck, held for its
+        # owner) settles by the owner's completed judgment, not by the
+        # evidence loop: it is held without a discovering check, and in an
+        # operator list too, whose end makes the one owner attempt
+        # (``_settle_owed_reviews``). Nothing completes over it (recovery
+        # lifecycle, 2026-10-31).
+        owed = self._owed_texts()
+        owed_only = bool(owed) and all(text in owed for text in self.open_findings)
+        if owed_only:
+            if not (self.config.requirements_ledger or self._explicit_tasks is not None):
+                return ""
+        elif not (self.config.requirements_ledger and self._explicit_tasks is None and self._discovering_checks()):
             return ""
         from .finding_state import from_session
-        held = {e["entry"]["text"] for e in self._disputable().values() if e["kind"] == "review"}
+        held = {e["entry"]["text"] for e in self._disputable().values() if e["kind"] == "review"} | owed
         state = from_session(self)
         typed = list(state.findings())
         if state.problems or not typed:
@@ -15195,6 +15981,9 @@ class Session:
         if not all(any(item.whole == text or text.startswith(item.whole) for item in typed)
                    for text in self.open_findings):
             return ""
+        if owed_only:
+            return (f"{len(self.open_findings)} open finding(s) are owed review debt, settled only by their owners' "
+                    "completed judgment")
         return f"{len(self.open_findings)} open finding(s) are held review findings the evidence loop can test"
 
     def _review_debt_holds(self, covers, *, slot_left: bool) -> bool:
@@ -16063,7 +16852,7 @@ class Session:
                 "and the current source yourself: an observation is neither a finding nor an approval, and "
                 "the reviewer's reason for not blocking binds nothing.")
 
-    def _judge_goal_review(self, spec, peer: str, note: str) -> str:
+    def _judge_goal_review(self, spec, peer: str, note: str, *, record: Optional[dict] = None) -> str:
         """Hold a goal-bearing review to its per-requirement verdicts (r05 on
         1655cf1: the CLI reviewer carried the goal and R10 verbatim and still
         replied NO FINDINGS while malformed IDs left through argparse's plain
@@ -16079,12 +16868,13 @@ class Session:
         # Only an approval needs every verdict: a review that already raises a
         # BLOCKING finding sends the work back whatever it left unsaid.
         if missing and not _has_blocking_finding(note) and not any(v is False for v in verdicts.values()):
+            # An unfinished review, held as owned review debt for its seat
+            # (recovery lifecycle, 2026-10-31: the bare unverified string
+            # this used to open had no settlement route).
             duplicated = [rid for rid in missing if rid in _review_judgments(note)]
-            self._open_finding("unverified", f"Task {spec.task_id}: review by {peer} gave no MET or NOT MET "
-                                             f"line for {', '.join(missing)}; recorded as an unfinished review."
-                                             + (f" Duplicate MET lines for {', '.join(duplicated)} are no "
-                                                "verdict." if duplicated else ""))
-            self._judgment_gap(spec, peer, "review", f"no single verdict line for {', '.join(missing)}")
+            self._owe_review(spec, peer, "review", f"gave no MET or NOT MET line for {', '.join(missing)}"
+                             + (f"; duplicate MET lines for {', '.join(duplicated)} are no verdict"
+                                if duplicated else ""), role="collaborator", record=record)
             self._note(f"task {spec.task_id}: review by {peer} left {', '.join(missing)} without a verdict")
         unmet = [rid for rid in rids if verdicts.get(rid) is False]
         if unmet and not _has_blocking_finding(note):
@@ -16559,7 +17349,9 @@ class Session:
             self._refresh_obligations()
         for peer, note in blocking:
             shown = (labels or {}).get(peer, peer)
-            mine = self._finding_records(task=spec.task_id, peer=peer)
+            # Owed review debt is never rechecked by id: only its owner's
+            # completed review settles it (``_settle_owed``).
+            mine = [r for r in self._finding_records(task=spec.task_id, peer=peer) if r.get("kind") != "unreviewed"]
             if not mine:
                 mine = self._register_review_findings(spec, peer, note)
             # A finding held for the post-merge recheck (a parallel child
@@ -16587,58 +17379,75 @@ class Session:
             # effort input and nothing else's: set for the call, cleared on
             # every exit (root's source observation on bcd2b52).
             self._recheck_impact = _worst_impact(mine)
+            rv = None
             try:
                 verdict = self._invoke_model(peer, prompt)
             except FinishReserved as exc:
                 # Refused to keep the finish: no verdict, so the finding is
                 # neither resolved nor confirmed and buys no fix round, as a
-                # capped recheck (below).
+                # capped recheck (below). The findings stay open under their
+                # own ids, held for their author (recovery lifecycle,
+                # 2026-10-31: never a bare string nothing can settle).
                 self._finish_refused(spec, f"recheck by {peer}", exc)
                 self._dispose(spec, peer, "recheck not run: refused to keep the finish")
-                # The whole finding as the reviewer wrote it: continuation
-                # lines and every marker form (Codex review of cd8c5b0),
-                # with the ids it holds on the registry.
                 standing = note.strip()
-                self._open_finding("unverified", f"Task {spec.task_id}: not re-checked after the revision "
-                                                 f"(ordinary calls stopped to keep the finish; {', '.join(ids)}): "
-                                                 f"{standing}")
+                rv = self._recovery_open(spec, role="recheck", seat=peer, kind="recheck",
+                                         outcome_class="judgment_refused_finish", observe=False,
+                                         question=f"{peer}'s recheck of {', '.join(ids)}")
+                rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt: the finish is held"
+                self._owe_review(spec, peer, "recheck", "ordinary calls stopped to keep the finish", role="recheck",
+                                 record=rv, fids=ids, original=standing)
                 task.record("user", "A blocking finding was not re-checked against the revision "
                                     "(ordinary calls were stopped to keep the finish) -- carry it into the "
                                     f"summary as an open question:\n[{shown}] {standing}")
+                self._recheck_impact = None
                 continue
             except TurnLimitReached as exc:
                 # No verdict either way: the finding is neither resolved nor
-                # confirmed, so it does not buy another fix round. The
-                # reviewer's original finding stays on the record as the
-                # specific unresolved defect (Codex review of 0983dac: only
-                # the generic no-verdict fact survived), beside the cap fact.
-                capped = self._capped_review(spec, peer, 'recheck', exc)
-                self._dispose(spec, peer, "recheck capped at its turn limit; no verdict")
-                task.record("assistant", f"[{shown} recheck] {capped}")
-                standing = note.strip()
-                self._open_finding("unverified", f"Task {spec.task_id}: not re-checked after the revision "
-                                                 f"(reviewer capped; {', '.join(ids)}): {standing}")
-                task.record("user", "A blocking finding was not re-checked against the revision "
-                                    "(the reviewer stopped at its turn cap) -- carry it into the "
-                                    f"summary as an open question:\n[{shown}] {standing}")
-                continue
+                # confirmed. The same seat completes its recheck once with
+                # what the call did carried; failing that, the reviewer's
+                # original findings stay open under their own ids, held for
+                # it (Codex review of 0983dac: the specific defect survives,
+                # beside the cap fact).
+                self._recheck_impact = None
+                completed, rv = self._recover_judgment(
+                    spec, peer, "recheck", role="recheck", prompt=prompt, task=task, exc=exc,
+                    gaps=[f"one line per finding ({', '.join(ids)}): RESOLVED, UNRESOLVED or INVALIDATED"])
+                if completed is None or not judgment.recheck_verdicts(completed, ids).judged_any:
+                    if completed is not None:
+                        self._settle_completion(spec, peer, "recheck", False)
+                    capped = self._capped_review(spec, peer, 'recheck', exc)
+                    self._dispose(spec, peer, "recheck capped at its turn limit; no verdict")
+                    task.record("assistant", f"[{shown} recheck] {capped}")
+                    standing = note.strip()
+                    self._owe_review(spec, peer, "recheck", f"stopped at {exc.turns or 'its'} rounds with no verdict",
+                                     role="recheck", record=rv, fids=ids, original=standing)
+                    task.record("user", "A blocking finding was not re-checked against the revision "
+                                        "(the reviewer stopped at its turn cap) -- carry it into the "
+                                        f"summary as an open question:\n[{shown}] {standing}")
+                    continue
+                self._settle_completion(spec, peer, "recheck", True)
+                self._recovery_result(rv, "recovered: the same seat completed its recheck with a verdict")
+                verdict = completed
             finally:
                 self._recheck_impact = None
             task.record("assistant", f"[{shown} recheck] {verdict}")
             reading = judgment.recheck_verdicts(verdict, ids)
-            if not reading.judged_any:
+            if not reading.judged_any and rv is None:
                 # Arrived, but no judgment on any finding: the same seat may
-                # complete it once (the job's allowance); a genuine UNRESOLVED
-                # never comes here.
-                completed = self._complete_judgment(
-                    spec, peer, "recheck", verdict,
-                    [f"one line per finding ({', '.join(ids)}): RESOLVED, UNRESOLVED or INVALIDATED"],
-                    role="recheck", prompt=prompt, task=task)
+                # complete it once (the job's allowance), told what the
+                # harness observed and never shown its own reply; a genuine
+                # UNRESOLVED never comes here.
+                completed, rv = self._recover_judgment(
+                    spec, peer, "recheck", role="recheck", prompt=prompt, task=task, raw=verdict,
+                    gaps=[f"one line per finding ({', '.join(ids)}): RESOLVED, UNRESOLVED or INVALIDATED"])
                 if completed is not None:
                     verdict = completed
                     task.record("assistant", f"[{shown} recheck, completed] {verdict}")
                     reading = judgment.recheck_verdicts(verdict, ids)
                     self._settle_completion(spec, peer, "recheck", reading.judged_any)
+                if reading.judged_any:
+                    self._recovery_result(rv, "recovered: the same seat completed its recheck with a verdict")
             new = self._apply_review_reading(spec, peer, "recheck", reading, binding)
             current = {r["fid"]: r for r in self.review_findings}
             for fid in ids:
@@ -16651,10 +17460,16 @@ class Session:
                 elif record["closed"]:
                     self._dispose(spec, peer, f"recheck: {fid} {state}")
                 else:
-                    self._open_finding("unverified", f"Task {spec.task_id}: {fid} not re-checked after the "
-                                                     f"revision ({peer} gave no valid verdict: {why[:120]}): "
-                                                     f"{record['text']}")
-                    self._judgment_gap(spec, peer, "recheck", f"{fid}: {why[:120]}")
+                    # No valid verdict on this id: the finding stays open under
+                    # its own id, held for its author (never a bare string).
+                    if rv is None:
+                        rv = self._recovery_open(spec, role="recheck", seat=peer, kind="recheck",
+                                                 outcome_class="recheck_unfinished",
+                                                 question=f"{peer}'s verdict on {fid}",
+                                                 event=self._call_event(spec.task_id, "recheck", peer))
+                        rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
+                    self._owe_review(spec, peer, "recheck", f"{peer} gave no valid verdict on {fid}: {why[:120]}",
+                                     role="recheck", record=rv, fids=[fid])
                     self._dispose(spec, peer, f"recheck: {fid} no valid verdict")
                     task.record("user", f"Finding {fid} was not re-checked against the revision (the reviewer's "
                                         "reply carried no valid verdict for it) -- carry it into the summary "
@@ -16726,9 +17541,12 @@ class Session:
         """
         rounds = f"{exc.turns} rounds" if exc.turns else "its turn cap"
         text = f"UNFINISHED: the {what} stopped at {rounds} before giving a verdict."
-        self._open_finding("unverified", f"Task {spec.task_id}: {what} by {peer} did not finish "
-                                         f"within its turn cap ({rounds}); no verdict.")
-        self._note(f"task {spec.task_id}: {what} by {peer} capped at {rounds}; recorded as unverified")
+        # No bare open string (recovery lifecycle, 2026-10-31: one such string
+        # stopped a live run FindingsOpen after two of eight slots, since
+        # nothing could hold, recheck or settle it). The caller recovers the
+        # judgment or holds it as owned debt (``_recover_judgment``,
+        # ``_owe_review``).
+        self._note(f"task {spec.task_id}: {what} by {peer} capped at {rounds}; no verdict")
         return text
 
     def _review_turn_budget_note(self, peer: str) -> str:
@@ -16790,7 +17608,7 @@ class Session:
         routed_texts = set()
         for peer, _ in blocking:
             for record in self._finding_records(task=spec.task_id, peer=peer):
-                if record.get("route"):
+                if record.get("route") or record.get("kind") == "unreviewed":
                     continue
                 claim = record.get("restated") or record.get("claim") or ""
                 kind, detail = _typed_finding(claim)

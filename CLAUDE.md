@@ -3556,6 +3556,58 @@ Key design decisions already settled:
     typed row keeps the route's identity test; a typed row against a
     check with no revision map never matches, and a missing map is never
     read as approval.
+- **A judgment that did not finish is owned review debt, and every stop is
+  an occurrence on one record** (Davis on #73, 2026-10-31, 6545870693;
+  `quadratus/recovery.py`). A live run stopped after two of eight slots
+  because one reviewer reached its round cap and the no-verdict review was
+  a bare open string nothing could hold, recheck or settle (6544825528).
+  Root's baseline (6545984480) reproduced three families across nine
+  controls. One lifecycle now covers them:
+  - *Recover once, else own the debt.* A capped or verdict-less first
+    review, recheck, final-child review, design review or text
+    verification writes an occurrence (`Session.recoveries`, `RV<task>-<n>`:
+    identity, source, class, the failed call's invocation id and measured
+    cost, allowlisted observations, prior attempts, the open question, the
+    allowance left, the decision and result). The same seat completes its
+    judgment once (`_complete_judgment`, the job's one completion, claimed
+    and never refunded); failing that, the judgment is held as owned debt:
+    a recheck's findings stay open under their own ids for their author
+    (never audit-carried in its place), and anything else registers one
+    `unreviewed` finding (`delivery.FINDING_KINDS`) for the seat that owes
+    it. Not a defect, not an approval, not carried to the audit, never
+    settled by an id line (`apply_reading`). Protective stops (uncertain
+    write, permission, integrity, cancel) stay stops; timeout and unknown
+    usage name reconciliation; a quota stop names the seat. No fallback
+    vendor, no larger cap, no allowance increase.
+  - *Only the owner settles it, on a real route.* RESOLVES or CONTINUES
+    closing clean, the post-merge recheck, the explicit list's end and the
+    cap each give the owner one review of the work as it now stands
+    (`_settle_owed`): at most two attempts, never twice on the same source,
+    the owner only, a source change during the call voids it. A completed
+    review closes the record by the owner's RESOLVED disposition with the
+    settling call's id; its BLOCKING lines open as new held findings. A
+    design review or verification is settled by the same owner's completed
+    judgment of the same kind (`_settle_owed_by_judgment`). DONE and the
+    cap never complete over it, and the auditor's MET does not lift it.
+  - *Context is harness facts, never model text.* The completion and the
+    owner review are told what the harness measured
+    (`_recovery_context`): the cap or the arrived reply (never repeated),
+    project files a reader tool opened (`recovery.safe_observations`:
+    existing project-relative paths only; search patterns, command text,
+    out-of-project paths, narration and reasoning never pass, since
+    `trace.shareable` keeps grep patterns in `files_read`), counts, the
+    changed files left unread, and the source binding; observations from an
+    earlier source are labelled history. The trace is read while the run is
+    live (`project_run._live_call_trace`), because `build_traces` runs only
+    after Session exits; when it is missing the prompt says so.
+  - *Proposals, not causes.* `result.json` carries `recoveries` and
+    `improvement` (families by class, role and vendor; evidence; cost from
+    `InvocationEvent`s, each outer call once, unknown usage counted and
+    never zeroed; a recommendation; a regression scenario; status
+    `proposed: not adopted`), and the report a section. The checkpoint
+    carries the occurrences; an interrupted episode's later ones ride its
+    committed terminal record and a resume merges them by id
+    (`_carry_recoveries`), so no attempt is lost and no retry resets.
 
 ## How development is coordinated
 

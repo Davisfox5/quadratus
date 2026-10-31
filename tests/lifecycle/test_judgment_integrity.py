@@ -34,6 +34,7 @@ from tests.lifecycle.test_lifecycle_matrix import FILES, judging
 from tests.lifecycle.test_step2_recovery import _episode, _interrupt_after
 
 COMPLETION = "arrived without a valid verdict in the required form"
+OWED = "## The work you owe a judgment on"
 #: Arrived, but no judgment: narration with no verdict and no requirement line.
 NARRATION = "I'll read app.py and the tests, then judge the work against the requirements."
 CLEAN_T1 = "NO FINDINGS\nR1: MET - app.py"
@@ -58,7 +59,14 @@ def _reviews(first, *, then=None, t2=CLEAN_T2):
 
 
 def _completions(replay):
-    return [c for c in replay.calls if COMPLETION in c.prompt]
+    """Judgment completions only: an owner's settlement of owed review debt
+    (recovery lifecycle, 2026-10-31) carries the same recovery context and
+    is not a completion."""
+    return [c for c in replay.calls if COMPLETION in c.prompt and OWED not in c.prompt]
+
+
+def _settlements(replay):
+    return [c for c in replay.calls if OWED in c.prompt]
 
 
 # -- A: one strict reading ------------------------------------------------------------
@@ -108,7 +116,11 @@ def test_an_arrived_review_without_a_verdict_is_completed_once_by_the_same_seat(
     done = _completions(replay)
     first = next(c for c in replay.calls if c.task == "t1" and c.role == "collaborator")
     assert len(done) == 1 and done[0].role == "collaborator" and done[0].vendor == first.vendor
-    assert NARRATION in done[0].prompt, "the raw reply is shown to the same seat, unchanged"
+    # Recovery lifecycle (root's context audit on 1dbbf9f, L2): the raw reply
+    # is model output, kept as its own artifact and never repeated into a
+    # prompt; the seat is told what the harness recorded instead.
+    assert NARRATION not in done[0].prompt and "is not repeated here" in done[0].prompt
+    assert "## Recovery context" in done[0].prompt
     assert replay.result.completed, replay.result.error
     budget = _budget(replay)
     assert budget["judgment_completions"] == 1 and budget["judgment_completion_records"][0]["seat"]
@@ -125,10 +137,17 @@ def test_a_completion_that_still_gives_no_verdict_is_an_honest_stop_with_no_loop
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False,
                    limits=_limits())
     assert len(_completions(replay)) == 1
-    assert replay.result.error.startswith("FindingsOpen") and not replay.result.completed
-    gaps = H.result_json(replay)["judgment_gaps"]
+    assert not replay.result.completed and "RFT1-1" in replay.result.error
+    result = H.result_json(replay)
+    gaps = result["judgment_gaps"]
     assert gaps and gaps[0]["task"] == "t1" and gaps[0]["kind"] == "review"
-    assert not [c for c in replay.calls if c.task == "t2"]
+    # Recovery lifecycle (2026-10-31): the unfinished review is owned review
+    # debt, so the run goes on to t2; the owner's one settlement before the
+    # cap's finish gives no verdict either, and nothing is asked again.
+    assert [c for c in replay.calls if c.task == "t2"]
+    assert len(_settlements(replay)) == 1
+    owed = next(f for f in result["review_findings"] if f["fid"] == "RFT1-1")
+    assert owed["kind"] == "unreviewed" and not owed["closed"]
 
 
 @pytest.mark.requirements_ledger
@@ -142,7 +161,10 @@ def test_the_allowance_is_one_per_job_not_per_task(tmp_path, monkeypatch):
     assert len(_completions(replay)) == 1
     outcomes = [r["outcome"] for r in H.result_json(replay)["judgment_completions"]]
     assert outcomes == ["answered", "not attempted: the job's allowance is spent"]
-    assert replay.result.error.startswith("FindingsOpen") and _budget(replay)["judgment_completions"] == 1
+    assert not replay.result.completed and "RFT2-1" in replay.result.error
+    assert _budget(replay)["judgment_completions"] == 1
+    owed = next(f for f in H.result_json(replay)["review_findings"] if f["fid"] == "RFT2-1")
+    assert owed["kind"] == "unreviewed" and not owed["closed"], "t2's unfinished review is owed, never waved"
 
 
 @pytest.mark.requirements_ledger
@@ -201,7 +223,10 @@ def test_a_genuine_unresolved_recheck_still_buys_the_fix_round_and_no_completion
 @pytest.mark.requirements_ledger
 def test_parallel_children_share_the_one_completion(tmp_path, monkeypatch):
     """Both children's reviews arrive without a verdict; one budget holds
-    the job's single claim, so exactly one is completed."""
+    the job's single claim, so exactly one is completed. The other is owed
+    review debt (recovery lifecycle, 2026-10-31), settled after the merge by
+    its own seat's completed review on the merged source: one owner call,
+    never a second completion."""
     script = _script([BATCH])
     script.overrides["collaborator"] = lambda call, replay: (
         (CLEAN_T1 if call.task == "t1" else CLEAN_T2) if COMPLETION in call.prompt else NARRATION)
@@ -210,7 +235,10 @@ def test_parallel_children_share_the_one_completion(tmp_path, monkeypatch):
     assert len(_completions(replay)) == 1 and _budget(replay)["judgment_completions"] == 1
     outcomes = sorted(r["outcome"] for r in H.result_json(replay)["judgment_completions"])
     assert outcomes == ["answered", "not attempted: the job's allowance is spent"]
-    assert not replay.result.completed
+    (settle,) = _settlements(replay)
+    owed = next(f for f in H.result_json(replay)["review_findings"] if f.get("kind") == "unreviewed")
+    assert owed["closed"] and settle.task == owed["task"] and settle.role == "collaborator"
+    assert replay.result.completed, replay.result.error
 
 
 @pytest.mark.requirements_ledger
@@ -391,10 +419,20 @@ def test_a_completion_whose_bound_identity_drifts_is_void_and_spends_the_claim(t
     assert record["outcome"].startswith("void: the bound identity changed") and changed in record["outcome"]
     assert record["binding"]["identity"] and record["judgment"] == ""
     # The stricter minimum also fails the task's own check afterwards, which
-    # may name the stop first; either way the review stays unjudged.
+    # may name the stop first; either way the void answer judges nothing.
     assert not replay.result.completed
+    result = H.result_json(replay)
     t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
-    assert any("recorded as an unfinished review" in f["detail"] and not f["recovered"] for f in t1["facts"])
+    assert any("UNREVIEWED: the review of t1" in f["detail"] for f in t1["facts"])
+    # Recovery lifecycle (2026-10-31): the review is owed debt. The void
+    # answer closes nothing; only a later owner review, a call of its own on
+    # the identity then current, can.
+    rv = next(r for r in result["recoveries"] if r["id"] == "RVt1-1")
+    void = rv["attempts"][0]
+    assert void["action"] == "complete_judgment" and void["outcome"].startswith("void: the bound identity changed")
+    owed = next(f for f in result["review_findings"] if f["fid"] == "RFT1-1")
+    assert owed["kind"] == "unreviewed"
+    assert all(d["call"] != void["call"]["invocation_id"] for d in owed["history"])
     assert _budget(replay)["judgment_completions"] == 1
 
 
@@ -408,7 +446,7 @@ def test_an_answered_completion_that_is_still_no_judgment_is_never_recorded_as_c
     assert record["outcome"] == "answered" and record["judgment"] == "still no valid verdict"
     t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
     assert not [f for f in t1["facts"] if "completed its judgment" in f["detail"]]
-    assert any("recorded as an unfinished review" in f["detail"] and f["terminal"] and not f["recovered"]
+    assert any("UNREVIEWED: the review of t1" in f["detail"] and f["terminal"] and not f["recovered"]
                for f in t1["facts"])
 
 

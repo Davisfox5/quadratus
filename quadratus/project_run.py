@@ -478,6 +478,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         lead_max_turns=getattr(settings, 'lead_max_turns', None),
         codebase_map=code_map, ask_operator=ask_operator, plan_gate=plan_gate,
         progress=progress, activity=activity.record, delegation_ledger=delegation,
+        call_trace=_live_call_trace,
         default_scope=default_scope, repository_policy=policy,
         security_verdict_json=security_verdict_json,
         capture_profile=capture_profile,
@@ -586,6 +587,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         if parent is not None:
             checkpoint.restore_state(session, body['state'])
             session._interrupted_admissions = list((carried or {}).get('interrupted_admissions') or [])
+            _carry_recoveries(session, parent)
         _record_models(session, fleet)
         session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
@@ -612,6 +614,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # error so the result says why; a breaker stop also lists the capped
         # tasks' preserved edits as in-flight work.
         error = session.stop_reason
+        try:
+            session._record_stop_rule(error)
+        except Exception:  # noqa: BLE001 -- the improvement record never fails a run
+            pass
         records = list((getattr(session, 'turn_limited_records', {}) or {}).values())
         failed = list((getattr(session, 'failed_records', {}) or {}).values())
         if error.startswith(('TurnLimitBreaker', 'TaskFailureBreaker')) and (records or failed):
@@ -650,6 +656,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                            for s in (getattr(session, 'history', None) or [])] if session else [],
                     budget_stop_reason=(budget.snapshot().get('stop_reason') if budget is not None else None))
     if interrupted:
+        if session is not None:
+            # The interrupted run's checkpoint is its last quiescent point;
+            # occurrences and attempts made after it are kept here, so a
+            # resumed episode carries them (no lost attempt, no reset retry).
+            terminal['recoveries'] = checkpoint._encode(list(getattr(session, 'recoveries', []) or []))
         try:
             job_store.publish({'terminal': terminal})
             terminal_committed = True
@@ -730,7 +741,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     if traces:
         from .trace import render_timeline
         lines += [render_timeline(traces), '']
-    lines += [delegation.render_report(), '', '## Task ledger', '', ledger]
+    lines += [delegation.render_report(), '']
+    recovery_section = _improvement_section(session)
+    if recovery_section:
+        lines += [recovery_section]
+    lines += ['## Task ledger', '', ledger]
     report = '\n'.join(lines)
     (run_dir / 'changes.diff').write_text(diff, encoding='utf-8')
     (run_dir / 'ledger.md').write_text(ledger, encoding='utf-8')
@@ -755,6 +770,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # judgments left without a valid verdict (session._complete_judgment).
         'judgment_completions': list(getattr(session, 'judgment_completions', []) or []) if session else [],
         'judgment_gaps': list(getattr(session, 'judgment_gaps', []) or []) if session else [],
+        # Recovery occurrences and the proposals aggregated from them
+        # (quadratus.recovery): deterministic, written by production paths,
+        # never adopted automatically. Costs come from the invocation ledger;
+        # unknown stays null.
+        'recoveries': list(getattr(session, 'recoveries', []) or []) if session else [],
+        'improvement': _improvement_record(session),
         # The last obligations view the planner or the audit read (quadratus.obligations).
         'obligations': dict(getattr(session, 'obligation_view', {}) or {}) if session else {},
         # Each family's resolution for this job and its provenance (the
@@ -1211,6 +1232,69 @@ def _record_models(session, fleet) -> None:
         return
     if session is not None and isinstance(record, dict):
         session.model_resolution = record
+
+
+def _carry_recoveries(session, parent) -> None:
+    """Recovery occurrences the parent episode recorded after its last
+    quiescent checkpoint (its committed terminal record holds them): each id
+    once, an occurrence's longer attempt list kept over the checkpoint's
+    shorter one, nothing invented. The registry is the checkpoint's; only
+    the evidence of what was tried, and so what may not be tried again,
+    comes from the terminal record."""
+    from . import checkpoint, jobstore
+    try:
+        terminal = jobstore.read_terminal(parent) or {}
+        later = checkpoint._decode(terminal.get('recoveries') or [])
+    except Exception:  # noqa: BLE001 -- an unreadable record carries nothing extra
+        return
+    known = {r.get('id'): i for i, r in enumerate(session.recoveries)}
+    for record in later if isinstance(later, list) else []:
+        if not isinstance(record, dict) or not record.get('id'):
+            continue
+        rid = record['id']
+        if rid not in known:
+            session.recoveries.append(dict(record, carried_from=parent.name))
+            known[rid] = len(session.recoveries) - 1
+            continue
+        mine = session.recoveries[known[rid]]
+        theirs = list(record.get('attempts') or [])
+        if len(theirs) > len(mine.get('attempts') or []) and theirs[:len(mine.get('attempts') or [])] == list(
+                mine.get('attempts') or []):
+            session.recoveries[known[rid]] = dict(record, carried_from=parent.name)
+
+
+def _live_call_trace(event):
+    """One finished call's tool record, read from the vendor's own session
+    store while the run is live (read-only, nothing copied): the full trace
+    dict, which the session passes through quadratus.recovery's allowlist
+    before anything reaches a prompt or a record. None when the call has no
+    session id or its transcript is not in this environment."""
+    from . import trace as _trace
+    vendor = _trace.vendor_of(getattr(event, 'requested_model', None))
+    sid = getattr(event, 'session_id', None)
+    if not vendor or not sid:
+        return None
+    source = _trace.locate(vendor, sid, _trace.session_roots())
+    if source is None:
+        return None
+    return _trace.trace_call(vendor, source, None, origin=source)
+
+
+def _improvement_record(session):
+    """The proposals aggregated from the run's recovery occurrences
+    (quadratus.recovery.proposals): deterministic, labelled proposed, never
+    adopted by this record. Recomputed from the carried occurrences, so a
+    resumed job neither loses nor duplicates them."""
+    from . import recovery
+    records = list(getattr(session, 'recoveries', []) or []) if session else []
+    return dict(proposals=recovery.proposals(records), cost=recovery.costs(records),
+                adoption='none: a proposal becomes engine behaviour only through a reviewed change')
+
+
+def _improvement_section(session) -> str:
+    from . import recovery
+    records = list(getattr(session, 'recoveries', []) or []) if session else []
+    return recovery.render(records, recovery.proposals(records)) if records else ''
 
 
 def _requirements_record(session):
