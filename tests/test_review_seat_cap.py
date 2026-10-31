@@ -354,14 +354,33 @@ def test_a_declaration_role_gets_the_small_cap_never_above_the_lead_cap(monkeypa
     assert DECLARATION_MAX_TURNS < 20
 
 
+def _owed_design_session(tmp_path, invoke):
+    """A design session whose artifact store is outside the project, as in
+    production (the store lives under the excluded .quadratus), so storing a
+    review does not move the source the review is bound to."""
+    import dataclasses
+
+    project = tmp_path / "project"
+    project.mkdir()
+    session = Session("goal", ArtifactStore(tmp_path / "store"), invoke, config=SessionConfig())
+    session.project = project
+    session.config = dataclasses.replace(session.config, allow_writes=True)
+    session._last_edit_started = 0
+    return session, project
+
+
 def test_an_owed_design_review_is_settled_only_by_the_same_owners_completed_design_review(tmp_path, monkeypatch):
     """Recovery lifecycle (2026-10-31): a capped design review is owed
-    review debt held for its seat. Another seat's verdict does not touch it;
-    the same seat's completed design review of the same task closes it."""
+    review debt held for its seat. Another seat's verdict does not touch it,
+    nor does a reply with no verdict (itself owed, never a bare string), nor
+    a verdict the harness wrote because the renders never reached the
+    reviewer; the same seat's own completed design review of renders still
+    current closes it."""
     from quadratus.memory import TaskMemory
-    from tests.test_preferences_in_product import _design_session, _fake_evidence, _ui
+    from tests.test_preferences_in_product import _fake_evidence, _ui
 
-    replies = iter([TurnLimitReached("capped", partial_text="BLOCKING: the header", turns=20), "APPROVED"])
+    replies = iter([TurnLimitReached("capped", partial_text="BLOCKING: the header", turns=20),
+                    "I looked at both screenshots and need more time.", "APPROVED"])
 
     def invoke(model, prompt, **k):
         role = (invocation_context.get() or {}).get("role")
@@ -372,18 +391,53 @@ def test_an_owed_design_review_is_settled_only_by_the_same_owners_completed_desi
             return reply
         return "tried"
 
-    session = _design_session(tmp_path, invoke)
-    _fake_evidence(tmp_path)
+    session, project = _owed_design_session(tmp_path, invoke)
     monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: False)
     memory = TaskMemory("t6", "grok:default", session.store)
+    _fake_evidence(project)
     session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
     (owed,) = [r for r in session.review_findings if r.get("kind") == "unreviewed"]
     assert owed["owed_kind"] == "design review" and owed["author"] == "claude:opus" and not owed["closed"]
     # Another seat's completed design review settles nothing it does not own.
     assert session._settle_owed_by_judgment(_ui(), "openai:sol", "design review") == []
-    assert not owed["closed"]
-    _fake_evidence(tmp_path)  # a fresh capture of the source as it now stands
+    # A reply with neither APPROVED nor BLOCKING is no judgment: still owed,
+    # recorded as an occurrence, and no bare "gave no verdict" string.
+    _fake_evidence(project)
     session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
-    assert session.design_checks[-1]["final_review"]["approved"]
+    assert not owed["closed"]
+    assert [r["outcome_class"] for r in session.recoveries] == ["design_review_capped", "review_unfinished"]
+    assert not [f for f in session.open_findings if "gave no verdict" in f and "UNREVIEWED" not in f]
+    # A verdict the harness wrote (the renders could not be handed over) is
+    # no judgment by the owner and makes no call.
+    monkeypatch.setattr(Session, "_evidence_refusals", lambda self, spec, files: [("set", "missing")])
+    _fake_evidence(project)
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    assert not owed["closed"]
+    monkeypatch.undo()
+    monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: False)
+    _fake_evidence(project)  # a fresh capture of the source as it now stands
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    assert session.design_checks[-1]["final_review"]["approved"] and not session.design_checks[-1]["review_stale"]
     assert owed["closed"] and owed["history"][-1]["author"] == "claude:opus"
     assert not [f for f in session.open_findings if owed["fid"] in f]
+
+
+def test_a_capped_text_verification_is_owed_by_its_verifier_and_its_completed_verification_settles_it(store):
+    """Recovery lifecycle (2026-10-31): a capped security verifier gives no
+    verdict, so the edge stays unset and the verification is owed review
+    debt for that verifier; its own completed verification of the work
+    closes it."""
+    from quadratus.task_kinds import TaskKind
+    rec = CappedSeat("verifier", times=1)
+    session = Session("Build a JSON parser", store, rec)
+    spec = TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY)
+    session.run_task(spec)
+    (owed,) = [r for r in session.review_findings if r.get("kind") == "unreviewed"]
+    assert owed["owed_kind"] == "verification" and owed["role"] == "verifier" and not owed["closed"]
+    verifier = owed["author"]
+    rv = next(r for r in session.recoveries if r["outcome_class"] == "verification_capped")
+    assert rv["seat"] == verifier and rv["debt"] == [owed["fid"]]
+    assert session._settle_owed_by_judgment(spec, "grok:default", "verification") == [], "another seat settles nothing"
+    session.run_task(spec)  # the same work verified again, this time to a verdict
+    assert owed["closed"] and owed["history"][-1]["author"] == verifier
+    assert rv["result"].startswith("recovered")

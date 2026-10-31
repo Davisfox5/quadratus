@@ -174,3 +174,91 @@ def test_an_unknown_kind_is_refused():
         assert "kind must be one of" in str(exc)
     else:
         raise AssertionError("an unknown finding kind was accepted")
+
+
+# -- review findings on this batch (2026-10-31) -------------------------------------------
+
+def test_a_search_scoped_to_an_existing_file_is_never_a_read(tmp_path):
+    """A Grep or Glob whose target is an existing project path (trace._target
+    prefers 'path') is a search, not an opened file."""
+    (tmp_path / "app.py").write_text("")
+    trace = dict(cwd="/c", tool_calls=[dict(name="Grep", target="app.py", outcome="success"),
+                                       dict(name="Glob", target="/c/app.py", outcome="success"),
+                                       dict(name="LS", target="app.py", outcome="success")])
+    obs = recovery.safe_observations(trace, project_root=tmp_path)
+    assert obs["files_read"] == [] and obs["searches"] == 3
+
+
+def _session(tmp_path, invoke=lambda *a, **k: ""):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+    return Session("goal", ArtifactStore(tmp_path / "store"), invoke, config=SessionConfig())
+
+
+def test_a_terminal_stop_is_classified_by_type_never_by_the_text_a_model_wrote(tmp_path):
+    from quadratus.providers import ProviderError
+    session = _session(tmp_path)
+    narrated = ProviderError("grok: turn ended cancelled: Running pytest now; the first attempt timed out "
+                             "and unknown_usage was reported")
+    session._record_terminal_recovery(narrated)
+    (record,) = session.recoveries
+    assert record["outcome_class"] == "provider_error" and record["decision"] == "stop: the run's own stop rule"
+    assert record["detail"] == "ProviderError" and "pytest" not in repr(record)
+    session._record_terminal_recovery(TimeoutError("claude CLI timed out after 900s"))
+    assert session.recoveries[-1]["outcome_class"] == "provider_timeout"
+    caused = ProviderError("wrapped")
+    caused.__cause__ = TimeoutError("x")
+    session._record_terminal_recovery(caused)
+    assert session.recoveries[-1]["outcome_class"] == "provider_timeout", "the cause chain is read by type"
+
+
+def test_a_stop_after_successful_calls_names_no_failed_call(tmp_path):
+    from quadratus.delegation import DelegationLedger
+    from quadratus.integration import CheckUnattributable
+    session = _session(tmp_path)
+    ledger = DelegationLedger(tmp_path / "invocations.jsonl")
+    session.config.delegation_ledger = ledger
+    session._active_spec = SimpleNamespace(task_id="t1")
+    ledger.events.append(SimpleNamespace(invoked=True, task="t1", role="collaborator", requested_model="claude:opus",
+                                         canonical_model=None, outcome="ok", invocation_id="ok-1"))
+    session._record_terminal_recovery(CheckUnattributable("the check failed"))
+    (record,) = session.recoveries
+    assert record["outcome_class"] == "stop_rule" and record["failed_call"] is None
+
+
+def test_a_context_for_debt_no_call_was_made_for_says_so(tmp_path):
+    session = _session(tmp_path)
+    record = dict(outcome_class="reviewer_unavailable", meaning=recovery.OUTCOME_CLASSES["reviewer_unavailable"],
+                  failed_call=None, observations=dict(status="unavailable", reason="not read for this outcome"),
+                  source=None, question="a cross-vendor review of t1's capped final work")
+    text = session._recovery_context(SimpleNamespace(task_id="t1"), "openai:sol", record, changed=["app.py"])
+    assert "No earlier call of yours on this work was made" in text
+    assert "previous reply" not in text and "could not observe" not in text and "earlier source" not in text
+
+
+def test_owner_settlements_are_counted_across_every_occurrence_that_names_the_debt(tmp_path):
+    """A later occurrence that re-owes the same record never resets the
+    owner's attempts or the per-source rule (review of a8a9af2, debt:2)."""
+    calls = []
+
+    def invoke(model, prompt, **k):
+        calls.append(model)
+        return "I looked and it seems fine."
+
+    session = _session(tmp_path, invoke)
+    session._available = lambda key: True
+    spec = SimpleNamespace(task_id="t1", description="Implement add.", scope=None, kind="review",
+                           complexity="simple", lead=None, needs=frozenset())
+    first = session._recovery_open(spec, role="collaborator", seat="claude:opus", kind="review",
+                                   outcome_class="review_capped", question="q", observe=False)
+    (fid,) = session._owe_review(spec, "claude:opus", "review", "capped", role="collaborator", record=first)
+    record = next(r for r in session.review_findings if r["fid"] == fid)
+    row = session._settle_owed(spec, record, situation="s", site="one")
+    assert row["verdict"] == "kept: the owner's reply gave no valid verdict" and len(calls) == 1
+    second = session._recovery_open(spec, role="collaborator", seat="claude:opus", kind="review",
+                                    outcome_class="review_capped", question="q", observe=False)
+    assert session._owe_review(spec, "claude:opus", "review", "capped again", role="collaborator",
+                               record=second) == [fid], "one record, never a second for the same debt"
+    row = session._settle_owed(spec, record, situation="s", site="two")
+    assert row["verdict"] == "kept: the owner already judged this exact source without a verdict"
+    assert len(calls) == 1 and session._owed_attempts(fid) == 1

@@ -46,7 +46,9 @@ def reviewer(*, completion, owed=None):
     settlement answers ``owed`` (default clean)."""
     def collab(call, replay):
         if OWED in call.prompt:
-            return H.claude_cap("Still reading.", num_turns=8) if owed == "cap" else clean(call)
+            if owed == "cap":
+                return H.claude_cap("Still reading.", num_turns=8)
+            return clean(call) if owed in (None, "clean") else owed
         if CONTEXT in call.prompt:
             if completion == "clean":
                 return clean(call)
@@ -90,6 +92,13 @@ def test_a_capped_review_is_completed_once_by_the_same_seat_and_the_run_finishes
     assert rv["outcome_class"] == "review_capped" and rv["seat"] == "claude:opus" and rv["role"] == "collaborator"
     assert rv["decision"] == "complete_judgment" and rv["result"].startswith("recovered")
     assert rv["failed_call"]["turn_limited"] is True and rv["failed_call"]["max_turns"] == 8
+    # The allowance actually left when it was decided: t1's own slot is spent
+    # while it runs, the goal question and the audit are held, and the job's
+    # one completion is still unclaimed.
+    allowance = rv["allowance"]
+    assert allowance["slots_left"] == 2 and allowance["finish_held"] == ["goal", "audit"]
+    assert allowance["judgment_completions_left"] == 1
+    assert allowance["calls_left_after_finish"] == allowance["calls_left"] - 2
     (attempt,) = rv["attempts"]
     assert attempt["action"] == "complete_judgment" and attempt["outcome"] == "answered"
     assert attempt["call"]["invocation_id"] != rv["failed_call"]["invocation_id"], "a new outer call"
@@ -157,11 +166,14 @@ def test_done_never_completes_over_owed_review_debt(tmp_path, monkeypatch):
     assert replay.of("auditor") and "R1: MET" in replay.of("auditor")[-1].reply
     assert result["requirements"]["status"]["R1"].startswith("NOT MET")
     assert "RFT1-1" in result["requirements"]["status"]["R1"]
+    # The stop itself is an occurrence of the run's own rule, never retried.
+    (stop,) = [r for r in result["recoveries"] if r["kind"] == "run"]
+    assert stop["outcome_class"] == "stop_rule" and stop["decision"] == "stop: the run's own stop rule"
+    assert stop["result"] == "stopped: " + replay.result.error.split(":", 1)[0]
 
 
 @pytest.mark.requirements_ledger
-def test_an_owner_settlement_that_caps_again_keeps_the_debt_and_is_not_repeated_on_the_same_source(
-        tmp_path, monkeypatch):
+def test_an_owner_settlement_that_caps_again_keeps_the_debt(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, R1 + T1, RESOLVE, collaborator=reviewer(completion="cap", owed="cap"))
     result = H.result_json(replay)
     assert not replay.result.completed
@@ -203,7 +215,8 @@ def test_the_completion_carries_observed_reads_through_the_allowlist_and_nothing
     assert obs["searches"] == 1 and obs["commands"] == 1 and obs["command_outcomes"] == {"error": 1}
     (completion,) = _completions(replay)
     context = completion.prompt[completion.prompt.index(CONTEXT):completion.prompt.index("It lacked:")]
-    assert "project files it opened: app.py" in context and "Opening a file does not show it was reviewed" in context
+    assert "project files a file-reading tool opened: app.py" in context
+    assert "Opening a file does not show it was reviewed" in context and "not a list of what you left unread" in context
     dumped = json.dumps(result)
     for canary in ("PATTERN_CANARY_7731", "COMMAND_CANARY_4410", "REASONING_CANARY_9012", "PATH_CANARY",
                    "/etc/passwd", "outside.txt", "id_rsa", NARRATION):
@@ -266,7 +279,7 @@ def test_a_later_settlement_labels_earlier_observations_as_history(tmp_path, mon
 
 # -- owner and duplicate guards -------------------------------------------------------------
 
-def test_only_the_owner_can_close_owed_debt_and_a_duplicate_owes_nothing_new(tmp_path):
+def test_only_the_owner_is_the_designated_judge_of_owed_debt(tmp_path):
     from quadratus import delivery
     finding = delivery.Finding("RFT1-1", "claude:opus", "collaborator", "UNREVIEWED: the review of t1 ...",
                                delivery.FindingBasis("none"), "unstated", "src", "t1", None, (), "unreviewed")
@@ -341,6 +354,7 @@ def test_a_capped_recheck_holds_the_finding_under_its_id_and_its_author_settles_
     assert finding["closed"] and finding["state"] == "resolved"
     judged = [d for d in finding["history"] if d["state"] == "resolved"]
     assert judged and judged[-1]["author"] == "claude:opus"
+    assert rv["result"].startswith("recovered: its judge closed the owned debt (RFT1-1 resolved by claude:opus")
     assert not [c for c in replay.calls if "blocking findings remain unresolved" in c.prompt.lower()], \
         "a capped recheck buys no fix round"
     # No bare string survives: every open text the run held was an id.
@@ -579,3 +593,171 @@ def test_the_owner_is_never_asked_twice_about_the_same_source(tmp_path, monkeypa
     assert any(a["outcome"] == "not attempted: the owner already judged this exact source without a verdict"
                for a in attempts[1:]), attempts
     assert not _finding(result, "RFT1-1")["closed"] and not replay.result.completed
+
+
+# -- the owner's settlement is a review: its findings and NOT MET lines are held -------------
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("reply", [
+    "BLOCKING: add('x', 1) returns a string instead of raising TypeError.",
+    "R1: NOT MET - add('x', 1) returns a string instead of raising TypeError",
+], ids=["blocking", "not-met-without-complete-line"])
+def test_an_owner_settlement_that_finds_a_defect_holds_it_and_the_run_does_not_complete(tmp_path, monkeypatch,
+                                                                                        reply):
+    replay = _run(tmp_path, monkeypatch, R1 + T1, RESOLVE, collaborator=reviewer(completion="cap", owed=reply))
+    result = H.result_json(replay)
+    owed = _finding(result, "RFT1-1")
+    assert owed["closed"], "the owner completed its review, so the debt it owed is settled"
+    (new,) = [f for f in result["review_findings"] if f["fid"] != "RFT1-1"]
+    assert new["kind"] == "defect" and new["author"] == "claude:opus" and new["task"] == "t1" and not new["closed"]
+    assert ("NOT MET" in new["claim"]) is reply.startswith("R1:")
+    assert any(new["fid"] in f for f in result.get("open_findings") or []) or not replay.result.completed
+    assert not replay.result.completed
+    rv = _rv(result)
+    assert rv["attempts"][-1]["outcome"] == f"reviewed: new {new['fid']}"
+
+
+# -- a source change during the owner's settlement voids it; the new source is not "judged" ---
+
+@pytest.mark.requirements_ledger
+def test_a_source_change_during_the_owner_settlement_voids_it_and_the_next_source_is_still_judged(
+        tmp_path, monkeypatch):
+    settles = []
+
+    def collab(call, replay):
+        if OWED in call.prompt:
+            settles.append(call)
+            if len(settles) == 1:
+                (replay.project / "README.md").write_text("# app\n\nchanged during the owner's review\n")
+            return clean(call)
+        if call.task == "t1" or CONTEXT in call.prompt:
+            return H.claude_cap(NARRATION, num_turns=8)
+        return clean(call)
+
+    again = RESOLVE.replace("Settle the owed review of t1.", "Ask again for the owed review of t1.")
+    replay = _run(tmp_path, monkeypatch, R1 + T1, RESOLVE, again, collaborator=collab, max_tasks=4)
+    result = H.result_json(replay)
+    attempts = [a for a in _rv(result)["attempts"] if a["action"] == "owner_settlement"]
+    assert attempts[0]["outcome"] == "void: the source changed during the review"
+    assert attempts[1]["outcome"] == "reviewed: no findings", attempts
+    assert attempts[0]["source"] != attempts[1]["source"], "the void judged the old source, never the new one"
+    assert len(settles) == 2 and _finding(result, "RFT1-1")["closed"]
+
+
+# -- at most two owner attempts, counted across every source ---------------------------------
+
+@pytest.mark.requirements_ledger
+def test_the_owner_is_asked_at_most_twice_and_a_third_resolves_is_refused(tmp_path, monkeypatch):
+    def collab(call, replay):
+        if OWED in call.prompt:
+            return "I looked at app.py and it seems reasonable."
+        if call.task == "t1" or CONTEXT in call.prompt:
+            return H.claude_cap(NARRATION, num_turns=8)
+        return clean(call)
+
+    def lead_(call, replay):
+        H.write(call, {"app.py": FIXED + f"\n# revision {call.task}\n"})
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
+
+    tasks = [RESOLVE.replace("Settle the owed review of t1.", f"Settlement attempt {n} for t1.") for n in (1, 2, 3)]
+    script = Script(orchestrator=_plan(R1 + T1, *tasks), lead=lead_, collaborator=collab,
+                    auditor=_auditor({"R1": "MET - app.py"}), **{"requirements-review": lambda c, r: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=5, record_complete=False, settings=CAPPED)
+    result = H.result_json(replay)
+    assert len([c for c in replay.calls if OWED in c.prompt]) == 2
+    made = [a for a in _rv(result)["attempts"] if a["action"] == "owner_settlement"
+            and not a["outcome"].startswith("not attempted")]
+    assert [a["outcome"] for a in made] == ["no valid verdict", "no valid verdict"]
+    assert len({a["source"] for a in made}) == 2
+    assert [c.task for c in replay.of("lead")] == ["t1", "t2", "t3"], "the third RESOLVES is refused at dispatch"
+    assert not _finding(result, "RFT1-1")["closed"] and not replay.result.completed
+
+
+# -- a recheck the author owes is never the audit's to settle ------------------------------
+
+@pytest.mark.requirements_ledger
+def test_a_recheck_with_no_verdict_is_not_handed_to_the_audit_and_its_author_is_asked_at_the_cap(
+        tmp_path, monkeypatch):
+    def collab(call, replay):
+        return "BLOCKING: the docstring contradicts the goal" if call.task == "t1" and not replay.of("recheck") \
+            else clean(call)
+
+    def recheck(call, replay):
+        return "I believe it is fine now."
+
+    def auditor(call, replay):
+        return _auditor({"R1": "MET - app.py"})(call, replay) + "\nRFT1-1: INVALIDATED tests/test_app.py::test_add passes"
+
+    script = Script(orchestrator=_plan(R1 + T1), lead=lead, collaborator=collab, recheck=recheck, auditor=auditor,
+                    **{"requirements-review": lambda c, r: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False, settings=CAPPED)
+    result = H.result_json(replay)
+    finding = _finding(result, "RFT1-1")
+    assert finding["kind"] == "defect" and finding["owed_recheck"] and not finding["audit_carried"]
+    assert not finding["closed"] and not any(d["role"] == "audit" for d in finding["history"])
+    at_cap = [c for c in replay.of("recheck") if "No task is left to name a settlement (the cap)" in c.prompt]
+    assert len(at_cap) == 1 and at_cap[0].vendor == replay.of("recheck")[0].vendor, "its author, once"
+    assert not replay.result.completed
+
+
+# -- one unfinished review is one owed record, however many ways it is unfinished ----------
+
+@pytest.mark.requirements_ledger
+def test_a_review_unfinished_two_ways_is_one_owed_record(tmp_path, monkeypatch):
+    def collab(call, replay):
+        return "I'll read app.py and the tests first." if call.task == "t1" else clean(call)
+
+    replay = _run(tmp_path, monkeypatch, R1 + T1, collaborator=collab, max_tasks=1)
+    result = H.result_json(replay)
+    owed = [f for f in result["review_findings"] if f.get("kind") == "unreviewed"]
+    assert len(owed) == 1 and owed[0]["author"] == "claude:opus"
+    assert len([f for f in result.get("open_findings") or [] if owed[0]["fid"] in f]) <= 1
+
+
+# -- a capped review of a capped final-batch child: recovered, owed, settled, cap lifted -----
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("settles", [True, False], ids=["clean-settlement", "no-verdict"])
+def test_a_capped_final_batch_review_is_owed_and_a_clean_settlement_lifts_the_cap(tmp_path, monkeypatch, settles):
+    from tests.lifecycle.test_finish_capacity import BATCH
+    from tests.lifecycle.test_quality_completion import README
+    from tests.lifecycle.test_step2_recovery import _capped_lead
+
+    def lead_(call, replay):
+        if call.task == "t1":
+            return _capped_lead(call, replay, {"app.py": FIXED})
+        H.write(call, {"README.md": README})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    def collab(call, replay):
+        if call.task != "t1":
+            return clean(call)
+        if OWED in call.prompt:
+            return clean(call) if settles else "Still looking at app.py."
+        return H.claude_cap(NARRATION, num_turns=8) if call.vendor == "claude" else \
+            H.grok_ok(NARRATION, stop="max_turn_requests", num_turns=8)
+
+    def auditor(call, replay):
+        return _auditor({"R1": "MET - app.py", "R2": "MET - README.md"})(call, replay)
+
+    script = Script(orchestrator=_plan(BATCH), lead=lead_, collaborator=collab, auditor=auditor,
+                    **{"requirements-review": lambda c, r: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False, settings=CAPPED)
+    result = H.result_json(replay)
+    review = result["parallel_batches"][0]["capped_final_reviews"][0]
+    assert review["verdict"] == "held: review capped", review
+    owed = next(f for f in result["review_findings"] if f.get("kind") == "unreviewed")
+    assert owed["task"] == "t1" and owed["final_cap"]
+    rv = next(r for r in result["recoveries"] if r["task"] == "t1" and r["outcome_class"] == "review_capped")
+    assert rv["attempts"][0]["action"] == "complete_judgment"
+    settle = [c for c in replay.calls if OWED in c.prompt]
+    assert len(settle) == 1 and "(the cap)" in settle[0].prompt
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    lifted = any(f["kind"] == "cap" and "owed review, completed at its settlement" in f["detail"] for f in t1["facts"])
+    assert lifted is settles and owed["closed"] is settles
+    # Lifted, the cap no longer stops the job on t1; the requirements are
+    # still the audit's (t1's capped lead bound no proof, so R1's evidence
+    # is missing and the run is honestly incomplete either way).
+    capped_stop = "capped or failed task(s) t1 not continued" in (replay.result.error or "")
+    assert capped_stop is (not settles), replay.result.error
+    assert not replay.result.completed

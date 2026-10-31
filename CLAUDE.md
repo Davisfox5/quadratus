@@ -3572,27 +3572,43 @@ Key design decisions already settled:
     judgment once (`_complete_judgment`, the job's one completion, claimed
     and never refunded); failing that, the judgment is held as owned debt:
     a recheck's findings stay open under their own ids for their author
-    (never audit-carried in its place), and anything else registers one
-    `unreviewed` finding (`delivery.FINDING_KINDS`) for the seat that owes
-    it. Not a defect, not an approval, not carried to the audit, never
-    settled by an id line (`apply_reading`). Protective stops (uncertain
-    write, permission, integrity, cancel) stay stops; timeout and unknown
-    usage name reconciliation; a quota stop names the seat. No fallback
-    vendor, no larger cap, no allowance increase.
+    (`Finding.owed_recheck`: never audit-carried until the author judges
+    again), and anything else registers one `unreviewed` finding
+    (`delivery.FINDING_KINDS`) for the seat that owes it. Not a defect, not
+    an approval, not carried to the audit, never settled by an id line
+    (`apply_reading`). A design reply with neither APPROVED nor a BLOCKING
+    line is owed the same way, never a bare string. Protective stops
+    (uncertain write, permission, integrity, cancel) stay stops; timeout
+    and unknown usage name reconciliation; a quota stop names the seat. A
+    terminal occurrence is classed by exception type, cause chain and the
+    budget's structured reason, never by message text (a provider error
+    carries model text), names a failed call only when the newest call
+    failed, and keeps only the type as its detail. No fallback vendor, no
+    larger cap, no allowance increase.
   - *Only the owner settles it, on a real route.* RESOLVES or CONTINUES
     closing clean, the post-merge recheck, the explicit list's end and the
     cap each give the owner one review of the work as it now stands
-    (`_settle_owed`): at most two attempts, never twice on the same source,
-    the owner only, a source change during the call voids it. A completed
-    review closes the record by the owner's RESOLVED disposition with the
-    settling call's id; its BLOCKING lines open as new held findings. A
-    design review or verification is settled by the same owner's completed
-    judgment of the same kind (`_settle_owed_by_judgment`). DONE and the
-    cap never complete over it, and the auditor's MET does not lift it.
+    (`_settle_owed`): at most two attempts and never twice on the same
+    source, both counted over every occurrence that names the record
+    (`_owed_settlements`), each attempt stamped with the source the owner
+    was shown; the owner only; a source change during the call voids it.
+    A completed review closes the record by the owner's RESOLVED
+    disposition with the settling call's id; its BLOCKING lines and every
+    covered requirement it calls NOT MET open as new held findings. Owed
+    rechecks get one author recheck at the list's end and the cap. A clean
+    settlement of a capped final-batch child lifts its cap as the review
+    would have (`_lift_final_cap`). A design review or verification is
+    settled only by the same owner's own completed judgment of the same
+    kind (APPROVED or its own BLOCKING line, on renders delivered and not
+    stale; a harness-written verdict judges nothing). DONE and the cap
+    never complete over it, and the auditor's MET does not lift it. An
+    occurrence's result is re-read from the registry when its debt closes.
   - *Context is harness facts, never model text.* The completion and the
     owner review are told what the harness measured
     (`_recovery_context`): the cap or the arrived reply (never repeated),
-    project files a reader tool opened (`recovery.safe_observations`:
+    or that no call was made; project files a reader tool was observed
+    opening, stated as observation and never as "unread"
+    (`recovery.safe_observations`:
     existing project-relative paths only; search patterns, command text,
     out-of-project paths, narration and reasoning never pass, since
     `trace.shareable` keeps grep patterns in `files_read`), counts, the

@@ -8500,6 +8500,7 @@ class Session:
         draft must not pass a revised tree, and a render with console errors
         is not evidence that the UI works.
         """
+        self._design_settles = None
         # Applicability is the task's own contract, fixed at dispatch (map
         # P3.4, package 2). Today's live reading is still computed and any
         # disagreement is recorded, so the run cannot count as complete.
@@ -8716,13 +8717,30 @@ class Session:
                                               blocking=[line.strip()[:300] for line in blocking])
                 record["review_text"] = verdict
                 owed_cap = str(verdict or "").startswith("UNFINISHED: the design review")
+                # The reviewer's own last reply, and whether it is a judgment:
+                # APPROVED, or a BLOCKING line it wrote itself. A harness-
+                # written verdict (renders not delivered, a copy altered) and
+                # a reply with neither judge nothing.
+                own = getattr(self, "_design_judgment", None)
+                own = own[1] if own and own[0] == reviewer else None
+                judged = own is not None and (_design_approved(own) or any(
+                    line.strip().startswith("BLOCKING:") for line in own.splitlines()))
+                if own is not None and not judged and not owed_cap:
+                    # Arrived without a verdict: the design review is owed by
+                    # this reviewer, never a bare open string.
+                    rv = self._recovery_open(spec, role="design-review", seat=reviewer, kind="design review",
+                                             outcome_class="review_unfinished",
+                                             question=f"{reviewer}'s design review of {spec.task_id}",
+                                             event=self._call_event(spec.task_id, "design-review", reviewer))
+                    rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
+                    self._owe_review(spec, reviewer, "design review", "gave no verdict (no APPROVED and no BLOCKING "
+                                     "line)", role="design-review", record=rv)
                 for line in blocking:
-                    if owed_cap and "gave no verdict" in line:
-                        # Filed as owned review debt by _final_design_review.
+                    if "gave no verdict" in line and (owed_cap or (own is not None and not judged)):
+                        # Filed as owned review debt above or by _final_design_review.
                         continue
                     self._open_finding("unverified", f"Task {spec.task_id} design: {line.strip()}")
-                if not owed_cap:
-                    self._settle_owed_by_judgment(spec, reviewer, "design review")
+                self._design_settles = reviewer if judged else None
                 self._edge("reviewer", not blocking)
                 if not blocking and self._current_resolves:
                     # Committed only once the whole task has passed, and only
@@ -8746,6 +8764,12 @@ class Session:
         record["capture"] = dict(spec.scope.capture) if getattr(spec.scope, "capture", None) else None
         record["review_stale"] = (self._design_review_drift(record) or self._design_context_drift(record)
                                   if delivered else "no delivered review")
+        settles = getattr(self, "_design_settles", None)
+        self._design_settles = None
+        if settles and delivered and not record["review_stale"]:
+            # Settled only by the owner's own completed judgment of renders
+            # still current (owed design-review debt, 2026-10-31).
+            self._settle_owed_by_judgment(spec, settles, "design review")
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
         if delivered and not record["review_stale"] and record["authority_ok"]:
@@ -8983,6 +9007,9 @@ class Session:
 
     def _final_design_review(self, spec, reviewer, shots) -> str:
         """The cross-vendor reviewer judges the final renders, not the draft's."""
+        # Which reply, if any, the reviewer itself wrote: every return below
+        # but the last is the harness's own text and judges nothing.
+        self._design_judgment = None
         files = self._evidence_files(spec, shots)
         refused = self._evidence_refusals(spec, files)
         if refused:
@@ -9080,6 +9107,7 @@ class Session:
             self._edge("delivered", False)
             return f"BLOCKING: the reviewer altered its copy of the source or renders before judging ({str(exc)[:300]})"
         self._record_delivery(reviewer, hashes)
+        self._design_judgment = (reviewer, verdict)
         return verdict
 
     def _record_delivery(self, reviewer, hashes) -> None:
@@ -9789,7 +9817,7 @@ class Session:
                 rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt: no reviewer is available"
                 if owner is not None:
                     self._owe_review(spec, owner, "review", "no reviewer from another vendor was available",
-                                     role="collaborator", outcome=outcome, record=rv)
+                                     role="collaborator", outcome=outcome, record=rv, final_cap=True)
                 else:
                     self._open_finding("unverified", f"Task {spec.task_id} stopped at its lead's turn limit in the "
                                                      "final parallel batch and no reviewer from another vendor "
@@ -9821,7 +9849,7 @@ class Session:
                     self._capped_review(spec, peer, "review", exc)
                     self._owe_review(spec, peer, "review", f"its review of the capped final work stopped at "
                                      f"{exc.turns or 'its'} rounds with no verdict", role="collaborator",
-                                     outcome=outcome, record=rv)
+                                     outcome=outcome, record=rv, final_cap=True)
                     result.update(reviewer=peer, verdict="held: review capped")
                     return result
                 self._settle_completion(spec, peer, "review", True, outcome=outcome)
@@ -9842,7 +9870,7 @@ class Session:
                     note = completed
                 if self._review_gaps(note):
                     self._owe_review(spec, peer, "review", "its review of the capped final work gave no valid "
-                                     "verdict", role="collaborator", outcome=outcome, record=rv)
+                                     "verdict", role="collaborator", outcome=outcome, record=rv, final_cap=True)
                     result.update(reviewer=peer, verdict="held: review gave no verdict")
                     return result
                 self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
@@ -9876,7 +9904,8 @@ class Session:
                                                         f"{record_['text']}", record=record_, outcome=outcome)
                 if not made:
                     self._owe_review(spec, peer, "review", "its review of the capped final work neither cleared it "
-                                     "nor named a BLOCKING finding", role="collaborator", outcome=outcome, record=rv)
+                                     "nor named a BLOCKING finding", role="collaborator", outcome=outcome, record=rv,
+                                     final_cap=True)
                 result["verdict"] = "held: findings"
                 self._note(f"{spec.task_id}: capped final work not cleared by {peer}; its findings are held")
             return result
@@ -11075,6 +11104,22 @@ class Session:
         for text in list(self.open_findings):
             if _finding_id(text) == fid or f" {fid} " in text or text.endswith(fid):
                 self.open_findings.remove(text)
+        self._refresh_recovery_results()
+
+    def _refresh_recovery_results(self) -> None:
+        """An occurrence's result read from the registry, never from the
+        action's return: one still saying ``held`` whose every owed id its
+        judge has since closed says so, with who closed each and how."""
+        closed = {r["fid"]: r for r in self.review_findings if r.get("closed")}
+        for occurrence in getattr(self, "recoveries", ()):
+            debt = list(occurrence.get("debt") or ())
+            if not debt or not str(occurrence.get("result") or "").startswith("held"):
+                continue
+            if all(fid in closed for fid in debt):
+                how = "; ".join(f"{fid} {closed[fid].get('state')} by "
+                                f"{((closed[fid].get('history') or [{}])[-1] or {}).get('author') or 'unknown'}"
+                                for fid in debt)
+                occurrence["result"] = f"recovered: its judge closed the owned debt ({how})"[:300]
 
     # -- evidence loop -------------------------------------------------------
     def _finish_pending_evidence(self) -> None:
@@ -13606,13 +13651,22 @@ class Session:
         total = getattr(self, "_max_tasks", None)
         calls = limits.get("max_calls")
         tokens = limits.get("max_reported_tokens")
+        held = list((snap.get("finish_protection") or {}).get("pending") or [])
+        calls_left = max(0, int(calls) - int(snap.get("reserved_attempts") or 0)) if calls else None
+        # Slots after the work admitted and still running (its charge lands
+        # after it returns, so ``_slots_used`` alone counts it as free).
+        used = int(getattr(self, "_slots_used", 0) or 0)
+        running = [int(e.get("slot") or 0) + int(e.get("slots") or 1) - 1
+                   for e in getattr(self, "task_admissions", ()) if e.get("outcome") is None]
         return dict(
-            calls_left=(max(0, int(calls) - int(snap.get("reserved_attempts") or 0)) if calls else None),
+            calls_left=calls_left,
+            # One call per finishing stage still held is not the recovery's.
+            calls_left_after_finish=(max(0, calls_left - len(held)) if calls_left is not None else None),
             tokens_left=(max(0, int(tokens) - int(snap.get("reported_tokens") or 0)) if tokens else None),
             judgment_completions_left=(max(0, limit - int(claimed)) if isinstance(claimed, int) else
                                        (limit if budget is None else None)),
-            slots_left=(max(0, int(total) - int(getattr(self, "_slots_used", 0) or 0)) if total else None),
-            finish_held=list((snap.get("finish_protection") or {}).get("pending") or []))
+            slots_left=(max(0, int(total) - max([used] + running)) if total else None),
+            finish_held=held)
 
     def _recovery_open(self, spec, *, role: str, seat: Optional[str], kind: str, outcome_class: str,
                        question: str, event=None, exc=None, observe: bool = True) -> dict:
@@ -13637,7 +13691,11 @@ class Session:
             observations=(self._call_observations(event) if observe else
                           recovery.safe_observations(None, unavailable="not read for this outcome")),
             allowance=self._recovery_allowance(), eligible=[], decision="", attempts=[], result="pending",
-            debt=[], detail=(f"{type(exc).__name__}: {str(exc)[:200]}" if exc is not None else ""))
+            # The exception's type and, for a cap, its round count: its
+            # message can carry vendor or model text and is not copied (the
+            # run's own error field keeps it for the operator).
+            debt=[], detail=(type(exc).__name__ + (f" after {exc.turns} rounds" if getattr(exc, "turns", None)
+                                                    else "") if exc is not None else ""))
         self.recoveries.append(record)
         self._note(f"{task_id}: recovery {record['id']}: {outcome_class} ({role} by {seat or '-'})")
         return record
@@ -13655,7 +13713,7 @@ class Session:
         return False
 
     def _recovery_attempt(self, record: Optional[dict], action: str, outcome: str, *, task=None, role=None,
-                          peer=None, site: str = "") -> None:
+                          peer=None, site: str = "", source: Optional[str] = None) -> None:
         """One attempted action on an occurrence, with the outer call it made
         (its own ledger event: identity and measured cost; none when no call
         was made)."""
@@ -13667,8 +13725,11 @@ class Session:
         known = {failed} | {(a.get("call") or {}).get("invocation_id") for a in record.get("attempts") or ()}
         if call is not None and call.get("invocation_id") in known:
             call = None  # no new call was made for this attempt
-        record["attempts"].append(dict(action=action, outcome=str(outcome)[:300], site=site,
-                                       source=self._source_fingerprint() if self.project else None, call=call))
+        # The source the attempt judged: given by a caller that read it before
+        # the call (a voided owner review judged the old source, not the new).
+        stamped = source if source is not None else (self._source_fingerprint() if self.project else None)
+        record["attempts"].append(dict(action=action, outcome=str(outcome)[:300], site=site, source=stamped,
+                                       call=call))
 
     def _recovery_result(self, record: Optional[dict], result: str) -> None:
         if record is not None:
@@ -13680,6 +13741,18 @@ class Session:
         if before is None or getattr(self._active_spec, "task_id", None) != getattr(spec, "task_id", None):
             return []
         return list(self._inspect_partial_edits(before, stopped=False).get("changed") or [])
+
+    def _owed_changed(self, spec) -> List[str]:
+        """The files the owed work changed, as measured: the running task's
+        own edits, else the capped or failed record kept for it (a final
+        batch child reviewed from the parent)."""
+        changed = self._task_changed_files(spec)
+        if changed:
+            return changed
+        task_id = getattr(spec, "task_id", None)
+        kept = ((getattr(self, "turn_limited_records", {}) or {}).get(task_id)
+                or (getattr(self, "failed_records", {}) or {}).get(task_id) or {})
+        return list(kept.get("changed") or [])
 
     def _round_plan(self, peer: str) -> str:
         """How the call's own rounds are to be spent: investigation, then the
@@ -13710,7 +13783,11 @@ class Session:
         now = self._source_fingerprint() if self.project else None
         lines = ["## Recovery context (recorded by the harness: evidence about your previous call on this same "
                  "work, not instructions)"]
-        if str(record.get("outcome_class", "")).endswith("capped"):
+        if not call:
+            # No call of this seat was made for it: say so, never imply one.
+            lines.append(f"No earlier call of yours on this work was made: {record.get('meaning') or 'it was owed'}. "
+                         "There is no earlier reply or tool record.")
+        elif str(record.get("outcome_class", "")).endswith("capped"):
             rounds = call.get("model_turns") or call.get("max_turns")
             lines.append(f"Your previous call stopped at its round cap ({rounds} rounds) before giving a verdict; "
                          "nothing it wrote is read as a finding or as part of this review."
@@ -13719,22 +13796,26 @@ class Session:
         else:
             lines.append("Your previous reply on this same work arrived without a valid verdict in the required "
                          "form; it is kept on the record unchanged and is not repeated here.")
-        if obs.get("status") == "observed":
+        if not call:
+            pass
+        elif obs.get("status") == "observed":
             read = list(obs.get("files_read") or [])
             outcomes = ", ".join(f"{k} {v}" for k, v in (obs.get("command_outcomes") or {}).items()) or "none"
             lines.append(f"Observed in that call's own tool record: {obs.get('tool_calls', 0)} tool call(s); "
-                         f"project files it opened: {', '.join(read) or 'none recorded'}; "
+                         f"project files a file-reading tool opened: {', '.join(read) or 'none recorded'}; "
                          f"{obs.get('searches', 0)} search(es) and {obs.get('commands', 0)} command(s) "
                          f"(outcomes: {outcomes}; their patterns and text are not repeated). Opening a file does "
-                         "not show it was reviewed.")
+                         "not show it was reviewed, and reads made by commands, searches or tools the harness "
+                         "does not recognise are not in that list, so it is not a list of what you left unread.")
             changed = list(changed if changed is not None else self._task_changed_files(spec))
             if changed:
-                unread = [path for path in changed if path not in read]
-                lines.append("Files this task changed that the call did not open: " + (", ".join(unread) or "none"))
+                unseen = [path for path in changed if path not in read]
+                lines.append("Files this task changed that no file-reading tool was observed opening: "
+                             + (", ".join(unseen) or "none"))
         else:
             lines.append(f"The harness could not observe that call's tool use ({obs.get('reason') or 'unavailable'}); "
                          "nothing is assumed about what it examined.")
-        if then and now and then != now:
+        if call and then and now and then != now:
             lines.append(f"That call ran on source {str(then)[:16]}; the source is now {str(now)[:16]}. What it "
                          "observed is history about an earlier source: it shows nothing about the source you judge "
                          "now and approves nothing.")
@@ -13782,6 +13863,10 @@ class Session:
         reply = self._complete_judgment(spec, peer, kind, raw or "", missing, role=role, prompt=prompt, task=task,
                                         outcome=outcome, context=self._recovery_context(spec, peer, record),
                                         recovery_record=record)
+        last = (record.get("attempts") or [{}])[-1]
+        if str(last.get("outcome") or "").startswith("not attempted"):
+            # Decided on what was actually available: no completion was made.
+            record["decision"] = f"hold_owned_debt: completion {last['outcome']}"
         return reply, record
 
     def _owed_record(self, fid) -> Optional[dict]:
@@ -13792,7 +13877,7 @@ class Session:
         return record
 
     def _owe_review(self, spec, peer: str, kind: str, why: str, *, role: str, outcome=None,
-                    record: Optional[dict] = None, fids=(), original: str = "") -> List[str]:
+                    record: Optional[dict] = None, fids=(), original: str = "", final_cap: bool = False) -> List[str]:
         """A required judgment by ``peer`` that did not finish, held as owned
         review debt (never a bare open string): for a recheck, the findings it
         was asked about stay open under their own ids, held for their author;
@@ -13824,6 +13909,10 @@ class Session:
                     # recheck that gave no verdict is the author's debt, and
                     # the task that holds it closed with an open finding.
                     self._hold_open_finding(spec, peer, verdict, record=existing, outcome=outcome, carry=False)
+                # On the record too, so the audit is not handed it in the
+                # author's place (``Finding.owed_recheck``) until the author
+                # judges it again.
+                existing.update(replace(delivery.Finding.from_dict(existing), owed_recheck=True).to_dict())
                 held.append(fid)
         elif any(r.get("kind") == "unreviewed" and not r.get("closed") and r.get("task") == str(spec.task_id)
                  and r.get("author") == peer and r.get("owed_kind") == kind for r in self.review_findings):
@@ -13848,11 +13937,18 @@ class Session:
                                        (), "unreviewed")
             row = dict(finding.to_dict(), text=claim, owed_kind=kind, owed_role=role, covers=covers,
                        description=str(getattr(spec, "description", "") or "")[:2000],
-                       changed=self._task_changed_files(spec))
+                       changed=self._owed_changed(spec))
             self.review_findings.append(row)
             verdict = f"{fid}: UNRESOLVED (owed {kind} by {peer}: {why}): {claim}"
             self._hold_open_finding(spec, peer, verdict, record=row, outcome=outcome)
             held.append(fid)
+        if final_cap and not fids:
+            # Owed for a capped child of the job's final batch: the owner's
+            # clean settlement lifts the cap exactly as a clean review of it
+            # would have (``_lift_final_cap``).
+            for row_ in self.review_findings:
+                if row_.get("fid") in held:
+                    row_["final_cap"] = True
         # The held entry carries the typed fact (``_hold_open_finding``), so
         # the owner's settlement recovers it atomically; no second fact is
         # added that nothing could close.
@@ -13896,23 +13992,34 @@ class Session:
                    if last is not None else "")
         return (self._role_packet(spec, "reviewer") + "\n\n"
                 f"## The work you owe a judgment on ({record['fid']})\n"
-                f"Task {task_id}, as you were asked to review it: {str(record.get('description') or '')[:1500]}\n"
+                f"Task {task_id}, as it was described: {str(record.get('description') or '')[:1500]}\n"
                 f"Files it changed (measured by the harness): {changed}.\n"
-                f"Your {record.get('owed_kind') or 'review'} of it did not finish, so it was never reviewed by you. "
+                f"Your {record.get('owed_kind') or 'review'} of it is owed: it did not finish or was never made, so "
+                "this work has no completed review by you. "
                 f"{situation} Review that work as it stands now in your working directory, against the original "
                 "goal and the requirements below.\n\n" + context
                 + _OWED_REVIEW_GRAMMAR + self._goal_authority(record["author"])
                 + self._review_turn_budget_note(record["author"]))
 
+    def _owed_settlements(self, fid: str) -> List[dict]:
+        """Every owner settlement made for ``fid``, across every occurrence
+        that names it (a later occurrence that re-owes the same record never
+        resets the count or the per-source rule)."""
+        return [a for r in self.recoveries if fid in (r.get("debt") or ())
+                for a in r.get("attempts") or () if a.get("action") == "owner_settlement"
+                and not str(a.get("outcome") or "").startswith("not attempted")]
+
     def _settle_owed(self, spec, record: dict, *, situation: str, outcome=None, site: str = "") -> dict:
         """One owner judgment of an owed-review record on the current source.
         Only the record's author, only while that seat is available, at most
-        ``_OWED_SETTLEMENT_ATTEMPTS`` times per record and never twice on the
-        same source. A completed review closes the record (RESOLVED by its
-        author, the harness recording the completion) and registers every
-        BLOCKING line as a new held finding of the original task; a capped,
-        refused or verdict-less reply leaves it open, with the attempt on the
-        record. Returns the row the settlement reports."""
+        ``_OWED_SETTLEMENT_ATTEMPTS`` times per record (counted over every
+        occurrence that names it) and never twice on the same source. A
+        completed review closes the record (RESOLVED by its author, the
+        harness recording the completion) and registers every BLOCKING line,
+        and every covered requirement it calls NOT MET, as a new held finding
+        of the original task; a capped, refused, voided or verdict-less reply
+        leaves it open, with the attempt on the record, stamped with the
+        source the owner was shown. Returns the row the settlement reports."""
         fid, owner = record["fid"], record["author"]
         row = dict(peer=owner, findings=1, verdict=None, resolved=[], kept=[], new=[], owed=fid)
         occurrence = next((r for r in reversed(self.recoveries) if fid in (r.get("debt") or ())), None)
@@ -13923,8 +14030,7 @@ class Session:
                                              f"{record.get('task')} ({fid})", observe=False)
             occurrence["debt"] = [fid]
         source = self._source_fingerprint() if self.project else None
-        tried = [a for a in occurrence.get("attempts") or () if a.get("action") == "owner_settlement"
-                 and not str(a.get("outcome") or "").startswith("not attempted")]
+        tried = self._owed_settlements(fid)
         if record.get("owed_kind") not in ("review", None):
             reason = (f"kept: a {record.get('owed_kind')} is settled by its owner's completed "
                       f"{record.get('owed_kind')} of a continuation of {record.get('task')}, not by a code review")
@@ -13938,58 +14044,91 @@ class Session:
             reason = ""
         if reason:
             row["verdict"] = reason
-            self._recovery_attempt(occurrence, "owner_settlement", "not attempted: " + reason[6:], site=site)
+            self._recovery_attempt(occurrence, "owner_settlement", "not attempted: " + reason[6:], site=site,
+                                   source=source)
             return row
-        owner_spec = SimpleNamespace(task_id=record.get("task"), description=record.get("description") or "")
+        task_id = record.get("task") or spec.task_id
+        owner_spec = SimpleNamespace(task_id=task_id, description=record.get("description") or "")
         saved_covers = self._current_covers if hasattr(self, "_current_covers") else None
         self._current_covers = list(record.get("covers") or [])
+
+        def attempt(result: str, *, called: bool = True) -> None:
+            self._recovery_attempt(occurrence, "owner_settlement", result, site=site, source=source,
+                                   **(dict(task=task_id, role="collaborator", peer=owner) if called else {}))
+
         try:
             prompt = self._owed_review_prompt(spec, record, situation)
             try:
-                with invocation(record.get("task") or spec.task_id, "collaborator"):
+                with invocation(task_id, "collaborator"):
                     reply = self._invoke_model(owner, prompt)
             except TurnLimitReached:
-                self._recovery_attempt(occurrence, "owner_settlement", "capped: no verdict", task=record.get("task")
-                                       or spec.task_id, role="collaborator", peer=owner, site=site)
+                attempt("capped: no verdict")
                 row["verdict"] = "kept: the owner's review stopped at its round cap again"
                 return row
             except FinishReserved as exc:
-                self._finish_refused(spec, f"owed review of {record.get('task')} by {owner}", exc, outcome=outcome)
-                self._recovery_attempt(occurrence, "owner_settlement", "refused to keep the finish", site=site)
+                self._finish_refused(spec, f"owed review of {task_id} by {owner}", exc, outcome=outcome)
+                # No call was made, so nothing about this source was judged.
+                attempt("not attempted: refused to keep the finish", called=False)
                 row["verdict"] = "kept: refused to keep the finish"
                 return row
             self.store.put(reply, kind=f"review:{owner}", author=owner)
             if self._source_fingerprint() != source:
-                self._recovery_attempt(occurrence, "owner_settlement", "void: the source changed during the review",
-                                       task=record.get("task") or spec.task_id, role="collaborator", peer=owner,
-                                       site=site)
+                attempt("void: the source changed during the review")
                 row["verdict"] = "kept: the source changed during the owner's review"
                 return row
-            if self._review_gaps(reply) or not _review_complete(reply) and not _clean_goal_review(
-                    reply, [rid for rid, _ in self._covered_texts()]):
-                self._recovery_attempt(occurrence, "owner_settlement", "no valid verdict",
-                                       task=record.get("task") or spec.task_id, role="collaborator", peer=owner,
-                                       site=site)
+            rids = [rid for rid, _ in self._covered_texts()]
+            verdicts = _requirement_verdicts(reply)
+            unmet = [rid for rid in rids if verdicts.get(rid) is False]
+            judged = (_has_blocking_finding(reply) or bool(unmet) or _review_complete(reply)
+                      or _clean_goal_review(reply, rids))
+            if self._review_gaps(reply) or not judged:
+                attempt("no valid verdict")
                 row["verdict"] = "kept: the owner's reply gave no valid verdict"
                 return row
-            new = self._register_review_findings(owner_spec, owner, reply, role="collaborator")
+            # A covered requirement the owner calls NOT MET is a BLOCKING
+            # finding, exactly as on the ordinary review route.
+            note = reply + "".join(f"\nBLOCKING: {rid} is NOT MET (the reviewer's own verdict line)." for rid in unmet
+                                   if not _has_blocking_finding(reply))
+            new = self._register_review_findings(owner_spec, owner, note, role="collaborator")
             for made in new:
                 verdict = f"{made['fid']}: UNRESOLVED (raised by {owner} in its owed review): {made['text']}"
                 self._hold_open_finding(owner_spec, owner, verdict, record=made, outcome=outcome)
                 row["new"].append(made["fid"])
-            settling = self._call_event(record.get("task") or spec.task_id, "collaborator", owner)
+            settling = self._call_event(task_id, "collaborator", owner)
             self._close_owed(record, owner, f"completed review on source {str(source)[:16]}"
                              + (f"; new findings {', '.join(row['new'])}" if row["new"] else "; no findings"),
                              call=getattr(settling, "invocation_id", "") or "")
             row["resolved"].append(fid)
             row["verdict"] = "reviewed" + (f": new {', '.join(row['new'])}" if row["new"] else ": no findings")
-            self._recovery_attempt(occurrence, "owner_settlement", row["verdict"],
-                                   task=record.get("task") or spec.task_id, role="collaborator", peer=owner, site=site)
+            if record.get("final_cap") and not row["new"] and _approving_review(note, rids):
+                row["cap_lifted"] = self._lift_final_cap(task_id, owner, list(record.get("covers") or []), note,
+                                                         rids)
+            attempt(row["verdict"])
             self._recovery_result(occurrence, "recovered: the owner completed the owed review"
                                   + (f"; new findings {', '.join(row['new'])} are held" if row["new"] else ""))
             return row
         finally:
             self._current_covers = saved_covers
+
+    def _lift_final_cap(self, task_id: str, peer: str, covers: List[str], note: str, rids) -> bool:
+        """A capped child of the final batch whose owed review its owner has
+        now completed clean: the cap is lifted as the review itself would
+        have lifted it (``_review_capped_final_child``), on that task's own
+        outcome. Nothing else: no slot, recovery, turn or grant."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == task_id), None)
+        if outcome is None:
+            return False
+        notes = not (_clean_goal_review(note, rids) if rids else note.strip().upper().rstrip(".") == "NO FINDINGS")
+        outcome.recover("cap")
+        outcome.note("cap", f"capped in the final parallel batch; merged source passed the checks and {peer}'s "
+                            "owed review, completed at its settlement, approved it"
+                            + (" with non-blocking notes kept on record" if notes else ""), terminal=False)
+        outcome.edge("review", True)
+        self._partial_tasks.discard(task_id)
+        for rid in covers:
+            self._mark_covered(rid, task_id)
+        self._note(f"{task_id}: capped final work reviewed clean by {peer} at its owed settlement; its cap is lifted")
+        return True
 
     def _close_owed(self, record: dict, owner: str, why: str, *, call: str = "") -> None:
         """Close an owed-review record on its author's completed review: one
@@ -14029,13 +14168,13 @@ class Session:
 
     def _owed_attempts(self, fid: str) -> int:
         """Owner settlements already attempted for the owed record ``fid``."""
-        return sum(1 for r in self.recoveries if fid in (r.get("debt") or ())
-                   for a in r.get("attempts") or () if a.get("action") == "owner_settlement"
-                   and not str(a.get("outcome") or "").startswith("not attempted"))
+        return len(self._owed_settlements(fid))
 
     def _owed_open(self) -> List[dict]:
-        """The open owed-review records."""
-        return [r for r in self.review_findings if r.get("kind") == "unreviewed" and not r.get("closed")]
+        """The open owed judgments: ``unreviewed`` records, and defects whose
+        author's recheck gave no verdict."""
+        return [r for r in self.review_findings if not r.get("closed")
+                and (r.get("kind") == "unreviewed" or r.get("owed_recheck"))]
 
     def _settle_owed_reviews(self, site: str) -> List[dict]:
         """Before a terminal decision with no planner after it (an explicit
@@ -14051,6 +14190,36 @@ class Session:
             rows.append(self._settle_owed(spec, record, outcome=holder or self.run_outcome, site=site,
                                           situation=f"No task is left to name a settlement ({site}): this is the one "
                                                     "owner review the harness makes before the run's finish."))
+        # A defect whose author's recheck gave no verdict: one recheck by
+        # that author on the current source, the ordinary settlement recheck,
+        # never twice on the same source and within the same attempt bound.
+        source = self._source_fingerprint() if self.project else None
+        by_task: Dict[str, List[dict]] = {}
+        for record in [r for r in self.review_findings if r.get("owed_recheck") and not r.get("closed")]:
+            tried = self._owed_settlements(record["fid"])
+            if any(a.get("source") == source for a in tried) or len(tried) >= _OWED_SETTLEMENT_ATTEMPTS:
+                continue
+            entry = next((e for e in self.unresolved_reviews if e.get("finding_id") == record["fid"]
+                          and e.get("text") in self.open_findings), None)
+            if entry is not None:
+                by_task.setdefault(str(record.get("task")), []).append(entry)
+        for task_id, entries in by_task.items():
+            description = next((e.get("description") for e in entries if e.get("description")), "") or ""
+            spec = SimpleNamespace(task_id=task_id, description=description, scope=None, kind="review",
+                                   complexity="simple", lead=None, needs=frozenset())
+            holder = next((o for o in reversed(self.task_outcomes) if o.task_id == task_id), None)
+            got = self._recheck_open_findings(
+                spec, entries, holder or self.run_outcome,
+                situation=(f"No task is left to name a settlement ({site}). Your recheck of these findings gave no "
+                           "verdict; this is the one recheck the harness makes before the run's finish, on the "
+                           "source as it now stands."))
+            states = {r["fid"]: r.get("state") for r in self.review_findings}
+            for entry in entries:
+                fid = entry["finding_id"]
+                occurrence = next((r for r in reversed(self.recoveries) if fid in (r.get("debt") or ())), None)
+                self._recovery_attempt(occurrence, "owner_settlement", f"recheck at {site}: {states.get(fid)}",
+                                       task=task_id, role="recheck", peer=entry.get("peer"), site=site, source=source)
+            rows.append(got)
         return rows
 
     def _record_stop_rule(self, reason: str) -> None:
@@ -14068,13 +14237,21 @@ class Session:
         self._recovery_result(record, f"stopped: {name}")
 
     def _record_terminal_recovery(self, exc: BaseException) -> None:
-        """The occurrence for an exception that ends the run: classified,
-        bound to the call that raised it where the ledger names one, marked
-        protective or uncertain. A protective stop stays a stop; an uncertain
-        outcome names reconciliation; neither is retried."""
+        """The occurrence for an exception that ends the run: classified by
+        the exception's type, its cause chain and the budget's structured
+        stop reason, never by its message (a provider error carries model
+        text); bound to the failed call only when that call is the newest one
+        and did not succeed; marked protective or uncertain. A protective
+        stop stays a stop; an uncertain outcome names reconciliation; neither
+        is retried."""
         name = type(exc).__name__
-        names = {klass.__name__ for klass in type(exc).__mro__}
-        reason = str(getattr(self._budget(), "_reason", "") or "") if self._budget() is not None else ""
+        chain, seen = [], exc
+        while seen is not None and len(chain) < 6:
+            chain.append(seen)
+            seen = seen.__cause__ or seen.__context__
+        names = {klass.__name__ for item in chain for klass in type(item).__mro__}
+        budget = self._budget()
+        reason = str(getattr(budget, "_reason", "") or "") if budget is not None else ""
         if "PartialWorkStopped" in names or "PartialWorkSuspected" in names:
             cls = "uncertain_write"
         elif names & {"DependencyTreeChanged", "DependencyIdentityUnavailable", "EvidenceIdentityMismatch",
@@ -14084,11 +14261,11 @@ class Session:
             cls = "permission"
         elif names & {"KeyboardInterrupt", "CancelledError"}:
             cls = "cancelled"
-        elif "WindowExhausted" in names or "window_exhausted" in reason:
+        elif "WindowExhausted" in names:
             cls = "provider_quota"
-        elif "unknown_usage" in str(exc) or reason == "unknown_usage":
+        elif reason == "unknown_usage":
             cls = "unknown_usage"
-        elif names & {"TimeoutError", "_GateTimeout"} or "timed out" in str(exc).lower():
+        elif names & {"TimeoutError", "TimeoutExpired", "_GateTimeout"}:
             cls = "provider_timeout"
         elif "FinishReserved" in names or "RunBudgetExceeded" in names:
             cls = "capacity_exhausted"
@@ -14112,7 +14289,15 @@ class Session:
         ledger = getattr(self.config, "delegation_ledger", None)
         last = next((e for e in reversed(list(getattr(ledger, "events", None) or [])) if getattr(e, "invoked", False)),
                     None)
-        event = last if last is not None and str(getattr(last, "task", "")) == str(task) else None
+        # The failed call, only when it is the newest call and it did not
+        # succeed: a stop the harness decided after successful calls names
+        # none, and an earlier call of another seat or role is never named.
+        event = None
+        if (cls != "stop_rule" and call and last is not None and str(getattr(last, "task", "")) == str(task)
+                and (getattr(last, "role", "") or "").split(":")[0] == role.split(":")[0]
+                and seat in (getattr(last, "requested_model", None), getattr(last, "canonical_model", None))
+                and getattr(last, "outcome", None) not in (None, "ok")):
+            event = last
         record = self._recovery_open(SimpleNamespace(task_id=task), role=role, seat=seat, kind="run",
                                      outcome_class=cls, question=f"the run ended on {name}", event=event, exc=exc,
                                      observe=False)

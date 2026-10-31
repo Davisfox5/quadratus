@@ -297,7 +297,10 @@ def proposals(records: Iterable[dict]) -> List[dict]:
         out.append(dict(
             family=key, outcome_class=cls, meaning=OUTCOME_CLASSES.get(cls, ""),
             occurrences=[r.get("id") for r in group], tasks=sorted({str(r.get("task")) for r in group}),
-            attempted=sorted({str(a.get("action")) for r in group for a in r.get("attempts") or []}),
+            # Only what was actually tried: a refused or unavailable action is
+            # an attempt record, not an attempt.
+            attempted=sorted({str(a.get("action")) for r in group for a in r.get("attempts") or []
+                              if not str(a.get("outcome") or "").startswith("not attempted")}),
             results=results, evidence=evidence, cost=costs(group),
             recommendation=change, regression_scenario=scenario,
             confidence=("observed once; the cause is not confirmed" if len(group) == 1 else

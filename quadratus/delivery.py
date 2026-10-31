@@ -219,6 +219,11 @@ class Finding:
     requirement: Optional[Tuple[str, int]] = None
     history: Tuple[Disposition, ...] = ()
     kind: str = "defect"
+    #: The author's recheck of this defect gave no verdict (round cap,
+    #: refused, no valid line): the judgment is the author's debt, so the
+    #: audit is not handed it in the author's place until the author has
+    #: judged it again (recovery lifecycle, 2026-10-31).
+    owed_recheck: bool = False
 
     def __post_init__(self):
         _check_id(self.fid, "finding id")
@@ -254,8 +259,10 @@ class Finding:
     def audit_carried(self) -> bool:
         """Open, no basis, not an immediate risk: examined by the audit by id,
         never a note and never an accepted task. Owned review debt is never
-        carried: the audit is not the seat whose judgment it is owed."""
-        return not self.closed and self.kind == "defect" and self.basis.kind == "none" and not self.holds_effects
+        carried: the audit is not the seat whose judgment it is owed, and a
+        defect whose author's recheck gave no verdict is that author's."""
+        return (not self.closed and self.kind == "defect" and not self.owed_recheck
+                and self.basis.kind == "none" and not self.holds_effects)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -274,7 +281,7 @@ class Finding:
                    requirement=(requirement[0], int(requirement[1])) if requirement else None,
                    history=tuple(Disposition(**{k: v for k, v in h.items() if k in Disposition.__dataclass_fields__})
                                  for h in data.get("history") or ()),
-                   kind=data.get("kind") or "defect")
+                   kind=data.get("kind") or "defect", owed_recheck=bool(data.get("owed_recheck")))
 
 
 def designated_judge(finding: Finding, author: str, role: str) -> str:
@@ -390,8 +397,11 @@ def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, autho
             state, why = "unjudged", f"INVALIDATED names evidence that is not on the record: {verdict.why[:160]}"
         else:
             state, why = verdict.state, verdict.why
-        out.append(replace(finding, history=finding.history + (
-            Disposition(finding.fid, state, why, author, role, binding, source_digest, call),)))
+        # The author's own judgment discharges a recheck it owed; anything
+        # unjudged leaves the debt where it was.
+        out.append(replace(finding, owed_recheck=finding.owed_recheck and state == "unjudged",
+                           history=finding.history + (
+                               Disposition(finding.fid, state, why, author, role, binding, source_digest, call),)))
     number = _next_number(findings, prefix)
     for new in reading.new:
         if drifted:

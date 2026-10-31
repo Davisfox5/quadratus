@@ -165,6 +165,13 @@ def test_the_allowance_is_one_per_job_not_per_task(tmp_path, monkeypatch):
     assert _budget(replay)["judgment_completions"] == 1
     owed = next(f for f in H.result_json(replay)["review_findings"] if f["fid"] == "RFT2-1")
     assert owed["kind"] == "unreviewed" and not owed["closed"], "t2's unfinished review is owed, never waved"
+    # Decided on what was left: no completion was available, so none is
+    # recorded as decided or attempted.
+    rv = next(r for r in H.result_json(replay)["recoveries"] if r["id"] == "RVt2-1")
+    assert rv["decision"].startswith("hold_owned_debt: completion not attempted: the job's allowance is spent")
+    assert rv["allowance"]["judgment_completions_left"] == 0
+    proposal = next(p for p in H.result_json(replay)["improvement"]["proposals"] if "RVt2-1" in p["occurrences"])
+    assert "complete_judgment" not in proposal["attempted"]
 
 
 @pytest.mark.requirements_ledger
@@ -408,8 +415,11 @@ def _reworded(session):
 def test_a_completion_whose_bound_identity_drifts_is_void_and_spends_the_claim(tmp_path, monkeypatch, drift, changed):
     """Source unchanged, but the effective check settings (a test minimum)
     or the covered requirement's text change while the completion runs: its
-    valid-looking answer is void, the review stays unjudged and the run
-    stops on it; the one claim is spent."""
+    valid-looking answer is void and judges nothing; the one claim is spent.
+    Since the recovery lifecycle (2026-10-31) the review is owed debt: in
+    the gate case the stricter check stops the run on its own rule with the
+    debt open; in the covered case the owner's later review, its own call on
+    the identity then current, settles it, and the audit decides the rest."""
     _drift_after_completion(monkeypatch, drift)
     script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
     script.overrides["collaborator"] = _reviews(NARRATION, then=CLEAN_T1)
@@ -432,7 +442,16 @@ def test_a_completion_whose_bound_identity_drifts_is_void_and_spends_the_claim(t
     assert void["action"] == "complete_judgment" and void["outcome"].startswith("void: the bound identity changed")
     owed = next(f for f in result["review_findings"] if f["fid"] == "RFT1-1")
     assert owed["kind"] == "unreviewed"
-    assert all(d["call"] != void["call"]["invocation_id"] for d in owed["history"])
+    settled = [a for a in rv["attempts"] if a["action"] == "owner_settlement" and a["outcome"].startswith("reviewed")]
+    if changed == "gate":
+        assert replay.result.error.startswith("CheckUnattributable") and not owed["closed"] and not settled
+        stop = next(r for r in result["recoveries"] if r["kind"] == "run")
+        assert stop["outcome_class"] == "stop_rule" and stop["failed_call"] is None, "no call caused this stop"
+    else:
+        (closing,) = [d for d in owed["history"] if d["state"] == "resolved"]
+        assert settled and closing["call"] == settled[-1]["call"]["invocation_id"]
+        assert closing["call"] != void["call"]["invocation_id"], "the void answer closes nothing"
+        assert replay.result.error.startswith("RequirementsUnmet")
     assert _budget(replay)["judgment_completions"] == 1
 
 
