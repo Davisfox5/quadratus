@@ -3358,11 +3358,14 @@ Key design decisions already settled:
   prompt (once; a parallel child's lead gets it through the goal block),
   every editing call after the draft (`_writer_goal`), every task review
   (`_goal_authority`), the final audit and both reassessments
-  (`_authority_context`). No new model pass, no second long paragraph; the
-  recheck is not a route, since it carries the reviewer's own finding. A
-  prompt that states a rule is not proof a seat applies it: the lifecycle
-  control shows the sentence reaching each seat and a scripted reviewer
-  acting on it, nothing about generation.
+  (`_authority_context`). No new model pass, no second long paragraph. The
+  recheck was first left out as a route because it carries the reviewer's
+  own finding; root's review of 0c5c6f1 read the actual recheck prompts
+  and found them byte-identical to baseline, with no goal, no requirement
+  text and no precedence, so the recheck is a route now (`_finding_contract`,
+  next note). A prompt that states a rule is not proof a seat applies it:
+  the lifecycle control shows the sentence reaching each seat and a
+  scripted reviewer acting on it, nothing about generation.
 - **A slot is charged at dispatch, and the ledger says what was charged**
   (`_run_tasks`, `slot_ledger`, `_slot_event`; same batch). `used += 1`
   sat at the top of the loop, so P12 spent two of its eight slots on a
@@ -3427,6 +3430,132 @@ Key design decisions already settled:
   (`RunStalled` past `2 * max_requirement_reopens + 1` uncharged turns)
   that today's paths cannot reach, so a future uncharged `continue` never
   plans for free.
+- **Seven repairs from root's review of 0c5c6f1** (6538988187, 2026-10-31;
+  the same three families, finished). Each was read off the delivered
+  prompts, record or checker, not inferred.
+  - *Both rechecks carry the finding's own contract* (`_finding_contract`).
+    `_recheck_blocking` (a reviewer re-checking its finding against the
+    revision, the capped-revision handoff) and `_recheck_open_findings`
+    (a held finding settled when a later task continues or resolves its
+    task, the post-merge recheck) now open with the verbatim goal, the
+    text of each requirement the named findings were raised under (read
+    from the finding's own requirement or basis where the ledger knows
+    that id, else the raising task's COVERS; never the current task's),
+    each line naming the finding and task it binds, every operator ruling
+    whole, the order of authority and the boundary rule, once. The block adds no finding, asks no
+    verdict on a requirement and reopens no review: the recheck grammar,
+    its expected ids and its named-finding-only scope are unchanged, and
+    the full review's per-requirement duty is not appended. The held
+    route in the control is a t1/R1 finding rechecked during a t2 that
+    covers R2 and continues t1, because the engine refuses RESOLVES on a
+    task that does not cover the finding's requirement.
+  - *The serial lead is told the order of authority* (`_lead_prompt`): the
+    one sentence (`_AUTHORITY_ORDER`) beside the boundary rule, once; a
+    parallel child already had it through its goal block. The serial
+    lead's goal is not repeated. A parallel child's prompt has carried the
+    goal twice since before this batch (the ledger render and the child's
+    goal block); that is outside this item and left as it is.
+  - *The audit's reassessment states the rules it enforces* (`_reassess`):
+    `_EXECUTED_ERROR_RULE` beside `_ERROR_PATH_RULE`, as the full audit
+    has it, so a MET on an error or refusal requirement is asked for the
+    exact executed case identities `_lower_unexercised_errors` requires,
+    and the full audit's resolution sentence (a citation resolves only as
+    a project file path with an extension or a `test_*` function in a
+    `test*.py` file; the scratch test the harness ran is not a project
+    file), so the auditor cites the executed identities beside a project
+    file that resolves. Neither the lowerer nor `_resolve_citations` is
+    changed: a bare test name still lowers, and the scratch identity alone
+    is still held.
+  - *A repair after the final audit renews the audit hold before its
+    writer is admitted* (`_renew_audit_hold`, `RunBudget.renew_finish`).
+    `protect_finish` never re-held a stage already started, so a NOT MET
+    audit followed by a repair ran the writer with no audit reserved. The
+    renewal is durable (persisted to the budget record), checked before
+    `_refuse_unpayable_dispatch` on the serial and batch routes, bounded
+    by `max_requirement_reopens`, and refused as `FinishReserved` when the
+    repair plus the renewed finish cannot fit; nothing spent is reset, the
+    started history stays, the allowance is not enlarged. `protect_finish`
+    keeps a renewed stage held while its renewal is owed (`_owed`: starts
+    no more than renewals), so naming the same stages again never frees
+    the renewed audit's capacity to ordinary work; once the renewed call
+    starts nothing re-holds it (root's independent reproduction on the
+    recovered head). While a renewed audit hold is pending, the repair's
+    route also counts the planner's DONE call between it and that audit,
+    even with no token reserve (counted as a call, tokens not counted;
+    zero-reserve admission elsewhere unchanged), and a renewal made for
+    work that is then not started (serial or batch) is released, so the
+    cap's goal question is not refused against it; the renewal stays
+    counted against its bound. A review-only
+    task is held to the same renewal (its close makes the next DONE's
+    audit necessary); only the explicit-task entry keeps its route. On
+    "never repeatedly audit unchanged source": a DONE repeated over
+    nothing is sent back by the coverage check on the recorded verdict
+    before any audit is asked; a task that re-covers a requirement closes
+    with receipts and obligation rows the auditor consumes, so its packet
+    is new by the engine's own definition of what an audit was about
+    (`test_every_evidence_the_audit_consumes_is_in_the_packet`) and is
+    audited under the renewed hold even when the source is byte-identical;
+    the cap's exact-state cache still releases the hold on a resume.
+    Every audit now records its `_audit_binding`, so the record shows
+    which packet each judged. A source-only reuse was tried in this batch
+    and refused by those controls, and a DONE-route binding reuse was
+    found unreachable (the coverage check fires first), so neither is in.
+  - *A task's admission is committed before its first effect*
+    (`_admit_dispatch`, `task-admissions` on the job store, carried on the
+    checkpoint). After the payable-route check and before any call, the
+    task ids, slot, count, authority digest and attempt count are
+    published under the committed authority; a store that cannot commit
+    stops the run with nothing started (`JobStoreUnavailable`), recorded
+    as not started with no slot charged and the typed outcome
+    `not_started` (`_refuse_admission_record`). The same holds for the
+    authority commit one step before it (a task start's or a wave's) and
+    for a parallel wave, a store refusal with no open admission for the
+    task means nothing ran, and an explicit list's `ran` entry is taken
+    back. A batch child on the security route publishes nothing of its
+    own; its wave's admission stands. The charge keeps its place
+    and its convention, and each ledger charge names its admission. A resume past an admission the checkpoint does not carry is
+    refused by the existing unconsumed-operation guard (the planner's
+    settled call that named the task), and the refusal now names the
+    admission beside the retained receipts: nothing dropped, nothing
+    re-planned, no refund. `_count_interrupted_admissions` is the
+    conservative count should a later checkpoint cadence admit such a
+    resume; today only the unit control reaches it.
+  - *A capped close after a handoff says what was performed*
+    (`_handoff_account`, `_close_turn_limited`): the hold reason and the
+    planner's summary name the recheck, its reviewer and what each
+    finding came to, and call the passing gate what it was, the harness's
+    observation for the reviewers, not the task's canonical gate with the
+    run-start originals. The handoff carries a per-finding outcome read
+    from the registry (`findings`: unresolved only where this recheck
+    wrote the reviewer's UNRESOLVED, no verdict, raised, source changed;
+    `resolved` and `invalidated` as the registry closed them;
+    `others_open` whenever another reviewer's finding is open), and the
+    close words every finding from it (`_handoff_holds`,
+    `_handoff_came_to`): a capped recheck reads "no verdict", a finding
+    the recheck raised reads raised, INVALIDATED is never RESOLVED, and a
+    finding outside the recheck is never credited to its reviewer. Each
+    hold states its own outcome first, inside the planner's 120-character
+    view of a hold. The cap, the
+    open finding and the unfinished outcome are unchanged; a plain capped
+    close keeps "before its recheck".
+  - *The independent checker compares requirement revisions*
+    (`tools/truth_check.py`: `_typed_not_run_rows`, `_revisions_match`,
+    `_bound_to_row`). A saved record whose clearing check moved R1 from
+    revision 1 to 2 while the typed row binds R1@1 and reads ran was
+    `verified`; now every clearance route (case, path, the older
+    unbound path route, class, command, skip) and `_met_over_debt`
+    require the check to carry the row's revisions exactly. One lookup
+    (`_typed_not_run_rows`, `_row_item`) serves both halves: the entry's
+    item or the row's behavior, the task compared as text, every live row
+    held (a decoy beside the live row clears nothing), and a superseded
+    `not_run` row, which the engine never writes, still binds when it is
+    the only one. Every bound reference must be an (id, revision) pair,
+    and a malformed one refuses the match rather than being dropped. A
+    revision must be a whole number present on both sides; a null never
+    equals a missing map entry. A legacy entry with no
+    typed row keeps the route's identity test; a typed row against a
+    check with no revision map never matches, and a missing map is never
+    read as approval.
 
 ## How development is coordinated
 

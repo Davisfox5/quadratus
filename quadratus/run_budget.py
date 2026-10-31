@@ -300,6 +300,12 @@ class RunBudget:
         self._finish_released = []
         self._finish_refusals = []
         self._finish_deferrals = []
+        #: Finishing stages held again after they were started and consumed
+        #: (a repair admitted after a NOT MET final audit makes a second
+        #: audit necessary), bounded by the caller's allowance; and each
+        #: renewal refused at that bound.
+        self._finish_renewals = []
+        self._renewal_refusals = []
         #: Same-seat judgment completions the job has claimed (carried), and
         #: what each was for (session._complete_judgment).
         self._judgments = int(carried.get('judgment_completions') or 0)
@@ -361,6 +367,8 @@ class RunBudget:
                 'pending': list(self._finish_pending), 'started': list(self._finish_started),
                 'released': list(self._finish_released), 'refusals': list(self._finish_refusals),
                 'deferrals': [dict(d) for d in self._finish_deferrals],
+                'renewals': [dict(r) for r in self._finish_renewals],
+                'renewal_refusals': [dict(r) for r in self._renewal_refusals],
                 'wall_policy': FINISH_WALL_POLICY,
                 'wall_seconds_per_stage': self.limits.finish_wall_seconds,
                 'held_wall_seconds': self._held_wall(None),
@@ -451,12 +459,59 @@ class RunBudget:
 
         Idempotent and never additive: the held set is replaced, so a resumed
         episode that names the same pending stages holds them once, and a
-        stage this budget saw start is never held again. Holding grants
-        nothing: the finishing calls still meet every limit."""
+        stage this budget saw start is never held again unless a renewal
+        owes it (``_owed``). Holding grants nothing: the finishing calls
+        still meet every limit."""
         with self._lock:
             wanted = [s for s in FINISH_STAGES if s in set(stages or ())]
-            self._finish_pending = [s for s in wanted if s not in self._finish_started]
+            self._finish_pending = [s for s in wanted if self._owed(s)]
             self._persist()
+
+    def _owed(self, stage) -> bool:
+        """Whether ``stage`` may be held now: never started in this budget,
+        or renewed (``renew_finish``) as many times as it has started, so
+        the renewed call has not started yet. A renewed stage that a later
+        ``protect_finish`` names stays held, with its reserved capacity
+        (root, independent reproduction on the recovered head: the filter
+        on historical starts dropped the renewed audit and freed its
+        capacity to an ordinary call); once the renewed call starts, the
+        starts outnumber the renewals and nothing re-holds it. Read from the
+        started history and the renewals as recorded: nothing is reset and
+        no allowance is added."""
+        starts = self._finish_started.count(stage)
+        renewed = sum(1 for r in self._finish_renewals if r.get('stage') == stage)
+        return starts <= renewed
+
+    def renew_finish(self, stage, *, why, limit):
+        """Hold ``stage`` again after this budget saw it start and settle: a
+        repair admitted after a NOT MET final audit makes a second audit
+        necessary, and ordinary work must keep its capacity from here on
+        (root's correction on 0c5c6f1, C1; addenda 6537675374 and
+        6538203622). Bounded by ``limit`` renewals of that stage in this
+        episode, the same allowance that bounds the DONE reopens that make
+        them necessary. Nothing spent is reset, the started history is
+        kept, and no allowance grows: the held capacity comes from what is
+        left. Returns True when the stage is pending after the call (held
+        now, or still pending from before); False when the bound refuses
+        it, which the caller treats as a refusal of the work."""
+        with self._lock:
+            if stage not in FINISH_STAGES:
+                raise ValueError(f'unknown finishing stage {stage!r}')
+            if stage in self._finish_pending:
+                return True
+            renewals = [r for r in self._finish_renewals if r.get('stage') == stage]
+            if len(renewals) >= max(0, int(limit)):
+                self._renewal_refusals.append(dict(stage=stage, why=str(why)[:300], at_attempt=self._calls,
+                                                   renewals=len(renewals), limit=int(limit)))
+                self._persist()
+                return False
+            self._finish_pending.append(stage)
+            self._finish_pending.sort(key=FINISH_STAGES.index)
+            self._finish_renewals.append(dict(stage=stage, why=str(why)[:300], at_attempt=self._calls,
+                                              renewal=len(renewals) + 1, previously_started=stage in self._finish_started))
+            self._settled.notify_all()
+            self._persist()
+            return True
 
     def claim_judgment_completion(self, limit, record):
         """Take one of the job's same-seat judgment completions, written to

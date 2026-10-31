@@ -315,6 +315,10 @@ def test_the_checker_names_a_lowering_on_executed_debt_from_the_record_alone():
     assert T._met_over_debt(met) == [
         "R1 is met while execution-debt row O1 reads execution pending",
         "R1 is met while execution-debt row O2 reads execution ran with no authorized runner",
+        # O3's entry exists but no recorded check clears it: the engine's
+        # "ran" is its own word (root's correction on 0c5c6f1, E1).
+        "R1 is met on execution-debt row O3 that reads ran while the record does not show its entry cleared "
+        "under the row's requirement revisions, gate, environment and the final source",
         "R1 is met while obligation O4 has an unknown purpose",
         "R1 is met on execution-debt row O7 that no NOT RUN or skip entry backs"]
 
@@ -467,3 +471,385 @@ def test_slots_unaccounted_reports_a_legacy_count_the_ledger_does_not_back(tmp_p
     assert record["slots_unaccounted"] == 0 and len(record["slot_ledger"]) == 3
     session._slots_used = 5
     assert PR._slot_fields(session)["slots_unaccounted"] == 2, "two slots the old rule counted that no charge backs"
+
+
+# --- root's correction on 0c5c6f1 (6538988187): Q1, Q2, Q3, C1, C2, E1 at the unit level ---------
+
+def test_the_recheck_contract_binds_each_finding_to_its_own_requirement_and_adds_no_duty(tmp_path):
+    """Q1: the two recheck routes carried a generated task and a bare
+    requirement id. The contract block carries the verbatim goal, the
+    original text of each requirement a named finding was raised under
+    (its own requirement, its basis, else the covers of the task that
+    raised it), the operator's rulings, the order of authority and the
+    boundary rule; never the current task's COVERS, and no full-review
+    verdict obligation."""
+    from quadratus.outcome import TaskOutcome
+    session, _ = _session(tmp_path, "")
+    session.memory.ledger.rulings.append("Q: keep add pure? -- A: yes, no logging")
+    session.task_outcomes.append(TaskOutcome(task_id="t1", intent="implementation", lead="grok:default",
+                                             covers=["R1"], resolves=[], continues=""))
+    session._current_covers = ["R5"]
+    own = dict(fid="RFT1-1", task="t1", author="claude:opus", claim="x", requirement=["R1", 1], basis=dict(kind="none"))
+    by_basis = dict(fid="RFT1-2", task="t1", author="claude:opus", claim="y", requirement=None,
+                    basis=dict(kind="requirement", ref="R5@1"))
+    by_task = dict(fid="RFT1-3", task="t1", author="claude:opus", claim="z", requirement=None, basis=dict(kind="none"))
+    block = session._finding_contract([own])
+    assert "## Original goal (verbatim; it outranks the task text where they differ)" in block
+    assert "R1 (RFT1-1, raised on t1): typing filters the cards" in block and "R5" not in block, \
+        "bound to the finding, labelled with it, not the current COVERS"
+    assert "## Operator rulings (asked and answered; do not re-ask)" in block and "- Q: keep add pure? -- A: yes, no logging" in block
+    assert S._AUTHORITY_ORDER in block and S._CONTRACT_BOUNDARY_RULE in block
+    assert "For each covered requirement give one line" not in block and "NO FINDINGS" not in block
+    assert "R5 (RFT1-2, raised on t1): the list logs no console errors while typing" in session._finding_contract([by_basis])
+    assert "R1 (RFT1-3, raised on t1): typing filters the cards" in session._finding_contract([by_task]), \
+        "the raising task's covers"
+    both = session._finding_contract([own, by_basis])
+    assert both.count("typing filters the cards") == 1 and both.count("the list logs no console") == 1
+    # A basis naming an id the ledger does not hold binds nothing; the
+    # raising task's covers stand (workflow refutation of this batch).
+    unknown = dict(fid="RFT1-4", task="t1", author="claude:opus", claim="w", requirement=None,
+                   basis=dict(kind="requirement", ref="R9@1"))
+    assert "R1 (RFT1-4, raised on t1): typing filters the cards" in session._finding_contract([unknown])
+    dashed = dict(unknown, fid="RFT1-5", basis=dict(kind="requirement", ref="R-1@1"))
+    assert "R1 (RFT1-5, raised on t1): typing filters the cards" in session._finding_contract([dashed])
+    # Two findings under one requirement share its line, each named.
+    shared = session._finding_contract([own, by_task])
+    assert "R1 (RFT1-1, raised on t1; RFT1-3, raised on t1): typing filters the cards" in shared
+    # Every ruling is rendered whole, as the ledger renders it.
+    for n in range(8):
+        session.memory.ledger.rulings.append(f"Q: ruling {n}? -- A: " + "x" * 450)
+    whole = session._finding_contract([own])
+    assert all(f"- Q: ruling {n}? -- A: " + "x" * 450 in whole for n in range(8)) and "no logging" in whole
+
+
+def test_the_serial_lead_is_told_the_order_of_authority_once_beside_the_boundary_rule(tmp_path):
+    """Q2: the serial lead's render carried the goal and the requirements
+    and the boundary rule, never that the goal and the rulings outrank the
+    generated task text, plan or recipe."""
+    session, _ = _session(tmp_path, "")
+    session._current_covers = ["R1"]
+    prompt = session._lead_prompt(_spec())
+    assert prompt.count(S._AUTHORITY_ORDER) == 1 and prompt.count(S._CONTRACT_BOUNDARY_RULE) == 1
+    # A parallel child's lead gets both through the goal block, still once.
+    session.memory.ledger.requirements.clear()
+    session._requirement_texts = {"R1": "typing filters the cards"}
+    child = session._lead_prompt(_spec())
+    assert child.count(S._AUTHORITY_ORDER) == 1 and child.count(S._CONTRACT_BOUNDARY_RULE) == 1
+    assert "## Original goal (verbatim" in child
+
+
+def test_the_audit_reassessment_states_the_executed_error_rule_it_enforces(tmp_path, monkeypatch):
+    """Q3: the reassessment of an error requirement offered 'a project file
+    path or test name' while the lowerer required exact executed case
+    identities. The prompt now carries the same rule the final audit does;
+    a MET on a bare test name is still held, an exact executed identity
+    stands. The lowerer is unchanged."""
+    session, _ = _session(tmp_path, "")
+    session.memory.ledger.requirements["R7"] = "add rejects a non-number argument with TypeError"
+    # The scratch test the harness ran is never a project file: the valid
+    # citation names the executed case beside a project file that resolves
+    # (workflow refutation of this batch: planting the scratch file in the
+    # project proved the case in a state the engine cannot reach).
+    (session.config.project / "add.py").write_text("def add(a, b):\n    return a + b\n")
+    prompts, replies = [], ["R7: MET - add.py and tests/test_e1.py"]
+    monkeypatch.setattr(session, "_invoke_model", lambda key, prompt, **kw: prompts.append(prompt) or replies.pop(0))
+    monkeypatch.setattr(session, "_quiescent", lambda: None)
+    entry = dict(kind="audit", reviewer="openai:sol", finding="R7: NOT MET - no rejecting case")
+    identity = session._evidence_identity()
+    record = dict(id="E1", target="R7", kind="audit", reviewer="openai:sol", task=None, finding=entry["finding"],
+                  original_disposition="NOT MET", claim="", file="tests/test_e1.py", file_sha256="x",
+                  source=session._source_fingerprint(), identity=identity, key=["audit", "R7", identity],
+                  receipt=dict(status="passed", reason="", cases=["tests/test_e1.py::test_rejects: passed"]),
+                  execution=None, reassessment=None, stage="intent", test="def test_rejects(): pass\n",
+                  disposition="")
+    session.evidence_requests.append(record)
+    held = session._reassess("R7", entry, record, record["test"])
+    assert S._EXECUTED_ERROR_RULE in prompts[0] and S._ERROR_PATH_RULE in prompts[0]
+    assert "the exact executed case identities the rule above names, beside a project file or test that resolves" in prompts[0]
+    assert "the scratch test the harness ran is not a project file" in prompts[0]
+    assert ("A citation resolves only as a project-relative file path with an extension, or a test function named "
+            "test_* defined in a file whose name starts with test and ends in .py; other names do not resolve") in prompts[0], \
+        "the resolution rule the gate enforces is stated (second-round refutation: nothing pinned it here)"
+    assert held.startswith("held: an error or refusal requirement: the MET cites no exact test case"), held
+    replies.append("R7: MET - tests/test_e1.py::test_rejects")
+    alone = session._reassess("R7", entry, record, record["test"])
+    assert alone.startswith("held: MET claimed without a project file or test that exists"), alone
+    replies.append("R7: MET - add.py and tests/test_e1.py::test_rejects")
+    exact = session._reassess("R7", entry, record, record["test"])
+    assert exact.startswith("MET on reassessment by the same auditor"), exact
+
+
+def test_the_budget_renews_a_consumed_finishing_stage_within_the_bound(tmp_path):
+    """C1: after the final audit started and settled, the hold is gone and
+    ordinary work could spend the capacity a second audit needs. The
+    renewal puts the stage back under hold, bounded, without resetting
+    anything spent or growing the allowance."""
+    from quadratus.run_budget import RunBudget, RunLimits, finishing
+    budget = RunBudget(RunLimits(max_calls=20, max_reported_tokens=1_000_000, wall_seconds=600,
+                                 max_concurrent_workers=1, reserve_tokens_per_call=10_000),
+                       path=tmp_path / "budget.json")
+    budget.protect_finish(["goal", "audit"])
+    with finishing("audit"):
+        ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=100, output_tokens=10))
+    fin = budget.snapshot()["finish_protection"]
+    assert fin["pending"] == ["goal"] and fin["started"] == ["audit"]
+    assert budget.renew_finish("audit", why="repair t2 admitted after the final audit", limit=2) is True
+    fin = budget.snapshot()["finish_protection"]
+    assert fin["pending"] == ["goal", "audit"] and fin["started"] == ["audit"], "history kept, hold renewed"
+    assert fin["renewals"] == [dict(stage="audit", why="repair t2 admitted after the final audit", at_attempt=1,
+                                     renewal=1, previously_started=True)]
+    assert budget.snapshot()["reserved_attempts"] == 1 and budget.snapshot()["reported_tokens"] == 110
+    assert budget.renew_finish("audit", why="again", limit=2) is True, "already pending: nothing new"
+    assert len(budget.snapshot()["finish_protection"]["renewals"]) == 1
+    with finishing("audit"):
+        ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=100, output_tokens=10))
+    assert budget.renew_finish("audit", why="third", limit=2) is True
+    with finishing("audit"):
+        ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=100, output_tokens=10))
+    assert budget.renew_finish("audit", why="past the bound", limit=2) is False
+    fin = budget.snapshot()["finish_protection"]
+    assert "audit" not in fin["pending"] and fin["renewal_refusals"][0]["limit"] == 2
+    # protect_finish still never re-holds a started stage on its own.
+    budget.protect_finish(["goal", "audit"])
+    assert "audit" not in budget.snapshot()["finish_protection"]["pending"]
+
+
+def test_protect_finish_keeps_a_renewed_audit_held_and_its_capacity_reserved(tmp_path):
+    """C1 (root's independent reproduction on the recovered head): after
+    renew_finish("audit") the budget held pending [goal, audit] with
+    started [audit], and a later protect_finish([goal, audit]) dropped the
+    renewed audit because it had started once, freeing its capacity to an
+    ordinary call. The renewed stage now stays held while its renewal is
+    owed, the call it holds for is still refused to ordinary work, and once
+    the renewed audit starts nothing re-holds it. Spend, history and the
+    allowance are unchanged throughout."""
+    from quadratus.run_budget import FinishReserved, RunBudget, RunLimits, finishing
+    budget = RunBudget(RunLimits(max_calls=4, max_reported_tokens=1_000_000, wall_seconds=600,
+                                 max_concurrent_workers=1, reserve_tokens_per_call=10_000),
+                       path=tmp_path / "budget.json")
+    budget.protect_finish(["goal", "audit"])
+    with finishing("audit"):
+        ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=100, output_tokens=10))
+    assert budget.renew_finish("audit", why="repair t2 admitted after the final audit", limit=2) is True
+    before = budget.snapshot()
+    # Positive: the episode's own protect_finish keeps the renewed audit held.
+    budget.protect_finish(["goal", "audit"])
+    fin = budget.snapshot()["finish_protection"]
+    assert fin["pending"] == ["goal", "audit"] and fin["started"] == ["audit"], fin
+    assert len(fin["renewals"]) == 1, "idempotent: no second renewal is recorded"
+    budget.protect_finish(["goal", "audit"])
+    assert budget.snapshot()["finish_protection"]["pending"] == ["goal", "audit"], "idempotent"
+    # The held capacity stays reserved: of 4 calls, 1 spent and 2 held, so
+    # one ordinary call fits and the next is refused to keep the finish.
+    ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=10, output_tokens=1))
+    with pytest.raises(FinishReserved):
+        budget.reserve()
+    after = budget.snapshot()
+    assert after["reserved_attempts"] == before["reserved_attempts"] + 1, "nothing reset"
+    assert after["finish_protection"]["started"] == ["audit"], "history kept"
+    # Negative: once the renewed audit starts, protect_finish does not hold it
+    # again, and a stage that was never renewed stays unheld after its start.
+    with finishing("audit"):
+        ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=100, output_tokens=10))
+    budget.protect_finish(["goal", "audit"])
+    fin = budget.snapshot()["finish_protection"]
+    assert fin["pending"] == ["goal"] and fin["started"] == ["audit", "audit"], fin
+    with finishing("goal"):
+        ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=10, output_tokens=1))
+    budget.protect_finish(["goal", "audit"])
+    assert budget.snapshot()["finish_protection"]["pending"] == [], "a started, unrenewed stage is not re-held"
+
+
+def test_a_task_admission_is_published_before_the_first_effect_and_a_failed_publication_starts_nothing(tmp_path):
+    """C2: the admission names the task, its slot, the committed authority
+    and the attempt count, and is committed to the job store under
+    ``task-admissions``; a store that cannot commit it stops the run with
+    the admission not kept."""
+    from quadratus.jobstore import JobStore
+    store = JobStore(tmp_path / "run")
+    session = _bare(tmp_path, job_store=store)
+    session._max_tasks, session._slots_used = 3, 1
+    entry = session._admit_dispatch([_spec()], how="task", used=1)
+    assert (entry["admission"], entry["tasks"], entry["slot"], entry["slots"], entry["max_tasks"]) == ("A1", ["t1"], 2, 1, 3)
+    assert entry["authority"] and len(entry["authority"]) >= 16 and entry["outcome"] is None
+    from quadratus import jobstore
+    manifest = jobstore.read_manifest(tmp_path / "run")
+    committed = jobstore.read_record(tmp_path / "run", "task-admissions", manifest=manifest)
+    assert committed == [dict(entry)], "committed before any effect, as the session holds it"
+    authority = jobstore.read_record(tmp_path / "run", "authority", manifest=manifest)
+    assert authority["digest"] == entry["authority"], "under the committed authority"
+
+    def broken(updates, **kw):
+        if "task-admissions" in updates:
+            raise OSError("disk full")
+        return original(updates, **kw)
+    original = store.publish
+    store.publish = broken
+    with pytest.raises(S.JobStoreUnavailable, match="could not publish its admission"):
+        session._admit_dispatch([replace(_spec(), task_id="t2")], how="task", used=2)
+    assert [e["admission"] for e in session.task_admissions] == ["A1"], "a refused admission is not kept"
+
+
+def test_a_batch_child_on_the_security_route_publishes_no_admission_of_its_own(tmp_path, monkeypatch):
+    """C2: a parallel child's admission is its wave's, committed by the
+    parent before any child ran. A child session on the security route
+    must not publish a second record over the parent's (its own list is
+    empty and shares the store); the serial route on the same spec does
+    admit once."""
+    from quadratus.jobstore import JobStore
+    store = JobStore(tmp_path / "run")
+    stubbed = dict(_renew_audit_hold=lambda self, specs, *, how: None,
+                   _refuse_unpayable_dispatch=lambda self, spec, stages, **kw: None,
+                   _mandatory_stages=lambda self, spec, **kw: [],
+                   _run_security_task=lambda self, spec: "security ran",
+                   _authority_before=lambda self, what: "0" * 16)
+    for name, fn in stubbed.items():
+        monkeypatch.setattr(S.Session, name, fn)
+    spec = replace(_spec(), work_class=S.WorkClass.SECURITY)
+    parent = _bare(tmp_path, job_store=store)
+    parent._max_tasks = 3
+    parent.task_admissions.append(dict(admission="A1", tasks=["t1", "t2"], how="batch", slot=1, slots=2, outcome=None))
+    store.publish({"task-admissions": list(parent.task_admissions)})
+    child = _bare(tmp_path / "c", job_store=store)
+    child._batch_child, child._serial_dispatch = True, False
+    assert child._run_task(spec) == "security ran"
+    assert child.task_admissions == [], "the child admitted nothing"
+    from quadratus import jobstore
+    assert [a["admission"] for a in jobstore.read_record(tmp_path / "run", "task-admissions")] == ["A1"], \
+        "the parent's wave admission is still the committed record"
+    serial = _bare(tmp_path / "s", job_store=JobStore(tmp_path / "s-run"))
+    serial._max_tasks, serial._serial_dispatch = 3, True
+    seen = []
+
+    def first_effect(self, spec):
+        # The security route's first call finds the admission committed.
+        seen.append([a["admission"] for a in jobstore.read_record(tmp_path / "s-run", "task-admissions")])
+        return "security ran"
+    monkeypatch.setattr(S.Session, "_run_security_task", first_effect)
+    assert serial._run_task(spec) == "security ran"
+    assert seen == [["A1"]], "committed before the security route's first effect"
+    assert [(a["admission"], a["tasks"], a["how"]) for a in serial.task_admissions] == [("A1", ["t1"], "task")]
+
+
+def test_a_parallel_wave_whose_admission_the_store_refuses_starts_nothing_and_says_so(tmp_path):
+    """C2, batch (second-round refutation): a wave whose admission the store
+    cannot commit was charged nothing but recorded nowhere except the
+    error. Each task is now recorded not started, with one not_started slot
+    event naming the wave, and no child runs."""
+    from quadratus.jobstore import JobStore
+    from tests.test_parallel_tasks import BATCH, Orchestrated
+    from tests.test_parallel_tasks import _session as parallel_session
+
+    class Failing(JobStore):
+        def publish(self, updates, **kw):
+            if "task-admissions" in updates:
+                raise OSError("disk full")
+            return super().publish(updates, **kw)
+
+    script = Orchestrated([BATCH, "DONE"], lead_delay=0)
+    session, _project = parallel_session(tmp_path, script, job_store=Failing(tmp_path / "run"))
+    with pytest.raises(S.JobStoreUnavailable, match="could not publish its admission"):
+        session.run(max_tasks=3)
+    tasks = [n["task"] for n in session.not_started]
+    assert len(tasks) == 2 and [(e["event"], e["tasks"], e["slots_used"]) for e in session.slot_ledger] == [
+        ("not_started", tasks, 0)]
+    assert session.task_admissions == [] and int(session._slots_used or 0) == 0
+    assert script.roots == [], "no child was built or called"
+
+
+def test_interrupted_admissions_are_counted_as_spent_on_resume_never_dropped(tmp_path):
+    """C2: an admission committed after the checkpoint's quiescent point
+    (the task interrupted before any effect settled) is read by the resume
+    and charged, on the ledger and the admissions record."""
+    from quadratus.jobstore import JobStore
+    store = JobStore(tmp_path / "run")
+    session = _bare(tmp_path, job_store=store)
+    session._max_tasks, session._slots_used = 3, 1
+    session._slot_event("charged", ["t1"], 1, how="serial", why="A1")
+    session.task_admissions.append(dict(admission="A1", tasks=["t1"], how="task", slot=1, slots=1, outcome="charged"))
+    body = dict(state=dict(task_admissions=list(session.task_admissions)))
+    session._admit_dispatch([replace(_spec(), task_id="t2")], how="task", used=1)
+    interrupted = checkpoint._interrupted_admissions(tmp_path / "run", body)
+    assert [e["admission"] for e in interrupted] == ["A2"] and interrupted[0]["tasks"] == ["t2"]
+    assert checkpoint._interrupted_admissions(tmp_path / "run", dict(state=dict(task_admissions=session.task_admissions))) == []
+    assert checkpoint._interrupted_admissions(tmp_path / "elsewhere", body) == [], "no store, no admissions"
+    fresh = _bare(tmp_path / "f")
+    fresh._max_tasks = 3
+    fresh._interrupted_admissions = interrupted
+    assert fresh._count_interrupted_admissions(1) == 2
+    assert fresh._slots_used == 2 and fresh.task_admissions[-1]["outcome"].startswith("interrupted")
+    (event,) = fresh.slot_ledger
+    assert (event["event"], event["tasks"], event["slots_used"]) == ("charged", ["t2"], 2) and "interrupted" in event["how"]
+    assert "Admitted in an earlier episode and interrupted before closing: t2" in fresh._slots_note()
+    assert fresh._interrupted_admissions == [], "counted once"
+
+
+def test_the_checker_requires_the_clearing_check_to_carry_the_rows_requirement_revisions():
+    """E1: a saved record whose typed NOT RUN row binds R1 revision 1 while
+    the clearing check ran under revision 2 is contradictory; the
+    reconstruction refuses it instead of trusting the row's ``ran``. A
+    record with no typed row for the entry keeps its route's identity
+    alone; a check that records no revision map clears nothing once a
+    typed row exists."""
+    from tools import truth_check as T
+    typed = dict(kind="not_run", task="t1", entry=dict(item="tests/test_app.py::test_add"), requirements=[["R1", 1]])
+    assert T._revisions_match(typed, dict(requirements={"R1": 1})) is True
+    assert T._revisions_match(typed, dict(requirements={"R1": 2})) is False
+    assert T._revisions_match(typed, dict(requirements={"R2": 1})) is False
+    assert T._revisions_match(typed, dict()) is False, "no map: no guessed approval"
+    assert T._revisions_match(dict(typed, requirements=[]), dict(requirements={"R1": 1})) is False
+    entry = dict(task="t1", item="tests/test_app.py::test_add", binding=dict(kind="case"))
+    record = dict(evidence_obligations=[typed])
+    assert T._bound_to_row(entry, dict(requirements={"R1": 1}), record) is True
+    assert T._bound_to_row(entry, dict(requirements={"R1": 2}), record) is False
+    assert T._bound_to_row(entry, dict(), record) is False
+    assert T._bound_to_row(entry, dict(), dict(evidence_obligations=[])) is True, "no typed row: the route's identity alone"
+    assert T._bound_to_row(dict(entry, task="t9"), dict(), record) is True, "another task's row is not this entry's"
+    # Workflow refutation of this batch, four shapes. A null revision never
+    # equals a missing map entry; a decoy row beside the live one is held
+    # too; a behavior-only or int-task row is this entry's row; a
+    # superseded row is not.
+    assert T._revisions_match(dict(typed, requirements=[["R1", None]]), dict(requirements={})) is False
+    assert T._revisions_match(dict(typed, requirements=[["R1", None]]), dict(requirements={"R1": None})) is False
+    assert T._revisions_match(dict(typed, requirements=[["R1", True]]), dict(requirements={"R1": True})) is False
+    # A malformed bound reference refuses rather than being dropped (root's
+    # independent review of the recovered head); the same row with every
+    # reference a pair matches.
+    assert T._revisions_match(dict(typed, requirements=[["R1", 1], ["R2"]]), dict(requirements={"R1": 1})) is False
+    assert T._revisions_match(dict(typed, requirements=[["R1", 1], "R2"]), dict(requirements={"R1": 1})) is False
+    assert T._revisions_match(dict(typed, requirements=[["R1", 1], ["R2", 1]]),
+                              dict(requirements={"R1": 1, "R2": 1})) is True
+    decoy = dict(typed, oid="O9", requirements=[["R9", 2]])
+    two = dict(record, evidence_obligations=[decoy, typed])
+    assert T._bound_to_row(entry, dict(requirements={"R1": 2, "R9": 2}), two) is False, "the live row binds R1@1"
+    assert T._bound_to_row(entry, dict(requirements={"R1": 1, "R9": 2}), two) is True, "every live row holds"
+    behavior_only = {k: v for k, v in typed.items() if k != "entry"}
+    behavior_only["behavior"] = entry["item"]
+    assert T._typed_not_run_rows(entry, dict(evidence_obligations=[behavior_only])) == [behavior_only]
+    assert T._bound_to_row(entry, dict(requirements={"R1": 2}), dict(evidence_obligations=[behavior_only])) is False
+    assert T._bound_to_row(dict(entry, task="1"), dict(requirements={"R1": 2}),
+                           dict(evidence_obligations=[dict(typed, task=1)])) is False
+    superseded = dict(typed, oid="O0", superseded_by="t2", requirements=[["R1", 2]])
+    assert T._bound_to_row(entry, dict(requirements={"R1": 2}), dict(evidence_obligations=[superseded, typed])) is False
+    # A not_run row the engine never supersedes: one that reads superseded
+    # still binds when it is the only row, never identity alone.
+    alone = dict(typed, superseded_by="t2")
+    assert T._bound_to_row(entry, dict(requirements={"R1": 2}), dict(evidence_obligations=[alone])) is False
+    assert T._bound_to_row(entry, dict(requirements={"R1": 1}), dict(evidence_obligations=[alone])) is True
+    # The older path route (no binding key on the entry) is held to the row too.
+    legacy = dict(task="t1", item="tests/test_app.py", after_check=0)
+    path_row = dict(typed, entry=dict(item="tests/test_app.py"))
+    legacy_record = dict(source_fingerprint="src", evidence_obligations=[path_row])
+    checks = [dict(passed=True, source="src", requirements={"R1": 2},
+                   cases=dict(executed=["tests/test_app.py::test_add"]))]
+    assert T._historical_paths_cleared(legacy, checks, legacy_record) is False, "the row binds R1@1"
+    assert T._historical_paths_cleared(legacy, [dict(checks[0], requirements={"R1": 1})], legacy_record) is True
+    assert T._historical_paths_cleared(legacy, checks, dict(legacy_record, evidence_obligations=[])) is True, \
+        "no typed row: the older reading stands"

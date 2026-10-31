@@ -64,10 +64,15 @@ def test_a_capped_close_holds_its_open_finding_and_resolves_settles_by_the_origi
     record = H.result_json(replay)
     assert record["turn_limited_tasks"] == ["t1"], replay.result.error
     finding = _findings(replay)["RFT1-1"]
-    assert finding["hold"] == "left open when t1 stopped at its lead turn limit before its recheck"
+    # The capped revision met its original reviewer once (the handoff
+    # recheck, UNRESOLVED), so the hold says what was performed (root's
+    # correction on 0c5c6f1, C3), never "before its recheck".
+    assert finding["hold"] == ("UNRESOLVED by claude:opus at its one recheck of t1's capped source (the "
+                               "harness's gate observation); left open when t1 stopped at its lead turn limit")
+    assert [(h["task"], h["outcome"]) for h in record["capped_handoffs"]] == [("t1", "unresolved")]
     # The planner saw the id, its hold and the rule, and RESOLVES was accepted.
     prompt = _held(replay)
-    assert "Open review findings, by id: RFT1-1 (by " in prompt and "held: left open when t1 stopped" in prompt
+    assert "Open review findings, by id: RFT1-1 (by " in prompt and "held: UNRESOLVED by claude:opus at its one " in prompt
     assert "closes only when the reviewer who raised it rechecks it RESOLVED" in prompt
     assert "do not exist" not in prompt and "TASK SENT BACK" not in replay.of("orchestrator")[2].prompt
     # The continuing lead was handed the finding as written, never told to clear it.
@@ -138,7 +143,11 @@ def test_an_inherited_finding_kept_open_stays_held_debt_and_names_its_carrier(tm
     assert "FindingsUnresolved" not in (replay.result.error or ""), replay.result.error
     close = [d for d in record["close_decisions"] if "t2" in d["closed"]][-1]
     assert close["stop"] is None and close["holds"], "held review debt, not a stop"
-    assert any(text.startswith("RFT1-1: UNRESOLVED (left open when t1 stopped") for text in record["open_findings"])
+    # t1's capped revision met its reviewer once (UNRESOLVED), and the hold
+    # says so first (root's correction on 0c5c6f1, C3).
+    assert any(text.startswith("RFT1-1: UNRESOLVED (UNRESOLVED by claude:opus at its one recheck of t1's capped "
+                               "source") for text in record["open_findings"]), record["open_findings"]
+    assert [(h["task"], h["outcome"]) for h in record["capped_handoffs"]] == [("t1", "unresolved")]
     later = replay.of("orchestrator")[2].prompt
     assert "RFT1-1" in later and "inherited by t2" in later
 

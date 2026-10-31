@@ -62,6 +62,7 @@ _CARRIED = (
     "_plan_gate_receipt", "_route_forfeit", "_terminal_route", "proof_binding_problems",
     "scenario_corrections", "evidence_routes", "_scenario_corrected", "model_resolution", "close_decisions", "review_resolutions",
     "deferred_evidence", "prompt_measurements", "finish_routing", "slot_ledger", "capped_handoffs",
+    "finish_renewals", "task_admissions",
 )
 #: Carried state added by the A+B batch (2026-10-18): absent from earlier
 #: checkpoints, which are still readable and resumable with these empty.
@@ -70,7 +71,8 @@ _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admis
                           "_terminal_route", "proof_binding_problems", "scenario_corrections",
                           "evidence_routes", "_scenario_corrected", "model_resolution", "close_decisions",
                           "review_resolutions", "deferred_evidence", "prompt_measurements",
-                          "finish_routing", "slot_ledger", "capped_handoffs"})
+                          "finish_routing", "slot_ledger", "capped_handoffs", "finish_renewals",
+                          "task_admissions"})
 #: Carried state the engine no longer holds, with what a non-empty value
 #: means. A checkpoint written before 2026-10-20 may carry size-trim
 #: records whose independent preservation judgment was still pending; the
@@ -532,12 +534,49 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
         raise CheckpointRefused("these differ from the checkpoint: " + ", ".join(differing)
                                 + ". A resumed episode must meet the same source, goal, policy, "
                                 "limits, settings, gate and dependency tree")
-    spent["unconsumed_operations"] = _unconsumed(run_dir, body, budget)
+    # Admissions committed after the quiescent point are read first so the
+    # refusal below can name them beside the receipts: with the planner's
+    # settled call that named the task unconsumed, every such admission in
+    # the serial and batch routes is refused here, retained in the parent's
+    # record, never dropped and never re-planned.
+    interrupted = _interrupted_admissions(run_dir, body)
+    spent["unconsumed_operations"] = _unconsumed(run_dir, body, budget, admitted=interrupted)
     _same_authority(run_dir, body)
+    spent["interrupted_admissions"] = interrupted
     return spent
 
 
-def _unconsumed(run_dir, body: dict, budget: dict) -> list:
+def _interrupted_admissions(run_dir, body: dict) -> list:
+    """Task admissions committed to the parent's store (``task-admissions``,
+    published before a task's or wave's first effect) that the checkpoint
+    does not carry: admitted after its quiescent point and interrupted
+    before any effect settled (an effect that did settle refuses the resume
+    above). A resumed episode counts them as spent rather than planning the
+    slot again (root's correction on 0c5c6f1, C2). With today's checkpoint
+    cadence (one quiescent point per planning turn, before the planner's
+    call) the call that named the task is itself unconsumed, so
+    ``_unconsumed`` refuses the resume and names the admission; the count
+    is the conservative reading should a later cadence admit one. A parent
+    without the record (an older engine) has none."""
+    from . import jobstore
+    try:
+        manifest = jobstore.read_manifest(run_dir)
+        committed = jobstore.read_record(run_dir, "task-admissions", manifest=manifest) if manifest else None
+    except jobstore.GenerationCorrupt as exc:
+        raise CheckpointRefused(f"the parent's committed admissions are corrupt: {exc}") from exc
+    except KeyError:
+        committed = None
+    if not isinstance(committed, list):
+        return []
+    state = body.get("state") or {}
+    carried = state.get("task_admissions")
+    if isinstance(carried, dict) and set(carried) == {"__tuple__"}:
+        carried = carried["__tuple__"]
+    known = {str(e.get("admission")) for e in (carried or []) if isinstance(e, dict)}
+    return [dict(e) for e in committed if isinstance(e, dict) and str(e.get("admission")) not in known]
+
+
+def _unconsumed(run_dir, body: dict, budget: dict, admitted=()) -> list:
     """Operations that settled after the quiescent point this checkpoint
     recorded (its ``watermark``) and were never consumed by the record.
     Any of them refuses the resume: a call that held the write grant or a
@@ -593,10 +632,15 @@ def _unconsumed(run_dir, body: dict, budget: dict) -> list:
                                     "digest its settlement recorded; the run is not resumed")
         receipts.append(f"{op.get('opid')}: {name}" + ("" if record is not None else " (missing)"))
     kinds = sorted({str(o.get("purpose") or ("editing call" if o.get("editing") else "model call")) for o in late})
+    admissions = "; ".join(f"{a.get('admission')} ({', '.join(a.get('tasks') or ())})" for a in (admitted or ())
+                           if isinstance(a, dict))
     raise CheckpointRefused(f"{len(late)} operation(s) settled after the last quiescent point and were never "
                             f"consumed by the record ({', '.join(kinds)}); their replies and outcomes are "
                             f"retained as receipts ({'; '.join(receipts[:6])}) and are not re-drawn, so the run "
-                            "is not resumed")
+                            "is not resumed"
+                            + (f". Task admission(s) committed after that point are retained in the parent's "
+                               f"record with the slot they spent, never dropped or re-planned: {admissions}"
+                               if admissions else ""))
 
 
 def _same_authority(run_dir, body: dict) -> None:

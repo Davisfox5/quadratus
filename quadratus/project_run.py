@@ -585,6 +585,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         )
         if parent is not None:
             checkpoint.restore_state(session, body['state'])
+            session._interrupted_admissions = list((carried or {}).get('interrupted_admissions') or [])
         _record_models(session, fleet)
         session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
@@ -1065,12 +1066,19 @@ def _slot_fields(session) -> dict:
     reported, never acted on), and each one-shot recheck of a capped,
     gated, in-scope revision (session._capped_revision_recheck)."""
     if session is None:
-        return dict(slot_ledger=[], slots_unaccounted=None, capped_handoffs=[])
+        return dict(slot_ledger=[], slots_unaccounted=None, capped_handoffs=[], task_admissions=[],
+                    finish_renewals=[])
     ledger = list(getattr(session, 'slot_ledger', []) or [])
     charged = sum(len(e.get('tasks') or []) for e in ledger if e.get('event') == 'charged')
     return dict(slot_ledger=ledger,
                 slots_unaccounted=max(0, int(getattr(session, '_slots_used', 0) or 0) - charged),
-                capped_handoffs=list(getattr(session, 'capped_handoffs', []) or []))
+                capped_handoffs=list(getattr(session, 'capped_handoffs', []) or []),
+                # Each task or wave admitted to a slot before its first effect,
+                # as committed to the job store (session._admit_dispatch), and
+                # each renewal of the final-audit hold before a post-audit
+                # writer (session._renew_audit_hold).
+                task_admissions=list(getattr(session, 'task_admissions', []) or []),
+                finish_renewals=list(getattr(session, 'finish_renewals', []) or []))
 
 
 def _survey_record(session, completed):

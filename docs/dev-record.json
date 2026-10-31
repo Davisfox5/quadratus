@@ -2809,7 +2809,9 @@
         "quadratus/project_run.py",
         "tests/lifecycle/test_boundary_correction.py",
         "tests/lifecycle/test_delivery_controller.py",
-        "tests/lifecycle/test_evidence_lifecycle.py"
+        "tests/lifecycle/test_evidence_lifecycle.py",
+        "quadratus/run_budget.py",
+        "tests/lifecycle/test_finding_identity.py"
       ],
       "author": "claude",
       "reviewer": "codex",
@@ -2823,7 +2825,8 @@
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "claude: scope extended to quadratus/completion_decision.py, quadratus/project_run.py, tests/lifecycle/test_boundary_correction.py, tests/lifecycle/test_delivery_controller.py, tests/lifecycle/test_evidence_lifecycle.py"
+        "claude: scope extended to quadratus/completion_decision.py, quadratus/project_run.py, tests/lifecycle/test_boundary_correction.py, tests/lifecycle/test_delivery_controller.py, tests/lifecycle/test_evidence_lifecycle.py",
+        "claude: scope extended to quadratus/run_budget.py, tests/lifecycle/test_finding_identity.py"
       ]
     }
   ],

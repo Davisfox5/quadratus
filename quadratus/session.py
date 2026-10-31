@@ -3222,6 +3222,18 @@ class Session:
         #: slot, reviewers and outcome of each one-shot recheck of a capped,
         #: gated, in-scope revision, resolved or not; carried.
         self.capped_handoffs: List[dict] = []
+        #: Each renewal of the final-audit hold before a post-audit writer
+        #: (``_renew_audit_hold``); carried.
+        self.finish_renewals: List[dict] = []
+        #: Each task or wave admitted to a slot, published to the job store
+        #: before its first effect under the committed authority
+        #: (``_admit_dispatch``); carried. A resumed episode counts an
+        #: admission committed after its checkpoint as spent.
+        self.task_admissions: List[dict] = []
+        #: Admissions a resume found committed in the parent's store and
+        #: absent from the checkpoint: interrupted before their first
+        #: effect; counted as spent at the start of the loop.
+        self._interrupted_admissions: List[dict] = []
         #: Set by ``_run_batch`` once a wave's children are about to be
         #: built: from here the wave is admitted work and its slots are
         #: charged however it ends.
@@ -5299,7 +5311,13 @@ class Session:
         # every operation it makes.
         self._authority_before(f"task {spec.task_id}")
         if self._required("security_verification", live) or live:
+            self._renew_audit_hold([spec], how="task")
             self._refuse_unpayable_dispatch(spec, self._mandatory_stages(spec, security=True), security=True)
+            # A batch child's admission is its wave's, published by the
+            # parent before any child ran; the child session holds no
+            # admissions of its own and must not publish over the parent's.
+            if getattr(self, "_serial_dispatch", False) and not getattr(self, "_batch_child", False):
+                self._admit_dispatch([spec], how="task", used=int(getattr(self, "_slots_used", 0) or 0))
             return self._run_security_task(spec)
 
         chosen, self._dispatch_lead = self._dispatch_lead, None
@@ -5311,7 +5329,13 @@ class Session:
         self._bind_contract(lead)
         collaborators = self.collaborators_for(spec, lead)
         self._route_peers = list(collaborators)
+        # Validated and routed: the audit's capacity is held again where this
+        # work makes a second audit necessary, the payable route is decided,
+        # and then the admission is committed, before the first effect.
+        self._renew_audit_hold([spec], how="task")
         self._refuse_unpayable_dispatch(spec, self._mandatory_stages(spec, collaborators), collaborators=collaborators)
+        if getattr(self, "_serial_dispatch", False) and not getattr(self, "_batch_child", False):
+            self._admit_dispatch([spec], how="task", used=int(getattr(self, "_slots_used", 0) or 0))
         self._register_acceptance_obligations(spec, self._current_covers)
         # Selection is recorded separately from invocation. The 2026-09-13
         # feature task selected Grok as a collaborator and never reached it,
@@ -5655,12 +5679,19 @@ class Session:
                     except TurnLimitReached as exc:
                         handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels,
                                                                 stage="fix")
-                        if handoff is None:
-                            return self._close_turn_limited(lead, spec, task, exc, before)
                         # Findings of peers outside this round's recheck stay
                         # held (the workflow refutation of this batch); with
                         # slots left they make the handoff an unfinished one.
+                        # Recorded on this task's own entry whatever the
+                        # recheck came to, so the close names them as outside
+                        # it (second-round refutation: an unresolved recheck
+                        # credited their hold to the wrong reviewer).
                         others = [u for u in unresolved if u[0] not in {p for p, _ in pending}]
+                        entry = self.capped_handoffs[-1] if self.capped_handoffs else None
+                        if others and entry is not None and entry.get("task") == spec.task_id:
+                            entry["others_open"] = [dict(peer=p, finding=_finding_id(v) or v[:120]) for p, v in others]
+                        if handoff is None:
+                            return self._close_turn_limited(lead, spec, task, exc, before)
                         if others and not self._final_work_slot(spec):
                             self.capped_handoffs[-1]["outcome"] = "unresolved: other findings open"
                             return self._close_turn_limited(lead, spec, task, exc, before)
@@ -5758,7 +5789,7 @@ class Session:
                                             text=verdict, description=spec.description[:2000],
                                             finding_id=fid))
 
-    def _hold_task_findings(self, spec, why: str, *, outcome=None) -> None:
+    def _hold_task_findings(self, spec, why: str, *, outcome=None, reasons=None) -> None:
         """Every open review finding of this task that the debt accounting
         does not hold yet, held there at a capped or failed close (one
         finding identity, 2026-10-28). controller-continuation-01: t4's
@@ -5772,11 +5803,12 @@ class Session:
         for record in self._finding_records(task=spec.task_id):
             if record["fid"] in held:
                 continue
-            record["hold"] = why
-            verdict = f"{record['fid']}: UNRESOLVED ({why}): {record['claim']}"
+            why_here = (reasons or {}).get(record["fid"]) or why
+            record["hold"] = why_here
+            verdict = f"{record['fid']}: UNRESOLVED ({why_here}): {record['claim']}"
             self._hold_open_finding(spec, record["author"], verdict, record=record, original=record.get("text"),
                                     outcome=outcome)
-            self._note(f"task {spec.task_id}: {record['fid']} by {record['author']} held open: {why}")
+            self._note(f"task {spec.task_id}: {record['fid']} by {record['author']} held open: {why_here}")
 
     def _capped_final_draft(self, lead, spec, task, exc, before, collaborators):
         """A capped first draft in the job's last task slot goes to the existing
@@ -5945,6 +5977,10 @@ class Session:
         # this batch, 2026-10-31).
         before_ids = {r["fid"] for r in self._finding_records(task=spec.task_id, open_only=False)}
         pending_ids = {r["fid"] for peer in peers for r in self._finding_records(task=spec.task_id, peer=peer)}
+        # How long each finding's history was before the recheck: a verdict
+        # is one this recheck wrote, never an earlier round's.
+        history_before = {r["fid"]: len(r.get("history") or ())
+                          for r in self._finding_records(task=spec.task_id, open_only=False)}
         try:
             unresolved = self._recheck_blocking(spec, pending, record, task, labels=labels)
         except BaseException as exc_:  # noqa: BLE001 -- recorded, then raised exactly as it was
@@ -5952,23 +5988,49 @@ class Session:
             raise
         open_after = [r for r in self._finding_records(task=spec.task_id)
                       if r["fid"] in pending_ids or r["fid"] not in before_ids]
+        # What each finding's recheck came to, by id, read from the
+        # registry, for the record and the capped close's wording (workflow
+        # refutations of this batch: a capped recheck was reported as the
+        # reviewer's UNRESOLVED, a finding the recheck raised as a verdict,
+        # an INVALIDATED one as RESOLVED). "unresolved": this recheck wrote
+        # the reviewer's UNRESOLVED; "no verdict": it wrote nothing (capped,
+        # refused or no valid verdict); "raised": the recheck raised it;
+        # "source changed": a check overtaken by an edit. Closed pending
+        # findings are "resolved" or "invalidated" as the registry says.
+        handoff["findings"], handoff["resolved"], handoff["invalidated"] = {}, [], []
+        records_now = {r["fid"]: r for r in self._finding_records(task=spec.task_id, open_only=False)}
+
+        def _written_now(fid):
+            history = list((records_now.get(fid) or {}).get("history") or ())
+            return history[-1] if len(history) > history_before.get(fid, 0) else None
+
         if self._source_fingerprint() != current:
             # What was checked is no longer the source: nothing is resolved.
             unresolved = [(peer, f"UNRESOLVED: the source changed during the recheck; {note.strip()}")
                           for peer, note in pending]
             handoff["outcome"] = "source changed"
-        elif open_after:
-            handoff["outcome"] = "unresolved"
+            handoff["findings"] = {fid: "source changed" for fid in sorted(pending_ids)}
+        else:
+            open_ids = {r["fid"] for r in open_after}
             said_ids = {_finding_id(v) for _p, v in unresolved}
             for r in open_after:
-                if r["fid"] not in said_ids:
-                    # Open on the registry with no verdict line (a capped or
-                    # refused recheck, or a finding the recheck raised): held
-                    # as unresolved under the reviewer's own name.
+                fid = r["fid"]
+                last = _written_now(fid)
+                if fid not in before_ids:
+                    handoff["findings"][fid] = "raised"
+                elif last is not None and str(last.get("state")) == "unresolved":
+                    handoff["findings"][fid] = "unresolved"
+                else:
                     why = ((r.get("history") or [{}])[-1].get("why") or "no verdict: the recheck did not judge it")
-                    unresolved.append((r["author"], f"{r['fid']}: UNRESOLVED: {str(why)[:200]}"))
-        else:
-            handoff["outcome"] = "resolved"
+                    if fid not in said_ids:
+                        # Held as open under the reviewer's own name.
+                        unresolved.append((r["author"], f"{fid}: UNRESOLVED: {str(why)[:200]}"))
+                    handoff["findings"][fid] = f"no verdict: {str(why)[:160]}"
+            for fid in sorted(pending_ids - open_ids):
+                last = _written_now(fid)
+                state = str((last or {}).get("state") or (records_now.get(fid) or {}).get("state") or "")
+                (handoff["invalidated"] if state == "invalidated" else handoff["resolved"]).append(fid)
+            handoff["outcome"] = "unresolved" if open_after else "resolved"
         handoff["unresolved"] = [_finding_id(v) or v[:120] for _p, v in unresolved]
         if (unresolved or open_after) and not final:
             # Slots are left: the reviewer's own verdict stands on the
@@ -6031,6 +6093,105 @@ class Session:
             return None
         return state, current, identity
 
+    def _handoff_account(self, spec) -> Optional[dict]:
+        """The one-shot handoff this task's capped revision went through
+        before taking the capped close, if any (``capped_handoffs``): the
+        recheck performed, its outcome and the gate observation it rested
+        on. None when no handoff reached a recheck."""
+        for entry in reversed(self.capped_handoffs):
+            if entry.get("task") != spec.task_id:
+                continue
+            if entry.get("outcome") in (None, "refused"):
+                return None
+            return entry
+        return None
+
+    @staticmethod
+    def _handoff_classes(handoff) -> dict:
+        """The handoff's findings by what its recheck came to: ``unresolved``
+        (the reviewer's own verdict), ``no_verdict``, ``raised``,
+        ``source_changed``, ``resolved``, ``invalidated`` and ``outside``
+        (other reviewers' findings open and outside the recheck, as
+        ``fid by peer``). An entry written before per-finding outcomes were
+        recorded has only ``unresolved`` ids, read as verdicts."""
+        classes = {k: [] for k in ("unresolved", "no_verdict", "raised", "source_changed", "resolved",
+                                   "invalidated", "outside")}
+        if not handoff:
+            return classes
+        findings = handoff.get("findings")
+        if not isinstance(findings, dict) or not findings:
+            classes["unresolved"] = list(handoff.get("unresolved") or ()) if handoff.get("outcome") == "unresolved" else []
+        else:
+            for fid, how in findings.items():
+                how = str(how)
+                key = ("unresolved" if how == "unresolved" else "raised" if how == "raised"
+                       else "source_changed" if how == "source changed" else "no_verdict")
+                classes[key].append(fid)
+        classes["resolved"] = list(handoff.get("resolved") or ())
+        classes["invalidated"] = list(handoff.get("invalidated") or ())
+        classes["outside"] = [f"{o.get('finding')} by {o.get('peer')}" for o in (handoff.get("others_open") or [])]
+        return classes
+
+    def _handoff_came_to(self, handoff) -> str:
+        """The planner's one clause for what the handoff's recheck came to,
+        from the per-finding record; each verdict word is the recheck
+        grammar's own and appears only where the reviewer wrote it."""
+        outcome = str(handoff.get("outcome") or "")
+        c = self._handoff_classes(handoff)
+        if outcome == "source changed":
+            return "the source changed during the recheck, so nothing was resolved"
+        parts = []
+        if c["resolved"]:
+            parts.append("RESOLVED (" + ", ".join(c["resolved"]) + ")")
+        if c["invalidated"]:
+            parts.append("INVALIDATED (" + ", ".join(c["invalidated"]) + ")")
+        if c["unresolved"]:
+            parts.append("UNRESOLVED (" + ", ".join(c["unresolved"]) + ")")
+        if c["no_verdict"]:
+            parts.append("no verdict on " + ", ".join(c["no_verdict"]) + " (the recheck stopped at its turn cap, was "
+                         "refused or gave no valid verdict)")
+        if c["raised"]:
+            parts.append("raised during the recheck: " + ", ".join(c["raised"]))
+        if c["outside"]:
+            parts.append("findings of other reviewers were open and outside that recheck ("
+                         + ", ".join(c["outside"]) + "), so the task is unfinished")
+        if not parts:
+            return f"the recheck ended {outcome or 'without a record'} with no verdict"
+        return "; ".join(parts)
+
+    def _handoff_holds(self, spec, handoff) -> Tuple[str, Dict[str, str]]:
+        """``(default, by_fid)``: why each open finding of a capped task is
+        held, with the finding's own outcome first so the planner's
+        120-character view of a hold still carries it (second-round
+        refutation of this batch: the outcome came after the cut)."""
+        tid = spec.task_id
+        stop = f"left open when {tid} stopped at its lead turn limit"
+        if handoff is None:
+            return f"{stop} before its recheck", {}
+        c = self._handoff_classes(handoff)
+        reviewers = ", ".join(handoff.get("reviewers") or ())
+        outside = {o.get("finding"): o.get("peer") for o in (handoff.get("others_open") or [])}
+        outcome = str(handoff.get("outcome") or "")
+        reasons: Dict[str, str] = {}
+        for fid in c["unresolved"]:
+            reasons[fid] = (f"UNRESOLVED by {reviewers} at its one recheck of {tid}'s capped source (the harness's gate "
+                            f"observation); {stop}")
+        for fid in c["no_verdict"]:
+            reasons[fid] = (f"no verdict at {reviewers}'s one recheck of {tid}'s capped source (capped, refused or no "
+                            f"valid verdict); {stop}")
+        for fid in c["raised"]:
+            reasons[fid] = f"raised by {reviewers} at the recheck of {tid}'s capped source; {stop}"
+        for fid in c["source_changed"]:
+            reasons[fid] = f"not resolved: the source changed during the recheck of {tid}'s capped source; {stop}"
+        for fid, peer in outside.items():
+            reasons[fid] = (f"not rechecked: outside the one recheck of {tid}'s capped source by {reviewers} "
+                            f"(its reviewer {peer} was not asked); {stop}")
+        default = (f"no verdict: the recheck of {tid}'s capped source ended {outcome}; {stop}"
+                   if outcome and outcome not in ("unresolved", "resolved", "source changed")
+                   and not outcome.startswith("unresolved: other findings open")
+                   else f"{stop}; not part of the one recheck of {tid}'s capped source")
+        return default, reasons
+
     def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
         """A lead stopped at its turn limit: keep the work, record it, re-plan.
 
@@ -6073,24 +6234,47 @@ class Session:
             # r08's t1 stopped at its cap and its source never met a check
             # before a verification-only task was named for it.
             self._observe_checks(spec, "turn-limited")
+        # What was performed before this close is stated as it happened
+        # (root's correction on 0c5c6f1, C3): a capped revision whose
+        # checked source met its original reviewer once records that
+        # recheck and its outcome, never "before its recheck", and the gate
+        # it rested on was the harness's observation, not the task's
+        # canonical gate.
+        handoff = self._handoff_account(spec)
         record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
                       changed=state["changed"], changed_lines=state["changed_lines"],
                       note=state["note"], partial_text=said[:4000] or None,
                       content=self._content_fingerprint(state["changed"]),
+                      handoff=(dict(outcome=handoff.get("outcome"), reviewers=list(handoff.get("reviewers") or ()),
+                                    unresolved=list(handoff.get("unresolved") or ()),
+                                    findings=dict(handoff.get("findings") or {}),
+                                    resolved=list(handoff.get("resolved") or ()),
+                                    invalidated=list(handoff.get("invalidated") or ()),
+                                    others_open=list(handoff.get("others_open") or ()))
+                               if handoff is not None else None),
                       **self._attempt_identity(spec))
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
-        self._hold_task_findings(spec, f"left open when {spec.task_id} stopped at its lead turn limit before "
-                                       "its recheck")
+        reviewers = ", ".join(handoff.get("reviewers") or ()) if handoff is not None else ""
+        held_why, reasons = self._handoff_holds(spec, handoff)
+        self._hold_task_findings(spec, held_why, reasons=reasons)
         from .project_files import MAX_INSPECT_BYTES
         self._cap_baselines[spec.task_id] = {
             path: (before or {}).get(path, b"") for path in state["changed"]
             if len((before or {}).get(path, b"")) <= MAX_INSPECT_BYTES}
         changed = ", ".join(state["changed"]) or "no files"
+        if handoff is None:
+            performed = f". Changed, unreviewed and ungated: {changed}"
+        else:
+            came_to = self._handoff_came_to(handoff)
+            performed = (f". Changed: {changed}. The harness observed the project gate passing on this source "
+                         "(an observation for the reviewers; the task's own canonical gate, with the run-start "
+                         f"original tests, did not run), and the original reviewer ({reviewers}) re-checked its "
+                         f"finding once on it: {came_to}; no further writer or recheck was called")
         summary_text = (
             "STOPPED AT THE LEAD TURN LIMIT before finishing"
             + (f" ({exc.turns} turns)" if exc.turns else "")
-            + f". Changed, unreviewed and ungated: {changed}"
+            + performed
             + (f" ({state['changed_lines']} lines)" if state["changed"]
                else ". No change to project files was detected after it stopped; the "
                     "continuation is handed the task's files as they are now")
@@ -7051,6 +7235,151 @@ class Session:
             entry["why"] = str(why)[:200]
         self.slot_ledger.append(entry)
 
+    def _renew_audit_hold(self, specs, *, how: str) -> None:
+        """Before a writer is admitted after the final audit was consumed:
+        hold the audit's capacity again, durably, so the repair plus the
+        required finishing work must fit what is left (root's correction on
+        0c5c6f1, C1). The DONE decision consumed the hold when it asked the
+        final audit (``_audit_requirements`` under ``finishing("audit")``);
+        a repair that follows makes a second audit necessary, and the
+        budget's own admission (``_admit`` counting the held stages) then
+        refuses a writer the remainder cannot pay through to it. Bounded by
+        ``max_requirement_reopens``, the allowance that bounds the DONE
+        reopens that make a renewal necessary; a renewal that bound refuses
+        refuses the writer (``FinishReserved``, infeasible: the task is not
+        started). Nothing is reset and no allowance grows. Tied to the
+        source as it stands when the work is admitted, on the record."""
+        budget = self._budget()
+        if (budget is None or not hasattr(budget, "renew_finish") or not self.config.requirements_ledger
+                or self._explicit_tasks is not None or not (self.project and self.config.allow_writes)):
+            return
+        tasks = [s.task_id for s in specs]
+        # A review-only task is not excluded: one that re-covers a NOT MET
+        # requirement is a dispatched route whose close makes the next
+        # DONE's audit necessary (workflow refutation of this batch: it was
+        # admitted with no hold, spent its calls, and the second audit was
+        # then unpayable).
+        snap = budget.snapshot()
+        fin = snap.get("finish_protection") or {}
+        if "audit" not in (fin.get("started") or ()) or "audit" in (fin.get("pending") or ()):
+            return
+        why = f"{how} {', '.join(tasks)} admitted after the final audit was consumed"
+        renewed = budget.renew_finish("audit", why=why, limit=self.config.max_requirement_reopens)
+        self.finish_renewals.append(dict(tasks=tasks, how=how, renewed=bool(renewed),
+                                         at_attempt=snap.get("reserved_attempts"),
+                                         reopens=int(getattr(self, "_requirement_reopens", 0) or 0),
+                                         source=self._source_identity()))
+        if not renewed:
+            exc = FinishReserved(f"{', '.join(tasks)}: a second final audit cannot be held again (the renewal "
+                                 f"allowance of {self.config.max_requirement_reopens} is spent); the repair is "
+                                 "not started")
+            exc.infeasible = True
+            raise exc
+        self._note(f"holding audit capacity again before {how} {', '.join(tasks)}: the final audit was consumed "
+                   "and this work makes a second one necessary")
+
+    def _release_renewal(self, tasks, why: str) -> None:
+        """Release the audit hold a renewal made for ``tasks`` when that work
+        is not started (second-round refutation of root's correction on
+        0c5c6f1, C1: the renewed hold outlived the refused repair and the
+        cap's goal question was refused against it). The budget is put back
+        where it stood before the renewal; the renewal stays counted
+        against its bound, so no allowance is added, and a later admitted
+        repair renews again within the same bound."""
+        entry = next((e for e in reversed(self.finish_renewals) if e.get("tasks") == list(tasks)), None)
+        if entry is None or not entry.get("renewed") or entry.get("released"):
+            return
+        budget = self._budget()
+        if budget is None or not hasattr(budget, "release_finish") or "audit" not in budget.finish_pending():
+            return
+        budget.release_finish("audit", why)
+        entry["released"] = str(why)[:200]
+
+    def _refuse_admission_record(self, specs, exc, *, used: int) -> None:
+        """A dispatch the store refused before its first effect (its
+        admission, or the authority commit before it): nothing ran, so no
+        slot is charged, each task is recorded not started with its typed
+        outcome saying so, an explicit list's 'ran' entry for it is taken
+        back, and the ledger names the refusal. The caller re-raises."""
+        tasks = [s.task_id for s in specs]
+        for spec in specs:
+            outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+            lead = str((outcome.lead if outcome is not None else "") or spec.lead or "")
+            self.not_started.append(dict(task=spec.task_id, lead=lead, description=(spec.description or "")[:300],
+                                         detail=str(exc)[:300]))
+            if outcome is not None:
+                outcome.closed_as = "not_started"
+                outcome.note("unverified", f"NOT RUN: {spec.task_id} was not started; the job store refused its "
+                             f"admission and nothing ran ({str(exc)[:200]})", terminal=False)
+        if self._explicit_tasks is not None and self.explicit.get("ran"):
+            last = self.explicit["ran"][-1]
+            if last.get("task") in tasks:
+                self.explicit["ran"].pop()
+        self._slot_event("not_started", tasks, used, why=str(exc))
+
+    def _admit_dispatch(self, specs, *, how: str, used: int) -> dict:
+        """Publish the admission of ``specs`` to a slot before their first
+        effect (root's correction on 0c5c6f1, C2; addendum 6537675374): the
+        task ids, the slot and count, the committed authority digest the
+        work runs under and the attempt count at admission, committed to
+        the job store as ``task-admissions`` in the same lineage the
+        operations use. A store that cannot commit it stops the run here
+        with nothing started. The charge itself stays where it was (after
+        dispatch, ``_slots_used`` keeps its pre-task convention); a resumed
+        episode that finds an admission committed after its checkpoint
+        counts it as spent (``_count_interrupted_admissions``)."""
+        tasks = [s.task_id for s in specs]
+        try:
+            authority = self._authority_before(f"admission of {', '.join(tasks)}")
+        except JobStoreUnavailable as exc:
+            exc.admission_refused = True
+            raise
+        budget = self._budget()
+        total = getattr(self, "_max_tasks", None)
+        entry = dict(admission=f"A{len(self.task_admissions) + 1}", tasks=tasks, how=how, slot=int(used) + 1,
+                     slots=len(tasks), max_tasks=int(total) if total else None, authority=authority,
+                     at_attempt=(budget.snapshot().get("reserved_attempts") if budget is not None else None),
+                     descriptions=[str(getattr(s, "description", "") or "")[:200] for s in specs],
+                     covers=list(getattr(self, "_current_covers", []) or []) if how == "task" else [],
+                     outcome=None)
+        self.task_admissions.append(entry)
+        store = self.config.job_store
+        if store is not None:
+            try:
+                store.publish({"task-admissions": [dict(e) for e in self.task_admissions]})
+            except Exception as exc:  # noqa: BLE001 -- the store is latched; nothing starts without the record
+                self.task_admissions.pop()
+                refused = JobStoreUnavailable(f"{how} {', '.join(tasks)} not started: the job store could not "
+                                              f"publish its admission ({type(exc).__name__})")
+                # Read by the dispatch loop: nothing of the task ran, so the
+                # slot is not charged and the record says not started.
+                refused.admission_refused = True
+                raise refused from exc
+        return entry
+
+    def _count_interrupted_admissions(self, used: int) -> int:
+        """Admissions the resume found committed in the parent's store and
+        absent from its checkpoint (admitted after the quiescent point and
+        interrupted before any effect settled): each is counted as spent
+        now, on the ledger and the admissions record, never dropped and
+        never re-planned as fresh capacity. Conservative: fewer slots
+        remain. Returns the count after them."""
+        for entry in list(self._interrupted_admissions):
+            slots = int(entry.get("slots") or len(entry.get("tasks") or ()) or 1)
+            used += slots
+            self._slots_used = used
+            kept = dict(entry, outcome="interrupted: admitted in an earlier episode and interrupted before its "
+                                       "first effect settled; counted as spent")
+            self.task_admissions.append(kept)
+            self._slot_event("charged", entry.get("tasks") or [], used,
+                             how=f"{entry.get('how') or 'task'} admitted in an earlier episode and interrupted",
+                             why=str(entry.get("admission") or ""))
+            self._note(f"{', '.join(entry.get('tasks') or ())}: admitted in an earlier episode and interrupted "
+                       f"before closing; its {slots} slot(s) count as spent, and any change it left is in the "
+                       "project, unreviewed")
+        self._interrupted_admissions = []
+        return used
+
     def _slots_note(self) -> str:
         """The job's task allowance as the planner must plan against it: the
         slots left, counting the task about to be named, and the requirements
@@ -7068,6 +7397,12 @@ class Session:
                 f"the correction allowance of {self.config.max_requirement_reopens}, past which the run "
                 f"stalls; a DONE sent back spends no slot and is sent back at most "
                 f"{self.config.max_requirement_reopens} times, after which the run ends incomplete.")
+        interrupted = [e for e in self.task_admissions if str(e.get("outcome") or "").startswith("interrupted")]
+        if interrupted:
+            text += (" Admitted in an earlier episode and interrupted before closing: "
+                     + ", ".join(t for e in interrupted for t in (e.get("tasks") or ()))
+                     + " (slot spent; any change it left is in the project, unreviewed; name its remaining work "
+                       "as new work if it is still owed).")
         text += self._allowance_note()
         ledger = self.memory.ledger
         if self.config.requirements_ledger and ledger.requirements:
@@ -7218,6 +7553,7 @@ class Session:
         # the count charged so far; ``_slot_event`` keeps the ledger.
         used = int(getattr(self, "_slots_used", 0) or 0)
         self._max_tasks = max_tasks
+        used = self._count_interrupted_admissions(used)
         # Uncharged loop turns are bounded by the correction allowance and
         # the DONE reopen allowance (each ``max_requirement_reopens``); the
         # tripwire below cannot fire on today's paths and exists so a future
@@ -7263,7 +7599,12 @@ class Session:
                         used += len(batch)
                         charged_turns += 1
                         self._slots_used = used
-                        self._slot_event("charged", [s.task_id for s in batch], used, how="batch")
+                        wave = getattr(self, "_wave_admission", None)
+                        self._slot_event("charged", [s.task_id for s in batch], used, how="batch",
+                                         why=wave["admission"] if wave else "")
+                        if wave is not None:
+                            wave["outcome"] = "charged"
+                        self._wave_admission = None
                     self._wave_started = False
                 if not ran and self.stop_reason:
                     # Stopped at intake, before any child's call.
@@ -7485,9 +7826,23 @@ class Session:
             charged = True
             try:
                 summary = self.run_task(spec)
+            except JobStoreUnavailable as exc:
+                admitted = any(e.get("tasks") == [spec.task_id] and e.get("outcome") is None
+                               for e in self.task_admissions)
+                if getattr(exc, "admission_refused", False) or not admitted:
+                    # The store refused before the task's first effect (its
+                    # admission, or the task-start authority commit before
+                    # it; nothing before the admission makes a call): no
+                    # slot is spent and the record says not started before
+                    # the stop (workflow refutations of this batch: the
+                    # charge read dispatched work with no admission named).
+                    charged = False
+                    self._refuse_admission_record([spec], exc, used=used)
+                raise
             except FinishReserved as exc:
                 if not self._settle_not_started(spec, exc):
                     raise
+                self._release_renewal([spec.task_id], f"{spec.task_id} was not started")
                 # The route's known stages cannot be paid from what is left.
                 # This policy elects to forfeit: a review is never dropped
                 # to fit and no replanning of the remaining slots is
@@ -7505,13 +7860,20 @@ class Session:
                 self._continues = None
                 self._last_wave = False
                 self._serial_dispatch = False
+                admission = next((e for e in reversed(self.task_admissions)
+                                  if e.get("tasks") == [spec.task_id] and e.get("outcome") is None), None)
                 if charged:
                     # Dispatched: charged once, whether the task closed,
                     # was capped, failed, or raised the stop leaving here.
                     used += 1
                     charged_turns += 1
                     self._slots_used = used
-                    self._slot_event("charged", [spec.task_id], used, how="serial")
+                    self._slot_event("charged", [spec.task_id], used, how="serial",
+                                     why=admission["admission"] if admission else "")
+                    if admission is not None:
+                        admission["outcome"] = "charged"
+                elif admission is not None:
+                    admission["outcome"] = "not started"
             unfinished = getattr(summary, "outcome", "closed")
             if unfinished in ("turn_limited", "failed"):
                 # A capped or failed continuation carries its predecessor's
@@ -8725,6 +9087,10 @@ class Session:
             chosen, self._dispatch_lead = self._dispatch_lead, None
             lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
             parsed.append((replace(spec, lead=lead), covers, continues))
+        # A wave admitted after the final audit was consumed makes a second
+        # audit necessary: its capacity is held again before the wave's own
+        # admission is costed.
+        self._renew_audit_hold([s for s, _c, _n in parsed], how="batch")
         short = self._admit_batch(parsed)
         if short:
             # Not started: nothing is written and no child is built. The
@@ -8741,10 +9107,21 @@ class Session:
                                   "what is left after the held finish; nothing was written", terminal=False)
             self._done_refusal = (f"\n\n--- BATCH NOT STARTED ---\nThe batch cannot be paid from what is left: "
                                   f"{short}. Reply DONE, or name a smaller task.")
+            self._release_renewal([s.task_id for s, _c, _n in parsed], "the parallel batch was not started")
             return False
-        self._authority_before("parallel batch")
         # From here the wave is admitted work: its slots are charged by the
-        # loop however it ends (quality/completion batch, 2026-10-31).
+        # loop however it ends (quality/completion batch, 2026-10-31), and
+        # its admission is committed before any child's first effect. A
+        # store that refuses the wave's authority commit or its admission
+        # starts nothing, and the record says so (second-round refutation).
+        try:
+            self._authority_before("parallel batch")
+            self._wave_admission = self._admit_dispatch([s for s, _c, _n in parsed], how="batch",
+                                                        used=int(getattr(self, "_slots_used", 0) or 0))
+        except JobStoreUnavailable as exc:
+            self._refuse_admission_record([s for s, _c, _n in parsed], exc,
+                                          used=int(getattr(self, "_slots_used", 0) or 0))
+            raise
         self._wave_started = True
         self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _, _ in parsed))
         project = Project(self.project, exclude=self.config.project_excludes)
@@ -9085,7 +9462,8 @@ class Session:
             reviewed = "".join(f"Task {e['task']}, as you reviewed it: {e['description'][:1500]}\n\n"
                                for e in {e["task"]: e for e in origins}.values())
             prompt = (self._role_packet(spec, "reviewer") + "\n\n"
-                      f"Task: {spec.description}\n\n" + reviewed
+                      + (self._finding_contract(records) + "\n\n" if records else "")
+                      + f"Task: {spec.description}\n\n" + reviewed
                       + f"{situation}\n\n"
                       + (f"Your findings left open:\n{self._finding_lines(records)}\n\n" + instructions
                          if records else self._proof_rows(spec) + "\n\n")
@@ -9910,6 +10288,11 @@ class Session:
             # requirement texts, gate, evidence, findings and policy is on
             # record, and asking again would be a second draw.
             self._note("the final audit of this exact state is on record; it is not asked again")
+            budget = self._budget()
+            if budget is not None and hasattr(budget, "release_finish"):
+                # A hold renewed for a repair that changed nothing the audit
+                # judged is not spent on a second draw of the same verdict.
+                budget.release_finish("audit", "the final audit of this exact state is on record")
             return {r: (bool(v[0]), str(v[1])) for r, v in kept["verdicts"].items()}
         carried = [r for r in self.review_findings if r.get("audit_carried")]
         standing = [r for r in self.review_findings if not r.get("closed") and not r.get("audit_carried")]
@@ -10044,6 +10427,17 @@ class Session:
                                             findings_standing=[r["fid"] for r in standing],
                                             acceptance=dict(self._last_acceptance), packet=packet_after.digest,
                                             failed=failed))
+        if not failed:
+            # Every audit records the packet it was about (the cap's final
+            # audit records the same binding below, settled), so the record
+            # shows whether two audits judged the same packet. No DONE-route
+            # reuse is built on it: a DONE repeated over nothing is sent back
+            # by the coverage check before any audit, and a task that
+            # re-covers a requirement closes with receipts the auditor
+            # consumes, so its packet is new (root's correction on 0c5c6f1,
+            # C1; the source-only cache tried in that batch was refused by
+            # tests/test_boundary_records.py).
+            self.requirement_audits[-1]["binding"] = self._audit_binding(ids)
         if final and not failed:
             # Two packets, both named: the one the auditor was handed
             # (``packet``) and the one its own dispositions settled
@@ -11157,9 +11551,15 @@ class Session:
                           + f"\n\nYou audited the delivered work and found:\n{entry['finding']}\n\n"
                           + evidence + self._obligations_block(bound) + "\n\n" + _EVIDENCE_AUTHORITY
                           + "\n\nThe project in your working directory is the delivered work. " + _ERROR_PATH_RULE
+                          + " " + _EXECUTED_ERROR_RULE
                           + f" Reassess {rid} alone, once. Reply with exactly one line: '{rid}: MET - <project "
-                          f"file path or test name that shows it>' or '{rid}: NOT MET - <what is still missing>'. "
-                          "A MET without a cited project file or test is counted as not met."
+                          f"file path or test name that shows it; for an error or refusal requirement, also the "
+                          f"exact executed case identities the rule above names, beside a project file or test "
+                          f"that resolves>' or '{rid}: NOT MET - <what is still missing>'. A MET without a cited "
+                          "project file or test is counted as not met. A citation resolves only as a "
+                          "project-relative file path with an extension, or a test function named test_* defined "
+                          "in a file whose name starts with test and ends in .py; other names do not resolve, and "
+                          "the scratch test the harness ran is not a project file."
                           + ("" if not any(o.get("execution") == "ran" and delivery.purpose_of(o) == "acceptance"
                                            for o in bound) else
                              " Each executed acceptance obligation listed above needs its own line, "
@@ -13200,9 +13600,22 @@ class Session:
         budget = self._budget()
         if budget is None:
             return []
-        reserve = int((budget.snapshot().get("limits") or {}).get("reserve_tokens_per_call") or 0)
+        snap = budget.snapshot()
+        reserve = int((snap.get("limits") or {}).get("reserve_tokens_per_call") or 0)
         if not reserve:
-            return []
+            # No token reserve: the planning call is still a call, and while
+            # a renewed audit hold is pending the repair's route must leave
+            # room for the planner's DONE between it and that audit
+            # (second-round refutation of root's correction on 0c5c6f1, C1:
+            # at 11 calls the renewal admitted the repair and the DONE was
+            # then refused). Only then, so zero-reserve admission elsewhere
+            # is unchanged; counted as a call, tokens not counted.
+            fin = snap.get("finish_protection") or {}
+            renewed = ("audit" in (fin.get("pending") or ())
+                       and any(r.get("stage") == "audit" for r in (fin.get("renewals") or ())))
+            if not renewed:
+                return []
+            return [delivery.PlanStage("next planning call", "reserve")]
         measured = self._last_planning_tokens()
         return [delivery.PlanStage("next planning call", "reserve", tokens=max(reserve, measured or 0))]
 
@@ -15247,7 +15660,12 @@ class Session:
         # both happen -- see _assess_scope.
         parts.append(self._role_packet(spec, 'lead'))
         if not rule_stated:
-            parts.append(_CONTRACT_BOUNDARY_RULE)
+            # The serial lead's render carries the verbatim goal and the
+            # requirements; the order of authority (the goal and operator
+            # rulings outrank the generated task text, plan or recipe) and
+            # the contract rule are stated here once (root's correction on
+            # 0c5c6f1, Q2). A parallel child has both through _writer_goal.
+            parts.append(_AUTHORITY_ORDER + " " + _CONTRACT_BOUNDARY_RULE)
         if self._writes() and spec.scope and spec.scope.proofs:
             parts.append(TEST_SUBSTANCE_RULE)
         parts.append(worker_menu())
@@ -16047,6 +16465,55 @@ class Session:
                        f"{record['claim'][:120]}")
         return new
 
+    def _finding_contract(self, records: List[dict]) -> str:
+        """The original contract the named findings are held to, for a
+        recheck (root's correction on 0c5c6f1, Q1; addenda 6537726867 and
+        6538203622: both recheck routes carried a generated task and a bare
+        requirement id, never the goal, the requirement's text or the order
+        of authority). Compact and bound to the findings themselves, never
+        to the current task's COVERS: the verbatim goal, the operator's
+        rulings, the original text of each requirement a named finding was
+        raised under (its own requirement, its basis, else the covers of the
+        task that raised it), the order of authority and the contract
+        boundary rule. It binds what the findings are judged against and
+        adds no finding duty, no verdict line and no fresh review."""
+        texts = self._requirement_texts_now()
+        bound: Dict[str, List[str]] = {}
+        by_task = {o.task_id: list(o.covers or ()) for o in self.task_outcomes}
+        for record in records:
+            found: List[str] = []
+            requirement = record.get("requirement")
+            if requirement:
+                found.append(str(requirement[0]))
+            basis = record.get("basis") or {}
+            if basis.get("kind") == "requirement" and basis.get("ref"):
+                found.append(str(basis["ref"]).split("@", 1)[0].upper().replace("R-", "R"))
+            # A basis that names no requirement on the ledger binds nothing;
+            # the raising task's own covers then stand (workflow refutation
+            # of this batch: a multi-cover task's finding with an unknown
+            # basis id had no requirement block at all).
+            found = [rid for rid in found if rid in texts]
+            if not found:
+                found = [rid for rid in by_task.get(str(record.get("task") or ""), []) if rid in texts]
+            label = str(record.get("finding_id") or record.get("fid") or record.get("id") or "").strip()
+            origin = str(record.get("task") or "").strip()
+            who = (label + (f", raised on {origin}" if origin else "")) if label else origin
+            for rid in found:
+                holders = bound.setdefault(rid, [])
+                if who and who not in holders:
+                    holders.append(who)
+        rulings = list(getattr(self.memory.ledger, "rulings", None) or [])
+        return ("## Original goal (verbatim; it outranks the task text where they differ)\n\n"
+                + self.memory.goal.strip()
+                + ("\n\n## Original requirements the findings below were raised under (verbatim)\n\n"
+                   + "\n".join(f"{rid} ({'; '.join(bound[rid])}): {texts[rid]}" if bound[rid] else f"{rid}: {texts[rid]}"
+                               for rid in bound) if bound else "")
+                + ("\n\n## Operator rulings (asked and answered; do not re-ask)\n\n"
+                   + "\n".join(f"- {r}" for r in rulings) if rulings else "")
+                + "\n\n" + _AUTHORITY_ORDER + " " + _CONTRACT_BOUNDARY_RULE
+                + " Hold each named finding to this contract where it bears on it; it adds no finding, asks "
+                  "no verdict on a requirement and reopens no review.")
+
     def _recheck_instructions(self, ids: List[str], *, spec=None) -> str:
         spec = spec if spec is not None else getattr(self, "_active_spec", None)
         return (self._proof_rows(spec) + "\n\n" if spec is not None else "") + (
@@ -16110,7 +16577,7 @@ class Session:
             # taken, so the identity the judge is handed is the one compared.
             instructions = self._recheck_instructions(ids)
             binding = self._judgment_binding(spec, peer, "recheck")
-            prompt = (self._role_packet(spec, 'reviewer') + '\n\n' +
+            prompt = (self._role_packet(spec, 'reviewer') + '\n\n' + self._finding_contract(mine) + '\n\n' +
                       f"Task: {spec.description}\n\n"
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       + self._routing_facts(mine)

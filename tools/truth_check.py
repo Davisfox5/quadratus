@@ -148,17 +148,95 @@ def _claim(item: str) -> str:
     return "paths" if _PATH.findall(item) else "none"
 
 
+def _row_item(row) -> str:
+    """The item a typed row is about, as the engine wrote it: the entry's
+    item, else the row's behavior (an older row shape). One reading for
+    every consumer, so the row a verdict is judged on is the row the
+    clearance compares (workflow refutation of this batch: the two halves
+    read the record with different keys and a behavior-only row was
+    cleared on identity alone)."""
+    return str((row.get("entry") or {}).get("item") or row.get("behavior") or "")
+
+
+def _typed_not_run_rows(entry, record) -> list:
+    """Every live typed obligation the engine registered for this NOT RUN
+    entry (kind ``not_run``, same task and item, not superseded), read
+    from the saved record; [] for a record written before typed rows
+    existed. The engine can hold more than one live row per (task, item)
+    (an item re-reported after its first row read ran), and a decoy row is
+    a forgery shape, so every live row is returned and a clearance must
+    hold against each. The engine supersedes acceptance rows only, never a
+    ``not_run`` one, so a superseded ``not_run`` row is not engine-written:
+    when every matching row reads superseded they still bind (fail closed),
+    rather than leaving the entry to its route's identity alone."""
+    rows = [row for row in (record or {}).get("evidence_obligations") or []
+            if isinstance(row, dict) and row.get("kind") == "not_run"
+            and str(row.get("task")) == str(entry.get("task")) and _row_item(row) == str(entry.get("item") or "")]
+    live = [row for row in rows if not row.get("superseded_by")]
+    return live or rows
+
+
+def _revision(value):
+    """An integer requirement revision, or None for anything else (a
+    bool, a null, text): a revision the record does not state as a whole
+    number is no revision."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _revisions_match(typed, check) -> bool:
+    """Whether a check's recorded requirement revisions are exactly the
+    revisions the typed row is bound to (root's correction on 0c5c6f1, E1):
+    the check must record a revision map, the row must bind at least one
+    whole-number revision, every bound id must be in the map with a
+    whole-number revision, and each must be equal. Read from the record
+    alone; a map the check does not carry, a row that binds none, a null
+    or non-integer revision on either side never matches (no guessed
+    approval from missing metadata; a null that equalled a missing map
+    entry was the refuted shape)."""
+    revisions = check.get("requirements") if isinstance(check.get("requirements"), dict) else None
+    refs = list(typed.get("requirements") or ())
+    if revisions is None or not refs:
+        return False
+    # Every bound reference must be an (id, revision) pair: a malformed one
+    # refuses the match rather than being dropped while _met_over_debt still
+    # reads its id (root's independent review of the recovered head:
+    # [["R1", 1], ["R2"]] matched a check carrying R1 alone).
+    if any(not (isinstance(r, (list, tuple)) and len(r) == 2) for r in refs):
+        return False
+    for ref in refs:
+        rid, rev = str(ref[0]), _revision(ref[1])
+        if rev is None or rid not in revisions or _revision(revisions[rid]) != rev:
+            return False
+    return True
+
+
+def _bound_to_row(entry, check, record) -> bool:
+    """The typed-row half of a NOT RUN clearance: where the record carries
+    the entry's typed row(s), the clearing check must have run under
+    exactly the requirement revisions each live row binds, read from the
+    check's own map (a check that carries none, or a row bound to none,
+    never matches: missing metadata is no approval). A record with no
+    typed row for the entry (one written before typed rows existed, or a
+    bare record) is read by its route's identity alone, as before:
+    nothing is guessed either way."""
+    rows = _typed_not_run_rows(entry, record)
+    if not rows:
+        return True
+    return all(_revisions_match(row, check) for row in rows)
+
+
 def _identity_ok(entry, check, record) -> bool:
     """The check-level identity every route demands: a passing check on
     the final source, under the entry's own gate and environment where the
     entry records them (a record without them is held to the source
-    alone). The per-command facts are read per row (``_row_ok``)."""
+    alone), and under the requirement revisions the entry's typed row binds
+    (``_bound_to_row``). The per-command facts are read per row (``_row_ok``)."""
     if not (check.get("passed") and check.get("source") and check.get("source") == record.get("source_fingerprint")):
         return False
     for key in ("gate", "environment"):
         if key in entry and (not isinstance(entry.get(key), str) or check.get(key) != entry[key]):
             return False
-    return True
+    return _bound_to_row(entry, check, record)
 
 
 def _paths_cleared(entry, checks, record) -> bool:
@@ -356,7 +434,8 @@ def _bound_not_run_cleared(entry, checks, record) -> bool:
     current = record.get("source_fingerprint")
     for check in checks[start:]:
         if not (check.get("passed") and check.get("source") and check.get("source") == current
-                and check.get("gate") == gate and check.get("environment") == environment):
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
             continue
         for row in _rows(check):
             if _row_ok(row) and set(cases) <= _row_passed_cases(row):
@@ -380,6 +459,11 @@ def _historical_paths_cleared(entry, checks, record) -> bool:
         if check.get("source") and check.get("source") != record.get("source_fingerprint"):
             continue
         if any(key in entry and check.get(key) != entry.get(key) for key in ("gate", "environment")):
+            continue
+        # A typed row the record carries binds this older entry too
+        # (workflow refutation of this batch: stripping the binding key
+        # turned the mismatched-revision record into verified).
+        if not _bound_to_row(entry, check, record):
             continue
         keys = _executed_keys(check)
         for row in _rows(check):
@@ -507,7 +591,8 @@ def _class_not_run_cleared(entry, checks, record) -> bool:
     current = record.get("source_fingerprint")
     for check in checks[start:]:
         if not (check.get("passed") and check.get("source") and check.get("source") == current
-                and check.get("gate") == gate and check.get("environment") == environment):
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
             continue
         for row in _rows(check):
             if not _row_ok(row) or row["report"].get("passed_truncated") is not False:
@@ -579,7 +664,8 @@ def _command_not_run_cleared(entry, checks, record) -> bool:
     current = record.get("source_fingerprint")
     for check in checks[start:]:
         if not (check.get("passed") and check.get("source") and check.get("source") == current
-                and check.get("gate") == gate and check.get("environment") == environment):
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
             continue
         for row in _rows(check):
             if (_row_ok(row) and _python_args(row["command"]) == declared and row.get("interpreter") == interpreter
@@ -744,9 +830,7 @@ def _skipped_cleared(entry, checks, record) -> bool:
                 continue
             if check.get("gate") != typed.get("gate") or check.get("environment") != typed.get("environment"):
                 continue
-            revisions = check.get("requirements") if isinstance(check.get("requirements"), dict) else None
-            bound = [(str(r[0]), r[1]) for r in (typed.get("requirements") or ()) if isinstance(r, (list, tuple)) and len(r) == 2]
-            if revisions is None or not bound or any(revisions.get(rid) != rev for rid, rev in bound):
+            if not _revisions_match(typed, check):
                 continue
         receipts = check.get("receipts") or []
         if receipts:
@@ -812,8 +896,9 @@ def _met_over_debt(record: dict) -> list:
     to them is not shown executed, or a row of unknown purpose binds them:
     each is a line for the reader, never a verdict change upward."""
     status = (record.get("requirements") or {}).get("status") or {}
-    entries = {(str(e.get("task")), str(e.get("item")))
+    entries = {(str(e.get("task")), str(e.get("item"))): e
                for e in record.get("unexecuted_acceptance") or [] if isinstance(e, dict)}
+    checks = record.get("checks") or []
     out = []
     for row in record.get("evidence_obligations") or []:
         if not isinstance(row, dict) or row.get("superseded_by"):
@@ -821,8 +906,12 @@ def _met_over_debt(record: dict) -> list:
         purpose = _row_purpose(row)
         if purpose == "acceptance":
             continue
-        item = str((row.get("entry") or {}).get("item") or row.get("behavior") or "")
-        backed = (str(row.get("task")), item) in entries
+        entry = entries.get((str(row.get("task")), _row_item(row)))
+        backed = entry is not None
+        # The engine's ``execution == ran`` is its own claim; the record's
+        # independent reconstruction (the entry's clearance under the row's
+        # revisions, gate, environment and the final source) must agree.
+        cleared = backed and _not_run_cleared(entry, checks, record)
         for ref in row.get("requirements") or []:
             rid = ref[0] if isinstance(ref, (list, tuple)) and ref else None
             if rid is None or not str(status.get(rid, "")).lower().startswith("met"):
@@ -837,6 +926,10 @@ def _met_over_debt(record: dict) -> list:
                 # NOT RUN or skip row; a typed row that reads ran with no
                 # entry behind it is the engine's word alone.
                 out.append(f"{rid} is met on execution-debt row {row.get('oid')} that no NOT RUN or skip entry backs")
+            elif not cleared:
+                out.append(f"{rid} is met on execution-debt row {row.get('oid')} that reads ran while the record "
+                           "does not show its entry cleared under the row's requirement revisions, gate, "
+                           "environment and the final source")
     return out
 
 
