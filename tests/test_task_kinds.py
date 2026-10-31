@@ -260,3 +260,20 @@ def test_no_per_language_routing_exists():
 
 def test_a_bare_policy_rotates():
     assert not KindPolicy().pins_a_model
+
+
+def test_the_concurrency_gate_tells_an_invariant_proof_from_a_defect_fix():
+    """Root on 113f4e1 (6549956979 item 1): a task proving behaviour that
+    already holds was told to show a test failing before the fix, which
+    asks for an invented bug. Both cases still need a test that really
+    interleaves and runs in an approved check; only a demonstrated defect
+    needs the failing-first run, and an invariant proof that fails has
+    found the defect."""
+    gate = policy_for(TaskKind.CONCURRENCY).gate
+    assert "actually interleaves" in gate and "runs in an approved check" in gate
+    assert "Concurrent code is not accepted on inspection" in gate
+    assert "corrects a demonstrated defect" in gate and "failing on the code before the fix" in gate
+    assert "do not invent a defect" in gate and "pass on the delivered code" in gate
+    assert "adversarially" in gate and "that failure is the defect" in gate
+    assert "failing before the fix and passing after" not in gate.replace(
+        "failing on the code before the fix and passing after", ""), "no unconditional failing-first rule"

@@ -2231,6 +2231,13 @@ GROK_SPEC = CLISpec(
     # whatever it was mid-sentence about; with it, one JSON envelope carrying
     # the final text and real token counts.
     output_args=["--output-format", "json"],
+    # The native session's identity, allocated before launch (root on
+    # 113f4e1, 6549956979 item 2): the installed 1.0.62 accepts a fresh UUID
+    # here, and its session folder under ~/.grok/sessions carries it, so a
+    # timeout that returns no envelope no longer hides the transcript or its
+    # native events. The final-only JSON envelope is unchanged: usage and
+    # stop semantics stay what they were.
+    session_id_flag="--session-id",
     # Verified levels on grok 1.0.30: low, medium, high, xhigh. Both --help
     # and the shipped README also advertise none/minimal/max; the binary
     # rejects all three. One more reason the probe outranks the table.

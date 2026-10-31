@@ -1282,7 +1282,91 @@ def _live_call_trace(event):
     # skip a line they cannot read, so an empty tool list alone cannot tell
     # "no tools used" from "nothing readable" (root's review of a7f9c6c, L3).
     record['integrity'] = _transcript_integrity(Path(source))
+    # Progress only from a native session folder's own event log (grok):
+    # a claude or codex transcript names tool use inside its rows, which
+    # these label counts would misread, so their records stay as they were.
+    if Path(source).is_dir():
+        record['progress'] = _transcript_progress(Path(source))
     return record
+
+
+_PROGRESS_LABEL = re.compile(r'[A-Za-z][A-Za-z0-9_.:-]{0,47}')
+_PROGRESS_TIME_KEYS = ('timestamp', 'ts', 'time', 'created_at', 'at')
+
+
+def _progress_time(row):
+    for key in _PROGRESS_TIME_KEYS:
+        value = row.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return float(value) / (1000.0 if value > 1e11 else 1.0)
+        if isinstance(value, str) and value:
+            try:
+                return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+            except ValueError:
+                continue
+    return None
+
+
+def _transcript_progress(source: Path) -> dict:
+    """What one call was doing, from the vendor's own event log, as counts:
+    events by label (the row's phase, type or event name, when it is a short
+    identifier), how many name a tool or reasoning, the first and last event
+    time, the span and the longest silence between events. A grok session
+    folder's ``events.jsonl`` carries the phase events that tell active
+    reasoning from tool execution and from a wait with no output; nothing
+    of the content is read. ``activity`` is the plain reading of the counts,
+    and a log that cannot be read whole says ``partial``."""
+    path = source / 'events.jsonl' if source.is_dir() else source
+    labels = {}
+    times = []
+    events = invalid = 0
+    complete = True
+    try:
+        read = 0
+        with open(path, 'rb') as handle:
+            for raw in handle:
+                read += len(raw)
+                if read > _INTEGRITY_BYTES:
+                    complete = False
+                    break
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    row = json.loads(text)
+                except ValueError:
+                    invalid += 1
+                    continue
+                if not isinstance(row, dict):
+                    invalid += 1
+                    continue
+                events += 1
+                for key in ('phase', 'type', 'event'):
+                    value = row.get(key)
+                    if isinstance(value, str) and _PROGRESS_LABEL.fullmatch(value):
+                        labels[value] = labels.get(value, 0) + 1
+                        break
+                stamp = _progress_time(row)
+                if stamp is not None:
+                    times.append(stamp)
+    except OSError:
+        return dict(status='unavailable', reason='the event log could not be read')
+    if invalid:
+        complete = False
+    tools = sum(n for k, n in labels.items() if 'tool' in k.lower())
+    reasoning = sum(n for k, n in labels.items() if 'reason' in k.lower() or 'think' in k.lower())
+    times.sort()
+    gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
+
+    def iso(stamp):
+        return datetime.fromtimestamp(stamp, timezone.utc).isoformat()
+    activity = ('tool_use' if tools else 'reasoning' if reasoning else 'other_events' if events else 'no_events')
+    top = dict(sorted(labels.items(), key=lambda kv: (-kv[1], kv[0]))[:12])
+    return dict(status='observed' if complete and events else 'partial' if events else 'unavailable',
+                events=events, invalid=invalid, labels=top, tool_events=tools, reasoning_events=reasoning,
+                first_at=iso(times[0]) if times else None, last_at=iso(times[-1]) if times else None,
+                span_seconds=round(times[-1] - times[0], 3) if len(times) > 1 else None,
+                longest_gap_seconds=round(max(gaps), 3) if gaps else None, activity=activity)
 
 
 #: Bound on the bytes read when measuring a transcript's integrity.

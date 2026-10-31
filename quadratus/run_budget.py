@@ -48,6 +48,9 @@ class FinishReserved(RunBudgetExceeded):
 #: per-call reserve from ordinary work; neither takes a smaller shape.
 FINISH_STAGES = ("goal", "audit")
 
+#: Unknown-usage causes kept per run, each once (bounded record).
+UNKNOWN_OPS_KEPT = 50
+
 #: The versioned wall-time policy for the finish (strategy reset, 2026-10-16):
 #: 120 s held for the cap's goal question and 120 s for the audit, inside the
 #: run's unchanged wall_seconds (RunLimits.finish_wall_seconds).
@@ -289,6 +292,11 @@ class RunBudget:
         self._input = int(carried.get('input_tokens') or 0)
         self._output = int(carried.get('output_tokens') or 0)
         self._unknown = 0
+        #: Each operation whose settlement carried no usage (the latch's
+        #: cause), by its own identity: ids and names only, never text.
+        #: Carried for the record; the latch itself is this episode's.
+        self._unknown_ops = [dict(o) for o in (carried.get('unknown_usage_operations') or [])
+                             if isinstance(o, dict)][:UNKNOWN_OPS_KEPT]
         self._reason = ''
         self._responses = []
         self._oversized = []
@@ -336,6 +344,7 @@ class RunBudget:
             'output_tokens': self._output,
             'reported_tokens': self._input + self._output,
             'unknown_usage_attempts': self._unknown, 'stop_reason': self._reason,
+            'unknown_usage_operations': [dict(o) for o in self._unknown_ops],
             'preserved_responses': list(self._responses),
             'elapsed_seconds': max(0, self._clock() - self._started),
             'token_boundary': 'post-return threshold; in-flight calls can overshoot',
@@ -737,6 +746,12 @@ class RunBudget:
             if any(type(n) is not int or n < 0 for n in counts):
                 self._unknown += 1
                 self._reason = self._reason or 'unknown_usage'
+                if operation is not None and len(self._unknown_ops) < UNKNOWN_OPS_KEPT:
+                    who = operation.get('identity') or {}
+                    self._unknown_ops.append(dict(
+                        opid=operation['opid'], task=str(who.get('task') or ''), role=str(who.get('role') or ''),
+                        seat=str(who.get('seat') or ''), editing=bool(operation.get('editing')),
+                        settled_at=operation.get('settled_at')))
             else:
                 # Provider normalization already folds in cache where needed.
                 self._input += counts[0]

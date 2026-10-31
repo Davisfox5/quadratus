@@ -329,6 +329,9 @@ class LLMProvider:
         else:
             ticket, remaining = (control.reserve(identity=identity, **shape) if control is not None
                                  else (None, None))
+        # The budget operation this call is: its id rides on the ledger row,
+        # so an unknown-usage latch names the call that caused it.
+        self.last_operation = f'O-{ticket}' if isinstance(ticket, int) else None
         previous_timeout = self.timeout if control is not None else None
         if control is not None:
             self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)

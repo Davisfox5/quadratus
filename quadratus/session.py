@@ -6409,6 +6409,10 @@ class Session:
                       content=self._content_fingerprint(changed), **self._attempt_identity(spec))
         task.keep(json.dumps(record), kind="task-failed", author=lead)
         self.failed_records[spec.task_id] = record
+        try:
+            self._record_task_failure(spec, exc, lead, state, changed)
+        except Exception:  # noqa: BLE001 -- the improvement record never fails a run
+            self._note(f"{spec.task_id}: the task-failure occurrence could not be written")
         self._hold_task_findings(spec, f"left open when {spec.task_id} failed ({exc.cause}) before its recheck")
         from .project_files import MAX_INSPECT_BYTES
         before = self._task_before or {}
@@ -14302,6 +14306,37 @@ class Session:
                            "source as it now stands.")))
         return rows
 
+    def _record_task_failure(self, spec, exc, lead: str, state: dict, changed: List[str]) -> None:
+        """The occurrence for a task that failed and was handed back
+        (``_close_failed``): the call that failed, bound to its own ledger row
+        (identity, measured cost, unknown usage kept unknown), its observed
+        trace through the allowlist (progress included where the transcript
+        has it), and what it left on disk, as counts. The task fails, the run
+        goes on; nothing is retried here."""
+        names = set()
+        seen = exc
+        for _ in range(6):
+            if seen is None:
+                break
+            names |= {klass.__name__ for klass in type(seen).__mro__}
+            seen = seen.__cause__ or seen.__context__
+        if exc.cause == "transport":
+            cls = "provider_timeout" if names & {"TimeoutError", "TimeoutExpired"} else "provider_error"
+        else:
+            cls = "task_failed"
+        call = dict(getattr(self, "_active_call", {}) or {})
+        role = str(call.get("role") or "lead")
+        seat = call.get("model") or lead
+        event = self._call_event(spec.task_id, role.split(":")[0], seat)
+        record = self._recovery_open(spec, role=role, seat=seat, kind="task", outcome_class=cls,
+                                     question=f"{spec.task_id} failed ({exc.cause}) and was handed back",
+                                     event=event, exc=exc, observe=event is not None)
+        record["effect"] = dict(inspected=bool(state.get("inspected")), changed_files=len(changed),
+                                changed_lines=int(state.get("changed_lines") or 0))
+        record["eligible"], record["decision"] = ["hand_back"], ("hand_back: the task failed; its work is kept and the "
+                                                               "planner names the rest (CONTINUES)")
+        self._recovery_result(record, f"failed: {spec.task_id} handed back ({exc.cause})")
+
     def _record_stop_rule(self, reason: str) -> None:
         """The occurrence for a stop the session chose rather than one an
         exception forced (``stop_reason``: open findings, unmet requirements,
@@ -14367,8 +14402,8 @@ class Session:
         role = str(call.get("role") or "run")
         seat = call.get("model")
         ledger = getattr(self.config, "delegation_ledger", None)
-        last = next((e for e in reversed(list(getattr(ledger, "events", None) or [])) if getattr(e, "invoked", False)),
-                    None)
+        invoked = [e for e in list(getattr(ledger, "events", None) or []) if getattr(e, "invoked", False)]
+        last = invoked[-1] if invoked else None
         # The failed call, only when it is the newest call and it did not
         # succeed: a stop the harness decided after successful calls names
         # none, and an earlier call of another seat or role is never named.
@@ -14378,9 +14413,43 @@ class Session:
                 and seat in (getattr(last, "requested_model", None), getattr(last, "canonical_model", None))
                 and getattr(last, "outcome", None) not in (None, "ok")):
             event = last
+        # An unknown-usage stop is caused by the call(s) whose settlement
+        # carried no usage, as the budget named them, never by the admission
+        # it later refused (root on 113f4e1, 6549956979 item 3): each cause is
+        # bound to its own ledger row by the operation id both carry; the
+        # refused admission is kept apart and never counted as a call.
+        causes, stopped = [], None
+        if cls == "unknown_usage" and budget is not None:
+            for op in (budget.snapshot().get("unknown_usage_operations") or []):
+                row = next((e for e in reversed(invoked) if getattr(e, "operation", None) == op.get("opid")), None)
+                if row is None:
+                    # An older ledger row without the operation id: the newest
+                    # invoked call of the same task, role and seat whose usage
+                    # is unknown, never a call that reported usage.
+                    row = next((e for e in reversed(invoked)
+                                if str(getattr(e, "task", "")) == str(op.get("task"))
+                                and (getattr(e, "role", "") or "").split(":")[0] == str(op.get("role")).split(":")[0]
+                                and op.get("seat") in (getattr(e, "requested_model", None),
+                                                       getattr(e, "canonical_model", None))
+                                and not getattr(e, "tokens_known", False)), None)
+                causes.append(dict(operation=op.get("opid"), task=op.get("task"), role=op.get("role"),
+                                   seat=op.get("seat"), editing=bool(op.get("editing")),
+                                   call=recovery.call_cost(row), event=row))
+        if causes:
+            stopped = (dict(task=str(task), role=role, seat=seat, invoked=False, why=name) if call else None)
+            first = next((c for c in causes if c["event"] is not None), causes[0])
+            event = first["event"]
+            task = str(first.get("task") or task)
+            role = str((getattr(event, "role", None) if event is not None else None) or first.get("role") or role)
+            seat = ((getattr(event, "requested_model", None) if event is not None else None)
+                    or first.get("seat") or seat)
         record = self._recovery_open(SimpleNamespace(task_id=task), role=role, seat=seat, kind="run",
                                      outcome_class=cls, question=f"the run ended on {name}", event=event, exc=exc,
-                                     observe=False)
+                                     observe=event is not None and bool(causes))
+        if causes:
+            record["causes"] = [{k: v for k, v in c.items() if k != "event"} for c in causes]
+            if stopped is not None:
+                record["stopped_call"] = stopped
         record["eligible"] = ["reconcile", "stop"] if cls in ("unknown_usage", "provider_timeout", "uncertain_write",
                                                               "unknown") else ["stop"]
         record["decision"] = ("stop: protective" if cls in recovery.PROTECTIVE else

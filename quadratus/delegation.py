@@ -255,6 +255,9 @@ class InvocationEvent:
     effort_reasons: list = field(default_factory=list)
     effort_policy: str = ""
     resolution_source: str = ""
+    #: The run budget's operation id for this call (``O-<n>``), the key an
+    #: unknown-usage latch names its cause by. Older records lack it.
+    operation: Optional[str] = None
 
     @property
     def tokens_known(self) -> bool:

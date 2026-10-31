@@ -611,7 +611,13 @@ ROUTING: Dict[str, KindPolicy] = {
         gate=(
             "Concurrent code is not accepted on inspection. Add a test that "
             "actually interleaves -- stress, fuzz, or a deterministic scheduler "
-            "-- and show it failing before the fix and passing after."
+            "-- and runs in an approved check. When the task corrects a "
+            "demonstrated defect, show that test failing on the code before "
+            "the fix and passing after. When it proves behaviour that should "
+            "already hold, do not invent a defect to fix: the test must drive "
+            "the invariant adversarially, with enough concurrent operations "
+            "that a race would show, and pass on the delivered code; if it "
+            "fails, that failure is the defect, and the first rule applies."
         ),
         human_check=True,
     ),

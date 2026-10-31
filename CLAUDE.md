@@ -3645,6 +3645,48 @@ Key design decisions already settled:
     carries the occurrences; an interrupted episode's later ones ride its
     committed terminal record and a resume merges them by id
     (`_carry_recoveries`), so no attempt is lost and no retry resets.
+- **A stop is charged to the call that caused it, not to the admission it
+  refused** (root on 113f4e1, 6549956979). The P16 run's Grok lead reasoned
+  for fifteen minutes with no tool call, hit the 900 s transport timeout,
+  and left no usage; the budget latched `unknown_usage` and refused the
+  orchestrator's replan, and the terminal record named the orchestrator
+  with zero calls. Three changes, one family:
+  - *Causes by operation.* Every settlement without usage is kept on the
+    budget as `unknown_usage_operations` (op id, task, role, seat, editing;
+    bounded to 50, no text), and the ledger row carries the same op id
+    (`InvocationEvent.operation`, from the provider's `last_operation`).
+    The terminal occurrence binds each cause to its own row (fallback for
+    rows without an id: the newest same task, role and seat with unknown
+    usage, never one that reported usage), takes its identity from the
+    first, keeps the refused admission as `stopped_call` (`invoked:
+    false`, never a cost), and reads the cause's trace. Several serial or
+    concurrent causes are all kept; a cause whose row is missing counts
+    once as unidentified, never as zero.
+  - *Failed tasks are occurrences.* `_close_failed` writes a `task`
+    occurrence (`provider_timeout`/`provider_error` by type chain, else
+    `task_failed`; action `hand_back`) with the failed call, its trace and
+    `effect` (inspected, changed files, changed lines). Nothing is retried.
+  - *Grok identity and progress.* `GROK_SPEC.session_id_flag` is
+    `--session-id`, so the UUID exists before launch and a timeout that
+    returns no envelope still locates the native folder. The live reader
+    adds `progress` from that folder's `events.jsonl`: event and label
+    counts, tool and reasoning counts, first/last time, span, longest gap,
+    `activity` (tool_use, reasoning, other_events, no_events) and `status`
+    (observed, partial when a row is malformed or the read was cut,
+    unavailable). Counts, identifier labels and ISO times only; the
+    allowlist re-validates them. The envelope, usage, stop semantics,
+    deadlines and retries are unchanged.
+  Limits: the events schema (a `phase`/`type`/`event` label and a
+  timestamp per row) is read from one installed version and is for root to
+  qualify against a real session; a harness crash mid-call leaves the id
+  only in the CLI's own folder; stderr is exported as a character count.
+- **A concurrency proof of existing behaviour does not invent a bug**
+  (same comment). The gate still needs a test that really interleaves and
+  runs in an approved check; the failing-first run applies only when the
+  task corrects a demonstrated defect, and an invariant proof that fails
+  has found one. The lead's check guidance now states the coverage rule
+  `uncovered_tests` already applied: a new test file counts when a listed
+  command names it, names its folder, or discovers it.
 
 ## How development is coordinated
 

@@ -7,6 +7,8 @@ carried to the audit, and never settled by an id line.
 """
 from types import SimpleNamespace
 
+import pytest
+
 from quadratus import delivery, recovery
 from quadratus.judgment import RecheckReading, Verdict
 
@@ -132,7 +134,8 @@ def test_the_report_section_says_unknown_usage_rather_than_zero():
 def test_every_outcome_class_has_a_meaning_and_protective_classes_are_stops():
     assert recovery.PROTECTIVE <= set(recovery.OUTCOME_CLASSES)
     assert all(recovery.OUTCOME_CLASSES.values())
-    assert {"complete_judgment", "hold_owned_debt", "owner_settlement", "stop", "reconcile"} == set(recovery.ACTIONS)
+    assert {"complete_judgment", "hold_owned_debt", "owner_settlement", "stop", "reconcile", "hand_back"} == \
+        set(recovery.ACTIONS)
 
 
 # -- the unreviewed kind ------------------------------------------------------------------------
@@ -263,3 +266,117 @@ def test_owner_settlements_are_counted_across_every_occurrence_that_names_the_de
     row = session._settle_owed(spec, record, situation="s", site="two")
     assert row["verdict"] == "kept: the owner already judged this exact source without a verdict"
     assert len(calls) == 1 and session._owed_attempts(fid) == 1
+
+
+# -- causal accounting (root on 113f4e1, 6549956979 item 3) -----------------------------------
+
+def test_the_budget_names_each_unknown_settlement_by_its_operation_and_nothing_else():
+    from quadratus.run_budget import UNKNOWN_OPS_KEPT, RunBudget, RunBudgetExceeded, RunLimits
+    budget = RunBudget(RunLimits(max_calls=UNKNOWN_OPS_KEPT + 10))
+    ok = budget.reserve(identity=dict(seat="claude:opus", task="t1", role="collaborator", prompt_digest="d"))[0]
+    budget.finish(ok, dict(input_tokens=10, output_tokens=2))
+    assert budget.snapshot()["unknown_usage_operations"] == [], "a known settlement is no cause"
+    lost = budget.reserve(identity=dict(seat="grok:default", task="t1", role="lead", prompt_digest="secret"))[0]
+    with pytest.raises(RunBudgetExceeded, match="unknown_usage"):
+        budget.finish(lost, None, reply="partial narration")
+    (op,) = budget.snapshot()["unknown_usage_operations"]
+    assert op["opid"] == f"O-{lost}" and (op["task"], op["role"], op["seat"]) == ("t1", "lead", "grok:default")
+    assert set(op) == {"opid", "task", "role", "seat", "editing", "settled_at"}, "ids and names only"
+    assert "secret" not in repr(op) and "narration" not in repr(op)
+    carried = RunBudget(RunLimits(max_calls=5), carried=budget.snapshot())
+    assert carried.snapshot()["unknown_usage_operations"] == [op]
+    many = RunBudget(RunLimits(max_calls=UNKNOWN_OPS_KEPT + 10))
+    for _ in range(UNKNOWN_OPS_KEPT + 3):
+        many._reason = ""  # past the latch, only to fill the record
+        ticket = many._admit("cli", "", None, {}, None, identity=dict(task="t1", role="lead", seat="s"))
+        with pytest.raises(RunBudgetExceeded):
+            many.finish(ticket, None)
+    assert len(many.snapshot()["unknown_usage_operations"]) == UNKNOWN_OPS_KEPT, "bounded"
+
+
+def _row(iid, *, task="t1", role="lead", seat="grok:default", op=None, tokens=None, outcome="TimeoutError"):
+    return SimpleNamespace(invoked=True, invocation_id=iid, task=task, role=role, requested_model=seat,
+                           canonical_model=None, outcome=outcome, operation=op, input_tokens=tokens,
+                           output_tokens=0 if tokens is not None else None, seconds=1.0, stderr_tail="",
+                           session_id=None, tokens_known=tokens is not None, turn_limited=False)
+
+
+def _latched(tmp_path, rows, ops):
+    from quadratus.delegation import DelegationLedger
+    from quadratus.run_budget import RunBudgetExceeded
+    session = _session(tmp_path)
+    ledger = DelegationLedger(tmp_path / "invocations.jsonl")
+    ledger.events.extend(rows)
+    session.config.delegation_ledger = ledger
+    session._active_call = dict(role="orchestrator", model="openai:astra")
+    session._budget = lambda: SimpleNamespace(_reason="unknown_usage", snapshot=lambda: dict(unknown_usage_operations=ops, limits={},
+                                                                            stop_reason="unknown_usage"))
+    session._record_terminal_recovery(RunBudgetExceeded("Run stopped: unknown_usage"))
+    return next(r for r in session.recoveries if r["kind"] == "run")
+
+
+def _op(n, **kw):
+    return dict(dict(opid=f"O-{n}", task="t1", role="lead", seat="grok:default", editing=True, settled_at=1.0), **kw)
+
+
+def test_the_cause_is_the_named_operation_never_the_refused_admission(tmp_path):
+    record = _latched(tmp_path, [_row("inv-lead", op="O-3"), _row("inv-ok", role="collaborator",
+                                                                  seat="claude:opus", tokens=50, outcome="ok")],
+                      [_op(3)])
+    assert record["outcome_class"] == "unknown_usage"
+    assert (record["task"], record["role"], record["seat"]) == ("t1", "lead", "grok:default")
+    assert record["failed_call"]["invocation_id"] == "inv-lead"
+    assert record["stopped_call"] == dict(task="run", role="orchestrator", seat="openai:astra", invoked=False,
+                                          why="RunBudgetExceeded")
+    proposals = recovery.proposals([record])
+    assert [p["family"] for p in proposals] == ["unknown_usage|lead|grok"]
+    assert recovery.costs([record])["calls"] == 1, "the refused admission is no call"
+
+
+def test_a_later_success_of_the_same_seat_cannot_steal_the_cause(tmp_path):
+    """An older ledger row with no operation id falls back to the newest
+    row of the same task, role and seat whose usage is unknown; a later
+    success of that seat is never it."""
+    record = _latched(tmp_path, [_row("inv-lost"), _row("inv-later", tokens=90, outcome="ok")], [_op(4)])
+    (cause,) = record["causes"]
+    assert cause["call"]["invocation_id"] == "inv-lost" and record["failed_call"]["invocation_id"] == "inv-lost"
+
+
+def test_two_causes_are_both_kept_and_costs_count_each_once(tmp_path):
+    rows = [_row("inv-a", op="O-2"), _row("inv-b", task="t2", op="O-3")]
+    record = _latched(tmp_path, rows, [_op(2), _op(3, task="t2")])
+    assert [c["call"]["invocation_id"] for c in record["causes"]] == ["inv-a", "inv-b"]
+    task_a = dict(failed_call=recovery.call_cost(rows[0]), attempts=[])
+    got = recovery.costs([record, task_a])
+    assert got["calls"] == 2 and got["calls_with_unknown_usage"] == 2 and got["tokens_known"] is None
+    assert got["unidentified_calls"] == 0
+
+
+def test_a_cause_whose_row_is_missing_is_counted_once_as_unidentified_never_as_zero(tmp_path):
+    record = _latched(tmp_path, [], [_op(7)])
+    (cause,) = record["causes"]
+    assert cause["call"] is None and cause["operation"] == "O-7"
+    got = recovery.costs([record, dict(record)])
+    assert got["calls"] == 0 and got["unidentified_calls"] == 1 and got["tokens_known"] is None
+
+
+def test_a_failed_editing_call_is_its_own_occurrence_with_what_it_left(tmp_path):
+    from quadratus.delegation import DelegationLedger
+    from quadratus.session import TaskFailed
+    session = _session(tmp_path)
+    ledger = DelegationLedger(tmp_path / "invocations.jsonl")
+    ledger.events.append(_row("inv-lead", op="O-2"))
+    session.config.delegation_ledger = ledger
+    session._active_call = dict(role="lead", model="grok:default")
+    exc = TaskFailed("transport", "grok CLI timed out after 900s")
+    exc.__cause__ = TimeoutError("grok CLI timed out after 900s")
+    session._record_task_failure(SimpleNamespace(task_id="t1"), exc, "grok:default",
+                                 dict(inspected=True, changed_lines=7), ["app.py", "tests/test_app.py"])
+    (record,) = session.recoveries
+    assert record["outcome_class"] == "provider_timeout" and record["kind"] == "task"
+    assert record["effect"] == dict(inspected=True, changed_files=2, changed_lines=7)
+    assert record["failed_call"]["invocation_id"] == "inv-lead" and record["failed_call"]["tokens"] is None
+    assert record["decision"].startswith("hand_back") and record["result"].startswith("failed: t1 handed back")
+    scope = TaskFailed("scope", "changed a file outside its scope")
+    session._record_task_failure(SimpleNamespace(task_id="t1"), scope, "grok:default", {}, [])
+    assert session.recoveries[-1]["outcome_class"] == "task_failed"

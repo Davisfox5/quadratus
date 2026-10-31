@@ -612,9 +612,10 @@ class Fleet:
                     + "\n".join(checks)
                     + "\nRun these commands verbatim from the working directory. Do not add cd, pipes, "
                     "wildcards, shell wrappers or substitute a directory for the listed files. "
-                    "A new test file that no listed command names is not shown to have run: unless a "
-                    "listed test file runs it, its tests stay unverified, so add new tests to a "
-                    "file a listed command already names. "
+                    "A new test file is not shown to have run unless a listed command names it, names "
+                    "a folder that holds it, or discovers it (a pytest command with no test-file "
+                    "operands discovers every Python test file); otherwise its tests stay unverified, "
+                    "so add new tests to a file or folder a listed command already runs. "
                     "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
                     "do not retry variants, delegate it or use another tool to execute it. "
                     "Report each check or acceptance step you could not run on its own line "
@@ -970,6 +971,7 @@ class Fleet:
                 turn_limited=outcome == "TurnLimitReached",
                 prompt_artifact=prompt_artifact,
                 session_id=getattr(provider, "last_session_id", None),
+                operation=getattr(provider, "last_operation", None),
                 post_return_failure=post_return_failure,
                 detail=detail,
                 stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),

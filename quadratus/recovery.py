@@ -68,6 +68,8 @@ OUTCOME_CLASSES: Dict[str, str] = {
     "stalled": "the planning loop did not converge",
     "stop_rule": "one of the run's own stop rules ended it (a failed or unattributable check, unverified "
                  "evidence, open findings, unmet requirements, a breaker)",
+    "task_failed": "a task broke its own rules (scope, reply, channel, environment); its work was kept and "
+                   "it was handed back",
     "unknown": "an outcome the harness could not classify",
 }
 
@@ -85,6 +87,8 @@ ACTIONS: Dict[str, str] = {
     "stop": "the run stops; the record keeps the evidence",
     "reconcile": "the outcome is uncertain: an operator reconciles it from the retained evidence before any "
                  "resume",
+    "hand_back": "the task fails; its work is kept and the planner names the remaining work (CONTINUES); "
+                 "nothing is retried",
 }
 
 #: Vendor CLI tool names the allowlist knows, by what they do. A read is a
@@ -182,11 +186,45 @@ def safe_observations(trace: Optional[dict], *, project_root=None, unavailable: 
         status, reason = "partial", "; ".join(p for p in parts if p) or "the transcript was not read whole"
     else:
         status, reason = "observed", ""
-    return dict(status=status, **({"reason": reason} if reason else {}),
+    extra = {}
+    progress = trace.get("progress") if isinstance(trace.get("progress"), dict) else None
+    if progress is not None:
+        extra["progress"] = _safe_progress(progress)
+    return dict(status=status, **({"reason": reason} if reason else {}), **extra,
                 tool_calls=sum(sum(v.values()) for v in tools.values()),
                 tools={k: dict(v) for k, v in sorted(tools.items())}, files_read=read[:60],
                 searches=searches, commands=commands, command_outcomes=dict(sorted(command_outcomes.items())),
                 writes_attempted=writes)
+
+
+_LABEL = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,47}")
+_ISO = re.compile(r"\d{4}-\d{2}-\d{2}T[0-9:.+-]{8,32}")
+
+
+def _safe_progress(progress: dict) -> dict:
+    """A call's progress summary, re-validated at the record boundary:
+    counts, short identifier labels and ISO times only."""
+    def count(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    def seconds(value):
+        return round(float(value), 3) if isinstance(value, (int, float)) and not isinstance(value, bool) \
+            and value >= 0 else None
+    labels = {k: count(v) for k, v in (progress.get("labels") or {}).items()
+              if isinstance(k, str) and _LABEL.fullmatch(k) and count(v) is not None} \
+        if isinstance(progress.get("labels"), dict) else {}
+    status = progress.get("status") if progress.get("status") in ("observed", "partial", "unavailable") else "unavailable"
+    activity = progress.get("activity") if progress.get("activity") in (
+        "tool_use", "reasoning", "other_events", "no_events") else None
+    return dict(status=status, events=count(progress.get("events")), invalid=count(progress.get("invalid")),
+                labels=dict(list(labels.items())[:12]), tool_events=count(progress.get("tool_events")),
+                reasoning_events=count(progress.get("reasoning_events")),
+                first_at=progress.get("first_at") if isinstance(progress.get("first_at"), str)
+                and _ISO.fullmatch(progress["first_at"]) else None,
+                last_at=progress.get("last_at") if isinstance(progress.get("last_at"), str)
+                and _ISO.fullmatch(progress["last_at"]) else None,
+                span_seconds=seconds(progress.get("span_seconds")),
+                longest_gap_seconds=seconds(progress.get("longest_gap_seconds")), activity=activity)
 
 
 def call_cost(event) -> Optional[dict]:
@@ -206,7 +244,13 @@ def call_cost(event) -> Optional[dict]:
                 output_tokens=out if isinstance(out, int) else None,
                 tokens=(inp + out) if known else None,
                 seconds=getattr(event, "seconds", None) if isinstance(getattr(event, "seconds", None),
-                                                                       (int, float)) else None)
+                                                                       (int, float)) else None,
+                # Whether the CLI wrote to stderr, as a count: never its text.
+                stderr_chars=len(getattr(event, "stderr_tail", "") or "") if isinstance(
+                    getattr(event, "stderr_tail", ""), str) else None,
+                session_known=bool(getattr(event, "session_id", None)),
+                operation=getattr(event, "operation", None) if isinstance(getattr(event, "operation", None), str)
+                else None)
 
 
 def costs(records: Iterable[dict]) -> dict:
@@ -215,8 +259,21 @@ def costs(records: Iterable[dict]) -> dict:
     zeroed."""
     seen: Dict[str, dict] = {}
     unidentified = 0
+    # A cause the budget named whose ledger row was not found is still a call
+    # that happened: counted once per operation id, unidentified, never
+    # absent and never zero, unless another record names its row.
+    orphan_ops = set()
+    records = [r for r in records if isinstance(r, dict)]
     for record in records:
-        for call in [record.get("failed_call")] + [a.get("call") for a in record.get("attempts") or []]:
+        causes = [c for c in record.get("causes") or [] if isinstance(c, dict)]
+        for cause in causes:
+            if not isinstance(cause.get("call"), dict):
+                if cause.get("operation"):
+                    orphan_ops.add(str(cause["operation"]))
+                else:
+                    unidentified += 1
+        for call in ([record.get("failed_call")] + [c.get("call") for c in causes]
+                     + [a.get("call") for a in record.get("attempts") or []]):
             if not isinstance(call, dict):
                 continue
             key = call.get("invocation_id")
@@ -224,6 +281,8 @@ def costs(records: Iterable[dict]) -> dict:
                 unidentified += 1
                 continue
             seen.setdefault(key, call)
+    named_ops = {str(c.get("operation")) for c in seen.values() if c.get("operation")}
+    unidentified += len(orphan_ops - named_ops)
     known = [c for c in seen.values() if isinstance(c.get("tokens"), int)]
     timed = [c for c in seen.values() if isinstance(c.get("seconds"), (int, float))]
     return dict(calls=len(seen), tokens_known=sum(c["tokens"] for c in known) if known else None,
