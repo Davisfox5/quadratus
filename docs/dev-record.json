@@ -2828,6 +2828,41 @@
         "claude: scope extended to quadratus/completion_decision.py, quadratus/project_run.py, tests/lifecycle/test_boundary_correction.py, tests/lifecycle/test_delivery_controller.py, tests/lifecycle/test_evidence_lifecycle.py",
         "claude: scope extended to quadratus/run_budget.py, tests/lifecycle/test_finding_identity.py"
       ]
+    },
+    {
+      "id": "T-recovery-lifecycle",
+      "purpose": "Common recovery lifecycle and evidence-backed improvement loop (Davis 6545870693): owned review debt for unfinished judgments across serial, recheck, settlement/post-merge, batch child, explicit list, final slot, design review and text verification; owner-only settlement bound to the full judgment identity with ordinary review qualification; protective stops kept; typed occurrence/learning records with invocation costs (unknown null), allowlisted transcript observations with measured integrity, labelled non-adopted proposals; checkpoint/terminal/resume parity. Corrections from the a8a9af2 refutation (a7f9c6c) and root review 6547961862 (cadbcb9), scoped CLEAR 6548215559. Pending: full local suite, exact CI, installed/privacy/freeze, live (root). Known limits: _ending_only single-seat turn/cache metadata loss (baseline), first-time permissive text verifier parser, JSON verifier cap unchanged. Raw failures kept: six environment unit failures identical on 1dbbf9f; original refutation 19/24 real verdicts addressed.",
+      "base": "1dbbf9f0e89b260400070ca52d588ddc58d769ac",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/recovery.py",
+        "quadratus/delivery.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tests/lifecycle/test_recovery_lifecycle.py",
+        "tests/test_recovery_units.py",
+        "tests/test_review_seat_cap.py",
+        "tests/lifecycle/test_judgment_integrity.py",
+        "tests/lifecycle/test_quality_completion.py",
+        "tests/lifecycle/test_boundary_correction.py",
+        "tests/lifecycle/test_delivery_controller.py",
+        "CLAUDE.md",
+        "docs/dev-record.json"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-31T19:40:16Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "cadbcb9438e2d2e388f5702fdf2b5cfc812bc910",
+        "at": "2026-10-31T19:40:17Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: Scoped CLEAR of cadbcb9 corrections by root and two independent reviewers (6548215559; manifests 06fe21fd..., e6768e1c...). Not full validation: full local suite, exact CI (41234856123 running), installed/privacy/freeze and live remain pending, root-owned. Kept: original refutation results, spy run 1328 passed/27 skipped on a8a9af2, six environment unit failures identical on 1dbbf9f, root raw 4PASS/1FAIL learning receipt."
+      ]
     }
   ],
   "receipts": [
