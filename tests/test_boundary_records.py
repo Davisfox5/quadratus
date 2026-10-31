@@ -63,8 +63,8 @@ def test_the_packet_digest_moves_with_any_field(field, value):
 
 
 def _rows(**over):
-    base = dict(oid="O1", requirements=[["R1", 1]], runner="gate", execution="ran", sufficiency="sufficient",
-                sufficiency_current=True, reason="")
+    base = dict(oid="O1", kind="acceptance", requirements=[["R1", 1]], runner="gate", execution="ran",
+                sufficiency="sufficient", sufficiency_current=True, reason="")
     base.update(over)
     return [base]
 
@@ -225,11 +225,26 @@ def test_a_conflicting_sufficiency_line_leaves_the_obligation_unjudged_in_the_se
                                {"R5": (True, UNIT)})
     typed = session.evidence_obligations[0]
     assert typed["sufficiency"] == "unjudged" and "2 sufficiency lines" in typed["sufficiency_note"]
+    # Quality/completion batch, 2026-10-31: a NOT RUN row is execution debt,
+    # settled by the harness's own run of its cases and judged by nobody. A
+    # seat's line about it, conflicting or not, is kept as a note and applied
+    # to nothing, so an executed row neither lowers nor credits R5 (P12
+    # lowered six METs on exactly this reading).
+    assert typed["purpose"] == "execution" and "not applied" in typed["sufficiency_note"]
     session._judge_obligations("openai:sol", "O1: INSUFFICIENT misses the error path", {"R5": (True, UNIT)})
-    assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
+    typed = session.evidence_obligations[0]
+    assert typed["sufficiency"] == "unjudged" and typed["sufficiency_note"].startswith("O1: INSUFFICIENT by openai:sol not applied")
+    found = {"R5": (True, UNIT)}
+    assert session._apply_acceptance(found, ["R5"]) == [] and found["R5"][0] is True
+    # An unexecuted row still holds R5: the debt is settled by execution alone.
+    session.checks.clear()
+    _not_run(session, "t4", ["R5"], f"NOT RUN: {UNIT} - not approved")
+    session._refresh_obligations()
+    pending = [o for o in session.evidence_obligations if o["task"] == "t4"]
+    assert len(pending) == 1 and pending[0]["execution"] != "ran" and pending[0]["purpose"] == "execution"
     found = {"R5": (True, UNIT)}
     lowered = session._apply_acceptance(found, ["R5"])
-    assert found["R5"][0] is False and "O1: sufficiency insufficient" in lowered[0]["reason"]
+    assert found["R5"][0] is False and f"{pending[0]['oid']}: execution" in lowered[0]["reason"]
 
 
 def test_invalidated_evidence_resolves_only_against_the_record(tmp_path):

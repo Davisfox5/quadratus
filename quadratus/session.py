@@ -2200,6 +2200,24 @@ _AUTHORITY_ORDER = (
     "conditions is not met. Behaviour the goal does not address, and old behaviour outside the work it "
     "asks for, is judged on its own merits as before.")
 
+#: One compact reading of the original contract that every seat gets
+#: (quality/completion batch, 2026-10-31; P12: json.loads accepted NaN and
+#: mutated state under a malformed-body requirement, missing CLI arguments
+#: left through argparse usage under a JSON-refusal requirement, and the
+#: README documented the exception; the long error-boundary lens reached
+#: only the ordinary collaborator). Four readings, no new pass, no new
+#: blocker for a genuine ambiguity.
+_CONTRACT_BOUNDARY_RULE = (
+    "The goal's contract binds every layer the work touches. Four readings of it are not open: a library's "
+    "leniency is not the goal's language (a parser that accepts what the required format forbids, such as NaN "
+    "or Infinity in JSON, breaks a requirement that names the format); parsing and validation that run before "
+    "the handler or dispatcher are part of the refusal boundary the goal names (an argument parser's usage exit "
+    "is not a JSON refusal where the goal requires one); a request the code refuses or cannot read whole leaves "
+    "no change behind, shown by reading the state after the refusal, not the error path; and documentation "
+    "describes the goal's contract and never narrows it (an exception the goal does not grant is a defect, not "
+    "a clarification). Where the goal is silent, or two of its rules collide on one input, name the ambiguity "
+    "for a decision instead of calling either reading a defect.")
+
 #: What a test cannot do in a reassessment, whoever wrote it.
 _EVIDENCE_AUTHORITY = (
     "The goal, the decisions and operator rulings, the configured checks and design evidence above bind "
@@ -3194,6 +3212,20 @@ class Session:
         #: The job's commitment to end after one task whose ordinary route
         #: could not be paid (admission/3, ``_commit_terminal``); carried.
         self._terminal_route: Optional[dict] = None
+        #: Slot accounting (quality/completion batch, 2026-10-31): one entry
+        #: per charge (admitted work dispatched, serial or a parallel wave,
+        #: whatever followed), per planner reply sent back before any lead
+        #: call, per DONE sent back and per task or batch not started; only a
+        #: charge moves ``_slots_used``. Carried by the checkpoint.
+        self.slot_ledger: List[dict] = []
+        #: Capped-revision handoffs (``_capped_revision_recheck``): the task,
+        #: slot, reviewers and outcome of each one-shot recheck of a capped,
+        #: gated, in-scope revision, resolved or not; carried.
+        self.capped_handoffs: List[dict] = []
+        #: Set by ``_run_batch`` once a wave's children are about to be
+        #: built: from here the wave is admitted work and its slots are
+        #: charged however it ends.
+        self._wave_started = False
         #: PROVES lines that bound nothing (unknown scenario, malformed case).
         self.proof_binding_problems: List[dict] = []
         self._calibrated: set = set()
@@ -5564,7 +5596,8 @@ class Session:
                 # measured, unreviewed and ungated, re-planned by name --
                 # unless it is the last slot's checked, in-scope source, which
                 # meets the reviewers whose findings it answered (r10).
-                handoff = self._capped_revision_recheck(lead, spec, task, exc, before, blocking, labels)
+                handoff = self._capped_revision_recheck(lead, spec, task, exc, before, blocking, labels,
+                                                        stage="revision")
                 if handoff is None:
                     return self._close_turn_limited(lead, spec, task, exc, before)
                 revision, unresolved, capped_writer = handoff[0], handoff[1], True
@@ -5620,10 +5653,18 @@ class Session:
                         revision = self._edit(lead, self._fix_prompt(spec, revision,
                                                                      [(labels[p], v) for p, v in actionable]))
                     except TurnLimitReached as exc:
-                        handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
+                        handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels,
+                                                                stage="fix")
                         if handoff is None:
                             return self._close_turn_limited(lead, spec, task, exc, before)
-                        revision, unresolved, capped_writer = handoff[0], handoff[1], True
+                        # Findings of peers outside this round's recheck stay
+                        # held (the workflow refutation of this batch); with
+                        # slots left they make the handoff an unfinished one.
+                        others = [u for u in unresolved if u[0] not in {p for p, _ in pending}]
+                        if others and not self._final_work_slot(spec):
+                            self.capped_handoffs[-1]["outcome"] = "unresolved: other findings open"
+                            return self._close_turn_limited(lead, spec, task, exc, before)
+                        revision, unresolved, capped_writer = handoff[0], others + handoff[1], True
                         break
                     except FinishReserved as exc:
                         # The findings the last recheck left open stay open.
@@ -5809,10 +5850,24 @@ class Session:
                  + f" Bound to source {current[:16]} and checks {identity[:16]}.")
         return draft, list(collaborators) + [p for p in reviewers if p not in collaborators]
 
-    def _capped_revision_recheck(self, lead, spec, task, exc, before, pending, labels):
-        """A capped revision or fix in the job's last task slot meets the
+    def _capped_revision_recheck(self, lead, spec, task, exc, before, pending, labels, *, stage: str = "revision"):
+        """A capped revision or fix whose work is the measured, in-scope
+        source with the task's checks passing on exactly it meets the
         reviewers whose blocking findings it answered, once, on the current
         source; or None and the capped close applies as before.
+
+        Quality/completion batch, 2026-10-31 (P12: t3's and t4's capped
+        revisions each left a gated, in-scope source whose findings were
+        never rechecked, and each cost a continuation task): the handoff
+        is no longer the last slot's alone. In any serial planner slot the
+        same bounded one-shot applies (``_checked_source``): the original
+        reviewers, no fresh writer, no retry, the cap event retained. In the
+        last slot the task closes on the recheck as before (an unresolved
+        finding goes to the close policy). Earlier, an unresolved recheck
+        returns None and the capped-task path applies: the recheck's
+        verdicts stand on the registry, the task is unfinished debt the
+        planner continues by name, and nothing is accepted on the writer's
+        behalf.
 
         Step 2 r10 on f6c028c: t3's capped Grok draft took the last-slot
         handoff to an Opus review, which found malformed CLI ids leaving as
@@ -5834,52 +5889,128 @@ class Session:
             return None
         if is_design_task(spec) and self.project and self.config.allow_writes:
             return None
-        if (exc.partial_text or "").strip():
-            # The accepted capped revision's structured PROVES lines (root
-            # on 9bedde0); a declaration, never execution or a verdict.
-            self._record_proves(lead, "lead", (exc.partial_text or "").strip())
-        bound = self._checked_final_source(spec, before)
+        final = self._final_work_slot(spec)
+        bound = self._checked_source(spec, before, final_only=False)
         if bound is None:
             return None
         state, current, identity = bound
         peers = [peer for peer, _ in pending]
         said = (exc.partial_text or "").strip()
+        where = "in the last task slot" if final else "with task slots left"
+        handoff = dict(task=spec.task_id, lead=lead, stage=stage, turns=exc.turns, final_slot=final,
+                       slot=int(getattr(self, "_slots_used", 0) or 0) + 1, reviewers=list(peers),
+                       changed=list(state["changed"]), changed_lines=state["changed_lines"], outcome=None)
+        self.capped_handoffs.append(handoff)
+        # The recheck route is admitted whole before it is promised, as the
+        # no-edit retry's is (``_no_edit_cap_note``); refused, nothing is
+        # written to the transcript and the capped close applies.
+        wall_extra, wall_known = self._route_wall(spec)
+        if not self._admit_repair(spec, f"recheck of the capped {stage}", "fix-cycle",
+                                  self._fix_cycle_stages(spec, pending, editor=False),
+                                  after=f"capped {stage}", wall_extra=wall_extra, wall_known=wall_known):
+            handoff["outcome"] = "refused"
+            self._note(f"task {spec.task_id}: the recheck of the capped {stage} cannot be paid whole; "
+                       "the capped close applies")
+            return None
         task.keep(json.dumps(dict(task=spec.task_id, lead=lead, turns=exc.turns, changed=state["changed"],
-                                  changed_lines=state["changed_lines"], reviewers=peers,
+                                  changed_lines=state["changed_lines"], reviewers=peers, final_slot=final,
                                   **self._attempt_identity(spec))),
-                  kind="capped-final-revision", author=lead)
-        if self._outcome is not None:
-            self._outcome.note("cap", f"lead stopped at its turn limit ({exc.turns or '?'} turns) while "
-                                      "revising in the last task slot; its in-scope source passed the checks "
-                                      f"and goes back to {', '.join(peers)} for their own findings",
-                               terminal=False)
-        self._note(f"task {spec.task_id}: revision stopped at its turn limit in the last task slot; its "
+                  kind="capped-final-revision" if final else "capped-checked-revision", author=lead)
+        cap_fact = (f"lead stopped at its turn limit ({exc.turns or '?'} turns) while revising {where}; its "
+                    f"in-scope source passed the checks and goes back to {', '.join(peers)} for their own findings")
+        if final and self._outcome is not None:
+            # With slots left the fact is written only once the recheck
+            # resolves: an unresolved handoff takes the capped-task path,
+            # whose own cap fact is the one the breaker and the survey count.
+            self._outcome.note("cap", cap_fact, terminal=False)
+        self._note(f"task {spec.task_id}: revision stopped at its turn limit {where}; its "
                    "checked, in-scope source goes back to the reviewers whose findings it answered")
         record = ("HARNESS RECORD: the lead stopped at its turn limit"
                   + (f" ({exc.turns} turns)" if exc.turns else "")
-                  + " while revising, before giving a final answer, in the job's last task slot. The "
-                    "revised work is the project source as it is now. Changed since the task began: "
+                  + " while revising, before giving a final answer, "
+                  + ("in the job's last task slot" if final else "with task slots left in the job")
+                  + ". The revised work is the project source as it is now. Changed since the task began: "
                     f"{', '.join(state['changed'])} ({state['changed_lines']} lines), inside the declared "
-                    "scope. The project's checks passed on exactly this source. Nothing here says your "
-                    "findings are addressed: read the source."
+                    "scope. The project's gate passed on exactly this source in the harness's own observation "
+                    "(the run-start original tests are not re-run there; the task's own gate still decides). "
+                    "Nothing here says your findings are addressed: read the source."
                   + (f" The lead's last words, which are narration and not a result: {said[:300]}"
                      if said else " The lead returned no answer text.")
                   + f" Bound to source {current[:16]} and checks {identity[:16]}.")
         task.record("assistant", record)
         task.keep(record, kind="revision")
-        unresolved = self._recheck_blocking(spec, pending, record, task, labels=labels)
+        # The outcome is read from the registry, never from the recheck's
+        # return alone: a capped, refused or verdict-less recheck returns
+        # nothing for a finding that stays open (the workflow refutation of
+        # this batch, 2026-10-31).
+        before_ids = {r["fid"] for r in self._finding_records(task=spec.task_id, open_only=False)}
+        pending_ids = {r["fid"] for peer in peers for r in self._finding_records(task=spec.task_id, peer=peer)}
+        try:
+            unresolved = self._recheck_blocking(spec, pending, record, task, labels=labels)
+        except BaseException as exc_:  # noqa: BLE001 -- recorded, then raised exactly as it was
+            handoff["outcome"] = f"stopped: {type(exc_).__name__}"
+            raise
+        open_after = [r for r in self._finding_records(task=spec.task_id)
+                      if r["fid"] in pending_ids or r["fid"] not in before_ids]
         if self._source_fingerprint() != current:
             # What was checked is no longer the source: nothing is resolved.
             unresolved = [(peer, f"UNRESOLVED: the source changed during the recheck; {note.strip()}")
                           for peer, note in pending]
+            handoff["outcome"] = "source changed"
+        elif open_after:
+            handoff["outcome"] = "unresolved"
+            said_ids = {_finding_id(v) for _p, v in unresolved}
+            for r in open_after:
+                if r["fid"] not in said_ids:
+                    # Open on the registry with no verdict line (a capped or
+                    # refused recheck, or a finding the recheck raised): held
+                    # as unresolved under the reviewer's own name.
+                    why = ((r.get("history") or [{}])[-1].get("why") or "no verdict: the recheck did not judge it")
+                    unresolved.append((r["author"], f"{r['fid']}: UNRESOLVED: {str(why)[:200]}"))
+        else:
+            handoff["outcome"] = "resolved"
+        handoff["unresolved"] = [_finding_id(v) or v[:120] for _p, v in unresolved]
+        if (unresolved or open_after) and not final:
+            # Slots are left: the reviewer's own verdict stands on the
+            # registry and the task stays the unfinished debt it was, for
+            # the planner to continue by name. Nothing is accepted and no
+            # second writer or recheck is called; the capped close records
+            # the PROVES lines itself.
+            self._note(f"task {spec.task_id}: {len(open_after) or len(unresolved)} finding(s) stayed open after "
+                       "the recheck; the capped close applies and the planner continues the work")
+            return None
+        if said:
+            # The accepted capped revision's structured PROVES lines (root
+            # on 9bedde0); a declaration, never execution or a verdict.
+            self._record_proves(lead, "lead", said)
+        if not final and self._outcome is not None:
+            self._outcome.note("cap", cap_fact, terminal=False)
         return record, unresolved
 
     def _checked_final_source(self, spec, before):
         """``(state, source, gate)`` when a capped call's work is the last
         slot's measured, in-scope source and the task's checks passed on
-        exactly it; None otherwise. The capped draft's conditions without its
-        reviewer choice (_capped_final_draft)."""
-        if not self._final_work_slot(spec) or not self._write_ceiling() or spec.scope is None:
+        exactly it; None otherwise (``_checked_source`` with
+        ``final_only``)."""
+        return self._checked_source(spec, before, final_only=True)
+
+    def _checked_source(self, spec, before, *, final_only: bool):
+        """``(state, source, gate)`` when a capped call's work is the
+        measured, in-scope source and the task's checks passed on exactly
+        it; None otherwise. The capped draft's conditions without its
+        reviewer choice (_capped_final_draft). With ``final_only`` the task
+        must hold the job's final work slot (``_final_work_slot``); without
+        it any serial planner task qualifies (never an explicit list, whose
+        completion path is its own, and never a parallel child, whose batch
+        decides), under the same write ceiling, scope, in-scope measured
+        edits and a passing check on exactly the current source and gate."""
+        if final_only:
+            if not self._final_work_slot(spec):
+                return None
+        elif (self._explicit_tasks is not None or getattr(self, "_batch_child", False)
+              or not getattr(self, "_serial_dispatch", False)):
+            return None
+        if not self._write_ceiling() or spec.scope is None:
             return None
         state = self._inspect_partial_edits(before)
         if not state["inspected"] or not state["changed"]:
@@ -5890,6 +6021,10 @@ class Session:
         self._observe_checks(spec, "turn-limited")
         current = self._source_fingerprint()
         identity = _gate_identity(self._current_gate()) if self._current_gate() is not None else None
+        # The passing run of exactly this source and gate is one of this
+        # task's own observations (the pre-review observation covers a
+        # revision that changed nothing; the turn-limited one covers a
+        # changed source), never another task's.
         if not current or identity is None or not any(
                 c.get("source") == current and c.get("gate") == identity and c.get("passed")
                 for c in self.review_checks if c.get("task") == spec.task_id):
@@ -6559,6 +6694,7 @@ class Session:
                     "nothing else; a long artifact comes in windows, each naming the exact next "
                     "request, and each window is one fetch. " + _ASK_SPARINGLY
                     + f"\n\n{_SIZE_GUIDE}\n\n{self._kind_request()}\n\n{_NEEDS_REQUEST}"
+                    + "\n\n" + _CONTRACT_BOUNDARY_RULE
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
                                   else _REQUIREMENTS_REQUEST + " " + _COVERS_REQUEST)
                        if self.config.requirements_ledger else "")
@@ -6892,6 +7028,29 @@ class Session:
                          "stands.")
         return text.rstrip()
 
+    def _slot_event(self, event: str, tasks, used: int, *, why: str = "", how: str = "") -> None:
+        """One ``slot_ledger`` entry. ``charged``: admitted work dispatched
+        (a serial task or a parallel wave), charged once at dispatch whatever
+        followed it (a clean close, a cap, a failure, a stop raised inside
+        it). ``sent_back``: a planner reply the intake refused before any
+        lead call. ``done_sent_back``: a DONE the completion decision
+        reopened. ``not_started``: a task or batch whose route was refused
+        at dispatch with nothing written. Only ``charged`` moves
+        ``_slots_used``; every entry records the count as it stands after
+        the event, so the ledger and the count agree at every point. The
+        uncharged events are bounded by the correction allowance
+        (``max_requirement_reopens`` → ``RunStalled``), the completion
+        decision's reopen allowance, the call, token and wall budgets and
+        the repeated-task stall; none of them frees planning."""
+        total = getattr(self, "_max_tasks", None)
+        entry = dict(event=event, tasks=[str(t) for t in tasks], slots_used=int(used),
+                     max_tasks=int(total) if total else None)
+        if how:
+            entry["how"] = how
+        if why:
+            entry["why"] = str(why)[:200]
+        self.slot_ledger.append(entry)
+
     def _slots_note(self) -> str:
         """The job's task allowance as the planner must plan against it: the
         slots left, counting the task about to be named, and the requirements
@@ -6904,7 +7063,11 @@ class Session:
             return ""
         left = max(0, total - int(getattr(self, "_slots_used", 0) or 0))
         text = (f"\n\nTask slots: {left} of {total} remain for this job, counting the task you name now. "
-                "A parallel batch spends one slot per task, and a task that is sent back spends one too.")
+                "A slot is spent when a task is dispatched, one per task in a parallel batch, however the "
+                "task ends. A task or batch sent back before any lead call spends no slot and counts against "
+                f"the correction allowance of {self.config.max_requirement_reopens}, past which the run "
+                f"stalls; a DONE sent back spends no slot and is sent back at most "
+                f"{self.config.max_requirement_reopens} times, after which the run ends incomplete.")
         text += self._allowance_note()
         ledger = self.memory.ledger
         if self.config.requirements_ledger and ledger.requirements:
@@ -7045,15 +7208,35 @@ class Session:
         # the cap bounds tasks run however they are grouped (Codex review of
         # #25: a 3-task batch used to cost one slot).
         # A resumed episode starts from the slots its job already spent.
+        # A slot is charged at dispatch (quality/completion batch,
+        # 2026-10-31; P12 spent two of its eight slots on a declaration the
+        # intake refused and a DONE that was sent back, so the cap ended
+        # the run with its requirements still open): a planner reply the
+        # intake refuses, a DONE sent back and a task not started spend
+        # none, and each stays bounded by the correction and reopen
+        # allowances, the budgets and the repeated-task stall. ``used`` is
+        # the count charged so far; ``_slot_event`` keeps the ledger.
         used = int(getattr(self, "_slots_used", 0) or 0)
         self._max_tasks = max_tasks
+        # Uncharged loop turns are bounded by the correction allowance and
+        # the DONE reopen allowance (each ``max_requirement_reopens``); the
+        # tripwire below cannot fire on today's paths and exists so a future
+        # uncharged ``continue`` that forgets to count never plans for free.
+        turns = charged_turns = 0
         # An explicit list that fills the cap exactly still ends through its
         # own completion path, never the cap's goal question, which is an
-        # orchestrator call (Codex on #42, 357d40a P2).
-        while (used < max_tasks and not self._terminal_committed()) or self._explicit_list_spent():
+        # orchestrator call (Codex on #42, 357d40a P2). A route forfeit ends
+        # planning with the charged count as it stands: the forfeited slots
+        # are named by the cap's decision, never spent.
+        while ((used < max_tasks and not self._terminal_committed() and self._route_forfeit is None)
+               or self._explicit_list_spent()):
             self._slots_used = used
             self._quiescent()
-            used += 1
+            turns += 1
+            if turns - charged_turns > 2 * int(self.config.max_requirement_reopens) + 1:
+                raise RunStalled(f"the planning loop ran {turns - charged_turns} turn(s) without dispatching a task, "
+                                 "past the correction allowance and the DONE reopen allowance together "
+                                 f"({self.config.max_requirement_reopens} each); it is not converging.")
             if self._explicit_tasks is not None:
                 spec = self._next_explicit_task()
             else:
@@ -7061,27 +7244,38 @@ class Session:
                 spec = self.next_task()
             self._done_refusal = ""
             batch, self._batch = ([spec] + self._batch if spec is not None and self._batch else None), []
-            if batch and used - 1 + len(batch) > max_tasks:
-                self._note(f"parallel batch of {len(batch)} exceeds the {max_tasks - used + 1} task "
+            if batch and used + len(batch) > max_tasks:
+                self._note(f"parallel batch of {len(batch)} exceeds the {max_tasks - used} task "
                            "slots left; running its first task alone")
                 batch = None
             if batch:
-                used += len(batch) - 1
                 previous_description = None
                 # No slot is left after this wave: no planning call follows it.
-                self._last_wave = used >= max_tasks and self._explicit_tasks is None
+                self._last_wave = used + len(batch) >= max_tasks and self._explicit_tasks is None
+                self._wave_started = False
                 try:
                     ran = self._run_batch(batch)
                 finally:
                     self._last_wave = False
+                    if self._wave_started:
+                        # Admitted and dispatched: one slot per task, charged
+                        # once, whatever the wave's outcome or stop.
+                        used += len(batch)
+                        charged_turns += 1
+                        self._slots_used = used
+                        self._slot_event("charged", [s.task_id for s in batch], used, how="batch")
+                    self._wave_started = False
                 if not ran and self.stop_reason:
                     # Stopped at intake, before any child's call.
                     break
                 if not ran:
-                    # Sent back before any lead call (map G6): the same as a
-                    # serial send-back, one slot spent, not one per task, and
-                    # it counts against the same correction allowance.
-                    used -= len(batch) - 1
+                    # Sent back or not started before any lead call (map
+                    # G6): no slot is spent, and a send-back counts against
+                    # the same correction allowance as a serial one.
+                    self._slot_event("not_started" if self.not_started and self.not_started[-1].get("task")
+                                     in {s.task_id for s in batch} else "sent_back",
+                                     [s.task_id for s in batch], used,
+                                     why=(self._done_refusal or "").strip().splitlines()[-1] if self._done_refusal else "")
                     self._covers_corrections += 1
                     if self._covers_corrections > self.config.max_requirement_reopens:
                         raise RunStalled("the orchestrator kept naming parallel batches that were sent back: "
@@ -7114,6 +7308,8 @@ class Session:
                     if decision.refusal:
                         self._done_refusal = decision.refusal
                     self.run_outcome.note("unverified", decision.reopen_fact, terminal=False)
+                    # No slot: the reopen allowance bounds this path.
+                    self._slot_event("done_sent_back", [], used, why=decision.reopen_fact)
                     continue
                 name = decision.stop.name if decision.stop else ""
                 if name == "RequirementsUnmet":
@@ -7156,6 +7352,7 @@ class Session:
             if problem:
                 # Corrected before any lead call is spent (Codex review of #25).
                 self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks without valid COVERS: {problem}")
@@ -7170,6 +7367,7 @@ class Session:
                 # requirement, corrected before any lead call through the same
                 # allowance as COVERS.
                 self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks without a valid proof mapping: {problem}")
@@ -7183,6 +7381,7 @@ class Session:
             if problem:
                 # The same allowance as COVERS: refused before any lead call.
                 self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks with an invalid RESOLVES: {problem}")
@@ -7194,6 +7393,7 @@ class Session:
                 # Before any lead call (step 2): an unfinished attempt re-sent
                 # with the same text and scope meets the same failure.
                 self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept re-sending an unfinished task unchanged: {problem}")
@@ -7206,6 +7406,7 @@ class Session:
                 # source, so the requirements wait for the final audit, which
                 # judges them independently (r02, r03: a verification task
                 # re-ran the tests where it could not run them).
+                self._slot_event("sent_back", [spec.task_id], used, why="verification-only task over a verified source")
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled("the orchestrator kept naming verification-only tasks over a source "
@@ -7216,6 +7417,7 @@ class Session:
             problem = self._capture_problem(spec, resolves)
             if problem:
                 self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming UI tasks without a valid capture: {problem}")
@@ -7228,6 +7430,7 @@ class Session:
                 # before any call (completion workflow, 2026-10-30): a
                 # CONTINUES names a dispatched task whose work is still owed.
                 self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming CONTINUES on work it cannot take over: {problem}")
@@ -7244,6 +7447,7 @@ class Session:
                 break
             if problem:
                 self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled("the orchestrator kept naming work over owed work without taking it over: "
@@ -7276,8 +7480,9 @@ class Session:
                 # point was intake, not work (Codex, live run
                 # 20260930T134226Z: "ran" named a task no call ever made).
                 self.explicit["ran"].append(dict(index=self._explicit_index, task=spec.task_id))
-            self._last_wave = used >= max_tasks and self._explicit_tasks is None
+            self._last_wave = used + 1 >= max_tasks and self._explicit_tasks is None
             self._serial_dispatch = True
+            charged = True
             try:
                 summary = self.run_task(spec)
             except FinishReserved as exc:
@@ -7287,17 +7492,26 @@ class Session:
                 # This policy elects to forfeit: a review is never dropped
                 # to fit and no replanning of the remaining slots is
                 # attempted, so no claim is made that no cheaper scope
-                # exists. Planning ends here, the remaining slots are
-                # forfeited and recorded as such, and the cap's own decision
-                # applies every gate, naming the forfeit rather than the cap.
+                # exists. Planning ends here, the remaining slots (this
+                # task's own among them: nothing of it ran) are forfeited
+                # and recorded as such, and the cap's own decision applies
+                # every gate, naming the forfeit rather than the cap.
+                charged = False
                 self._route_forfeit = dict(task=spec.task_id, detail=str(exc)[:400],
-                                           slots_unused=max(0, max_tasks - used), slots_used=used - 1)
-                used = max_tasks
+                                           slots_unused=max(0, max_tasks - used), slots_used=used)
+                self._slot_event("not_started", [spec.task_id], used, why=str(exc))
                 continue
             finally:
                 self._continues = None
                 self._last_wave = False
                 self._serial_dispatch = False
+                if charged:
+                    # Dispatched: charged once, whether the task closed,
+                    # was capped, failed, or raised the stop leaving here.
+                    used += 1
+                    charged_turns += 1
+                    self._slots_used = used
+                    self._slot_event("charged", [spec.task_id], used, how="serial")
             unfinished = getattr(summary, "outcome", "closed")
             if unfinished in ("turn_limited", "failed"):
                 # A capped or failed continuation carries its predecessor's
@@ -8529,6 +8743,9 @@ class Session:
                                   f"{short}. Reply DONE, or name a smaller task.")
             return False
         self._authority_before("parallel batch")
+        # From here the wave is admitted work: its slots are charged by the
+        # loop however it ends (quality/completion batch, 2026-10-31).
+        self._wave_started = True
         self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _, _ in parsed))
         project = Project(self.project, exclude=self.config.project_excludes)
         base = project.contents()
@@ -8640,6 +8857,7 @@ class Session:
                               else None)
                     self.evidence_obligations.append(dict(
                         obligation, oid=f"O{len(self.evidence_obligations) + 1}", runner=runner,
+                        purpose=delivery.purpose_of(obligation),
                         gate=_gate_identity(self.config.integration_gate),
                         base_gate=_gate_identity(self.config.integration_gate), environment=self._environment_id(),
                         execution="missing" if obligation["execution"] in ("ran", "failed") else obligation["execution"],
@@ -9675,7 +9893,8 @@ class Session:
                if self.design_checks else "")
             + self._not_run_block()
             + self._review_notes_block(audited)
-            + self._obligation_view(ids=list(audited)))
+            + self._obligation_view(ids=list(audited))
+            + "\n\n" + _CONTRACT_BOUNDARY_RULE)
 
     def _audit_requirements(self, ids: Optional[List[str]] = None, final: bool = False) -> dict:
         """One read-only call: each requirement met or not, with evidence.
@@ -9728,11 +9947,13 @@ class Session:
                " Then one line per review finding carried to you, by its id: '<id>: INVALIDATED <the "
                "test, file, receipt or command showing it never held>' or '<id>: UNRESOLVED <why it "
                "stands>'; a finding you do not judge stays open.")
-            + ("" if not any(o.get("execution") == "ran" for o in obligations_rows) else
-               " Each executed evidence obligation listed above needs its own line, '<O-id>: SUFFICIENT "
+            + ("" if not any(o.get("execution") == "ran" and delivery.purpose_of(o) == "acceptance"
+                             for o in obligations_rows) else
+               " Each executed acceptance obligation listed above needs its own line, '<O-id>: SUFFICIENT "
                "<what the executed case shows for that requirement and scenario>' or '<O-id>: INSUFFICIENT "
                "<what it does not establish>'. Your verdict on a requirement never judges a row it binds: a "
-               "row left unjudged keeps its requirement not met.")
+               "row left unjudged keeps its requirement not met. An execution-debt row listed under its own "
+               "heading is not judged; a line about one is recorded and applied to nothing.")
             + ("" if not any(o.get("modality") in ("legacy", "reading") for o in obligations_rows) else
                " Each legacy acceptance or reading row listed above needs its own '<O-id>: SUFFICIENT "
                "<evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; it is never judged by "
@@ -9857,7 +10078,7 @@ class Session:
                                                     default=str).encode()).hexdigest()[:16],
                     gaps=hashlib.sha256(json.dumps(list(getattr(self, "judgment_gaps", []) or []), sort_keys=True,
                                                    default=str).encode()).hexdigest()[:16],
-                    policy="audit/4")
+                    policy="audit/5")
         return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
 
     def _packet(self) -> "delivery.EvidencePacket":
@@ -9900,7 +10121,12 @@ class Session:
                                                       gate=o.get("gate"), environment=o.get("environment"),
                                                       modality=o.get("modality"), binding=o.get("binding"),
                                                       location=o.get("location"),
-                                                      scenario=[list(s) for s in o.get("scenario") or []]),
+                                                      scenario=[list(s) for s in o.get("scenario") or []],
+                                                      # The row's purpose and kind are part of what a
+                                                      # judgment is about: a row re-read under another
+                                                      # purpose is another packet, so no cached audit
+                                                      # is reused across the change (root, 6537666674).
+                                                      purpose=delivery.purpose_of(o), kind=o.get("kind")),
                                                  sort_keys=True, default=str)),
                                     h(json.dumps(list(o.get("receipts") or []), sort_keys=True, default=str)))
                                    for o in self.evidence_obligations))
@@ -10220,8 +10446,33 @@ class Session:
     def _obligations_block(self, rows: List[dict]) -> str:
         if not rows:
             return ""
-        lines = ["\n\n## Evidence obligations (harness records: execution is what ran; sufficiency is "
-                 "your judgment, never the harness's)"]
+        debt = [o for o in rows if delivery.purpose_of(o) != "acceptance"]
+        rows = [o for o in rows if delivery.purpose_of(o) == "acceptance"]
+        lines = []
+        if debt:
+            # Execution debt is shown apart from acceptance evidence and
+            # never put to a seat for sufficiency (quality/completion batch,
+            # 2026-10-31): a NOT RUN report or a skip fact asked whether
+            # the named cases ran, the harness's own execution answers it,
+            # and nothing about the requirements it holds follows either way.
+            lines.append("\n\n## Execution debt (harness records: a lead's NOT RUN report or a check's skipped "
+                         "cases, settled only by the harness's own execution of exactly the named cases on the "
+                         "current source, gate and environment; never evidence for the requirements it holds; "
+                         "judge nothing about these rows)")
+            for o in debt:
+                unknown = delivery.purpose_of(o) == "unknown"
+                lines.append(f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): "
+                             + ("UNKNOWN PURPOSE (mixed record; held, never credited) " if unknown else "")
+                             + f"{o['behavior']}; evidence {o.get('modality') or 'test'}; "
+                             f"runner {o['runner'] or 'NONE (prerequisite missing)'}; "
+                             f"execution {o['execution']}"
+                             + (f" ({o['reason']})" if o.get("reason") else "")
+                             + ("; held" if unknown else
+                                "; settled" if o.get("execution") == "ran" else "; unsettled: holds its requirements"))
+        if not rows:
+            return "\n".join(lines)
+        lines.append("\n\n## Evidence obligations (harness records: execution is what ran; sufficiency is "
+                     "your judgment, never the harness's)")
         for o in rows:
             modality = o.get("modality") or "test"
             runner = (o['runner'] or 'NONE (prerequisite missing)') if modality == "test" else (
@@ -10423,6 +10674,22 @@ class Session:
                      + ("; " if bound and held else "")
                      + (f"{len(held)} NOT RUN item(s) bound to no case ({'; '.join((e.get('binding') or {}).get('problem', '') or e['item'][:60] for e in held)[:200]}), held as written" if held else "")
                      + "; or a repair task that runs it; never a challenge")
+            return dict(kind="execution debt", challengeable=False, route=route[:500])
+        typed_debt = [o for o in self.evidence_obligations
+                      if any(r[0] == rid for r in o.get("requirements") or ()) and not o.get("superseded_by")
+                      and delivery.purpose_of(o) != "acceptance"
+                      and (delivery.purpose_of(o) == "unknown" or o.get("execution") != "ran")]
+        if typed_debt:
+            # The typed record holds what the entry-level reading may not
+            # (a skip fact executed on another source, a mixed record):
+            # execution debt, settled only by the harness, never a challenge
+            # (quality/completion batch, 2026-10-31).
+            route = ("execution debt (typed record): " + "; ".join(
+                f"{o['oid']} " + ("purpose unknown; held, never credited" if delivery.purpose_of(o) == "unknown"
+                                  else f"execution {o.get('execution')}" + (f" ({o['reason']})" if o.get("reason") else ""))
+                for o in typed_debt)
+                     + "; discharged only by the harness's gate executing what it binds on the current source, or a "
+                       "repair task that runs it; never a challenge")
             return dict(kind="execution debt", challengeable=False, route=route[:500])
         unrun = [o for o in self.evidence_obligations
                  if any(r[0] == rid for r in o.get("requirements") or ()) and o.get("modality") == "test"
@@ -10893,11 +11160,13 @@ class Session:
                           + f" Reassess {rid} alone, once. Reply with exactly one line: '{rid}: MET - <project "
                           f"file path or test name that shows it>' or '{rid}: NOT MET - <what is still missing>'. "
                           "A MET without a cited project file or test is counted as not met."
-                          + ("" if not any(o.get("execution") == "ran" for o in bound) else
-                             " Each executed evidence obligation listed above needs its own line, "
+                          + ("" if not any(o.get("execution") == "ran" and delivery.purpose_of(o) == "acceptance"
+                                           for o in bound) else
+                             " Each executed acceptance obligation listed above needs its own line, "
                              "'<O-id>: SUFFICIENT <why>' or '<O-id>: INSUFFICIENT <what it does not establish>'; "
                              "your verdict on the requirement never judges a row it binds, and an obligation "
-                             "left unjudged or judged insufficient keeps the requirement not met.")
+                             "left unjudged or judged insufficient keeps the requirement not met. An "
+                             "execution-debt row is not judged; a line about one is applied to nothing.")
                           + ("" if not any(o.get("modality") in ("legacy", "reading") for o in bound) else
                              " Each legacy acceptance or reading row listed above needs its own '<O-id>: "
                              "SUFFICIENT <evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; "
@@ -11524,7 +11793,9 @@ class Session:
         index = len(self.checks) - 1
         pending = [e for e in self.unexecuted_acceptance if e.get("kind") == "skipped" and e.get("cases")
                    and e.get("discharged_at") is None and e["after_check"] <= index]
-        if not pending:
+        if not pending or not self.checks[index].get("passed"):
+            # A failed aggregate check decides nothing (root's caution on
+            # 6537666674: the display record alone is not trusted success).
             return
         texts, _ = self._case_texts()
         runs = _check_runs(self.checks[index], self.project)
@@ -11824,7 +12095,11 @@ class Session:
             oid=oid, behavior=behavior, requirements=requirements, gate=_gate_identity(self._current_gate()),
             runner=runner, cases=cases, environment=self._environment_id(), policy="review/2",
             task=str(entry.get("task") or "run"), modality=modality, location=str(entry.get("location") or ""),
-            scenario=tuple(sorted((str(k), str(v)) for k, v in (entry.get("scenario") or {}).items())))
+            scenario=tuple(sorted((str(k), str(v)) for k, v in (entry.get("scenario") or {}).items())),
+            # A NOT RUN report or a skip fact asks whether execution
+            # happened; a declared acceptance scenario asks whether the
+            # behaviour is proved (delivery.PURPOSES).
+            kind=kind, purpose="execution" if kind in ("not_run", "skipped") else "acceptance")
         record = dict(obligation.to_dict(), kind=kind, entry=dict(item=entry.get("item"), receipt=entry.get("receipt"),
                                                                   after_check=entry.get("after_check"),
                                                                   # The observations recorded before this row
@@ -12004,6 +12279,10 @@ class Session:
             if entry.get("kind") == "skipped" and entry.get("cases"):
                 decided = entry.get("discharged_at")
                 if decided is not None and decided <= index:
+                    if not (0 <= decided < len(self.checks) and self.checks[decided].get("passed")):
+                        # A decision recorded on a check that did not pass
+                        # (an older engine's marker) is no discharge.
+                        return None
                     if entry.get("discharged_cases"):
                         return dict(index=decided, run=entry.get("discharged_run") or entry.get("receipt"),
                                     cases=list(entry["discharged_cases"]))
@@ -12021,7 +12300,10 @@ class Session:
                     return None
                 continue
             if entry.get("kind") == "skipped":
-                run = next((r for r in runs if r["id"] == entry["receipt"]), None)
+                # A failed check discharges nothing, as on every other route
+                # (root's caution on 6537666674: the display record alone is
+                # not trusted success).
+                run = next((r for r in runs if r["id"] == entry["receipt"]), None) if check.get("passed") else None
                 if run is not None:
                     return dict(index=index, run=run["id"], cases=[])
                 continue
@@ -12049,7 +12331,7 @@ class Session:
                     if shown:
                         return dict(index=index, run=run["id"], cases=shown)
                 continue
-            if paths:
+            if paths and check.get("passed"):
                 run = next((r for r in runs if all(p in r["files"] for p in paths)), None)
                 if run is not None:
                     return dict(index=index, run=run["id"], cases=[])
@@ -12271,6 +12553,26 @@ class Session:
                 # task's, or one not delivered to it) judges nothing and
                 # overwrites nothing (root on 4fac862).
                 refreshed.append(record)
+                continue
+            purpose = delivery.purpose_of(record)
+            if purpose != "acceptance":
+                # Execution debt is settled by execution, never judged, and
+                # an unknown-purpose row is held and never credited: a line
+                # a seat writes about either is kept as a note and applied
+                # to nothing, so it can neither lower nor credit the
+                # requirements the row holds (quality/completion batch,
+                # 2026-10-31; P12 lowered six METs this way).
+                why_not = ("execution debt is settled by execution, not judged" if purpose == "execution"
+                           else "a row of unknown purpose is held and never credited")
+                said, _why = explicit.get(obligation.oid, (None, ""))
+                if obligation.oid in conflicts:
+                    refreshed.append(dict(record, sufficiency_note=(
+                        f"{conflicts[obligation.oid]}; not applied ({auditor}): {why_not}")))
+                elif said is not None:
+                    refreshed.append(dict(record, sufficiency_note=(
+                        f"{obligation.oid}: {said.upper()} by {auditor} not applied: {why_not}")))
+                else:
+                    refreshed.append(record)
                 continue
             if obligation.oid in conflicts:
                 obligation = replace(obligation, sufficiency="unjudged", judged_by="", judged_binding="")
@@ -13409,7 +13711,11 @@ class Session:
                          f"{o['behavior'][:120]}; runner {o['runner'] or 'NONE: prerequisite, no authorized runner'}; "
                          + (f"binding {o['binding']}: {', '.join(o.get('cases') or ()) or 'no case bound'}; "
                             if o.get("kind") == "acceptance" else "")
-                         + f"execution {o['execution']}; sufficiency {o['sufficiency']}"
+                         + f"execution {o['execution']}; "
+                         + ("execution debt: settled by execution, not judged"
+                            if delivery.purpose_of(o) == "execution" else
+                            "purpose unknown (mixed record): held, never credited"
+                            if delivery.purpose_of(o) == "unknown" else f"sufficiency {o['sufficiency']}")
                          for o in self.evidence_obligations)
         notes.extend(self._admission_notes())
         waiting = [d for d in self.deferred_evidence if not d.get("rechecked") or str(d["rechecked"]).startswith(("kept", "not"))]
@@ -14914,10 +15220,13 @@ class Session:
                 current=spec.description, recent=self.config.recent_entries, with_previews=False
             ),
         ]
+        rule_stated = False
         if self._covered_texts() and not self.memory.ledger.requirements:
             # A parallel child's ledger is off, so its render has the goal but
-            # not the requirements this task covers (r11 on 136a3ec).
+            # not the requirements this task covers (r11 on 136a3ec). The
+            # goal block carries the contract rule, stated once per prompt.
             parts.append(self._writer_goal().strip())
+            rule_stated = True
         map_block = self._map_block()
         if map_block:
             parts.append(map_block)
@@ -14937,6 +15246,8 @@ class Session:
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
         parts.append(self._role_packet(spec, 'lead'))
+        if not rule_stated:
+            parts.append(_CONTRACT_BOUNDARY_RULE)
         if self._writes() and spec.scope and spec.scope.proofs:
             parts.append(TEST_SUBSTANCE_RULE)
         parts.append(worker_menu())
@@ -15208,7 +15519,7 @@ class Session:
                 + "\n\nMeet the goal and these requirements wherever they fall within this task's work, "
                   "including what they say must happen on an error or a refusal. Task text, a generated "
                   "plan or recipe, or an earlier answer that differs from them does not change them. "
-                  + _AUTHORITY_ORDER + " "
+                  + _AUTHORITY_ORDER + " " + _CONTRACT_BOUNDARY_RULE + " "
                   "It grants nothing: the task's permitted paths, edits, commands and size bound hold "
                   "as before, and a condition outside them goes to the record as a line 'BLOCKER: "
                   "<condition>', never an edit there.")
@@ -15231,7 +15542,8 @@ class Session:
                   "covered requirement that falls within this task's work and is not met is a BLOCKING "
                   "finding even when the task text omits it. It grants nothing: the task's permitted "
                   "paths, edits and commands bind as before, and a finding that needs a change outside "
-                  "them stays open as a finding, never a reason to edit there. " + _AUTHORITY_ORDER
+                  "them stays open as a finding, never a reason to edit there. " + _AUTHORITY_ORDER + " "
+                + _CONTRACT_BOUNDARY_RULE
                 + ("\n\nFor each covered requirement give one line 'R<n>: MET - <file>:<line>' naming "
                    "where the source meets every condition of it, including what it says must happen "
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "

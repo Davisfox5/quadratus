@@ -3311,6 +3311,122 @@ Key design decisions already settled:
   report that lost its skipped count reads as unknown
   (`integration.skipped_count`), never zero and never a crash, so a
   citation refuses it.
+- **Execution debt is settled by execution and judged by nobody**
+  (quality/completion batch, Davis on #73, 2026-10-31; P12,
+  evidence-selector-01-ticket-2ac2f85). A lead's NOT RUN report and a
+  check's skipped cases are records of what did not run, bound to the
+  task's whole COVERS; t6's two items ran at check 3, the engine still put
+  the executed rows to the auditor for sufficiency, and its INSUFFICIENT
+  lowered six METs. Every obligation now carries a typed `purpose`
+  (`delivery.PURPOSES`: `execution` for a `not_run` or `skipped` row with a
+  test modality, `acceptance` for everything else) and the typed row keeps
+  its `kind`. The purpose is read from the whole record, fail closed
+  (`delivery.purpose_of`): a declared purpose that contradicts the kind, a
+  kind the engine does not write, a non-test modality or no kind at all is
+  acceptance, which never settles by execution alone. The predicate
+  (`delivery.acceptance`) settles an execution row on an authorized runner
+  and `execution == "ran"` on the current identity and asks nothing else of
+  it; unsettled, it holds its requirements exactly as before (no runner,
+  missing, pending, stale, failed, skipped, invalid, revision moved).
+  Settled, it holds nothing and proves nothing: the acceptance evidence is
+  the declared scenario rows. The audit and reassessment prompts list debt
+  under its own heading ("## Execution debt", `_obligations_block`) and ask
+  for sufficiency lines on executed acceptance rows only; a line a seat
+  writes about a debt row (one, or a conflicting pair) is kept as
+  `sufficiency_note` and applied to nothing (`_judge_obligations`), and the
+  typed `judge_sufficiency` refuses such a row outright. The packet
+  identity carries purpose and kind (`packet/4`) and the audit binding is
+  `audit/5`, so a cached audit is not reused across a purpose change and a
+  job checkpointed on the older engine re-draws its final audit once on
+  resume. Skip facts are symmetric with NOT RUN rows. The independent checker (`tools/truth_check.py::_debt_lowering`)
+  names a final-audit lowering that cites the judged sufficiency of a
+  debt row the record shows executed as unshown, from the record alone,
+  never as the requirement met. `_discharge_record`'s skipped and paths
+  routes now read the check's result like every other route. Not changed:
+  which requirements a NOT RUN entry binds, the entry-level standing rule
+  (`_lower_unexecuted`), and the genuine candidate defects P12 found
+  (R17, R19, R22 and the R2 ambiguity), which no rule here removes.
+- **One contract rule reaches every seat that reads the goal**
+  (`_CONTRACT_BOUNDARY_RULE`, same batch). P12's real findings were four
+  readings of the goal: a library's leniency taken as the goal's language
+  (NaN accepted by a JSON parser), an argument parser's usage exit taken
+  as the required JSON refusal, mutation after a refusal never read from
+  the state, and a README exception narrowing a requirement. One compact
+  rule closes those four readings and keeps the open one (where the goal is
+  silent or two rules collide, name the ambiguity for a decision). It rides
+  the routes that already exist: the planner's task request, the lead
+  prompt (once; a parallel child's lead gets it through the goal block),
+  every editing call after the draft (`_writer_goal`), every task review
+  (`_goal_authority`), the final audit and both reassessments
+  (`_authority_context`). No new model pass, no second long paragraph; the
+  recheck is not a route, since it carries the reviewer's own finding. A
+  prompt that states a rule is not proof a seat applies it: the lifecycle
+  control shows the sentence reaching each seat and a scripted reviewer
+  acting on it, nothing about generation.
+- **A slot is charged at dispatch, and the ledger says what was charged**
+  (`_run_tasks`, `slot_ledger`, `_slot_event`; same batch). `used += 1`
+  sat at the top of the loop, so P12 spent two of its eight slots on a
+  declaration the intake refused and a DONE that was sent back, and the
+  cap ended the run with its requirements open. Now admitted work is
+  charged once when it is dispatched (a serial task, or a parallel wave
+  once `_run_batch` is past its admission, `_wave_started`), whatever
+  follows: a clean close, a cap, a failure, a stop raised inside it. A
+  planner reply the intake refuses (nine send-back sites, a batch sent
+  back, a verification-only task), a DONE sent back and a task or batch
+  not started spend nothing; each lands on the carried `slot_ledger`
+  (`sent_back`, `done_sent_back`, `not_started`) with the count as it
+  stood, and the uncharged paths stay bounded by what already bounded
+  them: the correction allowance (`max_requirement_reopens` to
+  `RunStalled`), the completion decision's reopen allowance, the repeated
+  task stall, the call, token and wall budgets. `_slots_used` keeps its
+  convention (slots charged before the current task) for `_final_work_slot`,
+  `_commit_terminal`, the planning admission and the capped-child review;
+  the planner's note says what spends a slot. A route forfeit now names the
+  refused task's own slot unused (nothing of it ran) and the charged count
+  stays as charged; the DONE-site RequirementsUnmet names capped or failed
+  work not continued, because a run the cap used to end now reaches that
+  stop. Legacy checkpoint counts are restored as recorded and an older
+  checkpoint resumes with an empty ledger. Not changed: the explicit-task
+  entry, the recovery allowance (charged at dispatch, never refunded), and
+  the quiescent checkpoint, which still predates the dispatch it precedes.
+- **A capped revision meets its reviewer in any serial slot, once**
+  (`_capped_revision_recheck`, `_checked_source`; same batch). The r10
+  handoff applied in the last slot only; P12's t3 and t4 each left a
+  gated, in-scope source whose findings were never rechecked and each cost
+  a continuation. The same bounded one-shot now applies with slots left:
+  the original reviewers, no fresh writer, no retry, the write ceiling,
+  the scope, measured in-scope edits and a passing observation of exactly
+  the current source and gate by this task (the pre-review observation
+  covers a revision that changed nothing; never another task's, never an
+  explicit list, never a parallel child). The recheck route is admitted
+  whole before it is promised (`_admit_repair`, as the no-edit retry's
+  is); refused, the capped close applies with nothing written to the
+  transcript. The outcome is read from the registry, never from the
+  recheck's return alone (workflow refutation, 2026-10-31: a capped,
+  refused or verdict-less recheck returns nothing for a finding that
+  stays open): resolved only when every pending finding is closed, none
+  was raised during the recheck and the source is unchanged. Resolved
+  closes the task clean with the cap fact on its record and a
+  `capped-checked-revision` artifact; anything else with slots left
+  (UNRESOLVED, a capped or refused recheck, a finding raised by the
+  recheck, a source that changed, another reviewer's finding still open
+  at the fix-cycle site) returns to the capped-task path, with the
+  reviewer's own verdict standing on the registry and the task owed for
+  the planner to continue by name, so nothing is accepted on the writer's
+  behalf and the breaker and the survey count one cap. PROVES lines are
+  recorded once, by the handoff or by the capped close. The record handed
+  to the reviewer says the gate passed in the harness's own observation,
+  where the run-start original tests are not re-run. Every handoff is on
+  `capped_handoffs` (task, stage, slot, reviewers, outcome, a stop's
+  exception name if the recheck raised; carried, in `result.json`). The
+  last slot closes on the recheck as before; `_capped_final_draft` stays
+  last-slot only. Two more facts from
+  the same batch: `result.json.slots_unaccounted` is the recorded count
+  minus the ledger's charges (non-zero only for a job resumed from a
+  checkpoint written under the old rule), and the loop carries a tripwire
+  (`RunStalled` past `2 * max_requirement_reopens + 1` uncharged turns)
+  that today's paths cannot reach, so a future uncharged `continue` never
+  plans for free.
 
 ## How development is coordinated
 

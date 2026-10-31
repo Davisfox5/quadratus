@@ -378,7 +378,7 @@ def test_an_audit_with_verdicts_and_no_row_line_leaves_the_executed_row_unjudged
     assert any("unjudged" in r["reason"] for r in audit["lowered"]), audit["lowered"]
     prompt = replay.of("auditor")[-1].prompt
     assert "An executed test row is judged only by your own line" in prompt
-    assert "Each executed evidence obligation listed above needs its own line" in prompt
+    assert "Each executed acceptance obligation listed above needs its own line" in prompt
 
 
 # -- 4. a command the requirement names is cited by the harness's exact receipt ------------------

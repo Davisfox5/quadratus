@@ -269,24 +269,29 @@ def _http_script(not_run_item):
 
 
 @pytest.mark.requirements_ledger
-def test_a_not_run_http_test_is_an_obligation_the_gate_executes_and_the_audit_judges(tmp_path, monkeypatch):
+def test_a_not_run_http_test_is_an_obligation_the_gate_executes_and_nobody_judges(tmp_path, monkeypatch):
     """The lead's sandbox could not bind a port and said so. The obligation
     names the gate as its runner; the real gate runs the real local HTTP
     server test whole; the receipt binds source, gate, runner, environment
-    and requirement revisions; the audit's MET on R2 is the sufficiency
-    judgment, by the auditor, bound to exactly that receipt."""
+    and requirement revisions. It is execution debt (quality/completion
+    batch, 2026-10-31): settled by that execution, listed to the auditor
+    under its own heading, judged by nobody; the auditor's SUFFICIENT about
+    it is recorded and applied to nothing. R2's acceptance is the declared
+    scenario rows' judgment."""
     replay = H.run(tmp_path, monkeypatch, _http_script("tests/test_http.py - the sandbox denied binding 127.0.0.1"),
                    files=HTTP_FILES, check=GATE_FILES, max_tasks=1, lead_runs_commands=False, record_complete=False)
     assert replay.result.completed, replay.result.error
     rows = {o["kind"]: o for o in _obligations(replay)}
     typed = rows["not_run"]
     assert typed["runner"] == "gate" and typed["execution"] == "ran" and typed["receipts"]
-    assert typed["sufficiency"] == "sufficient" and typed["judged_by"] == "openai:sol"
-    assert typed["established"] and typed["sufficiency_current"]
+    assert typed["purpose"] == "execution" and typed["sufficiency"] == "unjudged" and not typed["judged_by"]
+    assert typed["established"] and "not applied" in typed["sufficiency_note"]
     assert [list(r) for r in typed["requirements"]] == [["R1", 1], ["R2", 1]]
     assert typed["source_digest"] == H.result_json(replay)["checks"][-1]["source"]
     audit = replay.of("auditor")[-1].prompt
-    assert "Evidence obligations" in audit and f"{typed['oid']} (t1; R1, R2)" in audit and "runner gate" in audit
+    assert "## Execution debt" in audit and f"{typed['oid']} (t1; R1, R2)" in audit and "runner gate" in audit
+    debt_block = audit[audit.index("## Execution debt"):audit.index("## Evidence obligations")]
+    assert f"- {typed['oid']} (" in debt_block and "; settled" in debt_block
     # The real gate ran the real server: its receipt names the test file whole.
     last = H.result_json(replay)["checks"][-1]
     assert last["passed"] and any("test_http.py" in r.get("command", "") for r in last.get("receipts", []))

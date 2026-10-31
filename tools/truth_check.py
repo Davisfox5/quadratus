@@ -766,6 +766,80 @@ def _skipped_cleared(entry, checks, record) -> bool:
     return False
 
 
+_SUFFICIENCY_CITE = re.compile(r"\b(O\d+): sufficiency (?:insufficient|unjudged)\b")
+
+
+def _row_purpose(row: dict) -> str:
+    """The purpose an obligation row is read with, from the record alone
+    and fail closed (the same reading as the engine's, written here
+    independently): ``execution`` for a not_run or skipped row with no
+    contradicting declaration, a test modality and no scenario;
+    ``acceptance`` for an acceptance row; ``unknown`` otherwise."""
+    kind = row.get("kind")
+    derived = "execution" if kind in ("not_run", "skipped") else "acceptance" if kind == "acceptance" else None
+    declared = row.get("purpose")
+    if derived is None or declared not in (None, "", derived):
+        return "unknown"
+    if derived == "execution" and ((row.get("modality") or "test") != "test" or row.get("proof_id")
+                                   or row.get("scenario")):
+        return "unknown"
+    return derived
+
+
+def _debt_lowering(entry: dict, record: dict) -> list:
+    """The ids of rows that are not acceptance evidence (execution debt the
+    record shows executed, or a row of unknown purpose) whose judged
+    sufficiency ``entry`` (a final-audit lowering) cites; [] otherwise. A
+    sufficiency judgment is asked of acceptance evidence only, so such a
+    citation is a record disagreeing with itself."""
+    reason = str(entry.get("reason") or "")
+    if not reason.startswith("acceptance predicate:"):
+        return []
+    rows = {str(o.get("oid")): o for o in record.get("evidence_obligations") or [] if isinstance(o, dict)}
+    cited = []
+    for oid in _SUFFICIENCY_CITE.findall(reason):
+        row = rows.get(oid)
+        if row is None or row.get("superseded_by"):
+            continue
+        purpose = _row_purpose(row)
+        if purpose == "unknown" or (purpose == "execution" and row.get("execution") == "ran" and row.get("runner")):
+            cited.append(oid)
+    return cited
+
+
+def _met_over_debt(record: dict) -> list:
+    """Requirements the record marks met while an execution-debt row bound
+    to them is not shown executed, or a row of unknown purpose binds them:
+    each is a line for the reader, never a verdict change upward."""
+    status = (record.get("requirements") or {}).get("status") or {}
+    entries = {(str(e.get("task")), str(e.get("item")))
+               for e in record.get("unexecuted_acceptance") or [] if isinstance(e, dict)}
+    out = []
+    for row in record.get("evidence_obligations") or []:
+        if not isinstance(row, dict) or row.get("superseded_by"):
+            continue
+        purpose = _row_purpose(row)
+        if purpose == "acceptance":
+            continue
+        item = str((row.get("entry") or {}).get("item") or row.get("behavior") or "")
+        backed = (str(row.get("task")), item) in entries
+        for ref in row.get("requirements") or []:
+            rid = ref[0] if isinstance(ref, (list, tuple)) and ref else None
+            if rid is None or not str(status.get(rid, "")).lower().startswith("met"):
+                continue
+            if purpose == "unknown":
+                out.append(f"{rid} is met while obligation {row.get('oid')} has an unknown purpose")
+            elif row.get("execution") != "ran" or not row.get("runner"):
+                out.append(f"{rid} is met while execution-debt row {row.get('oid')} reads execution "
+                           f"{row.get('execution')}" + ("" if row.get("runner") else " with no authorized runner"))
+            elif not backed:
+                # The engine writes an unexecuted_acceptance entry for every
+                # NOT RUN or skip row; a typed row that reads ran with no
+                # entry behind it is the engine's word alone.
+                out.append(f"{rid} is met on execution-debt row {row.get('oid')} that no NOT RUN or skip entry backs")
+    return out
+
+
 def judge(run_dir, project=None) -> dict:
     run_dir = Path(run_dir)
     failed, unshown = [], []
@@ -831,6 +905,21 @@ def judge(run_dir, project=None) -> dict:
         unshown.append("no requirements were recorded, so none was audited")
     audits = [a for a in requirements.get("audits") or [] if isinstance(a.get("verdicts"), dict)]
     final = audits[-1]["verdicts"] if audits else {}
+    for entry in (audits[-1].get("lowered") or []) if audits else []:
+        # A requirement lowered on the sufficiency of an execution-debt row
+        # that the record shows executed (quality/completion batch,
+        # 2026-10-31; P12 lowered six METs this way). Read from the record
+        # alone: a NOT RUN or skipped row asks whether its cases ran, and a
+        # row that ran holds nothing, so a lowering that cites its judged
+        # sufficiency is a record disagreeing with itself. Reported as
+        # unshown, never as the requirement met: a forged or mixed row (a
+        # declared purpose other than execution, or a modality that is not a
+        # test run) is not read this way.
+        for oid in _debt_lowering(entry, record):
+            unshown.append(f"{entry.get('requirement')}: lowered on the judged sufficiency of {oid}, a row that is "
+                           "not acceptance evidence (execution debt the record shows executed, or an unknown "
+                           "purpose); the lowering is not established")
+    unshown.extend(_met_over_debt(record))
     for rid in sorted(listed):
         verdict = final.get(rid) or {}
         if not str(status.get(rid, "")).lower().startswith("met"):

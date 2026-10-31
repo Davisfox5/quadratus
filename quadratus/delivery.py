@@ -380,8 +380,50 @@ def apply_reading(findings: Sequence[Finding], reading: RecheckReading, *, autho
 
 EXECUTION_STATES = ("missing", "pending", "ran", "failed", "skipped", "invalid", "stale")
 SUFFICIENCY_STATES = ("unjudged", "sufficient", "insufficient")
+#: What a typed obligation asks (quality/completion batch, 2026-10-31).
+#: ``acceptance``: whether a behaviour is proved, which takes a completed
+#: execution and an independent seat's sufficiency judgment about exactly
+#: that evidence. ``execution``: only whether an execution happened, the
+#: debt a lead's NOT RUN report or a check's skipped cases leave behind;
+#: it is settled by the harness's own execution of exactly the bound cases
+#: on the current identity, is never evidence for the requirements it
+#: holds, and is never judged for sufficiency (P12 evidence-selector-01:
+#: two executed NOT RUN rows bound to all eight of a task's requirements
+#: were put to the auditor for sufficiency and lowered six METs on
+#: behaviours they never spoke to).
+PURPOSES = ("acceptance", "execution", "unknown")
+#: The record kinds the engine writes: a task's declared acceptance
+#: behavior, a lead's NOT RUN report, a check's skipped cases; ``unknown``
+#: is the typed reading of a record whose kind is absent or foreign.
+KINDS = ("acceptance", "not_run", "skipped", "unknown")
 #: Declared evidence modalities an obligation may carry (proof/1).
 MODALITIES = ("test", "reading", "legacy", "capture")
+
+
+def purpose_of(record: Mapping) -> str:
+    """The purpose a recorded obligation (a dict as the engine, a
+    checkpoint or a parallel child wrote it) is read with, fail closed.
+    ``execution`` only when the record's ``kind`` is ``not_run`` or
+    ``skipped``, its declared ``purpose`` (when present) agrees, its
+    evidence modality is ``test`` and it carries no declared scenario;
+    ``acceptance`` only for kind ``acceptance`` with an agreeing or absent
+    declaration. Everything else is ``unknown``: a record with no kind, a
+    kind the engine does not write, a declared purpose that contradicts
+    the kind or the set (a mixed or forged record), a debt row with a
+    non-test modality or a proof scenario. An unknown row is held and
+    never credited, by execution or by judgment. A legacy record written
+    before the field existed is read by its kind."""
+    kind = record.get("kind")
+    derived = "execution" if kind in ("not_run", "skipped") else "acceptance" if kind == "acceptance" else None
+    declared = record.get("purpose")
+    if derived is None:
+        return "unknown"
+    if declared not in (None, "", derived):
+        return "unknown"
+    if derived == "execution" and ((record.get("modality") or "test") != "test" or record.get("proof_id")
+                                   or record.get("scenario")):
+        return "unknown"
+    return derived
 
 
 @dataclass(frozen=True)
@@ -422,11 +464,31 @@ class EvidenceObligation:
     #: as ``(key, value)`` pairs: part of what a judgment is about.
     location: str = ""
     scenario: Tuple[Tuple[str, str], ...] = ()
+    #: The record kind (``KINDS``), carried on the typed row so a round
+    #: trip keeps it (root's caution on 6537666674: ``from_dict`` dropped
+    #: it, so a typed row could not say what it was).
+    kind: str = "acceptance"
+    #: What the row asks (``PURPOSES``): ``acceptance`` is established by
+    #: execution and an independent sufficiency judgment; ``execution``
+    #: (a NOT RUN report, a skip fact) by the harness's execution alone,
+    #: and is never evidence for the requirements it holds; ``unknown`` is
+    #: a mixed or foreign record (``purpose_of``), held and never credited.
+    purpose: str = "acceptance"
 
     def __post_init__(self):
         _check_id(self.oid, "obligation id")
         if self.modality not in MODALITIES:
             raise ValueError(f"modality must be one of {MODALITIES}")
+        if self.kind not in KINDS:
+            raise ValueError(f"kind must be one of {KINDS}")
+        if self.purpose not in PURPOSES:
+            raise ValueError(f"purpose must be one of {PURPOSES}")
+        if self.kind == "unknown" and self.purpose != "unknown":
+            raise ValueError(f"{self.oid}: a row of unknown kind has no other purpose than unknown")
+        if self.purpose == "execution" and self.kind not in ("not_run", "skipped"):
+            raise ValueError(f"{self.oid}: execution debt is a not_run or skipped row, not {self.kind}")
+        if self.purpose == "execution" and (self.modality != "test" or self.scenario):
+            raise ValueError(f"{self.oid}: execution debt is a test-modality row with no declared scenario")
         _text(self.behavior, f"{self.oid} behavior")
         if not self.requirements:
             raise ValueError(f"{self.oid} binds no requirement revision")
@@ -455,7 +517,8 @@ class EvidenceObligation:
                             requirements=[list(r) for r in self.requirements], gate=self.gate,
                             environment=self.environment, policy=self.policy, execution=self.execution,
                             cases=list(self.cases), behavior=self.behavior, modality=self.modality,
-                            location=self.location, scenario=[list(s) for s in self.scenario]))
+                            location=self.location, scenario=[list(s) for s in self.scenario],
+                            purpose=self.purpose))
 
     @property
     def sufficiency_current(self) -> bool:
@@ -468,6 +531,13 @@ class EvidenceObligation:
         string has no execution to show: it is established only by the
         judgment, about the current evidence (its binding carries the
         current source)."""
+        if self.purpose == "unknown":
+            return False
+        if self.purpose == "execution":
+            # Execution debt is settled by the execution itself: the
+            # question it asked has been answered. Nothing about the
+            # requirements it holds follows from it.
+            return self.runner is not None and self.execution == "ran"
         if self.modality in ("reading", "legacy"):
             return self.sufficiency == "sufficient" and self.sufficiency_current
         return self.execution == "ran" and self.sufficiency == "sufficient" and self.sufficiency_current
@@ -487,6 +557,12 @@ class EvidenceObligation:
             scenario = sorted(scenario.items())
         kept["scenario"] = tuple((str(k), str(v)) for k, v in scenario)
         kept["location"] = str(kept.get("location") or "")
+        # The purpose is read from the whole record, fail closed: a declared
+        # purpose that disagrees with the record's kind, or a kind the engine
+        # does not write, is acceptance (root's caution on 6537666674:
+        # from_dict dropped ``kind``, so the typed row could not know it).
+        kept["purpose"] = purpose_of(data)
+        kept["kind"] = data.get("kind") if data.get("kind") in KINDS else "unknown"
         return cls(**kept)
 
 
@@ -574,6 +650,12 @@ def judge_sufficiency(obligation: EvidenceObligation, verdict: str, *, judged_by
         raise ValueError("a sufficiency verdict is sufficient or insufficient")
     if not judged_by.strip() or judged_by.strip().lower() == "harness":
         raise ValueError("sufficiency is an independent seat's judgment, never the harness's")
+    if obligation.purpose != "acceptance":
+        # Execution debt asks only whether its cases ran: settled by the
+        # harness's execution, judged by nobody; an unknown-purpose row is
+        # held and never credited (quality/completion batch, 2026-10-31).
+        # The caller keeps a seat's line about either as a note.
+        raise ValueError(f"{obligation.oid} is {obligation.purpose}-purpose; it is not judged for sufficiency")
     if verdict == "sufficient" and obligation.execution != "ran" and not reading:
         raise ValueError(f"{obligation.oid} execution is {obligation.execution}; nothing to find sufficient")
     return replace(obligation, sufficiency=verdict, judged_by=judged_by.strip(),
@@ -607,7 +689,7 @@ class EvidencePacket:
     rulings: str
     decisions: str
     authority: str
-    policy: str = "packet/3"
+    policy: str = "packet/4"
     #: Every other evidence the audit or an acceptance path consumes, each
     #: entry as one digest of its whole record: the design checks (final
     #: review verdicts), the scratch proofs (status, eligibility, cases) and
@@ -615,6 +697,9 @@ class EvidencePacket:
     #: a packet built without them is a different packet.
     design_checks: Tuple[str, ...] = ()
     #: packet/3: the reviewer scratch proofs and the evidence requests.
+    #: packet/4: each obligation's identity carries its purpose and kind, so
+    #: a cached audit is never reused across a purpose change (quality/
+    #: completion batch, 2026-10-31).
     scratch_proofs: Tuple[str, ...] = ()
     evidence_requests: Tuple[str, ...] = ()
 
@@ -671,6 +756,28 @@ def acceptance(verdicts: Mapping[str, Tuple[bool, str]], obligations: Sequence[M
             if current_requirements is not None and any(
                     current_requirements.get(r[0]) != r[1] for r in o.get("requirements") or ()):
                 reasons.append(f"{o['oid']}: bound requirement revision changed")
+                continue
+            purpose = purpose_of(o)
+            if purpose == "unknown":
+                # A mixed or foreign record (declared purpose against its
+                # kind, no kind, a debt row with a scenario): held as written
+                # and never credited, by execution or by judgment.
+                reasons.append(f"{o['oid']}: purpose unknown (mixed record); held, never credited")
+                continue
+            if purpose == "execution":
+                # Execution debt (a NOT RUN report, a skip fact): the row
+                # asked only whether the bound cases ran. Unsettled, it holds
+                # the requirement as before (no runner, missing, stale,
+                # failed, skipped, invalid, pending); settled by the typed
+                # discharge (authorized runner, execution ran on the current
+                # identity), it holds nothing and proves nothing: no
+                # sufficiency is asked of it (quality/completion batch,
+                # 2026-10-31).
+                if o.get("runner") is None:
+                    reasons.append(f"{o['oid']}: no authorized runner (prerequisite)")
+                elif o.get("execution") != "ran":
+                    reasons.append(f"{o['oid']}: execution {o.get('execution')}"
+                                   + (f" ({o['reason']})" if o.get("reason") else ""))
                 continue
             if o.get("modality") in ("reading", "legacy"):
                 what = "reading claim" if o.get("modality") == "reading" else "legacy acceptance (mapping unknown)"

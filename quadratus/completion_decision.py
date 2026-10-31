@@ -325,9 +325,13 @@ def _done_reply(inputs: CompletionInputs, debt: Debt) -> Decision:
     if not satisfied:
         if inputs.reopens < inputs.max_reopens:
             return Decision(SEND_BACK, site, debt, reopen_fact="DONE sent back: requirements open")
+        # The owed work is named here because this stop now reaches a run
+        # the cap used to end first (slots are charged at dispatch, so a
+        # DONE sent back spends none; quality/completion batch, 2026-10-31).
+        owed = (f" Capped or failed work not continued: {', '.join(debt.partial)}." if debt.partial else "")
         return _classed(Decision(INCOMPLETE, site, debt, stop=Stop("unverified", (
             f"RequirementsUnmet: DONE was sent back {inputs.reopens} time(s) and the "
-            f"requirements are still not met: {_why(inputs)}. Work preserved."))))
+            f"requirements are still not met: {_why(inputs)}.{owed} Work preserved."))))
     if not inputs.dependencies_verified:
         return Decision(STEP, site, debt, step=VERIFY_DEPENDENCIES)
     # Today's conjunction, in its order: partiality is evaluated (and its

@@ -77,51 +77,64 @@ def _not_run_rows(prompt, path):
 # -- boundary 1: one packet, one predicate ---------------------------------------------------
 
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("shape", ["insufficient", "conflict"])
+@pytest.mark.parametrize("shape", ["insufficient", "conflict", "acceptance"])
 def test_an_explicit_insufficient_or_a_conflicting_sufficiency_keeps_the_requirement_unmet(tmp_path, monkeypatch,
                                                                                             shape):
-    """The gate executed the obligation (a real local HTTP test) and the
-    auditor's requirement lines say MET; the auditor's own sufficiency
-    line says otherwise, or says it twice. Execution is not acceptance:
-    the requirement is lowered by the predicate, the obligation is
-    insufficient (or unjudged with the conflict noted), and the run is
-    incomplete (V09)."""
+    """Execution is not acceptance (V09), judged where acceptance lives
+    (quality/completion batch, 2026-10-31). The gate executed the lead's
+    NOT RUN item (a real local HTTP test) and the auditor's requirement
+    lines say MET. The NOT RUN row is execution debt: settled by that run,
+    judged by nobody, so the auditor's INSUFFICIENT about it, or its two
+    contradicting lines, are recorded as notes and lower nothing, and the
+    run completes on the declared scenarios' own judgments. The same
+    INSUFFICIENT on R2's declared scenario row (``acceptance``) is the
+    acceptance judgment: the predicate lowers R2, the row is insufficient,
+    and the run is incomplete."""
     script = _http_script("tests/test_http.py - the sandbox denied binding 127.0.0.1")
+    p2 = scenario_text(simple_proofs("R1, R2")[1])
 
     def auditor(call, replay):
+        from tests.lifecycle.replies import requested_obligations
         lines = ["R1: MET - app.py", "R2: MET - tests/test_http.py"]
         for oid in _not_run_rows(call.prompt, "tests/test_http.py"):
-            lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
+            if shape != "acceptance":
+                lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
             if shape == "conflict":
                 lines.append(f"{oid}: SUFFICIENT it does answer /add")
-        # The case's own lines for the two declared scenarios, so only the
-        # NOT RUN row's judgment is what this case is about.
-        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt)]
+        for row in requested_obligations(call.prompt):
+            if row["behavior"] == p2 and row["execution"] == "ran" and shape == "acceptance":
+                lines.append(f"{row['oid']}: INSUFFICIENT the test never exercises the error response")
+        # The case's own lines for the declared scenarios it does not reject.
+        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt)
+                  if not any(line.startswith(f"{oid}: ") for line in lines)]
         return "\n".join(lines)
     script.overrides["auditor"] = auditor
     replay = H.run(tmp_path, monkeypatch, script, files=HTTP_FILES, check=GATE_FILES, max_tasks=1,
                    lead_runs_commands=False, record_complete=False)
-    assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
     typed = next(o for o in _obligations(replay) if o["kind"] == "not_run")
     assert typed["execution"] == "ran" and typed["receipts"], "the gate did run it"
-    audit = H.result_json(replay)["requirements"]["audits"][-1]
-    assert audit["verdicts"]["R2"]["met"] is False and audit["acceptance"]["R2"]["met"] is False
-    if shape == "insufficient":
-        assert typed["sufficiency"] == "insufficient" and typed["judged_by"] == "openai:sol"
-        assert any("sufficiency insufficient" in r for r in audit["acceptance"]["R2"]["reasons"])
-    else:
-        assert typed["sufficiency"] == "unjudged" and "2 sufficiency lines" in typed["sufficiency_note"]
-        assert any("sufficiency unjudged" in r for r in audit["acceptance"]["R2"]["reasons"])
-    # The lead's NOT RUN item is bound to every requirement its task covers
-    # (R1 and R2), so the same obligation lowers both; the acceptance-kind
-    # obligation the task's scope declared is unaffected.
-    assert audit["acceptance"]["R1"]["met"] is False and audit["acceptance"]["R1"]["reasons"] == \
-        audit["acceptance"]["R2"]["reasons"]
     assert [list(r) for r in typed["requirements"]] == [["R1", 1], ["R2", 1]]
-    declared = next(o for o in _obligations(replay) if o["kind"] == "acceptance")
-    assert declared["sufficiency"] == "sufficient" and declared["established"]
+    audit = H.result_json(replay)["requirements"]["audits"][-1]
     terminal = jobstore.read_terminal(_run_dir(replay))
-    assert terminal["completed"] is False and terminal["acceptance"]["requirements"]["R2"]["met"] is False
+    if shape == "acceptance":
+        assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
+        assert audit["verdicts"]["R2"]["met"] is False and audit["acceptance"]["R2"]["met"] is False
+        declared = next(o for o in _obligations(replay) if o["kind"] == "acceptance" and o["proof_id"] == "P2")
+        assert declared["sufficiency"] == "insufficient" and declared["judged_by"] == "openai:sol"
+        assert any(f"{declared['oid']}: sufficiency insufficient" == r for r in audit["acceptance"]["R2"]["reasons"])
+        assert audit["acceptance"]["R1"]["met"] is True, "the scenario row lowers only the requirement it binds"
+        assert typed["sufficiency"] == "unjudged" and not typed.get("sufficiency_note")
+        assert terminal["completed"] is False and terminal["acceptance"]["requirements"]["R2"]["met"] is False
+        return
+    assert replay.result.completed, replay.result.error
+    assert typed["purpose"] == "execution" and typed["sufficiency"] == "unjudged" and not typed["judged_by"]
+    if shape == "insufficient":
+        assert typed["sufficiency_note"].startswith(f"{typed['oid']}: INSUFFICIENT by openai:sol not applied")
+    else:
+        assert "2 sufficiency lines" in typed["sufficiency_note"] and "not applied" in typed["sufficiency_note"]
+    assert audit["acceptance"]["R1"]["met"] is True and audit["acceptance"]["R2"]["met"] is True
+    assert audit["lowered"] == []
+    assert terminal["completed"] is True
 
 
 @pytest.mark.requirements_ledger
@@ -520,17 +533,26 @@ def test_combined_debt_names_every_reason_and_commits_an_incomplete_terminal(tmp
         "R1: MET - app.py\nR2: MET - tests/test_http.py")
     script.overrides["recheck"] = lambda call, replay: "RFT1-1: UNRESOLVED still ignores them"
 
+    p2 = scenario_text(simple_proofs("R1, R2")[1])
+
     def auditor(call, replay):
+        # The insufficiency is judged on R2's declared scenario row, where
+        # acceptance lives; the NOT RUN row is execution debt and is not
+        # judged (quality/completion batch, 2026-10-31).
+        from tests.lifecycle.replies import requested_obligations
         lines = ["R1: MET - app.py", "R2: MET - tests/test_http.py", "RFT1-1: UNRESOLVED it stands"]
-        for oid in _not_run_rows(call.prompt, "tests/test_http.py"):
-            lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
-        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt)]
+        rejected = [row["oid"] for row in requested_obligations(call.prompt)
+                    if row["behavior"] == p2 and row["execution"] == "ran"]
+        lines += [f"{oid}: INSUFFICIENT the test never exercises the error response" for oid in rejected]
+        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt) if oid not in rejected]
         return "\n".join(lines)
     script.overrides["auditor"] = auditor
     replay = H.run(tmp_path, monkeypatch, script, files=HTTP_FILES, check=GATE_FILES, max_tasks=1,
                    lead_runs_commands=False, record_complete=False)
     assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
-    typed = next(o for o in _obligations(replay) if o["kind"] == "not_run")
+    debt = next(o for o in _obligations(replay) if o["kind"] == "not_run")
+    assert debt["execution"] == "ran" and debt["sufficiency"] == "unjudged" and debt["purpose"] == "execution"
+    typed = next(o for o in _obligations(replay) if o["kind"] == "acceptance" and o["proof_id"] == "P2")
     assert typed["execution"] == "ran" and typed["sufficiency"] == "insufficient"
     finding = _findings(replay)["RFT1-1"]
     assert finding["state"] == "unresolved" and finding["audit_carried"] and finding["history"][-1]["role"] == "audit"

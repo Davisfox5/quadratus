@@ -785,6 +785,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'prompt_measurements': list(getattr(session, 'prompt_measurements', []) or []) if session else [],
         # Each unmet requirement's route at the finish (session._evidence_route).
         'finish_routing': list(getattr(session, 'finish_routing', []) or []) if session else [],
+        # Slot accounting: each charge at dispatch (serial task or parallel wave),
+        # each planner reply sent back, DONE sent back or task not started, with
+        # the slots charged as it stood after the event (session._slot_event).
+        **_slot_fields(session),
         'terminal_route': dict(getattr(session, '_terminal_route', None) or {}) or None if session else None,
         'operations': list(getattr(session, 'operations', []) or []) if session else [],
         'job_store': dict(generation=(job_store.current().number if job_store.current() else None),
@@ -1051,6 +1055,22 @@ def _explicit_record(session, completed):
              'check and every requirement a listed task claimed audited met; requirements no '
              'task claimed are unjudged; no orchestrator planned, acknowledged or judged the goal.',
     )
+
+
+def _slot_fields(session) -> dict:
+    """The slot accounting a run record carries: the ledger of charges and
+    uncharged events (session._slot_event), the slots the recorded count
+    holds that no charge backs (non-zero only for a job resumed from a
+    checkpoint written under the older rule of a slot per loop turn;
+    reported, never acted on), and each one-shot recheck of a capped,
+    gated, in-scope revision (session._capped_revision_recheck)."""
+    if session is None:
+        return dict(slot_ledger=[], slots_unaccounted=None, capped_handoffs=[])
+    ledger = list(getattr(session, 'slot_ledger', []) or [])
+    charged = sum(len(e.get('tasks') or []) for e in ledger if e.get('event') == 'charged')
+    return dict(slot_ledger=ledger,
+                slots_unaccounted=max(0, int(getattr(session, '_slots_used', 0) or 0) - charged),
+                capped_handoffs=list(getattr(session, 'capped_handoffs', []) or []))
 
 
 def _survey_record(session, completed):

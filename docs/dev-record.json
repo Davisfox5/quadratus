@@ -2784,6 +2784,44 @@
         "candidate": "2ac2f852e6f8e6bfe39fe85ec52a853aee490c50",
         "at": "2026-10-30T20:13:16Z"
       }
+    },
+    {
+      "id": "T-quality-completion",
+      "purpose": "Grouped quality/completion batch (Davis, 2026-10-31, after P12 evidence-selector-01 ended INCOMPLETE with six METs lowered by executed NOT RUN rows): (1) execution debt separated from acceptance evidence through the typed record, prompts, judge, acceptance predicate, completion, checkpoint, parallel merge, report and the independent checker, with the packet digest carrying the row's purpose; (2) one compact shared original-contract/error-boundary guidance reaching planner, lead, revision, audit and reassessment through existing prompt routes; (3) persisted admission accounting that charges admitted work exactly once with bounded planner/DONE loops, and the bounded checked-draft handoff for a capped revision allowed before the last slot. Base 848fae1 is the #73 head (candidate 2ac2f85 plus two dev-record commits); runtime source otherwise equals the reviewed d08c57f",
+      "base": "848fae1659e49e695972182e858c19dc88caa42f",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/delivery.py",
+        "quadratus/checkpoint.py",
+        "quadratus/judgment.py",
+        "tools/truth_check.py",
+        "tests/test_quality_completion_units.py",
+        "tests/lifecycle/test_quality_completion.py",
+        "tests/test_evidence_lifecycle_units.py",
+        "tests/test_completion_workflow_units.py",
+        "tests/test_prompt_rule_parity.py",
+        "tests/lifecycle/test_recovery_handoff.py",
+        "tests/lifecycle/test_finish_capacity.py",
+        "tests/test_boundary_records.py",
+        "CLAUDE.md",
+        "docs/dev-record.json",
+        "quadratus/completion_decision.py",
+        "quadratus/project_run.py",
+        "tests/lifecycle/test_boundary_correction.py",
+        "tests/lifecycle/test_delivery_controller.py",
+        "tests/lifecycle/test_evidence_lifecycle.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-31T02:18:55Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: scope extended to quadratus/completion_decision.py, quadratus/project_run.py, tests/lifecycle/test_boundary_correction.py, tests/lifecycle/test_delivery_controller.py, tests/lifecycle/test_evidence_lifecycle.py"
+      ]
     }
   ],
   "receipts": [
