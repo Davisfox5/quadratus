@@ -116,10 +116,20 @@ Key design decisions already settled:
   the old `worker == seat` guard stopped catching that, so availability is
   now checked explicitly. Refusing beats letting the invocation fail later at
   transport.
-- **The brain trust is one seat per vendor** (Opus 5, GPT-5.6 Sol, Grok 4.6).
-  Nobody is displaced from it, and Sonnet is not in it. Its size follows from
-  the number of vendors -- when Google left, the seat left with the vendor
-  rather than being reassigned.
+- **The brain trust is at most one seat per vendor** (Opus 5, GPT-5.6 Sol).
+  Nobody is displaced from it, and Sonnet is not in it. When Google left, the
+  seat left with the vendor rather than being reassigned. **Grok is off the
+  trust and kept as a worker** (Davis, 2026-11-01: "Turn Grok off as a brain
+  trust member for now. Keep it as a worker. We will see if it can at least
+  do rote tasks"), after two admitted runs (P16, grok-reliability-01) in
+  which the `grok:default` lead spent its whole 900 s deadline with no edit
+  or reply. It is out of `peers`, `planners`, `REFUSAL_CHAIN`, the SIMPLE
+  rung and `_LADDER_ORDER`, so no rotation, spread, escalation or refusal
+  route seats it. xAI stays a vendor: `grok:worker` keeps ROTE and the
+  `lookup` errand, `grok:expert` stays its in-family escalation, tool
+  restrictions and effort are unchanged. The `grok:default` row stays so the
+  key resolves for old records, pricing and the probe. Restoring is those
+  four lists plus the SIMPLE rung.
 - **Security work is peeled into a bounded excursion**: the deputy takes the
   seat, GPT-5.6 Sol does the work, verification crosses vendor lines, the
   excursion closes, Fable resumes. Never an open-ended handover.
@@ -280,7 +290,9 @@ Key design decisions already settled:
   ages far faster than the first and every entry carries its evidence.
 - **Difficulty is the primary routing axis; kind pins are the exception**
   (`task_kinds.DIFFICULTY_LADDER`). Complex → Opus, standard → Sol, simple
-  (the bulk of well-sized tasks) → the current Grok, rote → Grok 4.5. The
+  (the bulk of well-sized tasks) → Sol since 2026-11-01 (Grok's agent held it
+  before; see the brain-trust entry), rote → `grok:worker`. A rote task the
+  restricted worker cannot serve climbs to Sol. The history follows. The
   earlier kind-pinned table concentrated nearly everything on two
   subscriptions while the others sat idle — exactly how one window exhausts
   early and forces a degraded run. Four rungs across three vendors means one

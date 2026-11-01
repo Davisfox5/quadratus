@@ -105,7 +105,7 @@ def test_difficulty_routes_up_the_ladder(store, rec):
     expect = {
         Complexity.COMPLEX: OPUS,
         Complexity.STANDARD: SOL,
-        Complexity.SIMPLE: GROK,
+        Complexity.SIMPLE: SOL,
         Complexity.ROTE: GROK_WORKER,
     }
     for i, (difficulty, lead) in enumerate(expect.items()):
@@ -417,7 +417,7 @@ def test_the_ladder_is_deterministic_not_rotating(store, rec):
         s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
         for i in range(3)
     }
-    assert leads == {GROK}
+    assert leads == {SOL}
 
 
 def test_mobile_work_rides_the_ladder_like_anything_else(store, rec):
@@ -429,7 +429,7 @@ def test_mobile_work_rides_the_ladder_like_anything_else(store, rec):
             TaskSpec(f"t{i}", "add the settings screen",
                      complexity=Complexity.SIMPLE, kind=TaskKind.MOBILE)
         )
-        assert got.author == GROK
+        assert got.author == SOL
 
 
 def test_review_work_always_draws_the_counterpart_reviewer(store, rec):
@@ -696,8 +696,9 @@ def test_simple_and_standard_leads_spread_across_vendors(store, rec):
     s = _session(store, rec)
     leads = [s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author for i in range(6)]
     vendors = [lead.partition(":")[0] for lead in leads]
-    assert {vendors.count(v) for v in set(vendors)} == {2}, leads
-    assert leads[0] == GROK, "the ladder's own choice wins a tie"
+    assert {vendors.count(v) for v in set(vendors)} == {3}, leads
+    assert leads[0] == SOL, "the ladder's own choice wins a tie"
+    assert GROK not in leads, "spreading never promotes grok:default (off the trust since 2026-11-01)"
 
 
 def test_complex_work_and_pinned_kinds_are_not_spread(store, rec):

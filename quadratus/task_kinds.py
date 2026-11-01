@@ -196,7 +196,7 @@ OPUS = "claude:opus"
 SOL = "openai:sol"            # the family; its release is the installed client's latest
 LUNA = "openai:luna"
 SONNET = "claude:sonnet"
-GROK = "grok:default"          # xAI's current default, whatever it is
+GROK = "grok:default"          # xAI's full agent; off the ladder and the trust since 2026-11-01
 GROK_WORKER = "grok:worker"   # same line, bounded call, low effort
 FABLE = "claude:fable"
 
@@ -214,12 +214,12 @@ FABLE = "claude:fable"
 #: The rungs, per the operator's read of current capability:
 #: * COMPLEX -- many logical steps, high stakes -> Opus, top of the pack.
 #: * STANDARD -- real judgement, not the hardest -> GPT-5.6 Sol.
-#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok, addressed as
-#:   the CLI's current default rather than as an iteration; capable at this
-#:   grade and cheap against its own window.
+#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Sol since
+#:   2026-11-01; Grok held it until then (see below).
 #: * ROTE -- mechanical work -> Grok, called as a bounded worker.
 #:
-#: Four rungs across three vendors means one vendor takes two, and xAI is the
+#: The history of the split, kept because it explains the ROTE seat:
+#: four rungs across three vendors meant one vendor took two, and xAI was the
 #: one that should: Anthropic already carries the orchestrator seat and every
 #: COMPLEX task, and OpenAI carries STANDARD plus the security, testing and
 #: review pins plus the fallback orchestrator seat. xAI was left holding a
@@ -236,15 +236,27 @@ FABLE = "claude:fable"
 #:
 #: A rung that is unavailable or excluded escalates upward (a stronger model
 #: can always do easier work) before it degrades downward.
+#:
+#: **SIMPLE moved off Grok on 2026-11-01** (operator directive: "Turn Grok off
+#: as a brain trust member for now. Keep it as a worker. We will see if it
+#: can at least do rote tasks"). In two admitted runs the grok:default lead
+#: spent its whole 900 s deadline with no edit or reply. The SIMPLE rung now
+#: names Sol, which is where the ladder's own upward rule already sent a
+#: simple task whenever the Grok rung was out; spreading still alternates
+#: simple and standard leads across the two remaining trust vendors.
+#: grok:default is off ``_LADDER_ORDER`` too, so nothing escalates into it:
+#: a rote task the restricted worker cannot serve (it must run something)
+#: climbs straight to Sol. ROTE stays grok:worker, which is the trial Davis
+#: asked for. Restoring is putting GROK back on SIMPLE and in the order.
 DIFFICULTY_LADDER: Dict[str, str] = {
     "complex": OPUS,
     "standard": SOL,
-    "simple": GROK,
+    "simple": SOL,
     "rote": GROK_WORKER,
 }
 
 #: Least to most capable, for escalation.
-_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, GROK, SOL, OPUS)
+_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, SOL, OPUS)
 
 
 def _available_always(_key: str) -> bool:

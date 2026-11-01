@@ -195,17 +195,29 @@ def test_planning_is_never_narrower_than_the_brain_trust():
         assert set(roles["peers"]) <= set(roles["planners"]), mode
 
 
-def test_the_brain_trust_carries_exactly_one_model_per_vendor():
+def test_the_brain_trust_carries_at_most_one_model_per_vendor():
     """Independent reads are why this system exists rather than one strong
-    model in a loop; two peers from one vendor would not be independent, and a
-    vendor with no seat is a read the debate never gets."""
+    model in a loop; two peers from one vendor would not be independent. Since
+    2026-11-01 xAI holds no trust seat (operator directive), so the trust is
+    every vendor but xAI, one seat each."""
     peers = MODE_ROSTERS["adversarial"]["peers"]
     providers = [resolve(p).provider for p in peers]
-    assert sorted(providers) == sorted(VENDORS)
+    assert sorted(providers) == sorted(v for v in VENDORS if v != "grok")
+    assert len(set(providers)) == len(providers)
 
 
-def test_grok_is_a_full_brain_trust_member_not_a_planner_only_guest():
-    assert "grok:default" in MODE_ROSTERS["adversarial"]["peers"]
+def test_grok_is_off_the_brain_trust_and_the_planners_but_stays_a_worker():
+    """Davis, 2026-11-01: "Turn Grok off as a brain trust member for now.
+    Keep it as a worker." The vendor and both bounded seats stay."""
+    from quadratus.registry import REFUSAL_CHAIN
+    for mode in MODE_ROSTERS.values():
+        for role in ("peers", "planners", "reviewers"):
+            assert not any(k.startswith("grok:") for k in mode[role]), role
+    assert not any(k.startswith("grok:") for k in REFUSAL_CHAIN)
+    assert "grok" in VENDORS
+    worker, expert = resolve("grok:worker"), resolve("grok:expert")
+    assert worker.restricted and worker.effort == "low" and expert.restricted and expert.effort == "high"
+    assert resolve("grok:default") is not None, "the row stays for old records, pricing and the probe"
 
 
 def test_solo_mode_has_no_reviewers():

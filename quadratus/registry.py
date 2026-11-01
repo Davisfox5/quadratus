@@ -371,8 +371,11 @@ ROSTER: List[ModelSpec] = [
         "than the weights -- which is why RETRIEVAL is also exposed as a "
         "consultant function.",
         vendor_default=True,
-        # The brain-trust seat is the one place the agent loop earns its
-        # keep: a peer that can read the tree forms an opinion worth having.
+        # Not seated since 2026-11-01 (operator directive): off the brain
+        # trust, the planners, the refusal chain and the difficulty ladder,
+        # so no routing path makes it a peer or a lead. The row stays so the
+        # key still resolves for old records, pricing and the probe, and so
+        # restoring the seat is a roster edit, not a re-derivation.
         effort="high",
     ),
     _spec(
@@ -559,10 +562,13 @@ def best_for(capability: str, **kwargs) -> Optional[ModelSpec]:
 #: Exploit generation and penetration testing are gated regardless of routing
 #: and need Anthropic's Cyber Verification Program; rerouting will not open
 #: them, and this chain is not a mechanism for evading a correct refusal.
+#:
+#: ``grok:default`` left the chain on 2026-11-01 with its brain-trust seat
+#: (operator directive): re-routing declined work hands a full agent the
+#: task, which is exactly the leadership the seat was taken off.
 REFUSAL_CHAIN: List[str] = [
     "claude:opus",
     "openai:sol",
-    "grok:default",
 ]
 
 
@@ -572,17 +578,18 @@ REFUSAL_CHAIN: List[str] = [
 #: prompt.
 MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
     "adversarial": {
-        # The brain trust: one model per vendor, which is the point.
-        # Independent reads are the whole reason this system exists rather
-        # than a single strong model in a loop, so the rule is one seat per
-        # subscription and the size of the trust follows from how many
-        # vendors are in the lineup -- three, since Google left. Nobody was
-        # displaced to get here: the seat went with the vendor. Grok 4.6
-        # earns its seat on independence and on turn efficiency -- roughly 53
-        # turns and 0.5B tokens against ~103 and 2.0B for the strongest coder
-        # on comparable work -- not on peak quality, where it is the weakest
-        # of the three.
-        "peers": ["claude:opus", "openai:sol", "grok:default"],
+        # The brain trust: at most one model per vendor, because independent
+        # reads are the whole reason this system exists rather than a single
+        # strong model in a loop. Two seats since 2026-11-01: Davis took
+        # grok:default off the trust ("Turn Grok off as a brain trust member
+        # for now. Keep it as a worker.") after two admitted runs in which
+        # the Grok lead spent the whole 900 s deadline on its task with no
+        # edit or reply (P16 and grok-reliability-01). xAI stays in the
+        # lineup as grok:worker on the rote rung and the lookup errand, with
+        # grok:expert as its in-family escalation. Restoring the seat is
+        # adding the key back here, to ``planners``, to REFUSAL_CHAIN and to
+        # the difficulty ladder (task_kinds.DIFFICULTY_LADDER).
+        "peers": ["claude:opus", "openai:sol"],
         # A subset, not a shortfall. Review is the one role with measured
         # data, and it pins the two models that fail in opposite directions:
         # ~70% recall / ~32% precision against ~39% precision / ~55% recall.
@@ -592,7 +599,8 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
         # Planning runs once per run, so it is the cheapest place to be
         # inclusive. It happens to equal the brain trust today; that is a
         # coincidence of the roster size, not a constraint worth enforcing.
-        "planners": ["claude:opus", "openai:sol", "grok:default"],
+        # grok:default left with its trust seat (2026-11-01).
+        "planners": ["claude:opus", "openai:sol"],
     },
     "collaborative": {
         "peers": ["claude:opus", "openai:gpt-5.6-terra"],

@@ -140,25 +140,22 @@ def test_the_ladder_spans_every_subscription():
     assert providers == set(VENDORS)
 
 
-def test_the_doubled_vendor_is_the_least_contended_one():
-    """Four rungs across three vendors means somebody takes two. It should be
-    the vendor that is not also carrying an orchestrator seat or the pinned
-    kinds."""
-    from collections import Counter
+def test_xai_holds_only_the_bounded_worker_rung():
+    """Since 2026-11-01 (operator directive) xAI's one rung is ROTE, called
+    as the restricted worker; SIMPLE names Sol, where the ladder's upward
+    rule already sent it whenever the Grok rung was out."""
+    from quadratus.registry import ORCHESTRATOR_CHAIN, resolve
 
-    from quadratus.registry import ORCHESTRATOR_CHAIN
-
-    counts = Counter(k.split(":")[0] for k in DIFFICULTY_LADDER.values())
-    doubled = [vendor for vendor, n in counts.items() if n > 1]
-    seat_vendors = {k.split(":")[0] for k in ORCHESTRATOR_CHAIN}
-    assert doubled == ["grok"]
-    assert "grok" not in seat_vendors
+    grok_rungs = {d: k for d, k in DIFFICULTY_LADDER.items() if k.startswith("grok:")}
+    assert grok_rungs == {"rote": GROK_WORKER} and resolve(GROK_WORKER).restricted
+    assert DIFFICULTY_LADDER["simple"] == SOL
+    assert "grok" not in {k.split(":")[0] for k in ORCHESTRATOR_CHAIN}
 
 
 def test_each_difficulty_maps_to_its_rung():
     assert route(TaskKind.BACKEND, default=GROK, difficulty="complex") == OPUS
     assert route(TaskKind.BACKEND, default=GROK, difficulty="standard") == SOL
-    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple") == GROK
+    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple") == SOL
     assert route(TaskKind.BACKEND, default=OPUS, difficulty="rote") == GROK_WORKER
 
 
