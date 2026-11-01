@@ -157,6 +157,28 @@ def test_an_unreadable_time_keeps_the_counts_and_marks_timing_partial(tmp_path, 
     assert safe["timing"] == "partial" and safe["first_at"] and safe["first_at"].endswith("+00:00")
 
 
+@pytest.mark.parametrize("ts", ["1" + "0" * 400, "-" + "1" + "0" * 400, str(10 ** 30)],
+                         ids=["10**400", "-10**400", "10**30"])
+def test_an_integer_time_too_large_for_a_float_is_unreadable_timing_not_an_error(tmp_path, ts):
+    """Root's review of e8f3a40: a valid JSON integer ``ts`` of 10**400
+    raised OverflowError before it was range-checked."""
+    rows = [_phase("streaming_reasoning", 1), '{"type": "phase_changed", "phase": "streaming_reasoning", "ts": '
+            + ts + "}", _phase("streaming_reasoning", 4)]
+    progress = _transcript_progress(_session(tmp_path, "0e3b6f2a-0000-4000-8000-0000000000ee", rows))
+    assert progress["events"] == 3 and progress["timing"] == "partial" and progress["timing_invalid"] == 1
+    assert progress["span_seconds"] == 3.0
+
+
+def test_the_record_boundary_takes_huge_integer_durations_as_unknown():
+    for value in (10 ** 400, -(10 ** 400), MAX_SECONDS + 1):
+        safe = recovery._safe_progress(dict(span_seconds=value, longest_gap_seconds=value))
+        assert safe["span_seconds"] is None and safe["longest_gap_seconds"] is None, value
+    assert recovery._safe_progress(dict(span_seconds=MAX_SECONDS))["span_seconds"] == float(MAX_SECONDS)
+
+
+MAX_SECONDS = recovery.MAX_PROGRESS_SECONDS
+
+
 def test_infinity_in_the_only_time_leaves_no_timing_and_does_not_raise(tmp_path):
     rows = ['{"type": "phase_changed", "phase": "streaming_reasoning", "ts": Infinity}']
     progress = _transcript_progress(_session(tmp_path, "0e3b6f2a-0000-4000-8000-0000000000dd", rows))

@@ -226,7 +226,10 @@ def _safe_progress(progress: dict) -> dict:
     def seconds(value):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
-        return round(float(value), 3) if math.isfinite(value) and 0 <= value <= MAX_PROGRESS_SECONDS else None
+        if isinstance(value, int):
+            # Compared as an integer before any float conversion (10**400).
+            return float(value) if 0 <= value <= MAX_PROGRESS_SECONDS else None
+        return round(value, 3) if math.isfinite(value) and 0 <= value <= MAX_PROGRESS_SECONDS else None
 
     def stamp(value):
         return value if isinstance(value, str) and _ISO.fullmatch(value) else None

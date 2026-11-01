@@ -1309,11 +1309,18 @@ def _progress_time(row):
         value = row.get(key)
         if isinstance(value, bool):
             return False
-        if isinstance(value, (int, float)):
+        if isinstance(value, int):
+            # Range-checked as an integer first: a JSON integer such as
+            # 10**400 cannot become a float (root's review of e8f3a40).
+            for scale in (1, 1000):
+                if _EPOCH_RANGE[0] * scale <= value <= _EPOCH_RANGE[1] * scale:
+                    return value / scale
+            return False
+        if isinstance(value, float):
             if not math.isfinite(value):
                 return False
             for scale in (1.0, 1000.0):
-                seconds = float(value) / scale
+                seconds = value / scale
                 if _EPOCH_RANGE[0] <= seconds <= _EPOCH_RANGE[1]:
                     return seconds
             return False
