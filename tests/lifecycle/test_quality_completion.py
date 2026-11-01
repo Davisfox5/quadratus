@@ -279,6 +279,7 @@ def test_a_capped_revision_with_slots_left_meets_its_reviewer_once_and_closes_on
     return, decides), a failing check or an out-of-scope edit keep the
     capped or failed close exactly as before, and no second writer or
     recheck is called."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
         return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
@@ -375,6 +376,7 @@ def test_both_recheck_routes_carry_the_original_contract_bound_to_the_findings_o
     text (R1, never t2's R2), the order of authority and the boundary rule,
     once, without the full review's verdict duty; the recheck grammar and
     its named-id scope stay."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_recovery_handoff import GROK_CAP
 
     def lead(call, replay):
@@ -706,6 +708,7 @@ def test_a_capped_close_after_a_handoff_reports_the_recheck_it_performed(tmp_pat
     its outcome and the observation it rested on, never 'before its
     recheck' or 'unreviewed and ungated'. The plain capped close keeps the
     old wording."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
         return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
@@ -751,6 +754,7 @@ def test_a_capped_recheck_is_reported_as_no_verdict_never_as_the_reviewers_unres
     reviewer stops at its own turn cap, so it gave no verdict; the finding
     stays open and the close says the recheck gave no verdict on it, never
     the recheck grammar's UNRESOLVED, and the hold says the same."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         H.write(call, {"app.py": FIXED})
         return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
@@ -786,6 +790,7 @@ def test_a_capped_close_with_another_reviewers_finding_open_says_what_was_resolv
     another reviewer's finding, outside that recheck, stayed open; the task
     is unfinished and the close says exactly that, never that the recheck
     'ended ... with no verdict'."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     near_miss = "BLOCKING: SCENARIO P1 - the declared scenario never states that a string argument raises TypeError"
     complex_t1 = T1.replace("KIND: backend simple", "KIND: backend complex")
 
@@ -1031,6 +1036,7 @@ def test_a_capped_close_words_each_finding_by_what_its_recheck_came_to(tmp_path,
     the hold still carries it. A raised finding is never the reviewer's
     UNRESOLVED, an INVALIDATED verdict is never RESOLVED, and another
     reviewer's finding outside the recheck is never credited to it."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _c3_script(case), files=FILES, max_tasks=3,
                    settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
     result = H.result_json(replay)

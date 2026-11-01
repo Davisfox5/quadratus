@@ -234,6 +234,7 @@ def test_j22_a_continuation_that_finishes_recovers_the_cap_and_keeps_its_record(
 
 
 def test_j23_two_caps_in_a_row_are_the_breaker(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -267,6 +268,7 @@ def test_j24_budget_exhaustion_is_a_budget_stop_with_the_task_stopped(tmp_path, 
 
 
 def test_j25_a_recovered_transport_failure_is_history_not_a_block(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.vendor == "grok":
             return H.grok_ok("I'll create it", stop="cancelled", num_turns=3)

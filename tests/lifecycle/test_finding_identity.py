@@ -59,6 +59,7 @@ def _held(replay, *, planner=1):
 
 @pytest.mark.requirements_ledger
 def test_a_capped_close_holds_its_open_finding_and_resolves_settles_by_the_original_reviewer(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(GROK_CAP, orchestrator=_plan(REQS + TASK, RESOLVE)),
                    files=FILES, max_tasks=3, record_complete=False)
     record = H.result_json(replay)
@@ -102,6 +103,7 @@ def test_an_explicit_resolves_the_reviewer_keeps_open_is_the_findings_unresolved
     and its lead reports it done; neither closes it. The original reviewer
     keeps it open at the settlement recheck, so the explicit attempt stops
     the run as an unresolved RESOLVES does for an audit finding."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     script = _script(GROK_CAP, orchestrator=_plan(REQS + TASK, RESOLVE))
     review, recheck = script.overrides["collaborator"], script.overrides["recheck"]
     script.overrides["collaborator"] = lambda c, r: ("RFT1-1: RESOLVED fixed by this task\n" + review(c, r)
@@ -129,6 +131,7 @@ BASED = ("BLOCKING: add('x', 1) returns without the error the requirement names 
 def test_an_inherited_finding_kept_open_stays_held_debt_and_names_its_carrier(tmp_path, monkeypatch):
     """A finding with a basis (the live run's EVIDENCE rows had one) is a
     legacy open text as well as a registry record: held debt at the close."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     script = _script(GROK_CAP, orchestrator=_plan(REQS + TASK, CONTINUE))
     recheck, review = script.overrides["recheck"], script.overrides["collaborator"]
     script.overrides["collaborator"] = lambda c, r: BASED if c.task == "t1" else review(c, r)
@@ -154,6 +157,7 @@ def test_an_inherited_finding_kept_open_stays_held_debt_and_names_its_carrier(tm
 
 @pytest.mark.requirements_ledger
 def test_a_resolves_without_continues_still_rechecks_and_the_debt_stays_with_the_capped_task(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(GROK_CAP, orchestrator=_plan(REQS + TASK, RESOLVE_ALONE)),
                    files=FILES, max_tasks=3, record_complete=False)
     record = H.result_json(replay)
@@ -166,6 +170,7 @@ def test_a_resolves_without_continues_still_rechecks_and_the_debt_stays_with_the
 
 @pytest.mark.requirements_ledger
 def test_a_capped_child_s_open_finding_reaches_the_post_merge_recheck(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _batch_script(GROK_CAP), files=FILES, max_tasks=4, record_complete=False)
     record = H.result_json(replay)
     assert sorted(record["turn_limited_tasks"]) == ["t1", "t2"]
@@ -189,6 +194,7 @@ def test_a_raised_child_s_open_findings_are_held_before_its_failed_record_is_wri
     """Root's control on 6c1b922: the ProviderError child goes through
     _record_unmerged_failure, not _close_failed, and its RFT2-1 had no hold.
     Nothing is merged or retried and the stop stays."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _batch_script(FAILING), files=FILES, max_tasks=4, record_complete=False)
     record = H.result_json(replay)
     assert record["failed_tasks"] == ["t2"] and len(replay.of("orchestrator")) == 1
@@ -214,6 +220,7 @@ def test_the_sealed_terminal_state_carries_the_end_s_findings_and_outcomes(tmp_p
     """Root's control on 6c1b922: a last-slot batch's sealed checkpoint
     kept review_findings=[] and unresolved_reviews=[] from the pre-batch
     quiescent point beside the end's capped lists."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _batch_script(GROK_CAP), files=FILES, max_tasks=2, record_complete=False)
     record = H.result_json(replay)
     assert sorted(record["turn_limited_tasks"]) == ["t1", "t2"]

@@ -408,6 +408,7 @@ def test_a_capped_draft_in_the_last_slot_meets_an_independent_review_only_when_c
     it, so the job ended with no independent read of the work. That source now
     goes to one cross-vendor review and the existing gate and close-out; the
     lead stays capped. Source the checks do not pass closes capped as before."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
 
     def lead(call, replay):
@@ -448,6 +449,7 @@ def test_every_task_review_judges_the_original_goal_not_only_the_task_paraphrase
     holds the source to it, and the unmet condition stays open after the
     lead's one revision instead of the job completing, whether the draft
     was capped (the last-slot handoff) or finished (an ordinary review)."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     contract = "A non-number argument must raise TypeError naming the argument."
     goal = "Implement add(a, b) in app.py. " + contract
@@ -584,6 +586,7 @@ def test_goal_bearing_work_is_reviewed_or_held_never_closed_unreviewed(tmp_path,
     direct label on goal-bearing work is refused so the task runs at the
     normal tier with its review. Work that covers no requirement keeps its
     behaviour on both routes."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from quadratus import runtime
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     monkeypatch.setenv("QUADRATUS_REQUIREMENTS_LEDGER", "1" if goal else "0")
@@ -691,6 +694,7 @@ def test_capped_work_in_the_final_parallel_batch_meets_one_independent_review(tm
     GoalUnconfirmedAtCap with calls left. The parent now sends that merged
     source to one reviewer from another vendor: a clean per-requirement
     verdict lifts the cap; a finding is held open. No lead call follows."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
              "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
@@ -907,6 +911,7 @@ def test_the_review_seat_is_asked_for_a_scratch_run_and_the_auditor_never_sees_a
     grok review gets neither; the auditor gets no probe and no command line
     (the standing rule: no command lines, paths or operands to the planner or
     auditor)."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from quadratus.session import _PROBE_RULE
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     seen = []
@@ -1293,6 +1298,7 @@ def test_a_capped_revision_in_the_last_slot_meets_the_reviewer_whose_findings_it
     other verdict stays open. The writer is never called again. Failing
     checks, an out-of-scope edit or a note with no blocking finding keep the
     capped close exactly as before."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
 
     def lead(call, replay):
@@ -1358,6 +1364,7 @@ def test_a_capped_fix_in_the_last_slot_meets_the_reviewer_whose_finding_stayed_o
     """r10, the fix-cycle form: the revision finished, its recheck came back
     UNRESOLVED, and the one fix stopped at its cap. The reviewer whose finding
     stayed open checks it once on the fixed source; no further fix follows."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
 
     def lead(call, replay):
@@ -1564,6 +1571,7 @@ def test_a_capped_writing_call_after_the_draft_is_told_its_real_round_budget(tmp
     CLI that takes the cap now carry the same budget in words, once. A
     codex writer (no round cap), a run with no cap, the reviewers and the
     draft get no writer note; nothing changes the cap itself."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     tier = {"grok-gate-fix": "simple", "codex-revision": "standard"}.get(case, "complex")
     declared = DECL_SIMPLE.replace("backend simple", "backend " + tier)
@@ -1821,6 +1829,7 @@ def test_a_parallel_childs_capped_no_edit_revision_gets_the_same_measured_retry(
     """R15's shape: t3 was a parallel child. The child spends its own task's
     remaining cycle; the fixed source merges and the task is not left
     turn-limited."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
              "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")

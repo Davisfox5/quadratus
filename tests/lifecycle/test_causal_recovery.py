@@ -47,7 +47,7 @@ def _native(home, sid, rows):
 
 def _timed_out_lead(home, seen, rows, *, stderr=""):
     def lead(call, replay):
-        assert call.vendor == "grok", "the simple rung is xAI's"
+        assert call.vendor == "grok", "the Grok lead is selected explicitly (H.grok_lead_routing)"
         sid = call.argv[call.argv.index("--session-id") + 1]
         seen.setdefault("sids", []).append(sid)
         _native(home, sid, rows)
@@ -71,6 +71,7 @@ REASONING_ROWS = [_phase("streaming_reasoning", s) for s in range(0, 60, 3)]
 
 
 def test_a_grok_timeout_is_the_cause_and_the_refused_replan_is_not_a_call(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     seen = {}
     replay = _run(tmp_path, monkeypatch, _timed_out_lead(tmp_path / "home", seen, REASONING_ROWS, stderr=STDERR),
                   SIMPLE_T1)
@@ -117,6 +118,7 @@ def test_a_grok_timeout_is_the_cause_and_the_refused_replan_is_not_a_call(tmp_pa
     (REASONING_ROWS[:3] + ["not json at all"] + REASONING_ROWS[3:5], "partial"),
 ], ids=["truncated-tail", "malformed-row"])
 def test_damaged_native_progress_is_labelled_partial_never_observed(tmp_path, monkeypatch, rows, status):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = _run(tmp_path, monkeypatch, _timed_out_lead(tmp_path / "home", {}, rows), SIMPLE_T1)
     result = H.result_json(replay)
     (failure,) = [r for r in result["recoveries"] if r["kind"] == "task"]
@@ -129,6 +131,7 @@ def test_a_later_success_cannot_steal_the_cause(tmp_path, monkeypatch):
     """t1's Grok lead succeeds, t2's times out: the newer successful calls of
     t1 (its review and close-out) never become the cause, and the stop
     names t2's lead."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
@@ -147,6 +150,7 @@ def test_a_later_success_cannot_steal_the_cause(tmp_path, monkeypatch):
 
 
 def test_a_normal_completion_writes_no_occurrence_and_grok_still_meters_from_its_envelope(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         assert "--session-id" in call.argv
         H.write(call, {"app.py": FIXED})
@@ -168,6 +172,7 @@ def test_two_concurrent_timeouts_are_two_causes_each_counted_once(tmp_path, monk
     """A PARALLEL batch whose two leads both time out while both are in
     flight: two settlements without usage, two causes on the one terminal
     record, each bound to its own row, and the cost counts each call once."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     import threading
 
     from tests.lifecycle.test_finish_capacity import BATCH

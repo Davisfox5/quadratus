@@ -63,6 +63,7 @@ def _charges(replay):
 
 @pytest.mark.requirements_ledger
 def test_a_task_over_owed_work_without_continues_is_sent_back_and_the_continuation_is_charged_once(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(GROK_CAP, orchestrator=_plan(REQS + TASK, DUPLICATE, CONTINUE)),
                    files=FILES, max_tasks=3, record_complete=False, survey=SurveyConfig(recovery_tasks=2))
     assert _leads(replay) == ["t1", "t2"], "the duplicate never reached a lead; the continuation did"
@@ -84,6 +85,7 @@ def test_a_task_over_owed_work_without_continues_is_sent_back_and_the_continuati
 
 @pytest.mark.requirements_ledger
 def test_with_the_allowance_spent_an_overlap_stops_the_run_naming_the_owed_work_before_any_call(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(GROK_CAP, orchestrator=_plan(REQS + TASK, DUPLICATE)),
                    files=FILES, max_tasks=3, record_complete=False, survey=SurveyConfig(recovery_tasks=0))
     assert _leads(replay) == ["t1"], "no lead call was spent on the duplicate"
@@ -99,6 +101,7 @@ def test_with_the_allowance_spent_an_overlap_stops_the_run_naming_the_owed_work_
 
 @pytest.mark.requirements_ledger
 def test_non_overlapping_work_still_runs_on_a_spent_allowance_and_the_stop_names_the_uncovered_requirement(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t2":
             H.write(call, {"README.md": README_DONE})
@@ -291,6 +294,7 @@ def test_a_unittest_module_not_run_item_stays_undischarged_while_only_pytest_ran
 
 @pytest.mark.requirements_ledger
 def test_a_charged_continuation_reaches_done_and_the_independent_audit(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_step2_recovery import SIMPLE_SHOWN, simple_proofs
     base = _script(GROK_CAP, orchestrator=_plan(REQS + TASK, CONTINUE))
     base.overrides["auditor"] = replies.judging_scenarios(
@@ -450,6 +454,7 @@ def test_first_coverage_of_another_requirement_in_the_same_file_runs_and_leaves_
     t2 covers the untouched R2 with a documentation comment in app.py. The
     shared file is not a takeover: t2 runs, nothing is charged, t1 stays
     owed."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     same_file = _simple("app.py", "Document the arguments and result of add in a comment in app.py.", "R2")
     base = _script(GROK_CAP, orchestrator=_plan(REQS2 + TASK, same_file))
     first_lead, first_review = base.overrides["lead"], base.overrides["collaborator"]
@@ -492,6 +497,7 @@ def test_a_parallel_block_over_owed_work_meets_the_same_admission_before_any_wri
     ordinary README task. With the allowance spent the run stops naming the
     owed work; with allowance left the batch is sent back naming the route.
     No child's writer is paid either way."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     base = _script(GROK_CAP, orchestrator=_plan(REQS2 + TASK, _batch(DUPLICATE, README_R2), CONTINUE))
     replay = H.run(tmp_path, monkeypatch, base, files=FILES, max_tasks=4, record_complete=False,
                    survey=SurveyConfig(recovery_tasks=recovery))
@@ -513,6 +519,7 @@ def test_a_parallel_block_over_owed_work_meets_the_same_admission_before_any_wri
 
 @pytest.mark.requirements_ledger
 def test_an_independent_parallel_batch_still_runs_beside_owed_work(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     base = _script(GROK_CAP, orchestrator=_plan(REQS3 + TASK, _batch(README_R2, NOTES_R3)))
     first_lead, first_review = base.overrides["lead"], base.overrides["collaborator"]
 

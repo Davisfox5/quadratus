@@ -113,6 +113,7 @@ GROK_CAP = H.grok_ok(NARRATION, stop="max_turn_requests", num_turns=8)
 
 @pytest.mark.requirements_ledger
 def test_a_serial_revision_capped_by_max_turn_requests_is_continued_by_the_planner(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(GROK_CAP, orchestrator=_plan(REQS + TASK, CONTINUE)),
                    files=FILES, max_tasks=3, record_complete=False)
     assert [c.vendor for c in replay.of("lead")][0] == "grok"
@@ -146,6 +147,7 @@ def test_a_continuation_in_the_last_slot_leaves_a_sealed_terminal_with_no_partia
     last slot, so no quiescent checkpoint follows it; the sealed terminal
     must still show the debt cleared, the lists agreeing with the records,
     and stay sealed and non-resumable."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(GROK_CAP, orchestrator=_plan(REQS + TASK, CONTINUE)),
                    files=FILES, max_tasks=2, record_complete=False)
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"], _roles(replay)
@@ -162,6 +164,7 @@ def test_a_continuation_in_the_last_slot_leaves_a_sealed_terminal_with_no_partia
 
 @pytest.mark.requirements_ledger
 def test_a_spent_recovery_allowance_stops_the_continuation_by_name(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(GROK_CAP, orchestrator=_plan(REQS + TASK, CONTINUE)),
                    files=FILES, max_tasks=3, record_complete=False, survey=SurveyConfig(recovery_tasks=0))
     assert H.result_json(replay)["turn_limited_tasks"] == ["t1"]
@@ -188,6 +191,7 @@ NEGATIVES = {
 @pytest.mark.requirements_ledger
 @pytest.mark.parametrize("case", sorted(NEGATIVES))
 def test_a_revision_that_stops_any_other_way_is_not_a_cap_and_is_not_continued(tmp_path, monkeypatch, case):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     envelope, cap, klass = NEGATIVES[case]
     settings = Settings(backend="cli", lead_max_turns=cap) if cap else None
     replay = H.run(tmp_path, monkeypatch,
@@ -208,6 +212,7 @@ def test_a_revision_that_stops_any_other_way_is_not_a_cap_and_is_not_continued(t
 
 @pytest.mark.requirements_ledger
 def test_unknown_usage_on_a_capped_revision_stays_unknown_and_is_not_zero(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     no_usage = json.dumps({"text": NARRATION, "stopReason": "max_turn_requests", "num_turns": 8,
                            "sessionId": "s-unknown"})
     replay = H.run(tmp_path, monkeypatch, _script(no_usage, orchestrator=_plan(REQS + TASK, CONTINUE)),
@@ -290,6 +295,7 @@ def test_a_batch_with_a_claude_capped_child_and_a_grok_capped_child_reaches_the_
     """proof-workflow-01's shape with the cap typed: both children close
     capped and merged, the batch does not stop, the planner is told what is
     owed, and its continuation of the grok child runs with the handoff."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _batch_script(GROK_CAP), files=FILES, max_tasks=4, record_complete=False)
     leads = {c.task: c.vendor for c in replay.of("lead") if c.task in ("t1", "t2")}
     assert leads == {"t1": "claude", "t2": "grok"}
@@ -321,6 +327,7 @@ def test_a_raised_child_keeps_the_stop_and_leaves_a_durable_failed_handoff(tmp_p
     also carries an error: a failure, not a cap. The batch stops as before
     (root boundary evidence) with the child unmerged and its files kept, and
     the record now holds the failed handoff a scope conflict would leave."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     failing = H.grok_ok(NARRATION, stop="max_turn_requests", num_turns=8, error="permission denied: write README.md")
     replay = H.run(tmp_path, monkeypatch, _batch_script(failing), files=FILES, max_tasks=4, record_complete=False)
     assert len(replay.of("orchestrator")) == 1, "no planning call followed the stopped batch"

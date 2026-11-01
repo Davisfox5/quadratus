@@ -148,6 +148,7 @@ def test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop(tmp_path, 
 
 
 def test_a_cap_then_a_failure_is_the_same_breaker(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})

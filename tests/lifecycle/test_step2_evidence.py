@@ -241,6 +241,7 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
     allowance: with the call limit reached it is refused, the run stops on
     the budget, the request and its passing receipt stay on the record, and
     the finding is still NOT MET."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     if not _sandboxed():
         pytest.skip("no scratch sandbox here")
     # The route's calls are made (``blocking``: one standing finding per
@@ -283,6 +284,7 @@ def test_a_held_review_finding_is_tested_and_rechecked_once_by_its_own_reviewer(
     open work. Tested by a passing harness run, it goes back once to the
     same reviewer: RESOLVED closes exactly that finding and the run
     completes; UNRESOLVED keeps it, and the run ends with the finding open."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def orchestrator(call, replay):
         n = len(replay.of("orchestrator"))
         if n == 1:

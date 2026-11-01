@@ -57,6 +57,7 @@ def _script(collaborator=None, revision=None, recheck=None):
 
 @pytest.mark.requirements_ledger
 def test_every_seat_is_launched_with_an_explicit_effort_and_the_family_wire_model(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(_at(tmp_path, "explicit"), monkeypatch, _script(), files=FILES, max_tasks=1, record_complete=False)
     by_role = {}
     for call in replay.calls:
@@ -85,6 +86,7 @@ def test_every_seat_is_launched_with_an_explicit_effort_and_the_family_wire_mode
 
 @pytest.mark.requirements_ledger
 def test_a_repeated_fix_cycle_raises_the_editor_and_the_recheck_explicitly(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     rechecks = []
 
     def revision(call, replay):
@@ -108,6 +110,7 @@ def test_a_repeated_fix_cycle_raises_the_editor_and_the_recheck_explicitly(tmp_p
 
 @pytest.mark.requirements_ledger
 def test_difficulty_raises_the_lead_and_its_reviewers_and_security_work_runs_high_throughout(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     plan = _plan(_scope(proofs=_proofs("R1"))).replace("KIND: backend simple", "KIND: backend complex")
     script = _script()
     script.overrides["orchestrator"] = lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE"
@@ -128,6 +131,7 @@ def test_difficulty_raises_the_lead_and_its_reviewers_and_security_work_runs_hig
 
 @pytest.mark.requirements_ledger
 def test_a_stale_catalogue_leaves_openai_unavailable_with_the_reason_and_sends_nothing_older(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     stale = write_codex_catalog(tmp_path / "stale.json", fetched_at="2026-09-01T00:00:00Z")
     monkeypatch.setenv("QUADRATUS_CODEX_CATALOG", str(stale))
     replay = H.run(_at(tmp_path, "stale"), monkeypatch, _script(), files=FILES, max_tasks=1, record_complete=False)
@@ -172,6 +176,7 @@ def test_the_budget_record_does_not_change_with_effort(tmp_path, monkeypatch):
     """Effort is a call parameter, never a budget input: the same run shape
     admits the same stages and reserves the same attempts whatever the
     difficulty label selected."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     low = H.run(_at(tmp_path, "simple"), monkeypatch, _script(), files=FILES, max_tasks=1, record_complete=False)
     plan = _plan(_scope(proofs=_proofs("R1"))).replace("KIND: backend simple", "KIND: backend complex")
     script = _script()

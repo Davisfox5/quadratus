@@ -123,6 +123,7 @@ def test_a_capped_draft_past_its_estimate_takes_the_capped_route_not_a_size_fail
     """R16's shape: a draft that stops at its round cap with a large in-path
     change. The capped paths decide (here the last slot's checked source
     meets its review); nothing fails the task on size and no trim is bought."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         H.write(call, {"app.py": LARGE})
         return H.grok_ok("Still adding helpers", stop="cancelled", num_turns=8)

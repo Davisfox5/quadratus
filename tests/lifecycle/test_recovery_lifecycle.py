@@ -535,6 +535,7 @@ EXAMPLE = _README + "\nExample: `add(1, 2)` returns `3`.\n"
 
 @pytest.mark.requirements_ledger
 def test_inherited_defect_and_owed_review_each_settle_by_their_own_judge(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead_(call, replay):
         if call.task == "t1":
             return lead(call, replay)
@@ -729,6 +730,7 @@ def test_a_review_unfinished_two_ways_is_one_owed_record(tmp_path, monkeypatch):
 @pytest.mark.requirements_ledger
 @pytest.mark.parametrize("settles", [True, False], ids=["clean-settlement", "no-verdict"])
 def test_a_capped_final_batch_review_is_owed_and_a_clean_settlement_lifts_the_cap(tmp_path, monkeypatch, settles):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_finish_capacity import BATCH
     from tests.lifecycle.test_quality_completion import README
     from tests.lifecycle.test_step2_recovery import _capped_lead
@@ -866,6 +868,7 @@ def test_a_final_batch_owner_settlement_is_held_to_the_executed_error_evidence_r
     settlement says MET citing only a source file. The ordinary review rule
     applies: the MET is not counted, so the cap is not lifted, and the gap
     is kept for the audit. The owed review itself was completed."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from tests.lifecycle.test_finish_capacity import BATCH
     from tests.lifecycle.test_quality_completion import README
     from tests.lifecycle.test_step2_recovery import _capped_lead

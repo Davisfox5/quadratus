@@ -434,6 +434,7 @@ def test_a_claude_failure_past_the_turn_count_is_not_read_as_a_cap(tmp_path, mon
 
 
 def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -450,6 +451,7 @@ def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
 
 def test_two_caps_in_a_row_stop_with_a_named_breaker_and_the_work_kept(tmp_path, monkeypatch):
     """Run 14: the breaker stopped the run and result.error was blank."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -475,6 +477,7 @@ def test_two_caps_in_a_row_stop_with_a_named_breaker_and_the_work_kept(tmp_path,
 
 def test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation(tmp_path, monkeypatch):
     """Grok review of #33: an error field at the count was read as the cap and replanned."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         H.write(call, {"README.md": "# app\n\npartial\n"})
         return H.grok_ok("I'll finish the README next", stop="cancelled", num_turns=14, error="overloaded")
@@ -491,6 +494,7 @@ def test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation(tmp_path,
 
 def test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchanged_tree(tmp_path, monkeypatch):
     """Not a cap: the unchanged tree lets another lead take the task, once."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.vendor == "grok":
             return H.grok_ok("I'll create it", stop="cancelled", num_turns=3)
@@ -536,6 +540,7 @@ def test_a_refused_lead_is_not_retried_or_rerouted(tmp_path, monkeypatch):
 @pytest.mark.parametrize("stop", ["refusal", "content_filter"])
 def test_a_grok_decline_is_one_lead_at_any_count_on_any_tree(tmp_path, monkeypatch, stop, turns, wrote):
     """Codex review of f7548a2: a decline on an unchanged tree was handed to another lead."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if wrote:
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -679,6 +684,7 @@ def test_a_clean_render_without_steps_still_verifies(tmp_path, monkeypatch):
     prompt asks for steps; the cross-vendor final review and the independent
     grader decide whether the render shows the change (Grok review of #33).
     """
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _design_script("Renders refreshed.\nCHANGED: []"),
                    files=_design_files())
     record = json.loads(replay.artifact_texts("design-evidence")[0])
@@ -726,6 +732,7 @@ def test_the_first_lead_is_handed_its_scoped_files_as_they_are(tmp_path, monkeyp
 def test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_more(
         tmp_path, monkeypatch, narration, act):
     """Codex review of 895cf67: zero changed files does not say the rounds went to reading."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             if act == "revert":
@@ -751,6 +758,7 @@ def test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_m
 
 
 def test_capped_edits_reach_the_continuation_as_the_tree_now_has_them(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial draft\n"})
@@ -802,6 +810,7 @@ def test_secret_hidden_and_linked_files_in_a_scope_never_reach_a_prompt(tmp_path
 
 def test_a_tail_edit_in_a_long_file_reaches_the_continuation_as_a_window(tmp_path, monkeypatch):
     """Codex review of 895cf67: a prefix cut at line 297 of 1,669 hid the capped call's tail edit."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     long_file = "".join(f"line_{i:04d} = {i}  # filler text to make the file long\n" for i in range(1, 1601))
     scope = dict(T2, permitted_paths=["README.md", "notes/long.py"], max_lines=40)
     decl = "KIND: docs simple\nSCOPE: " + json.dumps(scope) + "\nDocument add in README.md."

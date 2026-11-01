@@ -434,6 +434,7 @@ def test_a_capped_revision_that_touched_a_tree_is_named_when_the_run_ends_at_its
 def test_a_grok_gate_fix_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch, turns, edits):
     """Codex's 90cc5d9 baseline: without a cap on the fix role, a cancelled
     Grok envelope at 14 or 20 turns was a ProviderError."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def gate_fix(call, replay):
         if edits:
             H.write(call, {"app.py": FIXED})
@@ -448,6 +449,7 @@ def test_a_grok_gate_fix_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch, 
 
 
 def test_a_grok_revision_cancelled_at_the_cap_takes_the_capped_task_path(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def revision(call, replay):
         return H.grok_ok("Still revising.", stop="cancelled", num_turns=CAP)
     replay = _run(tmp_path, monkeypatch, Script(revision=revision), files=FILES, lead="grok:default")

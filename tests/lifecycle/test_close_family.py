@@ -408,6 +408,7 @@ def test_held_debt_in_the_last_slot_goes_to_the_caps_completion_decision(tmp_pat
 
 @pytest.mark.requirements_ledger
 def test_a_raised_child_still_stops_the_batch_under_the_shared_policy(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     failing = H.grok_ok(NARRATION, stop="max_turn_requests", num_turns=8, error="permission denied: write README.md")
     replay = H.run(tmp_path, monkeypatch, _batch_script(failing), files=FILES, max_tasks=4, record_complete=False)
     close = next(c for c in _closes(replay) if c["site"] == "batch")
@@ -417,6 +418,7 @@ def test_a_raised_child_still_stops_the_batch_under_the_shared_policy(tmp_path, 
 
 @pytest.mark.requirements_ledger
 def test_a_capped_child_beside_a_clean_child_continues_under_the_shared_policy(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _batch_script(GROK_CAP), files=FILES, max_tasks=4, record_complete=False)
     close = next(c for c in _closes(replay) if c["site"] == "batch")
     assert close["stop"] is None and len(replay.of("orchestrator")) >= 3

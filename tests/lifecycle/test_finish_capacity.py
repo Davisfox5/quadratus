@@ -401,6 +401,7 @@ def test_a_last_slot_tasks_capped_checked_source_meets_the_bounded_review(tmp_pa
     that exact source, one cross-vendor reviewer reads it, the goal
     question and the audit run, and the run completes with the cap
     recorded as a non-blocking fact."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     from quadratus.config import Settings
 
     def lead(call, replay):

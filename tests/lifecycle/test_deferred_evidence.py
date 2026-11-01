@@ -62,6 +62,7 @@ def _cli_vendor(peer: str) -> str:
 
 @pytest.mark.requirements_ledger
 def test_the_child_reviewer_is_told_the_rows_are_deferred_and_reads_them_after_the_merge(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _script(), files=FILES, max_tasks=3, record_complete=False)
     review = [c for c in replay.of("collaborator") if c.task == "t1"][0].prompt
     assert "deferred to the merge gate (declared by the harness" in review

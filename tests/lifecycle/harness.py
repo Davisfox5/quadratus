@@ -178,6 +178,24 @@ def fake_launch(replay: Replay):
     return launch
 
 
+def grok_lead_routing(monkeypatch, *, trust: bool = False) -> None:
+    """Select grok:default explicitly for a case that fault-injects a Grok
+    lead (or, with ``trust``, a Grok peer). Product routing keeps it off the
+    SIMPLE rung, the escalation order and the brain trust since 2026-11-01
+    (operator directive); a case whose scenario is a Grok call puts it back
+    here, by name, exactly as routing stood before, instead of relying on
+    the route. Vendor-generic cases do not call this and run the current
+    route."""
+    from quadratus import registry, task_kinds
+    monkeypatch.setitem(task_kinds.DIFFICULTY_LADDER, "simple", "grok:default")
+    monkeypatch.setattr(task_kinds, "_LADDER_ORDER", ("grok:worker", "grok:default", "openai:sol", "claude:opus"))
+    if trust:
+        adversarial = registry.MODE_ROSTERS["adversarial"]
+        for role in ("peers", "planners"):
+            if "grok:default" not in adversarial[role]:
+                monkeypatch.setitem(adversarial, role, [*adversarial[role], "grok:default"])
+
+
 def write(call: Call, files: Dict[str, str]) -> None:
     """Edit the calling seat's working directory, as an editing CLI would."""
     for name, text in files.items():

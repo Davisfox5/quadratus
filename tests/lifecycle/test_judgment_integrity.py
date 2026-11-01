@@ -202,6 +202,7 @@ def test_a_glued_recheck_is_completed_and_buys_no_extra_revision(tmp_path, monke
     it counted as UNRESOLVED and bought a second revision. Now the same
     seat completes it once, in the recheck role, and its RESOLVED closes
     exactly that finding."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def recheck(call, replay):
         return "RESOLVED" if COMPLETION in call.prompt else GLUED
     script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
