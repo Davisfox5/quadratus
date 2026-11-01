@@ -1290,36 +1290,62 @@ def _live_call_trace(event):
     return record
 
 
-_PROGRESS_LABEL = re.compile(r'[A-Za-z][A-Za-z0-9_.:-]{0,47}')
-_PROGRESS_TIME_KEYS = ('timestamp', 'ts', 'time', 'created_at', 'at')
+_PROGRESS_TIME_KEYS = ('ts', 'timestamp', 'time', 'created_at')
+#: Epoch seconds a native event may carry: 2001 to 2100. Milliseconds are
+#: the same range times 1000; anything else is unreadable timing.
+_EPOCH_RANGE = (1.0e9, 4.1e9)
 
 
 def _progress_time(row):
+    """The row's event time in epoch seconds, ``None`` when it carries none,
+    or ``False`` when it carries one that cannot be read for certain: a
+    non-finite or out-of-range number, a naive or non-UTC-convertible
+    string, or anything else (root's review of 56ab825, item 2). Never
+    raises."""
+    import math
     for key in _PROGRESS_TIME_KEYS:
+        if key not in row:
+            continue
         value = row.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return float(value) / (1000.0 if value > 1e11 else 1.0)
-        if isinstance(value, str) and value:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            if not math.isfinite(value):
+                return False
+            for scale in (1.0, 1000.0):
+                seconds = float(value) / scale
+                if _EPOCH_RANGE[0] <= seconds <= _EPOCH_RANGE[1]:
+                    return seconds
+            return False
+        if isinstance(value, str) and 0 < len(value) <= 40:
             try:
-                return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
-            except ValueError:
-                continue
+                parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                if parsed.tzinfo is None or parsed.utcoffset() is None:
+                    return False
+                seconds = parsed.timestamp()
+            except (ValueError, OverflowError, OSError):
+                return False
+            return seconds if _EPOCH_RANGE[0] <= seconds <= _EPOCH_RANGE[1] else False
+        return False
     return None
 
 
 def _transcript_progress(source: Path) -> dict:
-    """What one call was doing, from the vendor's own event log, as counts:
-    events by label (the row's phase, type or event name, when it is a short
-    identifier), how many name a tool or reasoning, the first and last event
-    time, the span and the longest silence between events. A grok session
-    folder's ``events.jsonl`` carries the phase events that tell active
-    reasoning from tool execution and from a wait with no output; nothing
-    of the content is read. ``activity`` is the plain reading of the counts,
-    and a log that cannot be read whole says ``partial``."""
+    """What one call was doing, from a native session folder's own event
+    log, as counts: events by allowlisted label (``recovery.GROK_PHASES`` and
+    ``GROK_EVENT_TYPES``; any other phase or type is counted as
+    ``other_phase``/``other_type`` and its text dropped), tool and reasoning
+    counts, the last known phase, first and last event time, span and the
+    longest silence. ``activity`` is the plain reading of the counts. A row
+    that is not a JSON object makes the record ``partial``; a time that
+    cannot be read for certain makes ``timing`` partial and is left out,
+    never guessed. Nothing of the content is read, and nothing raises."""
+    from .recovery import GROK_EVENT_TYPES, GROK_PHASES, GROK_TOOL_TYPES
     path = source / 'events.jsonl' if source.is_dir() else source
     labels = {}
     times = []
-    events = invalid = 0
+    events = invalid = timing_invalid = 0
+    last_phase = None
     complete = True
     try:
         read = 0
@@ -1334,36 +1360,49 @@ def _transcript_progress(source: Path) -> dict:
                     continue
                 try:
                     row = json.loads(text)
-                except ValueError:
+                except (ValueError, RecursionError):
                     invalid += 1
                     continue
                 if not isinstance(row, dict):
                     invalid += 1
                     continue
                 events += 1
-                for key in ('phase', 'type', 'event'):
-                    value = row.get(key)
-                    if isinstance(value, str) and _PROGRESS_LABEL.fullmatch(value):
-                        labels[value] = labels.get(value, 0) + 1
-                        break
+                phase, kind = row.get('phase'), row.get('type')
+                if phase is not None:
+                    label = phase if isinstance(phase, str) and phase in GROK_PHASES else 'other_phase'
+                    last_phase = label
+                elif isinstance(kind, str) and kind in GROK_EVENT_TYPES:
+                    label = kind
+                else:
+                    label = 'other_type'
+                labels[label] = labels.get(label, 0) + 1
+                if isinstance(kind, str) and kind in GROK_TOOL_TYPES:
+                    labels.setdefault('_tools', 0)
+                    labels['_tools'] += 1
                 stamp = _progress_time(row)
-                if stamp is not None:
+                if stamp is False:
+                    timing_invalid += 1
+                elif stamp is not None:
                     times.append(stamp)
     except OSError:
-        return dict(status='unavailable', reason='the event log could not be read')
+        return dict(status='unavailable', timing='unavailable', reason='the event log could not be read')
     if invalid:
         complete = False
-    tools = sum(n for k, n in labels.items() if 'tool' in k.lower())
-    reasoning = sum(n for k, n in labels.items() if 'reason' in k.lower() or 'think' in k.lower())
+    tools = labels.pop('_tools', 0)
+    reasoning = labels.get('streaming_reasoning', 0)
+    waiting = labels.get('waiting_for_model', 0)
     times.sort()
     gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
 
     def iso(stamp):
         return datetime.fromtimestamp(stamp, timezone.utc).isoformat()
-    activity = ('tool_use' if tools else 'reasoning' if reasoning else 'other_events' if events else 'no_events')
-    top = dict(sorted(labels.items(), key=lambda kv: (-kv[1], kv[0]))[:12])
+    activity = ('tool_use' if tools else 'reasoning' if reasoning else 'waiting' if waiting
+                else 'other_events' if events else 'no_events')
+    timing = ('unavailable' if not times else 'partial' if timing_invalid or not complete else 'observed')
     return dict(status='observed' if complete and events else 'partial' if events else 'unavailable',
-                events=events, invalid=invalid, labels=top, tool_events=tools, reasoning_events=reasoning,
+                timing=timing, events=events, invalid=invalid, timing_invalid=timing_invalid,
+                labels=dict(sorted(labels.items())), tool_events=tools, reasoning_events=reasoning,
+                last_phase=last_phase,
                 first_at=iso(times[0]) if times else None, last_at=iso(times[-1]) if times else None,
                 span_seconds=round(times[-1] - times[0], 3) if len(times) > 1 else None,
                 longest_gap_seconds=round(max(gaps), 3) if gaps else None, activity=activity)

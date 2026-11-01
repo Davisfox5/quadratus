@@ -197,34 +197,56 @@ def safe_observations(trace: Optional[dict], *, project_root=None, unavailable: 
                 writes_attempted=writes)
 
 
-_LABEL = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,47}")
-_ISO = re.compile(r"\d{4}-\d{2}-\d{2}T[0-9:.+-]{8,32}")
+#: The native event labels a progress record may name (root's review of
+#: 56ab825, item 3: a pattern is not an allowlist). Phases and event types
+#: seen in the retained grok 1.0.62 session, plus the tool event types the
+#: trace parser reads; every other phase or type is counted under
+#: ``other_phase`` / ``other_type`` and its text is never kept.
+GROK_PHASES = frozenset({"waiting_for_model", "streaming_reasoning"})
+GROK_EVENT_TYPES = frozenset({"turn_started", "loop_started", "phase_changed", "first_token", "tool_completed",
+                              "permission_resolved"})
+GROK_TOOL_TYPES = frozenset({"tool_completed", "permission_resolved"})
+PROGRESS_LABELS = GROK_PHASES | GROK_EVENT_TYPES | {"other_phase", "other_type"}
+PROGRESS_ACTIVITY = ("tool_use", "reasoning", "waiting", "other_events", "no_events")
+PROGRESS_STATUS = ("observed", "partial", "unavailable")
+#: The longest span or gap a record may state: a week, in seconds.
+MAX_PROGRESS_SECONDS = 7 * 24 * 3600
+_ISO = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?\+00:00")
 
 
 def _safe_progress(progress: dict) -> dict:
     """A call's progress summary, re-validated at the record boundary:
-    counts, short identifier labels and ISO times only."""
+    counts, labels from the fixed allowlist, UTC ISO times and finite,
+    bounded durations only."""
+    import math
+
     def count(value):
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 10 ** 9 else None
 
     def seconds(value):
-        return round(float(value), 3) if isinstance(value, (int, float)) and not isinstance(value, bool) \
-            and value >= 0 else None
-    labels = {k: count(v) for k, v in (progress.get("labels") or {}).items()
-              if isinstance(k, str) and _LABEL.fullmatch(k) and count(v) is not None} \
-        if isinstance(progress.get("labels"), dict) else {}
-    status = progress.get("status") if progress.get("status") in ("observed", "partial", "unavailable") else "unavailable"
-    activity = progress.get("activity") if progress.get("activity") in (
-        "tool_use", "reasoning", "other_events", "no_events") else None
-    return dict(status=status, events=count(progress.get("events")), invalid=count(progress.get("invalid")),
-                labels=dict(list(labels.items())[:12]), tool_events=count(progress.get("tool_events")),
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return round(float(value), 3) if math.isfinite(value) and 0 <= value <= MAX_PROGRESS_SECONDS else None
+
+    def stamp(value):
+        return value if isinstance(value, str) and _ISO.fullmatch(value) else None
+    raw = progress.get("labels") if isinstance(progress.get("labels"), dict) else {}
+    labels = {k: count(v) for k, v in raw.items() if k in PROGRESS_LABELS and count(v) is not None}
+
+    def pick(key, allowed):
+        value = progress.get(key)
+        return value if isinstance(value, str) and value in allowed else None
+    return dict(status=pick("status", PROGRESS_STATUS) or "unavailable",
+                timing=pick("timing", PROGRESS_STATUS) or "unavailable",
+                events=count(progress.get("events")), invalid=count(progress.get("invalid")),
+                timing_invalid=count(progress.get("timing_invalid")),
+                labels=dict(sorted(labels.items())), tool_events=count(progress.get("tool_events")),
                 reasoning_events=count(progress.get("reasoning_events")),
-                first_at=progress.get("first_at") if isinstance(progress.get("first_at"), str)
-                and _ISO.fullmatch(progress["first_at"]) else None,
-                last_at=progress.get("last_at") if isinstance(progress.get("last_at"), str)
-                and _ISO.fullmatch(progress["last_at"]) else None,
+                last_phase=pick("last_phase", GROK_PHASES | {"other_phase"}),
+                first_at=stamp(progress.get("first_at")), last_at=stamp(progress.get("last_at")),
                 span_seconds=seconds(progress.get("span_seconds")),
-                longest_gap_seconds=seconds(progress.get("longest_gap_seconds")), activity=activity)
+                longest_gap_seconds=seconds(progress.get("longest_gap_seconds")),
+                activity=pick("activity", PROGRESS_ACTIVITY))
 
 
 def call_cost(event) -> Optional[dict]:

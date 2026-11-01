@@ -14337,6 +14337,42 @@ class Session:
                                                                "planner names the rest (CONTINUES)")
         self._recovery_result(record, f"failed: {spec.task_id} handed back ({exc.cause})")
 
+    @staticmethod
+    def _bind_unknown_causes(ops: List[dict], invoked: list) -> list:
+        """The ledger row of each unknown-usage operation, or None (root's
+        review of 56ab825, item 1). A row whose ``operation`` equals the op
+        id is that call. Only a row with no operation id at all (written
+        before the id existed) may be associated otherwise, and only when it
+        is the single unclaimed row of the op's task, role and seat with
+        unknown usage, and no other unbound op of that task, role and seat
+        could claim it; a row is never bound to two operations. Anything
+        else stays unbound, so the operation is counted once as
+        unidentified instead of borrowing another call's cost."""
+        def same(op, event):
+            return (str(getattr(event, "task", "")) == str(op.get("task"))
+                    and (getattr(event, "role", "") or "").split(":")[0] == str(op.get("role") or "").split(":")[0]
+                    and op.get("seat") in (getattr(event, "requested_model", None),
+                                           getattr(event, "canonical_model", None)))
+        rows: list = [None] * len(ops)
+        claimed = set()
+        for i, op in enumerate(ops):
+            exact = [e for e in invoked if op.get("opid") and getattr(e, "operation", None) == op.get("opid")]
+            if len(exact) == 1 and id(exact[0]) not in claimed:
+                rows[i] = exact[0]
+                claimed.add(id(exact[0]))
+        legacy = [e for e in invoked if not getattr(e, "operation", None) and not getattr(e, "tokens_known", False)]
+        for i, op in enumerate(ops):
+            if rows[i] is not None:
+                continue
+            candidates = [e for e in legacy if id(e) not in claimed and same(op, e)]
+            rivals = [o for j, o in enumerate(ops) if j != i and rows[j] is None
+                      and o.get("task") == op.get("task") and o.get("seat") == op.get("seat")
+                      and str(o.get("role") or "").split(":")[0] == str(op.get("role") or "").split(":")[0]]
+            if len(candidates) == 1 and not rivals:
+                rows[i] = candidates[0]
+                claimed.add(id(candidates[0]))
+        return rows
+
     def _record_stop_rule(self, reason: str) -> None:
         """The occurrence for a stop the session chose rather than one an
         exception forced (``stop_reason``: open findings, unmet requirements,
@@ -14420,18 +14456,9 @@ class Session:
         # refused admission is kept apart and never counted as a call.
         causes, stopped = [], None
         if cls == "unknown_usage" and budget is not None:
-            for op in (budget.snapshot().get("unknown_usage_operations") or []):
-                row = next((e for e in reversed(invoked) if getattr(e, "operation", None) == op.get("opid")), None)
-                if row is None:
-                    # An older ledger row without the operation id: the newest
-                    # invoked call of the same task, role and seat whose usage
-                    # is unknown, never a call that reported usage.
-                    row = next((e for e in reversed(invoked)
-                                if str(getattr(e, "task", "")) == str(op.get("task"))
-                                and (getattr(e, "role", "") or "").split(":")[0] == str(op.get("role")).split(":")[0]
-                                and op.get("seat") in (getattr(e, "requested_model", None),
-                                                       getattr(e, "canonical_model", None))
-                                and not getattr(e, "tokens_known", False)), None)
+            ops = [op for op in (budget.snapshot().get("unknown_usage_operations") or []) if isinstance(op, dict)]
+            rows = self._bind_unknown_causes(ops, invoked)
+            for op, row in zip(ops, rows, strict=True):
                 causes.append(dict(operation=op.get("opid"), task=op.get("task"), role=op.get("role"),
                                    seat=op.get("seat"), editing=bool(op.get("editing")),
                                    call=recovery.call_cost(row), event=row))

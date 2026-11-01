@@ -3655,13 +3655,16 @@ Key design decisions already settled:
     budget as `unknown_usage_operations` (op id, task, role, seat, editing;
     bounded to 50, no text), and the ledger row carries the same op id
     (`InvocationEvent.operation`, from the provider's `last_operation`).
-    The terminal occurrence binds each cause to its own row (fallback for
-    rows without an id: the newest same task, role and seat with unknown
-    usage, never one that reported usage), takes its identity from the
-    first, keeps the refused admission as `stopped_call` (`invoked:
-    false`, never a cost), and reads the cause's trace. Several serial or
-    concurrent causes are all kept; a cause whose row is missing counts
-    once as unidentified, never as zero.
+    The terminal occurrence binds each cause to the row carrying its op id
+    (`_bind_unknown_causes`). A row with no op id at all may stand in only
+    when it is the one unclaimed unknown-usage row of that task, role and
+    seat and no other unbound op of that seat could claim it; a row with a
+    different op id never does, and no row serves two ops (root's review
+    of 56ab825: a fallback that ignored the id merged two causes into one
+    cost). It takes its identity from the first bound cause, keeps the
+    refused admission as `stopped_call` (`invoked: false`, never a cost),
+    and reads the cause's trace. Several serial or concurrent causes are
+    all kept; an unbound cause counts once as unidentified, never zero.
   - *Failed tasks are occurrences.* `_close_failed` writes a `task`
     occurrence (`provider_timeout`/`provider_error` by type chain, else
     `task_failed`; action `hand_back`) with the failed call, its trace and
@@ -3669,17 +3672,26 @@ Key design decisions already settled:
   - *Grok identity and progress.* `GROK_SPEC.session_id_flag` is
     `--session-id`, so the UUID exists before launch and a timeout that
     returns no envelope still locates the native folder. The live reader
-    adds `progress` from that folder's `events.jsonl`: event and label
-    counts, tool and reasoning counts, first/last time, span, longest gap,
-    `activity` (tool_use, reasoning, other_events, no_events) and `status`
-    (observed, partial when a row is malformed or the read was cut,
-    unavailable). Counts, identifier labels and ISO times only; the
-    allowlist re-validates them. The envelope, usage, stop semantics,
-    deadlines and retries are unchanged.
-  Limits: the events schema (a `phase`/`type`/`event` label and a
-  timestamp per row) is read from one installed version and is for root to
-  qualify against a real session; a harness crash mid-call leaves the id
-  only in the CLI's own folder; stderr is exported as a character count.
+    adds `progress` from that folder's `events.jsonl` (root qualified the
+    schema against the retained 1.0.62 session: `phase_changed` rows with
+    `phase` and `ts`). Labels are a fixed allowlist, not a pattern
+    (`recovery.GROK_PHASES`: waiting_for_model, streaming_reasoning;
+    `GROK_EVENT_TYPES`: turn_started, loop_started, phase_changed,
+    first_token, and the trace parser's tool_completed and
+    permission_resolved); any other phase or type is counted as
+    `other_phase`/`other_type` with its text dropped. A time is used only
+    when it is finite epoch seconds or milliseconds in 2001 to 2100 or a
+    zone-aware ISO string; anything else is counted in `timing_invalid`,
+    `timing` reads partial, and nothing raises. `activity` is tool_use,
+    reasoning, waiting (only waiting_for_model seen), other_events or
+    no_events; `status` is partial when a row is not a JSON object or the
+    read was cut. `_safe_progress` re-checks every field, including finite,
+    bounded durations. Only native session folders get it. The envelope,
+    usage, stop semantics, deadlines and retries are unchanged.
+  Limits: the allowlist is one CLI version's vocabulary, so a new phase
+  reads as `other_phase` until it is added; a harness crash mid-call leaves
+  the id only in the CLI's own folder; stderr is exported as a character
+  count.
 - **A concurrency proof of existing behaviour does not invent a bug**
   (same comment). The gate still needs a test that really interleaves and
   runs in an approved check; the failing-first run applies only when the

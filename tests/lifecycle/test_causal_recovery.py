@@ -30,9 +30,12 @@ REASONING = "REASONING_CANARY_8842"
 PROMPT = "PROMPT_CANARY_9953: implement add"
 
 
+T0_MS = 1_793_400_000_000  # 2026-10-31, epoch milliseconds
+
+
 def _phase(phase, second):
-    return json.dumps(dict(type="phase", phase=phase, timestamp=f"2026-10-31T20:{second // 60:02d}:"
-                                                                f"{second % 60:02d}.000Z", text=REASONING))
+    """The retained grok 1.0.62 schema: a phase_changed event with ``ts``."""
+    return json.dumps(dict(type="phase_changed", phase=phase, ts=T0_MS + second * 1000, text=REASONING))
 
 
 def _native(home, sid, rows):

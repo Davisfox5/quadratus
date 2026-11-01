@@ -380,3 +380,26 @@ def test_a_failed_editing_call_is_its_own_occurrence_with_what_it_left(tmp_path)
     scope = TaskFailed("scope", "changed a file outside its scope")
     session._record_task_failure(SimpleNamespace(task_id="t1"), scope, "grok:default", {}, [])
     assert session.recoveries[-1]["outcome_class"] == "task_failed"
+
+
+def test_a_named_operation_never_borrows_another_operations_row(tmp_path):
+    """Root's review of 56ab825, item 1: O-7 has no row; the row for O-9
+    must not stand in for it, and O-7 stays one unidentified call."""
+    record = _latched(tmp_path, [_row("other-call", op="O-9")], [_op(7), _op(9)])
+    by_op = {c["operation"]: c["call"] for c in record["causes"]}
+    assert by_op["O-9"]["invocation_id"] == "other-call" and by_op["O-7"] is None
+    got = recovery.costs([record])
+    assert got["calls"] == 1 and got["unidentified_calls"] == 1 and got["calls_with_unknown_usage"] == 1
+
+
+def test_ambiguous_legacy_rows_bind_nothing_and_each_operation_counts_once(tmp_path):
+    record = _latched(tmp_path, [_row("legacy-a"), _row("legacy-b")], [_op(7), _op(9)])
+    assert [c["call"] for c in record["causes"]] == [None, None]
+    got = recovery.costs([record])
+    assert got["calls"] == 0 and got["unidentified_calls"] == 2 and got["tokens_known"] is None
+    one = _latched(tmp_path / "one", [_row("legacy-a")], [_op(7), _op(9)])
+    assert [c["call"] for c in one["causes"]] == [None, None], "two ops of one seat could each claim it"
+    other_seat = _latched(tmp_path / "seat", [_row("legacy-a"), _row("legacy-b", seat="claude:opus")],
+                          [_op(7), _op(9, seat="claude:opus")])
+    assert [c["call"]["invocation_id"] for c in other_seat["causes"]] == ["legacy-a", "legacy-b"], \
+        "an unambiguous legacy association per seat still binds"

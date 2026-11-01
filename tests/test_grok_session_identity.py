@@ -20,9 +20,17 @@ from quadratus.project_run import _live_call_trace, _transcript_integrity, _tran
 from quadratus.providers import ProviderError
 from quadratus.trace import locate, session_roots
 
+T0_MS = 1_793_400_000_000  # 2026-10-31, epoch milliseconds
+
 
 def _phase(phase, second, **extra):
-    return json.dumps(dict(type="phase", phase=phase, timestamp=f"2026-10-31T20:49:{second:02d}.000Z", **extra))
+    """The retained grok 1.0.62 schema (root's review of 56ab825): a
+    ``phase_changed`` event with the phase and ``ts``."""
+    return json.dumps(dict(type="phase_changed", phase=phase, ts=T0_MS + second * 1000, **extra))
+
+
+def _event(kind, second, **extra):
+    return json.dumps(dict(type=kind, ts=T0_MS + second * 1000, **extra))
 
 
 def _session(root, sid, rows, *, cwd="%2Fwork%2Fproject"):
@@ -71,11 +79,14 @@ def test_a_timed_out_grok_call_keeps_its_session_and_its_native_progress(grok, m
 
 
 @pytest.mark.parametrize("rows,status,activity", [
-    ([_phase("streaming_reasoning", 1), _phase("tool_started", 2), _phase("tool_completed", 3)],
+    ([_event("turn_started", 0), _phase("streaming_reasoning", 1), _event("tool_completed", 3, outcome="success",
+                                                                           tool_call_id="g1")],
      "observed", "tool_use"),
-    ([_phase("streaming_reasoning", 1), '{"type": "phase", "phase": "streaming_reaso'], "partial", "reasoning"),
+    ([_phase("streaming_reasoning", 1), '{"type": "phase_changed", "phase": "streaming_reaso'], "partial",
+     "reasoning"),
+    ([_event("turn_started", 0), _event("loop_started", 0), _phase("waiting_for_model", 1)], "observed", "waiting"),
     ([], "unavailable", "no_events"),
-], ids=["tools", "truncated-tail", "no-output"])
+], ids=["tools", "truncated-tail", "waiting-no-output", "empty"])
 def test_progress_tells_tools_reasoning_and_no_output_apart_and_says_when_it_is_partial(tmp_path, rows, status,
                                                                                          activity):
     folder = _session(tmp_path, "0e3b6f2a-0000-4000-8000-000000000001", rows)
@@ -100,12 +111,70 @@ def test_the_live_reader_carries_integrity_and_progress_through_the_allowlist(mo
     assert "SECRET_REASONING_CANARY" not in json.dumps(obs), "counts and labels only, never content"
 
 
-def test_a_label_or_time_that_is_not_an_identifier_never_reaches_the_record():
-    progress = recovery._safe_progress(dict(status="observed", events=2, labels={"ok_label": 1, "rm -rf /": 1},
-                                            first_at="yesterday", last_at="2026-10-31T20:49:01+00:00",
-                                            activity="lying", span_seconds=-1))
-    assert progress["labels"] == {"ok_label": 1} and progress["first_at"] is None
-    assert progress["activity"] is None and progress["span_seconds"] is None
+def test_the_retained_schema_reads_as_the_failing_session_did(tmp_path):
+    """The shape root found in the retained grok 1.0.62 session: turn and
+    loop start, waiting for the model, first token, then streaming
+    reasoning, with ``ts`` and no tool event."""
+    rows = [_event("turn_started", 0), _event("loop_started", 0), _phase("waiting_for_model", 0),
+            _event("first_token", 2)] + [_phase("streaming_reasoning", 2 + n) for n in range(0, 12, 3)]
+    progress = _transcript_progress(_session(tmp_path, "0e3b6f2a-0000-4000-8000-0000000000aa", rows))
+    assert progress["labels"] == {"first_token": 1, "loop_started": 1, "streaming_reasoning": 4, "turn_started": 1,
+                                  "waiting_for_model": 1}
+    assert progress["activity"] == "reasoning" and progress["last_phase"] == "streaming_reasoning"
+    assert progress["tool_events"] == 0 and progress["timing"] == "observed" and progress["longest_gap_seconds"] == 3.0
+
+
+@pytest.mark.parametrize("row", [
+    {"type": "phase_changed", "phase": "SECRET_NATIVE_EVENT_LABEL_993"},
+    {"type": "SECRET_NATIVE_EVENT_LABEL_993"},
+    {"type": "phase_changed", "phase": ["SECRET_NATIVE_EVENT_LABEL_993"]},
+], ids=["unknown-phase", "unknown-type", "non-string-phase"])
+def test_an_unknown_identifier_shaped_label_is_counted_and_never_kept(monkeypatch, tmp_path, row):
+    from types import SimpleNamespace
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "0e3b6f2a-0000-4000-8000-0000000000bb"
+    _session(tmp_path, sid, [_phase("streaming_reasoning", 1), json.dumps(dict(row, ts=T0_MS + 2000))])
+    obs = recovery.safe_observations(_live_call_trace(SimpleNamespace(requested_model="grok:default", session_id=sid)),
+                                     project_root=tmp_path)
+    assert "SECRET_NATIVE_EVENT_LABEL_993" not in json.dumps(obs)
+    other = "other_type" if "phase" not in row else "other_phase"
+    assert obs["progress"]["labels"] == {"streaming_reasoning": 1, other: 1} and obs["progress"]["events"] == 2
+
+
+@pytest.mark.parametrize("ts", [float("inf"), float("-inf"), float("nan"), 1e308, -5, 0, True, "yesterday",
+                                "2026-10-31T20:49:01", "9999-12-31T23:59:59+00:00", "2026-13-40T00:00:00Z",
+                                {"at": 1}],
+                         ids=["inf", "-inf", "nan", "1e308", "negative", "zero", "bool", "word", "naive", "far",
+                              "impossible", "object"])
+def test_an_unreadable_time_keeps_the_counts_and_marks_timing_partial(tmp_path, ts):
+    rows = [_phase("streaming_reasoning", 1), json.dumps({"type": "phase_changed", "phase": "streaming_reasoning",
+                                                           "ts": ts}), _phase("streaming_reasoning", 4)]
+    progress = _transcript_progress(_session(tmp_path, "0e3b6f2a-0000-4000-8000-0000000000cc", rows))
+    assert progress["events"] == 3 and progress["reasoning_events"] == 3 and progress["status"] == "observed"
+    assert progress["timing"] == "partial" and progress["timing_invalid"] == 1
+    assert progress["span_seconds"] == 3.0, "only the readable times are used"
+    safe = recovery._safe_progress(progress)
+    assert safe["timing"] == "partial" and safe["first_at"] and safe["first_at"].endswith("+00:00")
+
+
+def test_infinity_in_the_only_time_leaves_no_timing_and_does_not_raise(tmp_path):
+    rows = ['{"type": "phase_changed", "phase": "streaming_reasoning", "ts": Infinity}']
+    progress = _transcript_progress(_session(tmp_path, "0e3b6f2a-0000-4000-8000-0000000000dd", rows))
+    assert progress["events"] == 1 and progress["timing"] == "unavailable" and progress["first_at"] is None
+    assert progress["span_seconds"] is None and progress["activity"] == "reasoning"
+
+
+def test_the_record_boundary_refuses_labels_times_and_durations_it_cannot_vouch_for():
+    progress = recovery._safe_progress(dict(
+        status=["observed"], timing="observed", events=2, labels={"ok_label": 1, "streaming_reasoning": 2,
+                                                                  "SECRET_NATIVE_EVENT_LABEL_993": 1},
+        first_at="yesterday", last_at="2026-10-31T20:49:01-05:00", activity="lying", last_phase="SECRET",
+        span_seconds=float("inf"), longest_gap_seconds=float("nan")))
+    assert progress["labels"] == {"streaming_reasoning": 2}
+    assert progress["status"] == "unavailable" and progress["first_at"] is None and progress["last_at"] is None
+    assert progress["activity"] is None and progress["last_phase"] is None
+    assert progress["span_seconds"] is None and progress["longest_gap_seconds"] is None
+    assert recovery._safe_progress(dict(span_seconds=1e12))["span_seconds"] is None, "bounded"
 
 
 def test_integrity_and_progress_agree_on_a_grok_folder_missing_its_event_log(tmp_path):
