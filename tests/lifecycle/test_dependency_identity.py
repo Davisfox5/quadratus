@@ -183,6 +183,7 @@ def test_a_gate_fix_denied_the_harness_command_at_the_cap_is_a_capability_stop(t
 
 
 def test_review_seats_share_the_cap_and_the_orchestrator_does_not(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # a non-codex collaborator (the Grok peer) shows the cap flag
     # Two tasks: both records are the harness's own (Davis, 2026-10-21); no
     # close-out call exists to cap or to exempt.
     replay = _run(tmp_path, monkeypatch, Script(), files=FILES, max_tasks=2)

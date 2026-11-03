@@ -116,7 +116,12 @@ def calls(trace):
     return [json.loads(line) for line in trace.read_text().splitlines()]
 
 
-def test_actual_edits_survive_cleanup_and_checks_target_selected_project(project_env):
+def test_actual_edits_survive_cleanup_and_checks_target_selected_project(project_env, monkeypatch):
+    from tests.lifecycle.harness import grok_lead_routing
+    # The fake client reports 99.0.0, which the codex catalogue refuses as a
+    # client mismatch, so OpenAI is unavailable here and this case's reviewer
+    # was always the Grok peer: selected explicitly since 2026-11-01.
+    grok_lead_routing(monkeypatch, trust=True)
     project, settings, trace, caller = project_env
     before_caller = (caller / 'add.py').read_bytes()
     result = run_project('Fix addition', project, settings, allow_writes=True,

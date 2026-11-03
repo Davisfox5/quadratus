@@ -346,7 +346,9 @@ def test_a_draft_mentioning_fetch_in_prose_is_not_a_request(store):
 
 
 class ConsultingRecorder(Recorder):
-    """The lead asks Sol one question, then drafts with the answer."""
+    """The lead asks Sol one question, then drafts with the answer. Since
+    2026-11-01 SIMPLE leads on Sol, so the consult cases run COMPLEX (Opus
+    leads) and Sol stays a peer the lead can name."""
 
     def __init__(self, consult_line="CONSULT Sol: is bcrypt still the right choice?"):
         super().__init__()
@@ -364,7 +366,7 @@ class ConsultingRecorder(Recorder):
 def test_a_lead_can_consult_a_named_peer(store):
     rec = ConsultingRecorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.COMPLEX))
     consults = [c for c in rec.calls if "area of strength" in c["prompt"]]
     assert len(consults) == 1
     assert consults[0]["model"] == SOL
@@ -376,7 +378,7 @@ def test_the_consultant_answers_blind(store):
     ledger, or the session. Expertise, not agreement."""
     rec = ConsultingRecorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.COMPLEX))
     consult = next(c["prompt"] for c in rec.calls if "area of strength" in c["prompt"])
     assert "Build a JSON parser" not in consult   # no goal/ledger
     assert "You are leading" not in consult       # no lead prompt
@@ -385,7 +387,7 @@ def test_the_consultant_answers_blind(store):
 def test_the_answer_returns_to_the_lead_and_is_filed(store):
     rec = ConsultingRecorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.COMPLEX))
     redraft = [c["prompt"] for c in rec.calls
                if "Consult answers" in c["prompt"] and "You are leading" in c["prompt"]]
     assert redraft
@@ -413,7 +415,7 @@ def test_the_consult_budget_is_enforced(store):
 
     rec = Chatty()
     s = _session(store, rec)
-    summary = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    summary = s.run_task(TaskSpec("t1", "work", complexity=Complexity.COMPLEX))
     assert summary.outcome == "failed", "the task fails on its own channel; the run goes on"
     assert s.failed_records["t1"]["cause"] == "channel"
     assert "Consult budget exhausted" in s.failed_records["t1"]["error"]
@@ -448,7 +450,11 @@ def test_clean_reviews_buy_no_revision_round(store):
     assert not any("Revise your work" in c["prompt"] for c in rec.calls)
 
 
-def test_one_substantive_review_still_triggers_the_revision(store):
+def test_one_substantive_review_still_triggers_the_revision(store, monkeypatch):
+    from quadratus.registry import MODE_ROSTERS
+    # Two collaborators are the case (one empty review, one substantive):
+    # a COMPLEX lead draws every other peer, so the trust needs three seats.
+    monkeypatch.setitem(MODE_ROSTERS["adversarial"], "peers", ["claude:opus", "openai:sol", "grok:default"])
     class Mixed(Recorder):
         def __init__(self):
             super().__init__()

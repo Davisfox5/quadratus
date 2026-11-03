@@ -215,6 +215,8 @@ def test_a_direct_task_whose_check_fails_still_gets_its_fix_round(tmp_path, monk
 
 
 def test_a_refused_direct_lead_is_still_the_refusal_stop(tmp_path, monkeypatch):
+    from quadratus.session import Session
+    monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "claude:opus")  # the refusal injected is Claude's
     replay = _run(tmp_path, monkeypatch, _decl(), lead=lambda c, r: H.claude_refusal("cyber"),
                   record_complete=False)
     assert replay.result.error.startswith("Provider") and not replay.result.completed

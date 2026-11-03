@@ -91,6 +91,7 @@ def test_serial_the_last_wave_closes_factually_and_the_finish_runs_inside_the_li
     audit. Now t2 closes factually, the goal question is call 11 and the
     audit call 12, and the run completes. t1's close-out, which the next
     planning call reads, is still the lead's own."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the 12-call bound and the reviewer seats were derived from the three-seat roster
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=2,
                    limits=_limits(12), record_complete=False)
     assert _roles(replay)[-2:] == [("run", "orchestrator"), ("audit", "auditor")]
@@ -452,6 +453,7 @@ def test_a_last_slot_after_a_failed_predecessor_still_ends_incomplete(tmp_path, 
     names the uncontinued task. A later task never clears a predecessor's
     debt. (The terminal route this was written on cannot arise since
     2026-10-21: no close-out call exists to drop.)"""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the 7,400 bound and the seats were derived from the three-seat roster
     from quadratus.config import Settings
 
     def lead(call, replay):

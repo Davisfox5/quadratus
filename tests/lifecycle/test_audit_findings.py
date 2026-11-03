@@ -535,6 +535,11 @@ def test_a_scope_overrun_after_a_resolution_is_rechecked_at_done(tmp_path, monke
 
 
 def test_an_exception_with_source_unchanged_keeps_a_valid_resolution(tmp_path, monkeypatch):
+    from quadratus.session import Session
+    picked = Session._pick_lead
+    # t3's injected failure is a Claude refusal envelope: t3's lead is the Claude seat.
+    monkeypatch.setattr(Session, "_pick_lead",
+                        lambda self, spec: "claude:opus" if spec.task_id == "t3" else picked(self, spec))
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
                   {"t1": _capture(measured=WIDE), "t2": _repair(),
                    "t3": lambda call, replay: H.claude_refusal("cyber")}, max_tasks=8)

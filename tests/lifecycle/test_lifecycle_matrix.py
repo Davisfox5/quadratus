@@ -697,6 +697,7 @@ def test_a_clean_render_without_steps_still_verifies(tmp_path, monkeypatch):
 # -- 9. discovery before writing (Run 14, 2026-09-26) ---------------------------------
 
 def test_a_capped_lead_is_told_its_round_budget(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # every lead is a turn-capped seat (codex has none)
     replay = _run(tmp_path, monkeypatch, Script(), max_tasks=2, settings=Settings(backend="cli", lead_max_turns=14))
     for call in replay.of("lead"):
         assert "This call has at most 14 tool rounds" in call.prompt, call.vendor

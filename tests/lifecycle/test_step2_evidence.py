@@ -1079,6 +1079,7 @@ def test_an_allowance_that_cannot_pay_the_required_stages_refuses_the_task_befor
     No review is dropped to fit, and the default bound's positive stands
     in test_a_false_final_audit_finding_is_challenged_after_the_cap_
     without_another_writer."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the 900,000 figure is a draft plus two reviews (three peers)
     replay = _ratio_run(tmp_path, monkeypatch, limits=_STARVED_LIMITS)
     result = H.result_json(replay)
     assert not replay.result.completed

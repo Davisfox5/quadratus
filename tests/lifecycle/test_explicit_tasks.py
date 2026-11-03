@@ -145,6 +145,8 @@ def test_the_session_itself_refuses_a_list_past_the_cap_with_a_typed_stop(tmp_pa
 
 
 def test_a_refusal_on_a_listed_task_is_still_the_refusal_stop(tmp_path, monkeypatch):
+    from quadratus.session import Session
+    monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "claude:opus")  # the refusal injected is Claude's
     replay = _run(tmp_path, monkeypatch, [README_TASK],
                   script=_script(lead=lambda c, r: H.claude_refusal("cyber")), record_complete=False)
     assert replay.result.error.startswith("Provider") and not replay.result.completed
