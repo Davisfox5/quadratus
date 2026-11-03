@@ -568,6 +568,9 @@ def test_a_final_challenge_that_does_not_establish_the_requirement_leaves_it_hel
         # The route's calls made (``blocking``), so the allowance that admits
         # t1's six-call route at dispatch is spent exactly at the
         # reassessment (see test_a_reassessment_the_budget_cannot_admit...).
+        # The six-call route is two reviews and two rechecks: the three-seat
+        # roster that control selects, selected here the same way.
+        H.grok_lead_routing(monkeypatch, trust=True)
         calibration = _ratio_run(tmp_path / "calibrate", monkeypatch, blocking=True)
         before = next(i for i, c in enumerate(calibration.calls) if REASSESS in c.prompt)
         assert [c.role for c in calibration.calls[:before]].count("recheck") == 2
