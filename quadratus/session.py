@@ -96,6 +96,7 @@ from .scope import (
     TaskScope,
     changed_paths,
     count_change_lines,
+    count_change_lines_by_path,
     is_test_path,
 )
 from .structured import StructuredError, parse_security_verdict
@@ -2181,6 +2182,30 @@ _ERROR_BOUNDARY_LENS = (
     "request or record it rejects must leave no change behind, which you check by reading the state "
     "after the refusal, not by reading the error path.")
 
+#: Counterpart entry points (Davis, 2026-11-04, after grok-worker-01: a
+#: review caught a cleanup failure on the CLI path, the fix became its own
+#: four-call task, and the same failure on the HTTP path of the same
+#: operation stayed until the final audit). Generic by construction: an
+#: entry point is anything the task adds or changes that a caller reaches.
+_COUNTERPART_LENS = (
+    "A failure you find at one entry point is a question about its counterparts: every other entry "
+    "point the task adds or changes that performs the same operation or runs the same failing code "
+    "(another command, request handler or public function over the same store, parser or resource). "
+    "Check each counterpart for the same failure and report each one that has it as its own BLOCKING "
+    "finding, naming the entry point.")
+_COUNTERPART_FIX = (
+    " Where a finding names a failure at one entry point, fix the same failure at every other entry "
+    "point of this task that performs the same operation or runs the same failing code, and name in "
+    "your account each counterpart you checked and what you changed there.")
+_COUNTERPART_RECHECK = (
+    " A RESOLVED line covers the entry point its finding names. If the revision left the same failure "
+    "at a counterpart (another entry point of this task that performs the same operation or runs the "
+    "same code), report it on a NEW line naming that entry point.")
+
+#: The largest measured change a review or recheck prompt carries inline;
+#: past it the file list stands and the seat reads the rest itself.
+REVIEW_DIFF_CHARS = 24_000
+
 #: How an evidence request is written and what it can do, for every point
 #: the channel is offered (the next-task prompt, the final-audit challenge).
 _EVIDENCE_CHANNEL = (
@@ -2979,6 +3004,7 @@ class Session:
             raise ValueError("The integration gate must run in the session project.")
         self._active_spec = None
         self._task_before = None
+        self._review_before = None
         self._task_memory = None
         self._active_call = {}
         self._worker_tool = None
@@ -5307,6 +5333,7 @@ class Session:
         self._fix_cycle_now, self._recheck_impact = 0, None
         self._active_spec = spec
         self._task_before = self._capture_source()
+        self._review_before = None
         if self.project and self.config.allow_writes and self._task_before is None:
             raise RunStalled("Cannot capture source to measure this editing task.")
         self.in_flight = {}
@@ -5510,6 +5537,9 @@ class Session:
         # per reviewer belongs: the scoreboard's question, not the author's.
         self._hold_unreviewed_goal_work(spec, lead, collaborators)
         if collaborators:
+            # The source every reviewer judges: a recheck is shown what
+            # changed since, not the whole work again.
+            self._review_before = self._capture_source() if self._writes() else None
             self._observe_checks(spec, "review")
             # Settled before any reviewer is handed the rows or a binding is
             # taken: what ran on this source is on the row the seat judges.
@@ -5522,7 +5552,7 @@ class Session:
         capped: set = set()
         for peer in collaborators:
             self._snapshot_scratch_bindings(spec)
-            prompt = self._collaborator_prompt(spec, draft, peer)
+            prompt = self._collaborator_prompt(spec, draft, peer, since=self._task_before)
             rv = None
             try:
                 with invocation(spec.task_id, "collaborator"):
@@ -16922,13 +16952,18 @@ class Session:
         self._measure_context("lead", prompt, task=spec.task_id, extra=map_block)
         return prompt
 
-    def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str) -> str:
+    def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str, *, since: Optional[dict] = None) -> str:
+        """``since``: the task's own starting capture, for the in-task
+        review only; the measured change is shown against it. A review
+        after a merge passes none (its parent's capture is not this
+        task's)."""
         label = resolve(peer)
-        prompt = self._collaborator_prompt_text(spec, draft, peer, label)
+        prompt = self._collaborator_prompt_text(spec, draft, peer, label, since=since)
         self._declare_deferred_evidence(spec, peer)
         return prompt
 
-    def _collaborator_prompt_text(self, spec: TaskSpec, draft: str, peer: str, label) -> str:
+    def _collaborator_prompt_text(self, spec: TaskSpec, draft: str, peer: str, label, *,
+                                  since: Optional[dict] = None) -> str:
         return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task: {spec.description}\n\n"
             f"Current work:\n{draft}\n\n"
@@ -16943,7 +16978,7 @@ class Session:
             "line> | impact: <data-loss|integrity|security|irreversible|correctness|contract|other>'. "
             "A finding with no basis is still recorded and carried to the final audit by id; a "
             "data-loss, integrity, security or irreversible impact holds the affected work whatever "
-            "its basis. " + _FINDING_SHAPE + " " + _ERROR_BOUNDARY_LENS
+            "its basis. " + _FINDING_SHAPE + " " + _ERROR_BOUNDARY_LENS + " " + _COUNTERPART_LENS
             + " If you genuinely find nothing worth changing, "
             "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'. "
             f"Otherwise end your reply with exactly one line, {_REVIEW_COMPLETE}, once you have "
@@ -16957,8 +16992,41 @@ class Session:
             + self._proof_rows(spec)
             + (self._scope_size_note(spec, audience="reviewer") if self._writes() else "")
             + self._sibling_note()
+            + self._measured_change(
+                since, "## The change under review, as the harness measured it",
+                "Start from this change: it is the work as it is on disk, whatever an account above says. "
+                "Read other files where a finding depends on them (a caller, a counterpart, a test, code "
+                "the changed lines run); do not spend rounds re-reading unchanged files to rediscover "
+                "what this diff already shows.",
+                "The source is unchanged since this task began.")
             + self._review_turn_budget_note(peer)
         )
+
+    def _measured_change(self, before: Optional[dict], heading: str, guidance: str, empty: str) -> str:
+        """The project's change since ``before``, measured by the harness,
+        for a seat that judges it: the file list with changed-line counts
+        and the unified diff, inline up to :data:`REVIEW_DIFF_CHARS` (the
+        rest is named, never silently dropped). Only for an editing run with
+        a capture; a read-only run's work is its text. Context only: what
+        the seat may read or run is unchanged (Davis, 2026-11-04: reviewers
+        spent rounds exploring their copies to find what changed)."""
+        if before is None or not self.project or not self._writes():
+            return ""
+        try:
+            from .project import Project
+            diff = Project(self.project, exclude=self.config.project_excludes).diff(before)
+        except Exception:  # noqa: BLE001 -- context, never a failure
+            log.debug("could not measure the change for a review prompt", exc_info=True)
+            return ""
+        if not diff.strip():
+            return f"\n\n{heading}\n\n{empty}"
+        counts = count_change_lines_by_path(diff)
+        files = ", ".join(f"{path} ({n})" for path, n in sorted(counts.items()) if path) or "see the diff"
+        shown = diff[:REVIEW_DIFF_CHARS]
+        cut = (f"\nThe diff is cut at {REVIEW_DIFF_CHARS:,} of {len(diff):,} characters; read the listed files "
+               "for the rest." if len(diff) > REVIEW_DIFF_CHARS else "")
+        return (f"\n\n{heading}\n\nFiles (changed lines): {files}\n{guidance}\n\n~~~diff\n{shown}"
+                + ("" if shown.endswith("\n") else "\n") + f"~~~{cut}")
 
     def _proof_rows(self, spec) -> str:
         """The task's declared proof scenarios with their binding and
@@ -17448,7 +17516,7 @@ class Session:
             "Revise your work. Address every finding explicitly: fix it, or "
             "rebut it with a reason -- silence is not a response. A finding "
             "you cannot decide goes to the record as an open question, not "
-            "into the void. "
+            "into the void." + _COUNTERPART_FIX + " "
             + self._revision_delivery()
             + self._binding_feedback(spec)
             + (self._scope_size_note(spec, audience="editor") if self._writes() else "")
@@ -17689,8 +17757,8 @@ class Session:
                 "for it. A defect you find that is not one of these goes on its own "
                 "line 'NEW: <finding> | basis: <requirement id, command or file> | impact: "
                 "<data-loss|integrity|security|irreversible|correctness|contract|other>'; a remark that "
-                "is not a defect goes on 'NOTE: <remark>'. Do not reopen the review of anything else. "
-                "Expected ids: " + ", ".join(ids) + ".")
+                "is not a defect goes on 'NOTE: <remark>'. Do not reopen the review of anything else."
+                + _COUNTERPART_RECHECK + " Expected ids: " + ", ".join(ids) + ".")
 
     @_invocation_role("recheck")
     def _recheck_blocking(
@@ -17743,8 +17811,14 @@ class Session:
                       f"Task: {spec.description}\n\n"
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       + self._routing_facts(mine)
-                      + f"The revised work:\n{revision}\n\n"
-                      + instructions + self._review_turn_budget_note(peer))
+                      + f"The revised work:\n{revision}"
+                      + self._measured_change(
+                          getattr(self, "_review_before", None),
+                          "## What changed since your review, as the harness measured it",
+                          "Check your findings against this change and the files it touches; the rest of "
+                          "the source is what you already reviewed.",
+                          "Nothing: the source is byte-for-byte what you reviewed.")
+                      + "\n\n" + instructions + self._review_turn_budget_note(peer))
             # The worst impact among this peer's findings is this call's
             # effort input and nothing else's: set for the call, cleared on
             # every exit (root's source observation on bcd2b52).
@@ -17940,7 +18014,7 @@ class Session:
             f"Your current work:\n{revision}\n\n"
             f"These blocking findings remain unresolved:\n{remaining}\n\n"
             "Fix them, or state precisely why the reviewer is wrong. Produce "
-            "the complete revised work."
+            "the complete revised work." + _COUNTERPART_FIX
             + (self._scope_size_note(spec, audience="editor") if self._writes() else "")
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
             + _NO_REQUESTS_IN_FIX

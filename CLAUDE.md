@@ -3712,6 +3712,28 @@ Key design decisions already settled:
   `uncovered_tests` already applied: a new test file counts when a listed
   command names it, names its folder, or discovers it.
 
+- **A review starts from the measured change; a recheck from what changed
+  since that review** (Davis, 2026-11-04, after grok-worker-01: 1.72M of
+  5.72M reported tokens went to reviews and rechecks, 97% of all tokens
+  were input, and seats explored their copies to find what changed). The
+  in-task reviewer prompt carries the task's diff since it began
+  (`Session._measured_change`, file list with changed-line counts, diff
+  inline up to `REVIEW_DIFF_CHARS`, 24,000 characters, the rest named); a
+  recheck from `_recheck_blocking` carries the diff since the capture taken
+  when the review ran (`_review_before`), or says the source is unchanged.
+  A review after a merge (`_review_capped_final_child`) passes no capture,
+  because the parent's is not that task's. The same run caught a failure
+  on one entry point while its counterpart on the same operation survived
+  to the final audit, so the review lens (`_COUNTERPART_LENS`), the
+  revision and fix prompts (`_COUNTERPART_FIX`) and the recheck
+  (`_COUNTERPART_RECHECK`, a NEW line) each name counterparts: other entry
+  points the task adds or changes that perform the same operation or run
+  the same code. Generic by construction, pinned by test. Context and
+  instructions only: what a seat may read, run or edit is unchanged, and
+  the token effect is unmeasured until a run shows it. Reusing the
+  harness's own check runs on an unchanged source already existed
+  (`_observe_checks` skips a repeat; review seats get `harness_checks`).
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on
