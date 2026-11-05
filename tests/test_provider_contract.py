@@ -151,12 +151,15 @@ def test_a_claude_error_envelope_with_a_partial_result_keeps_its_status_and_is_n
     with pytest.raises(ProviderError) as caught:
         _extract_claude_result(out)
     assert "claude reported an error" in str(caught.value)
-    assert _extract_claude_diagnostics(out) == {"stop_reason": "error", "status": 429, "failure_class": "rate_limited"}
+    # model_calls is the envelope's own turn count, kept since 2026-11-05.
+    assert _extract_claude_diagnostics(out) == {"stop_reason": "error", "status": 429, "failure_class": "rate_limited",
+                                                "model_calls": 1}
 
 
 def test_a_claude_429_with_the_windows_wording_is_a_cap_not_a_rate_limit():
     out = _claude(is_error=True, api_error_status=429, result="You've reached your Fable limit.")
-    assert _extract_claude_diagnostics(out) == {"stop_reason": "end_turn", "status": 429, "failure_class": "cap"}
+    assert _extract_claude_diagnostics(out) == {"stop_reason": "end_turn", "status": 429, "failure_class": "cap",
+                                                "model_calls": 1}
     with pytest.raises(ProviderError) as caught:
         _extract_claude_result(out)
     assert _looks_exhausted(caught.value)
@@ -166,13 +169,14 @@ def test_a_claude_503_is_unavailable_and_an_unknown_error_is_unclassified():
     out = _claude(is_error=True, api_error_status=503, result="API Error: 503 overloaded")
     assert _extract_claude_diagnostics(out)["failure_class"] == "unavailable"
     out = _claude(is_error=True, result="something else went wrong")
-    assert _extract_claude_diagnostics(out) == {"stop_reason": "end_turn"}
+    assert _extract_claude_diagnostics(out) == {"stop_reason": "end_turn", "model_calls": 1}
 
 
 def test_a_claude_answer_mentioning_a_status_records_no_failure():
     out = _claude(result="The handler returns 429 on a burst and 503 when the pool is down.")
     assert _extract_claude_result(out).startswith("The handler returns 429")
-    assert _extract_claude_diagnostics(out) is None
+    # No failure fact is recorded; the call's own turn count is (2026-11-05).
+    assert _extract_claude_diagnostics(out) == {"model_calls": 1}
 
 
 def test_a_claude_output_limit_stop_is_not_an_answer():

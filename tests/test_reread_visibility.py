@@ -70,8 +70,9 @@ def test_codex_reports_at_all_now():
                               'output_tokens': 642}}),
     ])
     facts = _extract_codex_diagnostics(stream)
+    # The one completed item is not a tool step: zero steps, measured (2026-11-05).
     assert facts == {'stop_reason': 'turn.completed', 'cached_input_tokens': 63360,
-                     'usage_completeness': 'complete', 'completed_turns': 1}
+                     'usage_completeness': 'complete', 'completed_turns': 1, 'tool_steps': 0}
 
 
 def test_nothing_parseable_reports_nothing():

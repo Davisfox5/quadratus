@@ -53,6 +53,7 @@ __all__ = [
     "UNKNOWN", "ROLE_STAGES", "ARTIFACT_STAGES", "TAIL_BYTES", "MAX_JSON_BYTES",
     "MAX_USAGE_BYTES", "MAX_ARTIFACT_ENTRIES", "read_status", "run_history",
     "render_text", "render_markdown", "history_rows", "HISTORY_COLUMNS",
+    "call_breakdown", "BREAKDOWN_BYTES", "render_breakdown_html",
 ]
 
 UNKNOWN = "unknown"
@@ -416,6 +417,7 @@ def read_status(project_root=None, series_dir=None, *, state_dir=None, now=None)
         "terminal_status": UNKNOWN,
         "stop_reason": UNKNOWN,
         "report": UNKNOWN,
+        "breakdown": None,
         "unknown": {},
     }
     unknown: Dict[str, str] = status["unknown"]
@@ -428,6 +430,8 @@ def read_status(project_root=None, series_dir=None, *, state_dir=None, now=None)
         _fill(status, mark, project_root, series_dir, state_dir, now)
     except Exception as exc:  # noqa: BLE001 -- a monitor never fails on the run it describes
         mark("liveness", f"monitor error: {exc.__class__.__name__}: {_first_line(exc)}")
+    if status["run_dir"] != UNKNOWN:
+        status["breakdown"] = call_breakdown(status["run_dir"])
     for field, value in list(status.items()):
         if value == UNKNOWN and field not in unknown and field != "unknown":
             unknown[field] = "not determined"
@@ -845,6 +849,140 @@ def history_rows(history: List[Dict[str, Any]]) -> List[List[Any]]:
             for r in history]
 
 
+# -- the call breakdown -----------------------------------------------------
+
+#: The whole of a run's invocations.jsonl is read for the breakdown, up to
+#: this bound; past it only the newest records are, and the result says so.
+BREAKDOWN_BYTES = 8 * 1024 * 1024
+
+
+def _seconds(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 10 ** 7:
+        return round(float(value), 1)
+    return None
+
+
+def _label(value: Any) -> str:
+    text = _first_line(value, 60) if value is not None else ""
+    return text or UNKNOWN
+
+
+def call_breakdown(run_dir) -> Dict[str, Any]:
+    """Where one run's tokens went, call by call and by role, read from its
+    ``invocations.jsonl`` (Davis, 2026-11-05: grok-worker-01 showed 97% input
+    tokens and no way to see rounds). Each invoked call's input, output,
+    cached input, model turns (claude, grok), tool steps (codex), seconds and
+    input per turn; then the same summed by role. Read-only and bounded like
+    every monitor read; a missing figure is ``None`` and counted as unknown,
+    never zero. Never raises."""
+    out: Dict[str, Any] = {"rows": [], "by_role": [], "problem": "", "partial": False}
+    try:
+        path = Path(run_dir) / "invocations.jsonl"
+        size = _size(path)
+        if size is None:
+            out["problem"] = "invocations.jsonl is absent"
+            return out
+        records, problem = _tail_jsonl(path, BREAKDOWN_BYTES)
+        out["partial"] = size > BREAKDOWN_BYTES
+        out["problem"] = problem + ("; only the newest records were read" if out["partial"] else "")
+        roles: Dict[str, Dict[str, Any]] = {}
+        for record in records:
+            if record.get("invoked") is not True:
+                continue
+            inp, outp = _count(record.get("input_tokens")), _count(record.get("output_tokens"))
+            turns, steps = _count(record.get("model_turns")), _count(record.get("tool_steps"))
+            row = {"task": _label(record.get("task")), "role": _label(record.get("role")),
+                   "seat": _label(record.get("requested_model")), "input": inp, "output": outp,
+                   "tokens": inp + outp if inp is not None and outp is not None else None,
+                   "cached": _count(record.get("cached_input_tokens")), "turns": turns, "tool_steps": steps,
+                   "seconds": _seconds(record.get("seconds")),
+                   "input_per_turn": inp // turns if inp is not None and turns else None}
+            out["rows"].append(row)
+            agg = roles.setdefault(row["role"], {"role": row["role"], "calls": 0, "tokens": 0, "unknown_tokens": 0,
+                                                 "turns": 0, "calls_with_turns": 0, "tool_steps": 0,
+                                                 "calls_with_steps": 0, "seconds": 0.0, "_turn_input": 0})
+            agg["calls"] += 1
+            if row["tokens"] is None:
+                agg["unknown_tokens"] += 1
+            else:
+                agg["tokens"] += row["tokens"]
+            if turns is not None:
+                agg["turns"] += turns
+                agg["calls_with_turns"] += 1
+                if inp is not None:
+                    agg["_turn_input"] += inp
+            if steps is not None:
+                agg["tool_steps"] += steps
+                agg["calls_with_steps"] += 1
+            agg["seconds"] += row["seconds"] or 0.0
+        for agg in sorted(roles.values(), key=lambda a: -a["tokens"]):
+            turn_input = agg.pop("_turn_input")
+            agg["input_per_turn"] = turn_input // agg["turns"] if agg["turns"] else None
+            agg["seconds"] = round(agg["seconds"], 1)
+            out["by_role"].append(agg)
+    except Exception as exc:  # noqa: BLE001 -- a monitor never fails on the run it describes
+        out["problem"] = f"breakdown unreadable: {exc.__class__.__name__}"
+    return out
+
+
+def _breakdown_note(breakdown: Dict[str, Any]) -> str:
+    rows = breakdown.get("rows") or []
+    turns = sum(1 for r in rows if r["turns"] is not None)
+    steps = sum(1 for r in rows if r["tool_steps"] is not None)
+    return (f"{len(rows)} calls; model turns recorded for {turns}, tool steps for {steps}; "
+            "a blank is not recorded, never zero")
+
+
+BREAKDOWN_ROLE_COLUMNS = ["Role", "Calls", "Tokens", "Model turns", "Tool steps", "Input per turn", "Seconds"]
+BREAKDOWN_CALL_COLUMNS = ["Task", "Role", "Seat", "Input", "Output", "Cached", "Turns", "Tool steps",
+                          "Input per turn", "Seconds"]
+
+
+def breakdown_role_rows(breakdown: Dict[str, Any]) -> List[List[str]]:
+    """The by-role summary as display rows under ``BREAKDOWN_ROLE_COLUMNS``."""
+    def turns(a):
+        return (f"{a['turns']:,} in {a['calls_with_turns']} of {a['calls']}" if a["calls_with_turns"] else "")
+    def steps(a):
+        return (f"{a['tool_steps']:,} in {a['calls_with_steps']} of {a['calls']}" if a["calls_with_steps"] else "")
+    return [[a["role"], str(a["calls"]),
+             f"{a['tokens']:,}" + (f" (+{a['unknown_tokens']} unknown)" if a["unknown_tokens"] else ""),
+             turns(a), steps(a), _blank(a["input_per_turn"]), f"{a['seconds']:,.0f}"]
+            for a in breakdown.get("by_role") or []]
+
+
+def breakdown_call_rows(breakdown: Dict[str, Any]) -> List[List[str]]:
+    """Every invoked call as display rows under ``BREAKDOWN_CALL_COLUMNS``."""
+    return [[r["task"], r["role"], r["seat"], _blank(r["input"]), _blank(r["output"]), _blank(r["cached"]),
+             _blank(r["turns"]), _blank(r["tool_steps"]), _blank(r["input_per_turn"]),
+             "" if r["seconds"] is None else f"{r['seconds']:,.0f}"]
+            for r in breakdown.get("rows") or []]
+
+
+def _blank(value: Any) -> str:
+    return "" if value is None else f"{value:,}"
+
+
+def render_breakdown_html(breakdown: Optional[Dict[str, Any]]) -> str:
+    """The breakdown as an HTML section for the GUI tab and the phone page:
+    the by-role table, then every call inside a closed ``<details>``. Every
+    string is escaped; empty when no call has been recorded."""
+    import html as _html
+    if not isinstance(breakdown, dict) or not breakdown.get("rows"):
+        return ""
+    def esc(value):
+        return _html.escape(str(value), quote=True)
+    def table(columns, rows):
+        return ("<table><tr>" + "".join(f"<th>{esc(c)}</th>" for c in columns) + "</tr>"
+                + "".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>" for r in rows) + "</table>")
+    return ('<section aria-label="Where the tokens went"><h3>Where the tokens went</h3>'
+            f'<p class="qm-note">{esc(_breakdown_note(breakdown))}</p>'
+            + table(BREAKDOWN_ROLE_COLUMNS, breakdown_role_rows(breakdown))
+            + '<details><summary>Every call</summary>'
+            + table(BREAKDOWN_CALL_COLUMNS, breakdown_call_rows(breakdown)) + '</details>'
+            + (f'<p class="qm-note">{esc(breakdown["problem"])}</p>' if breakdown.get("problem") else "")
+            + '</section>')
+
+
 # -- rendering --------------------------------------------------------------
 
 def _fmt(value: Any) -> str:
@@ -873,8 +1011,19 @@ def _live_word(status: Dict[str, Any]) -> str:
     return UNKNOWN
 
 
-def render_text(status: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None) -> str:
-    """One screen of plain text for a terminal over ssh."""
+def _text_table(columns: List[str], rows: List[List[str]], text_columns: int) -> List[str]:
+    """Rows aligned for a terminal: the first ``text_columns`` left, numbers right."""
+    widths = [max([len(c)] + [len(r[i]) for r in rows]) for i, c in enumerate(columns)]
+    def line(cells):
+        return "  " + "  ".join(c.ljust(w) if i < text_columns else c.rjust(w)
+                                for i, (c, w) in enumerate(zip(cells, widths, strict=True)))
+    return [line(columns)] + [line(r) for r in rows]
+
+
+def render_text(status: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None, *,
+                calls: bool = False) -> str:
+    """One screen of plain text for a terminal over ssh. ``calls`` adds the
+    table of every call under the by-role summary."""
     lines = [f"Quadratus monitor  {status.get('read_at', '')}",
              f"Project:   {status['project']}"]
     series = status.get("series")
@@ -900,6 +1049,16 @@ def render_text(status: Dict[str, Any], history: Optional[List[Dict[str, Any]]] 
     unknown = {k: v for k, v in status.get("unknown", {}).items() if k != "last_event_note"}
     if unknown:
         lines.append("Unknown:   " + "; ".join(f"{k}: {v}" for k, v in unknown.items()))
+    breakdown = status.get("breakdown")
+    if isinstance(breakdown, dict) and breakdown.get("rows"):
+        lines += ["", "Where the tokens went, by role (" + _breakdown_note(breakdown) + "):"]
+        lines += _text_table(BREAKDOWN_ROLE_COLUMNS, breakdown_role_rows(breakdown), 1)
+        if calls:
+            lines += ["", "Every call:"] + _text_table(BREAKDOWN_CALL_COLUMNS, breakdown_call_rows(breakdown), 3)
+        if breakdown.get("problem"):
+            lines.append(f"  ({breakdown['problem']})")
+    elif isinstance(breakdown, dict) and breakdown.get("problem"):
+        lines.append(f"Calls:     {breakdown['problem']}")
     if history:
         lines += ["", "Recent runs:"]
         for row in history:
@@ -939,5 +1098,19 @@ def render_markdown(status: Dict[str, Any]) -> str:
         lines += ["", "<details><summary>Unknown fields</summary>", ""]
         lines += [f"- {k}: {v}" for k, v in unknown.items()]
         lines += ["", "</details>"]
+    breakdown = status.get("breakdown")
+    if isinstance(breakdown, dict) and breakdown.get("rows"):
+        def table(columns, rows):
+            def cell(text):
+                return str(text).replace("|", "\\|")
+            return (["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
+                    + ["| " + " | ".join(cell(c) for c in r) + " |" for r in rows])
+        lines += ["", "#### Where the tokens went, by role", f"_{_breakdown_note(breakdown)}_", ""]
+        lines += table(BREAKDOWN_ROLE_COLUMNS, breakdown_role_rows(breakdown))
+        lines += ["", "<details><summary>Every call</summary>", ""]
+        lines += table(BREAKDOWN_CALL_COLUMNS, breakdown_call_rows(breakdown))
+        lines += ["", "</details>"]
+        if breakdown.get("problem"):
+            lines.append(f"_{breakdown['problem']}_")
     lines += ["", f"_Read at {status.get('read_at', '')}_"]
     return "\n".join(lines)

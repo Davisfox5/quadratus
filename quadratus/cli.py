@@ -259,7 +259,7 @@ def _run_monitor(args: argparse.Namespace) -> int:
     project = status.get("project")
     history = run_history(project, state_dir=args.state_dir, limit=args.history) \
         if project and project != "unknown" else []
-    print(render_text(status, history))
+    print(render_text(status, history, calls=bool(getattr(args, "calls", False))))
     return 0
 
 
@@ -529,6 +529,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     watch.add_argument(
+        "--calls",
+        action="store_true",
+        help=(
+            "With --monitor: also print every call of the run (task, role, seat, input, output, "
+            "cached input, model turns, tool steps, input per turn, seconds) under the by-role summary."
+        ),
+    )
+    watch.add_argument(
         "--history",
         type=int,
         default=10,
@@ -556,8 +564,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    if (args.series or args.serve is not None) and not args.monitor:
-        parser.error("--series and --serve are only used with --monitor")
+    if (args.series or args.serve is not None or args.calls) and not args.monitor:
+        parser.error("--series, --serve and --calls are only used with --monitor")
     if args.monitor:
         if args.prompt or args.probe or args.probe_all or args.status or args.policy_preview:
             parser.error("--monitor takes no prompt and cannot be combined with probe, status or policy preview")

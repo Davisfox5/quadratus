@@ -888,6 +888,34 @@ def _reread_and_cost(usage, cost=None) -> Dict[str, object]:
     return facts
 
 
+#: The codex event-stream item types that are a tool step: one command, file
+#: change, MCP tool call or web search the model asked for and the client ran.
+CODEX_TOOL_ITEMS = ("command_execution", "file_change", "mcp_tool_call", "web_search")
+
+
+def _codex_tool_steps(stdout: str) -> int:
+    """How many tool steps one codex call ran: completed tool items in its
+    event stream. codex reports no turn count (its ``turn.completed`` is the
+    whole exec), so this is the measured count of what each round did, by
+    type only; nothing of a command or its output is read (Davis,
+    2026-11-05: grok-worker-01's 16 codex calls had no round figure)."""
+    steps = 0
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "item.completed":
+            continue
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") in CODEX_TOOL_ITEMS:
+            steps += 1
+    return steps
+
+
 def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     """Bounded facts from codex's ``turn.completed`` event.
 
@@ -918,7 +946,12 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         if event.get("type") != "turn.completed":
             continue
         diagnostics = {"stop_reason": "turn.completed"}
+    steps = _codex_tool_steps(stdout)
     account = _codex_usage_account(stdout)
+    if steps or account["completed_turns"]:
+        # A completed turn with no tool item ran zero steps, measured; a
+        # stream with neither says nothing, so nothing is recorded.
+        diagnostics["tool_steps"] = steps
     if account["completed_turns"] or account["pending"] or account["invalid"]:
         diagnostics["usage_completeness"] = "complete" if account["complete"] else "unresolved"
         diagnostics["completed_turns"] = account["completed_turns"]
@@ -1324,10 +1357,16 @@ def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
 
 
 def _ending_only(diagnostics: Dict[str, object]) -> Optional[Dict[str, object]]:
-    """An envelope with no auxiliary rows reports no usage provenance, as
+    """An envelope with no auxiliary rows reports no auxiliary provenance, as
     before; how a failed call ended is kept regardless, so an error
-    envelope's status and class reach the ledger."""
-    kept = {k: diagnostics[k] for k in ("stop_reason", "status", "failure_class") if k in diagnostics}
+    envelope's status and class reach the ledger. The call's own measured
+    facts are kept too: its turn count, its cached-input subset and the
+    vendor's stated cost. Dropping them here was the single-seat metadata
+    loss carried since the recovery batch; grok-worker-01 recorded no turn
+    count and no cache figure for any of its 24 claude calls (Davis,
+    2026-11-05)."""
+    kept = {k: diagnostics[k] for k in ("stop_reason", "status", "failure_class", "model_calls",
+                                        "cached_input_tokens", "vendor_cost_usd") if k in diagnostics}
     return kept or None
 
 

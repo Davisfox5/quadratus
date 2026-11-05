@@ -219,6 +219,9 @@ class InvocationEvent:
     fresh_input_tokens: Optional[int] = None
     #: Model turns the call ran, from the vendor envelope.
     model_turns: Optional[int] = None
+    #: Tool steps the call ran, counted from the vendor's event stream where
+    #: it reports no turn count (codex). None is not measured, never zero.
+    tool_steps: Optional[int] = None
     #: The turn limit sent with the call, if any, and whether it was hit.
     max_turns: Optional[int] = None
     turn_limited: bool = False
@@ -305,6 +308,9 @@ def safe_diagnostics(value) -> dict:
     count = value.get('model_calls')
     if type(count) is int and 0 <= count <= 1_000_000:
         result['model_calls'] = count
+    steps = value.get('tool_steps')
+    if type(steps) is int and 0 <= steps <= 1_000_000:
+        result['tool_steps'] = steps
     # Accept the older extractor spelling while keeping one stable ledger key.
     names = value.get('attempted_tools', value.get('tools_attempted'))
     if isinstance(names, list):

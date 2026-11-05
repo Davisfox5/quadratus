@@ -17,6 +17,7 @@ from .monitor import (
     _read_json,
     _read_regular,
     _tail_jsonl,
+    render_breakdown_html,
     render_markdown,
 )
 
@@ -668,6 +669,7 @@ def render_story(status):
                    + ('<p class="qm-note">Shown up to 6,000 characters; the whole reply is in the saved run '
                       'files.</p>' if reply['truncated'] else '') + '</details></article>')
     out.append('</div></section>')
+    out.append(render_breakdown_html(status.get('breakdown')))
     out.append('<details><summary>Run records and full report</summary>'
                '<p class="qm-note">Activity shows the last saved update. Team replies describe what agents reported; '
                'the Tests box shows results saved by the test runner. Tokens include cached input; actual cost is not shown.</p><pre>'

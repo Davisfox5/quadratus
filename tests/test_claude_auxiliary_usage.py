@@ -46,14 +46,16 @@ def test_attempt_one_envelope_counts_the_haiku_row_once():
 
 
 def test_no_model_usage_keeps_the_old_figure():
+    """No auxiliary provenance is claimed; the call's own cached-input
+    subset is kept (2026-11-05: it was dropped with the provenance)."""
     assert _extract_claude_usage(_envelope()) == {"input_tokens": 62738, "output_tokens": 2827}
-    assert _extract_claude_diagnostics(_envelope()) is None
+    assert _extract_claude_diagnostics(_envelope()) == {"cached_input_tokens": 23978 + 38694}
 
 
 def test_seat_only_rows_add_nothing():
     out = _envelope(modelUsage={"claude-fable-5-1": FABLE})
     assert _extract_claude_usage(out) == {"input_tokens": 62738, "output_tokens": 2827}
-    assert _extract_claude_diagnostics(out) is None
+    assert _extract_claude_diagnostics(out) == {"cached_input_tokens": 23978 + 38694}
 
 
 def test_a_malformed_row_makes_the_whole_figure_unknown():
@@ -224,7 +226,9 @@ def test_a_vendor_limit_envelope_reports_zero_rather_than_unknown():
     # No auxiliary rows, so no usage provenance; how the call ended is kept
     # (the client preflight batch, 2026-10-21): the vendor's own wording
     # classes it as the window, never as a transient rate limit.
-    assert _extract_claude_diagnostics(LIMIT_ENVELOPE) == {"stop_reason": "stop_sequence", "failure_class": "cap"}
+    # The turn count is the call's own measured fact, kept since 2026-11-05.
+    assert _extract_claude_diagnostics(LIMIT_ENVELOPE) == {"stop_reason": "stop_sequence", "failure_class": "cap",
+                                                           "model_calls": 1}
 
 
 def test_an_empty_model_usage_agrees_with_a_zero_seat_and_contradicts_a_spending_one():

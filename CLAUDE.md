@@ -3734,6 +3734,24 @@ Key design decisions already settled:
   harness's own check runs on an unchanged source already existed
   (`_observe_checks` skips a repeat; review seats get `harness_checks`).
 
+- **Rounds per call are recorded, and the monitor shows where the tokens
+  went** (Davis, 2026-11-05: grok-worker-01's 40 calls recorded no model
+  turns, so rounds × context could not be separated). Claude's single-seat
+  envelope went through `cli_providers._ending_only`, which dropped the
+  turn count, the cached-input subset and the vendor's stated cost (the
+  metadata loss carried since the recovery batch); it now keeps all three.
+  codex reports no turn count, so its tool steps are counted from the event
+  stream (`CODEX_TOOL_ITEMS`: command, file change, MCP call, web search)
+  into `InvocationEvent.tool_steps`; a completed turn with none is 0,
+  measured, and a stream with no turn records nothing. The monitor reads
+  the run's whole `invocations.jsonl` (bounded, `BREAKDOWN_BYTES`) into
+  `monitor.call_breakdown`: each invoked call's input, output, cached,
+  turns, tool steps, seconds and input per turn, and the same by role. The
+  terminal view prints the by-role table (`--monitor --calls` adds every
+  call); the GUI Monitor tab and the phone page show both
+  (`render_breakdown_html`, escaped). A blank is not recorded, never zero.
+  Observational only, like the rest of the monitor.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

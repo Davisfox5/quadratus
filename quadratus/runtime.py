@@ -967,6 +967,7 @@ class Fleet:
                                     if isinstance(usage.get("input_tokens"), int) and isinstance(cached, int)
                                     and usage["input_tokens"] >= cached else None),
                 model_turns=raw.get("model_calls") if isinstance(raw.get("model_calls"), int) else None,
+                tool_steps=raw.get("tool_steps") if isinstance(raw.get("tool_steps"), int) else None,
                 max_turns=getattr(provider, "max_turns", None),
                 turn_limited=outcome == "TurnLimitReached",
                 prompt_artifact=prompt_artifact,
