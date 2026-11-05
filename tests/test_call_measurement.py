@@ -125,3 +125,42 @@ def test_read_status_carries_the_breakdown_and_the_cli_flag_needs_monitor(tmp_pa
     assert "Every call:" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         cli.main(["--calls", "goal"])
+
+
+def test_a_missing_figure_never_enters_a_role_aggregate_as_zero(tmp_path):
+    """Root's pre-live review of f4d34a2 (6670379668): a call whose input and
+    seconds are unknown but whose turns are known counted its 8 turns against
+    the other call's 100 input tokens (10 per turn instead of 50) and showed
+    the role's time as complete."""
+    run = _ledger(tmp_path, [
+        dict(task="t1", role="recheck", requested_model="claude:opus", invoked=True, input_tokens=100,
+             output_tokens=10, model_turns=2, seconds=1),
+        dict(task="t2", role="recheck", requested_model="claude:opus", invoked=True, input_tokens=None,
+             output_tokens=None, model_turns=8, seconds=None),
+    ])
+    (agg,) = monitor.call_breakdown(run)["by_role"]
+    assert agg["input_per_turn"] == 50 and agg["calls_with_input_per_turn"] == 1, "paired subset only"
+    assert agg["turns"] == 10 and agg["calls_with_turns"] == 2, "turns are still every recorded turn"
+    assert agg["tokens"] == 110 and agg["unknown_tokens"] == 1 and agg["calls_with_tokens"] == 1
+    assert agg["seconds"] == 1.0 and agg["calls_with_seconds"] == 1 and agg["unknown_seconds"] == 1
+    (row,) = monitor.breakdown_role_rows({"by_role": [agg]})
+    assert row[2] == "110 (+1 unknown)" and row[5] == "50 (1 of 2 calls)" and row[6] == "1 (+1 unknown)"
+
+
+def test_all_unknown_reads_unknown_and_a_measured_zero_stays_zero(tmp_path):
+    run = _ledger(tmp_path, [
+        dict(task="t1", role="lead", requested_model="openai:sol", invoked=True, input_tokens=None,
+             output_tokens=None, seconds=None),
+        dict(task="t1", role="recheck", requested_model="openai:sol", invoked=True, input_tokens=60_000,
+             output_tokens=300, tool_steps=0, model_turns=0, seconds=0),
+    ])
+    by = {a["role"]: a for a in monitor.call_breakdown(run)["by_role"]}
+    assert by["lead"]["tokens"] is None and by["lead"]["seconds"] is None and by["lead"]["input_per_turn"] is None
+    lead_row = next(r for r in monitor.breakdown_role_rows({"by_role": [by["lead"]]}))
+    assert lead_row[2] == "unknown (1)" and lead_row[6] == "" and lead_row[5] == ""
+    recheck = by["recheck"]
+    assert recheck["tool_steps"] == 0 and recheck["calls_with_steps"] == 1, "zero steps is measured"
+    assert recheck["turns"] == 0 and recheck["calls_with_turns"] == 1 and recheck["input_per_turn"] is None
+    assert recheck["seconds"] == 0.0 and recheck["unknown_seconds"] == 0, "zero seconds is measured"
+    recheck_row = monitor.breakdown_role_rows({"by_role": [recheck]})[0]
+    assert recheck_row[4] == "0 in 1 of 1" and recheck_row[6] == "0"

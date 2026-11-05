@@ -898,27 +898,43 @@ def call_breakdown(run_dir) -> Dict[str, Any]:
                    "seconds": _seconds(record.get("seconds")),
                    "input_per_turn": inp // turns if inp is not None and turns else None}
             out["rows"].append(row)
-            agg = roles.setdefault(row["role"], {"role": row["role"], "calls": 0, "tokens": 0, "unknown_tokens": 0,
-                                                 "turns": 0, "calls_with_turns": 0, "tool_steps": 0,
-                                                 "calls_with_steps": 0, "seconds": 0.0, "_turn_input": 0})
+            # Every sum is over the calls that recorded its figure, and says
+            # how many those are: a missing figure is never added as zero
+            # (root's pre-live review of f4d34a2, 6670379668).
+            agg = roles.setdefault(row["role"], {
+                "role": row["role"], "calls": 0, "tokens": 0, "calls_with_tokens": 0, "unknown_tokens": 0,
+                "turns": 0, "calls_with_turns": 0, "tool_steps": 0, "calls_with_steps": 0,
+                "seconds": 0.0, "calls_with_seconds": 0, "unknown_seconds": 0,
+                "calls_with_input_per_turn": 0, "_paired_input": 0, "_paired_turns": 0})
             agg["calls"] += 1
             if row["tokens"] is None:
                 agg["unknown_tokens"] += 1
             else:
                 agg["tokens"] += row["tokens"]
+                agg["calls_with_tokens"] += 1
             if turns is not None:
                 agg["turns"] += turns
                 agg["calls_with_turns"] += 1
-                if inp is not None:
-                    agg["_turn_input"] += inp
+            # Input per turn pairs a call's own input with its own turns:
+            # a call missing either stays out of numerator and denominator.
+            if turns is not None and inp is not None:
+                agg["_paired_input"] += inp
+                agg["_paired_turns"] += turns
+                agg["calls_with_input_per_turn"] += 1
             if steps is not None:
                 agg["tool_steps"] += steps
                 agg["calls_with_steps"] += 1
-            agg["seconds"] += row["seconds"] or 0.0
+            if row["seconds"] is None:
+                agg["unknown_seconds"] += 1
+            else:
+                agg["seconds"] += row["seconds"]
+                agg["calls_with_seconds"] += 1
         for agg in sorted(roles.values(), key=lambda a: -a["tokens"]):
-            turn_input = agg.pop("_turn_input")
-            agg["input_per_turn"] = turn_input // agg["turns"] if agg["turns"] else None
-            agg["seconds"] = round(agg["seconds"], 1)
+            paired_input, paired_turns = agg.pop("_paired_input"), agg.pop("_paired_turns")
+            agg["input_per_turn"] = paired_input // paired_turns if paired_turns else None
+            if not agg["calls_with_tokens"]:
+                agg["tokens"] = None
+            agg["seconds"] = round(agg["seconds"], 1) if agg["calls_with_seconds"] else None
             out["by_role"].append(agg)
     except Exception as exc:  # noqa: BLE001 -- a monitor never fails on the run it describes
         out["problem"] = f"breakdown unreadable: {exc.__class__.__name__}"
@@ -944,9 +960,21 @@ def breakdown_role_rows(breakdown: Dict[str, Any]) -> List[List[str]]:
         return (f"{a['turns']:,} in {a['calls_with_turns']} of {a['calls']}" if a["calls_with_turns"] else "")
     def steps(a):
         return (f"{a['tool_steps']:,} in {a['calls_with_steps']} of {a['calls']}" if a["calls_with_steps"] else "")
-    return [[a["role"], str(a["calls"]),
-             f"{a['tokens']:,}" + (f" (+{a['unknown_tokens']} unknown)" if a["unknown_tokens"] else ""),
-             turns(a), steps(a), _blank(a["input_per_turn"]), f"{a['seconds']:,.0f}"]
+    def tokens(a):
+        if a["tokens"] is None:
+            return f"unknown ({a['unknown_tokens']})"
+        return f"{a['tokens']:,}" + (f" (+{a['unknown_tokens']} unknown)" if a["unknown_tokens"] else "")
+    def per_turn(a):
+        if a["input_per_turn"] is None:
+            return ""
+        partial = a["calls_with_input_per_turn"] < a["calls"]
+        return f"{a['input_per_turn']:,}" + (f" ({a['calls_with_input_per_turn']} of {a['calls']} calls)"
+                                             if partial else "")
+    def seconds(a):
+        if a["seconds"] is None:
+            return ""
+        return f"{a['seconds']:,.0f}" + (f" (+{a['unknown_seconds']} unknown)" if a["unknown_seconds"] else "")
+    return [[a["role"], str(a["calls"]), tokens(a), turns(a), steps(a), per_turn(a), seconds(a)]
             for a in breakdown.get("by_role") or []]
 
 

@@ -3750,7 +3750,12 @@ Key design decisions already settled:
   terminal view prints the by-role table (`--monitor --calls` adds every
   call); the GUI Monitor tab and the phone page show both
   (`render_breakdown_html`, escaped). A blank is not recorded, never zero.
-  Observational only, like the rest of the monitor.
+  Every role sum is over the calls that recorded its figure and says how
+  many: input per turn pairs each call's own input with its own turns
+  (`calls_with_input_per_turn`), seconds and tokens carry an unknown
+  count, and a role with no known figure reads unknown, not 0 (root's
+  pre-live review of f4d34a2). It counts per call; it is not a per-turn
+  activity ledger. Observational only, like the rest of the monitor.
 
 ## How development is coordinated
 
