@@ -842,6 +842,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'test_repairs': list(getattr(session, 'test_repairs', []) or []) if session else [],
         'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
+        # Readings an editing call could not make, routed to its review
+        # (inspection), with the attestation that closed each, if any.
+        'inspection_gaps': list(getattr(session, 'inspection_gaps', []) or []) if session else [],
         # Harness runs of a reviewer's scratch test in its copy; never a MET.
         'scratch_proofs': list(getattr(session, 'scratch_proofs', []) or []) if session else [],
         'evidence_requests': list(getattr(session, 'evidence_requests', []) or []) if session else [],

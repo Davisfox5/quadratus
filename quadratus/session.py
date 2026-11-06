@@ -1419,6 +1419,12 @@ _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
 #: An editing call's own account of acceptance it could not run (runtime
 #: check guidance). Read only to lower an audit verdict, never to raise one.
 _NOT_RUN_LINE = re.compile(r"^\s*(?:NOT RUN|BLOCKED):\s*(.+?)\s*$", re.MULTILINE)
+#: An optional association on a NOT RUN reason: ``... - <why> | for: R2, R5``.
+_NOT_RUN_FOR = re.compile(r"\s*\|\s*for:\s*(R\d+(?:\s*,\s*R\d+)*)\s*$", re.IGNORECASE)
+#: A NOT RUN item that only names reading files (turn-tracking-01 O10:
+#: "Read tickets/store.py tests/test_dependencies_store.py"), never a run.
+_INSPECTION_ITEM = re.compile(r"^\s*(?:read|reading|inspect|inspecting|open|view|examine|look\s+at|review)\b\s*:?",
+                              re.IGNORECASE)
 #: Documentation files a reading scenario may name (never a source file).
 _DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
 _PROVES_ANY = re.compile(r"^\s*PROVES:(.*)$", re.MULTILINE)
@@ -2180,7 +2186,11 @@ _ERROR_BOUNDARY_LENS = (
     "input too: a body shorter or longer than its declared length, a stream or file that ends early, a "
     "partial read, a record cut mid-field; code must not act on what it did not fully receive, and a "
     "request or record it rejects must leave no change behind, which you check by reading the state "
-    "after the refusal, not by reading the error path.")
+    "after the refusal, not by reading the error path. Tell a failure before a change is made durable "
+    "from one while releasing resources after it is durable: the first must leave the state unchanged "
+    "and report the refusal; after the second the change stands, so the caller must not be told the "
+    "operation failed and the release failure must not surface as a crash. Check both at every entry "
+    "point that performs the operation, against the state read afterwards.")
 
 #: Counterpart entry points (Davis, 2026-11-04, after grok-worker-01: a
 #: review caught a cleanup failure on the CLI path, the fix became its own
@@ -2796,6 +2806,66 @@ def _error_clause(text: str) -> bool:
     return bool(_ERROR_CLAUSE.search(text or ""))
 
 
+#: An error requirement whose input is an integer or an identifier (Davis,
+#: 2026-11-04, R19 of grok-worker-01: the 5000-digit ID). General
+#: vocabulary only, never a project's field names.
+_INTEGER_INPUT = re.compile(
+    r"\b(?:ids?|identifiers?|integers?|ints?|numbers?|numeric|counts?|index(?:es)?|indices|ports?|"
+    r"quantit(?:y|ies)|amounts?|limits?|offsets?|sizes?)\b", re.IGNORECASE)
+
+
+def _int_conversion_limit():
+    """The running interpreter's own limit on digits in an int conversion
+    from text, or None where the runtime has none. Read, never set: the
+    harness neither weakens Python's protection nor imposes a goal limit."""
+    import sys as _sys
+    get = getattr(_sys, "get_int_max_str_digits", None)
+    try:
+        limit = get() if get else 0
+    except Exception:  # noqa: BLE001 -- an interpreter without the limit has none to name
+        return None
+    return limit if isinstance(limit, int) and limit > 0 else None
+
+
+def boundary_classes(texts) -> list:
+    """(rid, classes) for each covered error or refusal requirement whose
+    text names an integer or identifier input: the input classes at its
+    representation edges, derived from the runtime, never from a candidate.
+    They are risks to exercise, never new requirements."""
+    limit = _int_conversion_limit()
+    classes = ["non-numeric text", "an empty or missing value", "a negative value", "zero",
+               "2**63 (9223372036854775808, one past the signed 64-bit and SQLite INTEGER range)"]
+    if limit:
+        classes.append(f"a decimal of {limit + 1} digits (one past this Python's int-from-text limit of "
+                       f"{limit}, sys.get_int_max_str_digits())")
+    return [(rid, list(classes)) for rid, text in texts
+            if _error_clause(text) and _INTEGER_INPUT.search(text or "")]
+
+
+def boundary_note(texts) -> str:
+    """The boundary classes for the lead and the reviewer, labelled as
+    untested risks: a class nobody exercised is a gap to test, not an
+    observed defect, and an observed failure is reported as what it is."""
+    rows = boundary_classes(texts)
+    if not rows:
+        return ""
+    by_classes = {}
+    for rid, classes in rows:
+        by_classes.setdefault(tuple(classes), []).append(rid)
+    lines = [f"- {', '.join(rids)}: " + "; ".join(classes) for classes, rids in by_classes.items()]
+    return ("\n\n## Input boundaries these requirements reach (risks to exercise, not new requirements)\n\n"
+            + "\n".join(lines)
+            + "\nEach requirement's own words decide what must happen at each boundary (its refusal, status "
+              "or message). Do not lower Python's limit or add a limit the goal does not state; the code must "
+              "refuse each value as the requirement says, without a traceback or a crash, and leave no change "
+              "behind. A test case per class that applies is the cheap proof; an approved check runs it. Write "
+              "each case so a crash fails an assertion (assert on the exit status, response status, output and "
+              "stored state the requirement names; catch what the call raises and assert on it), so a "
+              "traceback is a failed case the repair route acts on, not an error that stops the check. A "
+              "class nobody exercised is an untested risk, never a defect anyone observed: report a failure "
+              "only when a run or a read of the code shows it, and name which.")
+
+
 #: What an error or refusal requirement needs before it is accepted, for the
 #: seats that judge it; the harness enforces it whatever the reply says.
 _EXECUTED_ERROR_RULE = (
@@ -3208,6 +3278,9 @@ class Session:
         #: Acceptance an editing call said it did not run ('NOT RUN:' lines):
         #: evidence that can only lower an audit verdict, never raise one.
         self.unexecuted_acceptance: List[dict] = []
+        #: NOT RUN items that only name reading files, routed to the task's
+        #: review as inspections (``_record_inspection_gap``), never execution.
+        self.inspection_gaps: List[dict] = []
         #: Review-only tasks not dispatched because the harness had already
         #: verified the current source (Session._verification_handoff).
         self.verification_handoffs: List[dict] = []
@@ -5601,6 +5674,8 @@ class Session:
                     self._note(f"task {spec.task_id}: review by {peer} gave no verdict; held as owned review debt")
                 elif rv is not None and rv.get("result") == "pending":
                     self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
+                if _review_complete(note) or _clean_goal_review(note, [r for r, _ in self._covered_texts()]):
+                    self._attest_inspections(spec.task_id, peer, "review")
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
@@ -8330,6 +8405,8 @@ class Session:
             return open_work[0]
         if self._standing_not_run():
             return "a task reported acceptance it did not run"
+        if self._open_inspections():
+            return "a reading an editing call reported it could not make is not attested by a completed review"
         if self._unnamed_standing():
             return "test files no required check names have not been shown to run"
         if self.design_checks or (spec is not None and is_design_task(spec)):
@@ -9375,6 +9452,9 @@ class Session:
                 # A child's execution facts come back with it, re-based to the
                 # parent's checks: only a check the parent runs after the merge
                 # can discharge them (Codex review of b6ba3ba, F5).
+                # A child's readings come back with their attestation: the
+                # digests it recorded are compared with the merged source.
+                self.inspection_gaps.extend(dict(g) for g in getattr(child, "inspection_gaps", []) or [])
                 for entry in child.unexecuted_acceptance:
                     # Re-based whole: the binding (scenario, cases) the child
                     # recorded survives; only the parent's own gate and
@@ -11362,6 +11442,13 @@ class Session:
         which, confirmed, is a repair task's while a slot is left or an
         honest incomplete. finding-lifecycle-02 spent three challenges, about
         594k tokens, on requirements held by runner-less NOT RUN rows."""
+        inspections = [g for g in self._open_inspections() if rid in (g.get("requirements") or ())]
+        if inspections:
+            return dict(kind="inspection", challengeable=False, route=(
+                "inspection: " + "; ".join(f"{g['task']} could not read {', '.join(g['files'])}" for g in inspections)
+                + "; attested only by a completed review or recheck shown these files, on these files (a review-only "
+                  "verification task is shown them); never a challenge "
+                  "and never a test run")[:500])
         standing = [e for e in self._standing_not_run() if rid in (e.get("requirements") or ())]
         if standing:
             bound = [c for e in standing for c in (e.get("cases") or ())]
@@ -12007,6 +12094,9 @@ class Session:
             # The complete item is the claim (root's control on bd0164f: a
             # 300-character prefix of 'P1 <detail> and P2' bound P1 alone);
             # prompts bound the display, never the identity.
+            declared = _NOT_RUN_FOR.search(why)
+            if declared:
+                why = why[:declared.start()]
             entry = dict(task=task, role=role, author=key, item=item, why=why.strip()[:300],
                          requirements=list(self._current_covers), after_check=len(self.checks),
                          # The identity a discharging check must carry: the
@@ -12018,6 +12108,9 @@ class Session:
             # What the item names, bound now so a later genuine execution
             # can discharge it (evidence lifecycle batch, 2026-10-29).
             self._bind_not_run(entry)
+            if self._record_inspection_gap(entry):
+                continue
+            self._associate_not_run(entry, re.findall(r"R\d+", declared.group(1).upper()) if declared else ())
             # A report after a check is a new report: an earlier run cannot
             # discharge what was said about the source since (F3: a re-report
             # in revision was deduplicated away and the old run lifted it).
@@ -12026,6 +12119,135 @@ class Session:
                 self.unexecuted_acceptance.append(entry)
                 self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
                 self._register_obligation(entry, kind="not_run")
+
+    def _associate_not_run(self, entry: dict, declared=()) -> None:
+        """Which of the task's covered requirements a NOT RUN item holds
+        (Davis, 2026-11-06, turn-tracking-01 O34: an unexecuted interpreter
+        fallback in a test helper held every requirement its task covered,
+        a documentation one among them). In order: the requirements of the
+        declared scenarios the item binds; of the scenarios whose bound
+        cases it binds; of the scenarios whose declared location it names.
+        Failing all three, the reporting seat's own ``| for: R<n>`` line,
+        only with ids its task covers. Failing that, every covered
+        requirement stays held and the association says it is unknown and
+        how it resolves. The item, its reason and its execution are never
+        changed or dropped; ``requirements_covered`` keeps what the task
+        covered, and the record says how the association was reached."""
+        covers = [r for r in (entry.get("requirements") or []) if r]
+        entry["requirements_covered"] = list(covers)
+        rows = [r for r in self.evidence_obligations
+                if r.get("task") == entry.get("task") and r.get("kind") == "acceptance" and not r.get("superseded_by")]
+        def held_by(match) -> set:
+            return {str(ref[0]) for r in rows if match(r) for ref in (r.get("requirements") or ())}
+        binding = entry.get("binding") or {}
+        pids = [p.strip() for p in str(binding.get("scenario") or "").split(",") if p.strip()]
+        cases = set(entry.get("cases") or ())
+        paths = set(_item_paths(str(entry.get("item") or "")))
+        found, how = set(), ""
+        for label, match in ((f"scenario {', '.join(pids)}", lambda r: r.get("proof_id") in pids if pids else False),
+                             ("the scenarios whose cases it binds", lambda r: bool(cases & set(r.get("cases") or ()))),
+                             ("the scenarios whose location it names", lambda r: str(r.get("location") or "") in paths)):
+            found = held_by(match) & set(covers)
+            if found:
+                how = label
+                break
+        valid = [r for r in dict.fromkeys(declared) if r in covers]
+        if found:
+            entry["requirements"], entry["association"] = [r for r in covers if r in found], f"bound: {how}"
+        elif valid and len(valid) == len(list(dict.fromkeys(declared))):
+            entry["requirements"] = valid
+            entry["association"] = f"declared by {entry.get('author')} ({', '.join(valid)})"
+        else:
+            entry["association"] = ("unknown: the item names no declared scenario, case or location of this task"
+                                    + (f" and its declared {', '.join(declared)} is not within the task's covers"
+                                       if declared else "")
+                                    + "; every covered requirement stays held until it runs, is bound to a scenario, "
+                                      "or the reporting seat names the requirement it serves")
+        if entry["requirements"] != covers:
+            self._note(f"task {entry.get('task')}: NOT RUN item held against {', '.join(entry['requirements'])} "
+                       f"({entry['association']}): {str(entry.get('item'))[:80]}")
+
+    def _record_inspection_gap(self, entry: dict) -> bool:
+        """Route a NOT RUN item that only names reading files to inspection,
+        never to execution debt (Davis, 2026-11-06, turn-tracking-01 O10:
+        "Read tickets/store.py tests/test_dependencies_store.py", written by a
+        codex revision told to read with claude's tool names, held nine
+        requirements with no runner that could ever discharge it). A reading
+        is satisfied by the task's own reviewer, who holds a copy of exactly
+        this source: the gap is put in that reviewer's prompt, and a
+        completed review or recheck of the task records the files' digests as
+        a source-bound read attestation. Until then, or when the files change
+        after it, the gap stays open and holds the task's covered
+        requirements; tests never stand in for it. True when routed."""
+        item = str(entry.get("item") or "")
+        paths = _item_paths(item)
+        if (not _INSPECTION_ITEM.match(item) or not paths or (entry.get("binding") or {}).get("kind") != "paths"
+                or not self.project):
+            return False
+        root = Path(self.project)
+        if not all((root / p).is_file() for p in paths):
+            return False
+        if any(g["task"] == entry["task"] and g["item"] == item and g.get("attested") is None
+               for g in self.inspection_gaps):
+            return True
+        self.inspection_gaps.append(dict(
+            id=f"I{len(self.inspection_gaps) + 1}", task=entry["task"], role=entry.get("role"), author=entry.get("author"), item=item, why=entry.get("why"),
+            files=sorted(set(paths)), requirements=list(entry.get("requirements") or []),
+            route="the reviewer of this task, or of a review-only verification task, reads these files in its "
+                  "source copy; a completed review or recheck shown them attests them on that source",
+            attested=None))
+        self._note(f"task {entry['task']}: NOT RUN '{item[:80]}' is a reading, routed to the task's review "
+                   "(inspection), not execution")
+        return True
+
+    def _file_digests(self, files) -> Dict[str, Optional[str]]:
+        import hashlib
+        out: Dict[str, Optional[str]] = {}
+        for rel in files:
+            try:
+                out[rel] = hashlib.sha256((Path(self.project) / rel).read_bytes()).hexdigest()
+            except OSError:
+                out[rel] = None
+        return out
+
+    def _attest_inspections(self, task: str, peer: str, stage: str) -> None:
+        """A completed review or recheck in ``task`` attests each inspection
+        gap its prompt listed (``_inspection_note``): the files' digests as
+        they are in the source this seat was handed, which is the current
+        source. A gap the seat was never shown is never attested by it."""
+        shown = set((getattr(self, "_inspections_shown", None) or {}).get(task) or ())
+        for gap in self.inspection_gaps:
+            if gap.get("id") not in shown:
+                continue
+            digests = self._file_digests(gap["files"])
+            if any(d is None for d in digests.values()):
+                continue
+            gap["attested"] = dict(by=peer, stage=stage, files=digests, source=self._source_fingerprint())
+            self._note(f"task {task}: {peer}'s completed {stage} attests the reading of {', '.join(gap['files'])}")
+
+    def _open_inspections(self) -> List[dict]:
+        """Inspection gaps not attested on the files as they are now."""
+        return [g for g in self.inspection_gaps
+                if not g.get("attested") or self._file_digests(g["files"]) != g["attested"].get("files")]
+
+    def _inspection_note(self, spec) -> str:
+        """For the task's reviewer: the readings its lead reported it could
+        not make, which this review attests."""
+        task = getattr(spec, "task_id", None)
+        # The task's own gaps; a review-only verification task is shown all
+        # of them, which is its route when no recheck of the task followed.
+        gaps = [g for g in self._open_inspections() if g["task"] == task or is_review_only(spec)]
+        if not hasattr(self, "_inspections_shown"):
+            self._inspections_shown = {}
+        self._inspections_shown.setdefault(task, set()).update(g.get("id") for g in gaps)
+        if not gaps:
+            return ""
+        rows = "\n".join(f"- {g['task']}: {', '.join(g['files'])} (reported: {g['item'][:160]}"
+                         + (f" - {g['why'][:120]}" if g.get("why") else "") + ")" for g in gaps)
+        return ("\n\nThe editing call reported it could not read these files. They are in your copy: read them "
+                "and judge the work with them. Your completed review is recorded as the reading of exactly these "
+                "files on this source; until a review shown them completes, the reading stays open and holds "
+                "the requirements of the task that reported it.\n" + rows)
 
     def _bind_not_run(self, entry: dict) -> None:
         """Bind a NOT RUN item to what it names, as the harness can identify
@@ -12616,16 +12838,23 @@ class Session:
         """The audit's view of what is not shown to have run."""
         unrun = self._unnamed_standing()
         standing = self._standing_not_run()
-        if not unrun and not standing:
+        unread = self._open_inspections()
+        if not unrun and not standing and not unread:
             return ""
         lines = []
+        for gap in unread:
+            lines.append(f"- task {gap['task']} ({gap.get('role')}) could not read {', '.join(gap['files'])} "
+                         f"(covers {', '.join(gap.get('requirements') or [])}): a reading, not a run; attested only "
+                         "by a completed review or recheck shown these files, on these files")
         if unrun:
             lines.append("- test files no required check names (not shown to have run): " + ", ".join(unrun))
         for entry in standing:
             binding = entry.get("binding") or {}
             lines.append(f"- task {entry['task']} ({entry['role']}) reported NOT RUN: {_display_item(entry['item'])}"
                          + (f" - {entry['why']}" if entry["why"] else "")
-                         + (f" (covers {', '.join(entry['requirements'])})" if entry["requirements"] else "")
+                         + (f" (holds {', '.join(entry['requirements'])}"
+                            + (f"; {entry['association']}" if entry.get("association") else "") + ")"
+                            if entry["requirements"] else "")
                          + (f" [bound to {', '.join(binding['cases'])}: discharged only by the harness's gate "
                             "executing it whole]" if binding.get("cases") else
                             f" [not bound to any case: {binding['problem']}]" if binding.get("problem") else ""))
@@ -13561,6 +13790,11 @@ class Session:
             if blockers:
                 reason = ("acceptance reported NOT RUN by the covering task: "
                           + "; ".join(f"{e['task']}: {e['item']}" for e in blockers))[:300]
+            unread = [g for g in self._open_inspections() if rid in (g.get("requirements") or ())]
+            if unread:
+                typed = ("reading not attested: " + "; ".join(f"{g['task']}: {', '.join(g['files'])}" for g in unread)
+                         + " (a completed review of that task attests it)")
+                reason = (reason + "; " + typed if reason else typed)[:300]
             # An obligation that did not run, ran on another source or under
             # another identity lowers the MET; one with no runner is a
             # prerequisite nobody can run yet, and lowers it as well: what
@@ -16829,6 +17063,12 @@ class Session:
             # goal block carries the contract rule, stated once per prompt.
             parts.append(self._writer_goal().strip())
             rule_stated = True
+        else:
+            # The draft's goal comes through the memory render, which carries
+            # no boundary classes: the lead sees them before it writes.
+            boundary = boundary_note(self._covered_texts()).strip()
+            if boundary:
+                parts.append(boundary)
         map_block = self._map_block()
         if map_block:
             parts.append(map_block)
@@ -16992,6 +17232,7 @@ class Session:
             + self._proof_rows(spec)
             + (self._scope_size_note(spec, audience="reviewer") if self._writes() else "")
             + self._sibling_note()
+            + self._inspection_note(spec)
             + self._measured_change(
                 since, "## The change under review, as the harness measured it",
                 "Start from this change: it is the work as it is on disk, whatever an account above says. "
@@ -17054,8 +17295,14 @@ class Session:
                          f"{execution}" + (f" (receipt {receipts[-1]})" if receipts and r["execution"] == "ran" else "")
                          + (f" ({r['reason'][:80]})" if r.get("reason") else ""))
             for entry in (r.get("scenario_lineage") or [])[-1:]:
-                lines.append(f"  corrected by the planner on finding {entry.get('finding')}: {entry.get('field')} was "
-                             f"'{str(entry.get('before'))[:160]}'; the scenario above is the one in force")
+                changed = entry.get("fields") or {entry.get("field"): dict(before=entry.get("before"))}
+                lines.append(f"  corrected by the planner on finding {entry.get('finding')}: "
+                             + "; ".join(f"{f} was '{str((v or {}).get('before'))[:160]}'" for f, v in changed.items())
+                             + "; the scenario above is the one in force. Judge it whole: a RESOLVED on its finding "
+                               "means operation, state and expect are consistent with each other and with the "
+                               "requirement, not only the corrected field. A field that still contradicts another "
+                               "is '<id>: UNRESOLVED SCENARIO P<n> - <contradiction> | proposal: <field>: <text>', "
+                               "naming each field that must change.")
         legacy = all(r.get("binding", "").startswith("unknown") for r in rows)
         facts = self._observation_facts(task)
         return ("\n\n## Proof scenarios this task declared, as the harness holds them\n" + "\n".join(lines)
@@ -17151,7 +17398,8 @@ class Session:
         return ("\n\n## Original goal (verbatim; it outranks the task text where they differ)\n\n"
                 + self.memory.goal.strip()
                 + ("\n\n## Original requirements this task covers (verbatim)\n\n"
-                   + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else ""))
+                   + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else "")
+                + boundary_note(covered))
 
     def _writer_goal(self) -> str:
         """The goal block for an editing call after the draft (r11 on
@@ -17349,21 +17597,25 @@ class Session:
         # A review that finished keeps finishing: holding one line is not
         # turning the reply into an unfinished review.
         finished = _review_complete(note) or _clean_goal_review(note, list(texts))
+        bounded = {rid for rid, _ in boundary_classes([(rid, texts[rid]) for rid in held])}
         lines = []
         for line in note.splitlines():
             m = _AUDIT_LINE.match(line)
             if m and m.group(1).upper() in held and m.group(2).upper() == "MET":
                 line = (f"{m.group(1).upper()}: UNVERIFIED - MET claimed without executed negative-path "
                         "evidence (harness: its MET line cites no exact test case shown executed and passed, by "
-                        "this review's scratch demonstration or a recorded check on this source); add a test "
-                        "that exercises the rejecting path")
+                        "this review's scratch demonstration or a recorded check on this source); an untested "
+                        "risk, no counterexample observed; add a test that exercises the rejecting path"
+                        + (" at each input boundary listed for it" if m.group(1).upper() in bounded else ""))
             lines.append(line)
         source = self._source_fingerprint() if self.project else None
         for rid in held:
             text = (f"{peer} marked {rid} MET without executed negative-path evidence: its MET line cites no "
-                    "exact test case shown executed and passed on this source; not counted")
+                    "exact test case shown executed and passed on this source; not counted. An untested risk, "
+                    "no counterexample observed: a test case through an approved check, or this reviewer's "
+                    "scratch demonstration, is the route")
             self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=[rid], association="named",
-                                          text=text, source=source))
+                                          text=text, source=source, risk="untested"))
             if self._outcome is not None:
                 self._outcome.note("unverified", f"{rid}: {text}", terminal=False)
         self._note(f"task {spec.task_id}: {peer}'s MET on {', '.join(held)} not counted: no executed "
@@ -17812,6 +18064,7 @@ class Session:
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       + self._routing_facts(mine)
                       + f"The revised work:\n{revision}"
+                      + self._inspection_note(spec)
                       + self._measured_change(
                           getattr(self, "_review_before", None),
                           "## What changed since your review, as the harness measured it",
@@ -17892,6 +18145,8 @@ class Session:
                     self._settle_completion(spec, peer, "recheck", reading.judged_any)
                 if reading.judged_any:
                     self._recovery_result(rv, "recovered: the same seat completed its recheck with a verdict")
+            if reading.judged_any:
+                self._attest_inspections(spec.task_id, peer, "recheck")
             new = self._apply_review_reading(spec, peer, "recheck", reading, binding)
             current = {r["fid"]: r for r in self.review_findings}
             for fid in ids:
@@ -18232,15 +18487,18 @@ class Session:
                   "requirements, location, evidence kind and id stay as declared.\n\n"
                   "## Original goal (verbatim)\n" + self.memory.goal.strip() + "\n\n"
                   + "\n\n".join(blocks)
-                  + "\n\nReply with exactly one line per scenario named above and nothing else. Each line "
+                  + "\n\nReply with lines for the scenarios named above and nothing else. Each line "
                   "carries the operation first and any explanation after it, never mixed:\n"
                   "SCENARIO P<n>: <operation|state|expect>: <the corrected text only> | because: <why, optional>"
-                  " -- adopt the proposal or write a narrower correct text; one field per scenario\n"
+                  " -- adopt the proposal or write a narrower correct text. A scenario's operation, state and "
+                  "expect are read together: when the contradiction involves more than one of them, write one line "
+                  "per field that changes, for the same scenario, and they are applied together as one revision or "
+                  "not at all; never correct one field and leave another contradicting it\n"
                   "SCENARIO P<n>: KEEP | because: <why the declared text is right> -- the finding then stands as an "
                   "ordinary finding for the reviewer and the lead\n"
                   "SCENARIO P<n>: REQUIREMENT | because: <what in R<n> would have to change> -- the operator is "
                   "asked; nothing is reinterpreted and nothing becomes met\n"
-                  "Bounds the harness enforces, with no second ask: the corrected text is the whole new text of "
+                  "Bounds the harness enforces, with no second ask: each corrected text is the whole new text of "
                   "one field of one scenario, on one line, and it is the text only (not a diff, not a note); the "
                   "explanation is not part of the text and may be any length on the same line. Keep the field as "
                   "concise as a declared one: there is no character count, and the one size limit is the same the "
@@ -18280,7 +18538,12 @@ class Session:
             explanations = [why for _, _, why in lines.get(pid, []) if why]
             explanation = explanations[0][:600] if explanations else ""
             proof = proofs[pid]
-            if len(distinct) > 1:
+            fields = [verb for verb, _ in distinct if verb in ("operation", "state", "expect")]
+            # Several fields of one scenario are one revision (Davis,
+            # 2026-11-06, turn-tracking-01 O11: the expectation was corrected
+            # and the state left contradicting it). Ambiguous is a field
+            # given two texts, or a field line beside KEEP or REQUIREMENT.
+            if len(distinct) > 1 and (len(fields) != len(distinct) or len(set(fields)) != len(fields)):
                 self._record_scenario_correction(
                     spec, pid, by_pid[pid], reply=reply, by=seat.key,
                     status=f"refused: ambiguous reply ({len(distinct)} conflicting lines for {pid}); the scenario "
@@ -18289,16 +18552,27 @@ class Session:
                 continue
             verb, text = distinct[0] if distinct else (None, "")
             if verb in ("operation", "state", "expect"):
-                problem = _scenario_text_problem(text, proof[verb]) or self._correction_packet_problem(spec, pid, verb, text)
+                changes = {field: text for field, text in distinct}
+                # One field keeps the record shape it always had; several
+                # name the field each problem and text belongs to.
+                several = len(changes) > 1
+                problem = next(((f"{field}: {p}" if several else p) for field, p in
+                                ((f, _scenario_text_problem(t, proof[f])) for f, t in changes.items()) if p), "")
+                problem = problem or self._correction_packet_problem(spec, pid, changes)
                 if problem:
                     self._record_scenario_correction(spec, pid, by_pid[pid], status=f"refused: {problem}", reply=reply,
-                                                     by=seat.key, field=verb, proposal=text[:600],
+                                                     by=seat.key, field=", ".join(changes),
+                                                     proposal=("; ".join(f"{f}: {t}" for f, t in changes.items())
+                                                               if several else text)[:600],
                                                      explanation=explanation)
                     continue
-                spec = self._apply_scenario_correction(spec, pid, verb, text, findings=[r["fid"] for r in by_pid[pid]],
+                spec = self._apply_scenario_correction(spec, pid, changes, findings=[r["fid"] for r in by_pid[pid]],
                                                        by=seat.key)
-                self._record_scenario_correction(spec, pid, by_pid[pid], status="corrected", reply=reply, by=seat.key,
-                                                 field=verb, before=proof[verb], after=text, explanation=explanation)
+                self._record_scenario_correction(
+                    spec, pid, by_pid[pid], status="corrected", reply=reply, by=seat.key, field=", ".join(changes),
+                    before="; ".join(f"{f}: {proof[f]}" for f in changes) if several else proof[verb],
+                    after="; ".join(f"{f}: {t}" for f, t in changes.items()) if several else text,
+                    fields={f: dict(before=proof[f], after=t) for f, t in changes.items()}, explanation=explanation)
             elif verb == "requirement":
                 rids = list(proof["requirements"])
                 question = (f"Scenario {pid} of task {spec.task_id} is contested ({by_pid[pid][0]['typed']['reason'][:300]}) "
@@ -18334,7 +18608,7 @@ class Session:
             record["route"] = f"scenario: {status}"
         self._note(f"task {spec.task_id}: scenario {pid}: {status}")
 
-    def _correction_packet_problem(self, spec, pid: str, field: str, text: str) -> str:
+    def _correction_packet_problem(self, spec, pid: str, changes: dict) -> str:
         """The size bound a corrected scenario field meets is the one its
         declaration met: the task's role packets (lead and reviewer) built
         from the corrected scope must still be within their limit. Nothing
@@ -18343,7 +18617,7 @@ class Session:
         if scope is None or not getattr(scope, "proofs", None):
             return ""
         trial = replace(spec, scope=replace(scope, proofs=tuple(
-            dict(p, **{field: text}) if p["id"] == pid else p for p in scope.proofs)))
+            dict(p, **changes) if p["id"] == pid else p for p in scope.proofs)))
         try:
             for role in self._packet_roles(spec):
                 self._role_packet(trial, role)
@@ -18352,16 +18626,19 @@ class Session:
                     f"({str(exc)[:160]})")
         return ""
 
-    def _apply_scenario_correction(self, spec, pid: str, field: str, text: str, *, findings: List[str], by: str):
+    def _apply_scenario_correction(self, spec, pid: str, changes: dict, *, findings: List[str], by: str):
         """Put the corrected text in force: on the task's scope (so every
         later prompt of this task carries it) and on its acceptance rows,
         whose prior text, execution and judgment are kept as lineage and
         start again (as a capture redeclaration does): nothing judged under
         the old text is relabelled as a judgment of the new one. The
         existing receipts on this source re-discharge the row at once when
-        its cases still match; a sufficiency judgment never carries over."""
+        its cases still match; a sufficiency judgment never carries over.
+        ``changes`` maps each corrected field to its new text: all of them
+        are one revision, one lineage entry carrying every field's original
+        and replacement."""
         scope = spec.scope
-        proofs = [dict(p, **{field: text}) if p["id"] == pid else p for p in scope.proofs]
+        proofs = [dict(p, **changes) if p["id"] == pid else p for p in scope.proofs]
         new = next(p for p in proofs if p["id"] == pid)
         spec = replace(spec, scope=replace(scope, proofs=tuple(proofs)))
         if getattr(self._active_spec, "task_id", None) == spec.task_id:
@@ -18373,12 +18650,15 @@ class Session:
                 continue
             scenario = dict((str(k), str(v)) for k, v in (row.get("scenario") or []))
             lineage = list(row.get("scenario_lineage") or [])
-            lineage.append(dict(field=field, before=scenario.get(field), after=text, findings=list(findings),
+            first = next(iter(changes))
+            lineage.append(dict(field=", ".join(changes), before=scenario.get(first), after=changes[first],
+                                fields={f: dict(before=scenario.get(f), after=t) for f, t in changes.items()},
+                                findings=list(findings),
                                 finding=findings[0] if findings else None, by=by, behavior=row.get("behavior"),
                                 scenario=[list(s) for s in row.get("scenario") or []], execution=row.get("execution"),
                                 sufficiency=row.get("sufficiency"), judged_by=row.get("judged_by", ""),
                                 receipts=list(row.get("receipts") or [])))
-            scenario[field] = text
+            scenario.update(changes)
             row.update(scenario=sorted(scenario.items()), behavior=item[:300],
                        entry=dict(row.get("entry") or {}, item=item), scenario_lineage=lineage,
                        execution="missing", sufficiency="unjudged", judged_by="", judged_binding="", receipts=[],

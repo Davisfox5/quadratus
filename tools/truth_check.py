@@ -933,6 +933,43 @@ def _met_over_debt(record: dict) -> list:
     return out
 
 
+def _inspection_problems(record: dict, project=None) -> list:
+    """Readings an editing call reported it could not make (the engine's
+    ``inspection_gaps``): each is shown only by an attestation of exactly
+    those files. With ``project`` the attested digests are compared with the
+    files as they are; without it the attestation must have been made on
+    the final source. Unattested, stale or unreadable is a line for the
+    reader, never a pass (Davis, 2026-11-06, turn-tracking-01 O10)."""
+    import hashlib
+    out = []
+    for gap in record.get("inspection_gaps") or []:
+        if not isinstance(gap, dict):
+            out.append("an inspection gap record is not an object")
+            continue
+        files = [str(f) for f in gap.get("files") or []]
+        where = f"task {gap.get('task')}: reading of {', '.join(files) or 'no files'}"
+        attested = gap.get("attested")
+        if not isinstance(attested, dict) or not files:
+            out.append(f"{where} is not attested by a completed review")
+            continue
+        digests = attested.get("files") if isinstance(attested.get("files"), dict) else {}
+        if sorted(digests) != sorted(files) or any(not isinstance(v, str) for v in digests.values()):
+            out.append(f"{where}: the attestation does not name exactly these files")
+            continue
+        if project:
+            for rel in files:
+                try:
+                    now = hashlib.sha256((Path(project) / rel).read_bytes()).hexdigest()
+                except OSError:
+                    now = None
+                if now != digests[rel]:
+                    out.append(f"{where}: {rel} is not the file the review attested")
+                    break
+        elif not attested.get("source") or attested.get("source") != record.get("source_fingerprint"):
+            out.append(f"{where} was attested on another source than the final one")
+    return out
+
+
 def judge(run_dir, project=None) -> dict:
     run_dir = Path(run_dir)
     failed, unshown = [], []
@@ -1035,6 +1072,7 @@ def judge(run_dir, project=None) -> dict:
         if not cleared:
             unshown.append(f"task {entry.get('task')} reported NOT RUN and no later check shows it ran: "
                            f"{str(entry.get('item'))[:120]}")
+    unshown.extend(_inspection_problems(record, project))
     for repair in record.get("test_repairs") or []:
         # Kept case names and executed cases do not show a repaired test's
         # assertions were not weakened; only an independent review can.

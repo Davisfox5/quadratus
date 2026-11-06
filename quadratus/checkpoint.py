@@ -51,7 +51,7 @@ RESUMED = "resumed-by.json"
 #: Session attributes carried verbatim (JSON-safe after encoding).
 _CARRIED = (
     "checks", "review_checks", "open_findings", "findings", "failed", "turn_limited",
-    "failed_records", "turn_limited_records", "survey", "decisions", "unexecuted_acceptance",
+    "failed_records", "turn_limited_records", "survey", "decisions", "unexecuted_acceptance", "inspection_gaps",
     "original_test_runs", "requirement_audits", "requirement_reviews", "verification_handoffs",
     "verification_dispatched", "policy_plans", "parallel_batches", "_partial_tasks", "_cap_baselines",
     "_turn_limited_in_a_row", "_requirement_reopens", "_covers_corrections", "_original_tests",

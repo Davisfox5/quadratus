@@ -152,6 +152,29 @@ LEAD_CAPPED_ROLES = frozenset({"lead", "revision", "gate-fix", "design-fix"})
 #: audit, which the session already counts as nothing met. The orchestrator,
 #: closeout and workers stay uncapped.
 REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor"})
+
+
+def inspection_tools(model_key: str) -> str:
+    """How an editing seat reads the project, in its own vendor's tool names
+    (Davis, 2026-11-06, turn-tracking-01 O10: every editing seat was told
+    "Use Read, Grep and Glob for inspection", claude's tool names. A codex
+    seat has no tools by those names and reads through shell commands, and a
+    seat that took the sentence literally could report reading itself as
+    NOT RUN, which the harness then held as execution debt on every covered
+    requirement). Reading is never a check: it needs no approval and is
+    never a NOT RUN item."""
+    vendor = (model_key or "").partition(":")[0]
+    if vendor == "openai":
+        how = ("Read and search files with read-only shell commands (ls, cat, sed -n, head, rg, grep); "
+               "they need no approval and are not checks.")
+    elif vendor == "claude":
+        how = "Read and search files with Read, Grep and Glob; they need no approval and are not checks."
+    else:
+        how = "Read and search files with your own file-reading and search tools; they need no approval."
+    return (how + " Reading a file is always available to you and is never a NOT RUN item: NOT RUN is only for "
+            "a check or acceptance step that must execute.")
+
+
 #: Roles whose whole answer is one declared line (a CAPTURE: line, FIXTURE:
 #: blocks). They may read the copy to find a selector, not explore it: series
 #: rule-3572b72 f5's capture-redeclare ran 12 rounds and 403k tokens and
@@ -616,12 +639,14 @@ class Fleet:
                     "a folder that holds it, or discovers it (a pytest command with no test-file "
                     "operands discovers every Python test file); otherwise its tests stay unverified, "
                     "so add new tests to a file or folder a listed command already runs. "
-                    "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
+                    + inspection_tools(model_key) + " If an ungranted command is denied, "
                     "do not retry variants, delegate it or use another tool to execute it. "
                     "Report each check or acceptance step you could not run on its own line "
                     "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
                     "with the edits and available evidence; a NOT RUN line keeps the requirement it "
-                    "serves open until a check runs it. "
+                    "serves open until a check runs it. When it serves only some of the task's "
+                    "requirements and names no declared scenario or test case, end the line with ' | for: R<n>, R<m>' naming them; without that, "
+                    "or naming one the task does not cover, it holds every requirement the task covers. "
                     "Do not change permissions."
                 )
             before = self.project.contents()

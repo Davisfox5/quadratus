@@ -200,11 +200,11 @@ def test_the_corrected_text_has_no_character_count_and_meets_the_declaration_s_p
     spec = TaskSpec(task_id="t1", description="work",
                     scope=TaskScope(permitted_paths=["app.py"], intended_result="add", acceptance=["add works"],
                                     max_lines=20, proofs=proofs))
-    assert session._correction_packet_problem(spec, "P1", "state", long_state) == ""
+    assert session._correction_packet_problem(spec, "P1", {"state": long_state}) == ""
     declared = session._role_packet(spec, "lead")
     assert len(declared.encode()) <= 20_000
     huge = "x" * 21_000
-    problem = session._correction_packet_problem(spec, "P1", "state", huge)
+    problem = session._correction_packet_problem(spec, "P1", {"state": huge})
     assert problem.startswith("the corrected text puts this task's role packet over its limit, which the declaration met")
     assert dict(spec.scope.proofs[0])["state"] == "nothing stored", "a refused trial applied nothing"
     prompt = inspect.getsource(Session._correct_scenarios)

@@ -3756,6 +3756,35 @@ Key design decisions already settled:
   count, and a role with no known figure reads unknown, not 0 (root's
   pre-live review of f4d34a2). It counts per call; it is not a per-turn
   activity ledger. Observational only, like the rest of the monitor.
+- **A reading is reviewed, a NOT RUN holds what it serves, a scenario is
+  corrected whole, and a boundary nobody tested is a risk** (Davis,
+  2026-11-06, batch 6674444836 on turn-tracking-01). O10: every editing seat
+  was told "Use Read, Grep and Glob", claude's tool names; a codex revision
+  reported reading two files as NOT RUN and it held nine requirements as
+  runner-less execution debt. `runtime.inspection_tools` now names each
+  vendor's own way to read and says reading is never a NOT RUN item. A NOT
+  RUN that only names reading existing files becomes an inspection gap
+  (`inspection_gaps`), never execution debt: it is listed in the prompt of
+  the task's next review or recheck (and of any review-only verification
+  task), and only a completed review or recheck that was shown it attests
+  it, by the files' sha256; a later change to a file reopens it. An open gap
+  holds the reporting task's requirements at the audit, the evidence route
+  and the verification handoff; tests never stand in for it, and
+  `truth_check` reports an unattested or stale one. O34: a NOT RUN item now
+  holds only the requirements of the declared scenario, bound case or
+  scenario location it names, or the reporting seat's own `| for: R<n>`
+  (only ids its task covers); otherwise every covered requirement stays held
+  with an `association` that says it is unknown and how it resolves. O11: a
+  correction may change several fields of one scenario, applied as one
+  revision with every field's before and after, or not at all. R19: the
+  goal block shows, for error requirements about integer or ID inputs, the
+  boundary classes read from the runtime (2**63 and one digit past
+  `sys.get_int_max_str_digits()`), labelled as risks, never requirements and
+  never a lowered limit, with the instruction to write each case so a crash
+  fails an assertion; a held MET says "untested risk, no counterexample
+  observed". An exception escaping product code in a check is still
+  unattributable by the attribution rule above and buys no repair; only a
+  case that asserts on the outcome does.
 
 ## How development is coordinated
 
