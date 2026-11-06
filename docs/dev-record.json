@@ -3,7 +3,7 @@
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
     "pr": 73,
-    "sha": "2ac2f852e6f8e6bfe39fe85ec52a853aee490c50",
+    "sha": "6a6c59f5176c4ad4afedbb0273fe5f0231ac4b18",
     "gate": "Step 2 plus blueprint stage A+B records (Davis, 2026-10-18): root's review of the typed records batch, root's production wiring and durable effects, one full suite on the final connected changed batch, exact CI, then the frozen end-to-end evaluation contract. Benchmark stays paused; no automatic PASS or MET.",
     "required_receipts": [
       "ci",
@@ -49,6 +49,13 @@
         "at": "2026-10-18T00:44:18Z",
         "previous_pr": 73,
         "previous_gate": "Step 2 (adaptive orchestration, accurate recovery, coordination, persistent progress): root's independent scoped review of #73 and #72, one correction batch, one final combined changed-engine local suite, exact CI and install, then one qualified fresh medium multi-component job. Benchmark stays paused; no automatic PASS or MET."
+      },
+      {
+        "previous": "2ac2f852e6f8e6bfe39fe85ec52a853aee490c50",
+        "sha": "6a6c59f5176c4ad4afedbb0273fe5f0231ac4b18",
+        "reason": "Reconciliation (root 6674996693): PR73 carried root-reviewed deliveries 56ab825 through 6a6c59f (turn tracking and unknown-safe aggregation, the head of the turn-tracking-01 live run) that this record never moved to. 6a6c59f is the base of batch 6674444836. Unqualified: no receipt is recorded for it, and 2ac2f85 stays in history.",
+        "by": "claude",
+        "at": "2026-11-06T02:20:01Z"
       }
     ]
   },

@@ -11,6 +11,7 @@ R21, R22 and R24 though it served one of them.
 """
 import inspect
 import json
+import re
 
 import pytest
 
@@ -31,7 +32,7 @@ def test_each_vendor_is_told_its_own_reading_tools_and_reading_is_never_not_run(
         assert "never a NOT RUN item" in text
     source = inspect.getsource(runtime)
     assert "inspection_tools(model_key)" in source and '"Use Read, Grep and Glob for inspection. ' not in source
-    assert "' | for: R<n>, R<m>'" in source, "the association grammar the parser reads is stated"
+    assert "' | for: R<n>, R<m>'" in source and "releases none of the others" in source
 
 
 # -- A2. a reading NOT RUN is an inspection, attested by a review it was shown --------------------------
@@ -75,23 +76,94 @@ def test_anything_else_stays_execution_debt(tmp_path, line):
     assert session.inspection_gaps == [] and len(session.unexecuted_acceptance) == 1
 
 
-def test_only_a_completed_review_shown_the_gap_attests_it_and_a_changed_file_reopens_it(tmp_path):
+def _read(session, task="t1", peer="claude:opus", stage="review", spec=None, verdict="READ"):
+    """Hand the open gaps to one seat and answer with its explicit judgment."""
+    note = session._inspection_note(spec or TaskSpec(task_id=task, description="x"), peer, stage)
+    ids = re.findall(r"^- (IG-[0-9a-f]{10}) ", note, re.MULTILINE)
+    reply = "NO FINDINGS\n" + "".join(f"{verdict} {gid} - add returns the sum\n" for gid in ids)
+    return note, ids, reply
+
+
+def test_only_the_seat_handed_the_gap_attests_it_on_its_explicit_read_line(tmp_path):
     session, spec, project = _session(tmp_path)
     session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
-    session._attest_inspections("t1", "claude:opus", "review")
-    assert session._open_inspections(), "a review never shown the gap attests nothing"
-    note = session._inspection_note(spec)
-    assert "could not read these files" in note and "t1: app.py" in note
-    session._attest_inspections("t1", "claude:opus", "review")
-    assert session._open_inspections() == [] and session._inspection_note(spec) == ""
-    attested = session.inspection_gaps[0]["attested"]
-    assert attested["by"] == "claude:opus" and set(attested["files"]) == {"app.py"}
+    (gap,) = session.inspection_gaps
+    session._attest_inspections("t1", "claude:opus", "review", f"NO FINDINGS\nREAD {gap['id']} - fine")
+    assert session._open_inspections(), "a seat never handed the gap attests nothing"
+    note, ids, reply = _read(session, spec=spec)
+    assert ids == [gap["id"]] and "could not read these files" in note and "'READ <id> - " in note
+    session._attest_inspections("t1", "openai:sol", "review", reply)
+    assert session._open_inspections(), "another seat's hand-off is not this seat's"
+    session._attest_inspections("t1", "claude:opus", "review", "NO FINDINGS")
+    assert session._open_inspections(), "a completed review with no READ line attests nothing"
+    assert gap["refusals"][-1]["why"] == "no 'READ <id> - <what they show>' line"
+    note, ids, reply = _read(session, spec=spec)
+    session._attest_inspections("t1", "claude:opus", "review", reply)
+    assert session._open_inspections() == []
+    attested = gap["attested"]
+    assert attested["by"] == "claude:opus" and attested["judgment"] == "add returns the sum"
     (project / "app.py").write_text("def add(a, b):\n    return b + a\n")
     assert session._open_inspections(), "the attestation is bound to the bytes it read"
     assert session._evidence_route("R2")["kind"] == "inspection"
 
 
-def test_a_review_only_task_is_shown_every_open_gap(tmp_path):
+def test_an_unread_line_never_attests(tmp_path):
+    session, spec, _ = _session(tmp_path)
+    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _, ids, reply = _read(session, spec=spec)
+    session._attest_inspections("t1", "claude:opus", "review", reply + f"UNREAD {ids[0]} - the copy had no app.py\n")
+    assert session._open_inspections() and session.inspection_gaps[0]["attested"] is None
+
+
+def test_root_attestation_binds_the_bytes_handed_never_the_bytes_after_the_reply(tmp_path):
+    """Root control attestation-must-bind-source-handed-to-review."""
+    session, spec, project = _session(tmp_path)
+    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _, _, reply = _read(session, spec=spec)
+    (project / "app.py").write_text("changed while the review ran\n")
+    session._attest_inspections("t1", "claude:opus", "review", reply)
+    assert session._open_inspections(), "the reviewer read the old bytes; the new ones stay unread"
+
+
+def test_a_completed_review_with_read_lines_is_still_a_clean_verdict(tmp_path):
+    from quadratus.session import _clean_goal_review, _review_complete
+    reply = "NO FINDINGS\nR1: MET - app.py:2\nREAD IG-0123456789 - app.py adds"
+    assert _clean_goal_review(reply, ["R1"]) and _review_complete("NO FINDINGS\nREAD IG-0123456789 - ok")
+
+
+def test_root_mixed_read_and_execution_must_not_clear(tmp_path):
+    """Root control mixed-read-and-execution-must-not-clear."""
+    session, spec, _ = _session(tmp_path)
+    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py and execute python app.py - unavailable")
+    assert session.inspection_gaps == [] and len(session._standing_not_run()) == 1
+    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py and tests/test_app.py - unavailable")
+    assert len(session.inspection_gaps) == 1 and len(session._standing_not_run()) == 1
+
+
+def test_root_batch_sibling_gap_must_remain_unattested(tmp_path):
+    """Root control batch-sibling-gap-must-remain-unattested: two children's
+    gaps merged into the parent keep distinct identities, and a review
+    handed only t1's gap attests only that one."""
+    parent, _, project = _session(tmp_path / "p")
+    (project / "other.py").write_text("X = 1\n")
+    children = []
+    for task, path in (("t1", "app.py"), ("t2", "other.py")):
+        child, _, child_project = _session(tmp_path / task)
+        (child_project / "other.py").write_text("X = 1\n")
+        child._active_spec = TaskSpec(task_id=task, description="x")
+        child._record_not_run("openai:sol", "revision", f"NOT RUN: Read {path} - unavailable")
+        children.append(child)
+    for child in children:
+        parent.inspection_gaps.extend(dict(g) for g in child.inspection_gaps)
+    first, second = parent.inspection_gaps
+    assert first["id"] != second["id"]
+    _, ids, reply = _read(parent, task="t1")
+    assert ids == [first["id"]]
+    parent._attest_inspections("t1", "claude:opus", "review", reply + f"READ {second['id']} - forged\n")
+    assert first["attested"] and second["attested"] is None
+
+
+def test_a_review_only_task_is_handed_every_open_gap(tmp_path):
     session, spec, _ = _session(tmp_path)
     session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
     from quadratus import session as S
@@ -99,27 +171,38 @@ def test_a_review_only_task_is_shown_every_open_gap(tmp_path):
     original = S.is_review_only
     try:
         S.is_review_only = lambda s: s is verify
-        assert "t1: app.py" in session._inspection_note(verify)
+        note, ids, reply = _read(session, task="t2", spec=verify)
     finally:
         S.is_review_only = original
-    session._attest_inspections("t2", "openai:sol", "review")
+    assert "(t1): app.py" in note
+    session._attest_inspections("t2", "claude:opus", "review", reply)
     assert session._open_inspections() == []
 
 
-def test_the_gaps_are_carried_and_judged_outside_the_engine(tmp_path):
+def test_the_gaps_are_carried_and_judged_outside_the_engine_with_the_same_authority(tmp_path):
     assert "inspection_gaps" in checkpoint._CARRIED
     session, spec, project = _session(tmp_path)
     session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
     record = dict(inspection_gaps=json.loads(json.dumps(session.inspection_gaps)),
                   source_fingerprint=session._source_fingerprint())
-    assert truth_check._inspection_problems(record) == ["task t1: reading of app.py is not attested by a completed review"]
-    session._inspection_note(spec)
-    session._attest_inspections("t1", "claude:opus", "review")
+    assert truth_check._inspection_problems(record) == [
+        "task t1: reading of app.py is not attested by a completed review's READ judgment"]
+    _, _, reply = _read(session, spec=spec)
+    session._attest_inspections("t1", "claude:opus", "review", reply)
     record["inspection_gaps"] = json.loads(json.dumps(session.inspection_gaps))
     assert truth_check._inspection_problems(record) == []
     assert truth_check._inspection_problems(record, project) == []
     assert truth_check._inspection_problems(dict(record, source_fingerprint="other")) == [
         "task t1: reading of app.py was attested on another source than the final one"]
+    # Root control saved-attestation-missing-review-authority: digests and
+    # source alone, or a judgment with no hand-off on record, never pass.
+    gap = record["inspection_gaps"][0]
+    bare = dict(gap, attested=dict(files=gap["attested"]["files"], source=gap["attested"]["source"]))
+    assert truth_check._inspection_problems(dict(record, inspection_gaps=[bare])) == [
+        "task t1: reading of app.py: the attestation names no reviewer, stage or READ judgment"]
+    unhanded = dict(gap, handed=[])
+    assert truth_check._inspection_problems(dict(record, inspection_gaps=[unhanded])) == [
+        "task t1: reading of app.py: no hand-off of these bytes to claude:opus's review is on record"]
     (project / "app.py").write_text("changed\n")
     assert truth_check._inspection_problems(record, project) == [
         "task t1: reading of app.py: app.py is not the file the review attested"]
@@ -136,39 +219,47 @@ def _rows(session):
     ]
 
 
+ALL = ["R1", "R2", "R3"]
+
+
 @pytest.mark.parametrize("entry, declared, held, how", [
-    (dict(item="P1", binding=dict(kind="scenario", scenario="P1")), (), ["R1"], "bound: scenario P1"),
+    (dict(item="P1", binding=dict(kind="scenario", scenario="P1")), (), ["R1"], "bound"),
+    (dict(item="P1 and P2", binding=dict(kind="scenario", scenario="P1, P2")), (), ["R1", "R2"], "bound"),
     (dict(item="tests/test_a.py::test_x", binding=dict(kind="case"), cases=["tests/test_a.py::test_x"]), (),
-     ["R1"], "bound: the scenarios whose cases it binds"),
-    (dict(item="python3.9 tests/test_a.py", binding=dict(kind="paths")), (), ["R1"],
-     "bound: the scenarios whose location it names"),
-    (dict(item="the python3.9 fallback in helper.py", binding=dict(kind="none")), ("R3",), ["R3"],
-     "declared by openai:sol (R3)"),
-    (dict(item="the python3.9 fallback in helper.py", binding=dict(kind="none")), ("R3", "R9"), ["R1", "R2", "R3"],
-     "unknown"),
-    (dict(item="the python3.9 fallback in helper.py", binding=dict(kind="none")), (), ["R1", "R2", "R3"], "unknown"),
-], ids=["scenario", "case", "location", "declared", "declared-outside-covers", "unknown"])
-def test_the_item_holds_what_it_is_bound_or_declared_to_serve_else_every_cover(tmp_path, entry, declared, held, how):
+     ["R1"], "bound"),
+    (dict(item="python3.9 tests/test_a.py", binding=dict(kind="paths")), (), ["R1"], "bound"),
+    # Root control partly-unbound-item-must-not-narrow-to-matched-subset.
+    (dict(item="python tests/test_a.py other.py", binding=dict(kind="paths")), (), ALL, "unknown: part"),
+    (dict(item="P1 tests/test_b.py::test_y", binding=dict(kind="mixed", scenario="P1"),
+          cases=["tests/test_a.py::test_x", "tests/test_b.py::test_y"]), (), ALL, "unknown: part"),
+    # Root control unverified-self-association-must-not-clear-other-cover.
+    (dict(item="all acceptance checks", binding=dict(kind="none")), ("R1",), ALL, "unknown"),
+    (dict(item="the python3.9 fallback in helper.py", binding=dict(kind="none")), ("R3", "R9"), ALL, "unknown"),
+    (dict(item="the python3.9 fallback in helper.py", binding=dict(kind="none")), (), ALL, "unknown"),
+], ids=["scenario", "two-scenarios", "case", "location", "partly-unbound-path", "partly-unbound-case",
+        "self-declared", "declared-outside-covers", "unknown"])
+def test_the_hold_narrows_only_when_the_whole_item_is_bound(tmp_path, entry, declared, held, how):
     session, _, _ = _session(tmp_path)
     _rows(session)
-    entry = dict(entry, task="t1", author="openai:sol", requirements=["R1", "R2", "R3"])
+    entry = dict(entry, task="t1", author="openai:sol", requirements=list(ALL))
     session._associate_not_run(entry, declared)
-    assert entry["requirements"] == held and entry["requirements_covered"] == ["R1", "R2", "R3"]
+    assert entry["requirements"] == held and entry["requirements_covered"] == ALL
     assert entry["association"].startswith(how), entry["association"]
-    if how == "unknown":
-        assert "every covered requirement stays held until it runs" in entry["association"]
+    if how.startswith("unknown"):
+        assert "every covered requirement stays held" in entry["association"]
+    if declared:
+        assert entry["association_claimed"] == list(declared) and "never narrows the hold" in entry["association"]
 
 
-def test_a_declared_association_is_parsed_off_the_reason_and_shown_to_the_audit(tmp_path):
+def test_a_declared_association_is_kept_as_a_claim_and_shown_to_the_audit(tmp_path):
     session, _, _ = _session(tmp_path)
     session._current_covers = ["R21", "R22", "R24"]
     session._record_not_run("openai:sol", "lead", "NOT RUN: the python3.9 fallback branch - no 3.9 here | for: R24")
     (entry,) = session.unexecuted_acceptance
-    assert entry["why"] == "no 3.9 here" and entry["requirements"] == ["R24"]
-    assert entry["requirements_covered"] == ["R21", "R22", "R24"]
-    assert session._evidence_route("R21")["kind"] != "execution debt"
-    assert session._evidence_route("R24")["kind"] == "execution debt"
-    assert "(holds R24; declared by openai:sol (R24))" in session._not_run_block()
+    assert entry["why"] == "no 3.9 here" and entry["requirements"] == ["R21", "R22", "R24"]
+    assert entry["association_claimed"] == ["R24"]
+    assert session._evidence_route("R21")["kind"] == "execution debt"
+    assert "openai:sol claims it serves R24 (recorded, never narrows the hold)" in session._not_run_block()
 
 
 # -- B. a scenario correction is one revision of the whole scenario --------------------------------------

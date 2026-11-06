@@ -644,9 +644,10 @@ class Fleet:
                     "Report each check or acceptance step you could not run on its own line "
                     "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
                     "with the edits and available evidence; a NOT RUN line keeps the requirement it "
-                    "serves open until a check runs it. When it serves only some of the task's "
-                    "requirements and names no declared scenario or test case, end the line with ' | for: R<n>, R<m>' naming them; without that, "
-                    "or naming one the task does not cover, it holds every requirement the task covers. "
+                    "serves open until a check runs it. It holds every requirement the task covers "
+                    "unless everything it names is a declared scenario, a case of one or a scenario's "
+                    "file; you may end it with ' | for: R<n>, R<m>' to say which requirements it serves, "
+                    "which is recorded as your claim and releases none of the others. "
                     "Do not change permissions."
                 )
             before = self.project.contents()

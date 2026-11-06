@@ -3758,33 +3758,43 @@ Key design decisions already settled:
   activity ledger. Observational only, like the rest of the monitor.
 - **A reading is reviewed, a NOT RUN holds what it serves, a scenario is
   corrected whole, and a boundary nobody tested is a risk** (Davis,
-  2026-11-06, batch 6674444836 on turn-tracking-01). O10: every editing seat
-  was told "Use Read, Grep and Glob", claude's tool names; a codex revision
-  reported reading two files as NOT RUN and it held nine requirements as
-  runner-less execution debt. `runtime.inspection_tools` now names each
-  vendor's own way to read and says reading is never a NOT RUN item. A NOT
-  RUN that only names reading existing files becomes an inspection gap
-  (`inspection_gaps`), never execution debt: it is listed in the prompt of
-  the task's next review or recheck (and of any review-only verification
-  task), and only a completed review or recheck that was shown it attests
-  it, by the files' sha256; a later change to a file reopens it. An open gap
-  holds the reporting task's requirements at the audit, the evidence route
-  and the verification handoff; tests never stand in for it, and
-  `truth_check` reports an unattested or stale one. O34: a NOT RUN item now
-  holds only the requirements of the declared scenario, bound case or
-  scenario location it names, or the reporting seat's own `| for: R<n>`
-  (only ids its task covers); otherwise every covered requirement stays held
-  with an `association` that says it is unknown and how it resolves. O11: a
+  2026-11-06, batch 6674444836 on turn-tracking-01; root's correction
+  6674996693 on a3de6d6). O10: every editing seat was told "Use Read, Grep
+  and Glob", claude's tool names; a codex revision reported reading two
+  files as NOT RUN and it held nine requirements as runner-less execution
+  debt. `runtime.inspection_tools` now names each vendor's own way to read
+  and says reading is never a NOT RUN item. Only a *pure* reading (a
+  reading verb, then existing file paths and joiners, nothing else;
+  `_pure_reading`) becomes an inspection gap (`inspection_gaps`, id
+  `IG-<10 hex>`, unique across parallel children); anything mixed stays
+  execution debt. A gap is handed to the task's next review or recheck
+  (or a review-only verification task) with the files' digests and source
+  at dispatch; only that seat's completed reply with `READ <id> - <what
+  they show>` and no `UNREAD <id>` attests it, on the dispatched bytes, so
+  a file changed while the review ran is not attested and a later change
+  reopens it. An open gap holds the reporting task's requirements at the
+  audit, the evidence route and the verification handoff; tests never stand
+  in for it. `truth_check` requires the same authority (seat, stage, READ
+  judgment, a consumed hand-off of exactly those bytes) and reports
+  anything less as unverified. O34: a NOT RUN item's hold narrows only when
+  the whole item is bound to the task's declared scenarios (every scenario,
+  case and, for a path-bound item, path it names); one unmatched part keeps
+  every covered requirement held and is named. The seat's `| for: R<n>` is
+  kept as `association_claimed` and never narrows the hold. O11: a
   correction may change several fields of one scenario, applied as one
   revision with every field's before and after, or not at all. R19: the
-  goal block shows, for error requirements about integer or ID inputs, the
-  boundary classes read from the runtime (2**63 and one digit past
-  `sys.get_int_max_str_digits()`), labelled as risks, never requirements and
-  never a lowered limit, with the instruction to write each case so a crash
-  fails an assertion; a held MET says "untested risk, no counterexample
-  observed". An exception escaping product code in a check is still
-  unattributable by the attribution rule above and buys no repair; only a
-  case that asserts on the outcome does.
+  goal block lists, for error requirements about integer or ID inputs,
+  candidate boundary classes, each with the condition under which it
+  applies (2**63 where values reach a signed 64-bit or SQLite INTEGER
+  store; one digit past `sys.get_int_max_str_digits()` where text goes
+  through int()). They are candidates, never requirements: the
+  requirement's own contract decides the behaviour, a value it accepts
+  (an opaque or arbitrary-precision ID) stays accepted, and no limit is
+  lowered or added. The lead is told to write each case so a crash fails an
+  assertion; a held MET says "untested risk, no counterexample observed".
+  An exception escaping product code in a check is still unattributable by
+  the attribution rule above and buys no repair; only a case that asserts
+  on the outcome does.
 
 ## How development is coordinated
 

@@ -950,11 +950,27 @@ def _inspection_problems(record: dict, project=None) -> list:
         where = f"task {gap.get('task')}: reading of {', '.join(files) or 'no files'}"
         attested = gap.get("attested")
         if not isinstance(attested, dict) or not files:
-            out.append(f"{where} is not attested by a completed review")
+            out.append(f"{where} is not attested by a completed review's READ judgment")
             continue
         digests = attested.get("files") if isinstance(attested.get("files"), dict) else {}
         if sorted(digests) != sorted(files) or any(not isinstance(v, str) for v in digests.values()):
             out.append(f"{where}: the attestation does not name exactly these files")
+            continue
+        # The same authority the engine requires (root review of a3de6d6,
+        # item 6): a named seat's READ judgment in a completed review or
+        # recheck, on a hand-off of exactly these bytes to that seat and
+        # stage. Anything missing is unverified, never a pass.
+        by, stage, judgment = attested.get("by"), attested.get("stage"), attested.get("judgment")
+        handed = [h for h in gap.get("handed") or [] if isinstance(h, dict)]
+        if not (isinstance(by, str) and by and stage in ("review", "recheck")
+                and isinstance(judgment, str) and judgment.strip()):
+            out.append(f"{where}: the attestation names no reviewer, stage or READ judgment")
+            continue
+        if not any(h.get("peer") == by and h.get("stage") == stage and h.get("consumed") is True
+                   and h.get("files") == digests and h.get("source") == attested.get("source")
+                   and (attested.get("task") is None or h.get("task") == attested.get("task"))
+                   for h in handed):
+            out.append(f"{where}: no hand-off of these bytes to {by}'s {stage} is on record")
             continue
         if project:
             for rel in files:

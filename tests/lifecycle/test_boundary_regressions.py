@@ -240,24 +240,25 @@ CASE = "tests/test_store.py::test_cli_refuses_each_boundary_and_changes_nothing"
 SHOWN = f"the project check executed {CASE} on the delivered source, which refuses 2**63 and keeps the item"
 
 
-def _run(tmp_path, monkeypatch, *, source, tests, review, repaired=None):
+def _run(tmp_path, monkeypatch, *, source, tests, review, repaired=None, plan=PLAN, proof=PROOF, case=CASE,
+         shown=SHOWN, r1=R1, files=FILES):
     def lead(call, replay):
         H.write(call, {"store.py": source, "tests/test_store.py": tests})
-        proves = f"PROVES: P1 - {CASE}[len19]\n" if tests == NEGATIVE else ""
+        proves = f"PROVES: P1 - {case}[len19]\n" if tests != files["tests/test_store.py"] else ""
         return "Implemented remove.\n" + proves + 'CHANGED: ["store.py", "tests/test_store.py"]'
 
     def gate_fix(call, replay):
         H.write(call, {"store.py": repaired})
         return 'Repaired the failing cases.\nCHANGED: ["store.py"]'
 
-    script = Script(orchestrator=lambda c, r: PLAN if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
+    script = Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
                     collaborator=lambda c, r: review,
-                    auditor=judging_scenarios(judging(lambda c, r: f"R1: MET - {CASE}[len19]"), PROOF, basis=SHOWN),
+                    auditor=judging_scenarios(judging(lambda c, r: f"R1: MET - {case}[len19]"), proof, basis=shown),
                     **{"requirements-review": lambda c, r: "COMPLETE",
                        "revision": lambda c, r: "Nothing to change.\nCHANGED: []",
                        **({"gate-fix": gate_fix} if repaired else {})})
-    return H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False, check=VERBOSE,
-                 goal="Add item removal by ID to the store's command line and HTTP handler. " + R1)
+    return H.run(tmp_path, monkeypatch, script, files=files, max_tasks=1, record_complete=False, check=VERBOSE,
+                 goal="Add item removal by ID to the store's command line and HTTP handler. " + r1)
 
 
 def _final(replay):
@@ -274,7 +275,9 @@ def test_the_classes_come_from_the_runtime_and_name_no_candidate(monkeypatch):
     assert not any("digits" in c for c in S.boundary_classes([("R1", R1)])[0][1]), "no limit, no class"
     assert S.boundary_classes([("R1", "remove returns the removed item")]) == [], "not an error requirement"
     note = S.boundary_note([("R1", R1)])
-    assert "risks to exercise, not new requirements" in note and "Do not lower Python's limit" in note
+    assert "candidates to check, not new requirements" in note and "Do not lower Python's limit" in note
+    assert "applies only where its condition holds" in note and "must stay accepted" in note
+    assert "must refuse each" not in note and "where values reach a signed 64-bit or SQLite INTEGER store" in note
     assert "never a defect anyone observed" in note and "so a crash fails an assertion" in note
     for word in ("ticket", "sqlite3", "OverflowError", "argparse", "depend", "close"):
         assert word not in note, word
@@ -292,7 +295,7 @@ def test_a_sound_candidate_is_accepted_on_its_executed_state_based_cases(tmp_pat
     assert _final(replay)["verdicts"]["R1"]["met"] is True
     lead, review = replay.of("lead")[0].prompt, replay.of("collaborator")[0].prompt
     for prompt in (lead, review):
-        assert "## Input boundaries these requirements reach" in prompt and "2**63" in prompt
+        assert "## Input boundaries these requirements may reach" in prompt and "2**63" in prompt
     assert S._ERROR_BOUNDARY_LENS in review
     check = H.result_json(replay)["checks"][-1]
     assert check["passed"], check
@@ -333,9 +336,96 @@ def test_a_met_without_a_run_is_an_untested_risk_naming_the_route(tmp_path, monk
     (revision,) = replay.of("revision")
     assert "R1: UNVERIFIED - MET claimed without executed negative-path" in revision.prompt
     assert "an untested risk, no counterexample observed" in revision.prompt
-    assert "at each input boundary listed for it" in revision.prompt
+    assert "at each listed input boundary that applies to it" in revision.prompt
     notes = H.result_json(replay).get("review_notes") or []
     held = [n for n in notes if n.get("risk") == "untested"]
     assert held and "no counterexample observed" in held[0]["text"]
     assert _final(replay)["verdicts"]["R1"]["met"] is False
     assert not replay.result.completed
+
+
+#: A contract under which large IDs are valid (root review of a3de6d6, item
+#: 7): the same classes are shown, and nothing makes them refusals.
+R_OPAQUE = ("IDs are arbitrary-precision integers: removing an item by any such ID succeeds, and an ID with no item "
+            "returns a JSON error object with HTTP 404")
+OPAQUE = '''import json
+from pathlib import Path
+
+
+def remove(path, raw):
+    if not isinstance(raw, str) or not raw.isascii() or not raw.isdigit():
+        return 400, {"error": "invalid id"}
+    items = json.loads(Path(path).read_text())
+    if raw not in items:
+        return 404, {"error": "not found"}
+    del items[raw]
+    Path(path).write_text(json.dumps(items))
+    return 200, {"removed": raw}
+'''
+OPAQUE_TESTS = '''import json
+import sys
+
+import pytest
+
+import store
+
+LIMIT = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+LARGE = [str(2 ** 63)] + (["1" + "0" * LIMIT] if LIMIT else [])
+
+
+def test_remove(tmp_path):
+    path = tmp_path / "items.json"
+    path.write_text(json.dumps({"1": "a"}))
+    assert store.remove(str(path), "1") == (200, {"removed": "1"})
+
+
+@pytest.mark.parametrize("raw", LARGE, ids=lambda v: f"len{len(v)}")
+def test_large_ids_are_accepted(tmp_path, raw):
+    path = tmp_path / "items.json"
+    path.write_text(json.dumps({raw: "a"}))
+    assert store.remove(str(path), raw) == (200, {"removed": raw})
+    assert json.loads(path.read_text()) == {}
+
+
+def test_an_unknown_id_is_a_json_404_and_changes_nothing(tmp_path):
+    path = tmp_path / "items.json"
+    path.write_text(json.dumps({"1": "a"}))
+    assert store.remove(str(path), "2") == (404, {"error": "not found"})
+    assert json.loads(path.read_text()) == {"1": "a"}
+'''
+OPAQUE_HAPPY = '''import json
+
+import store
+
+
+def test_remove(tmp_path):
+    path = tmp_path / "items.json"
+    path.write_text(json.dumps({"1": "a"}))
+    assert store.remove(str(path), "1") == (200, {"removed": "1"})
+'''
+OPAQUE_FILES = {"store.py": "def remove(path, raw):\n    raise NotImplementedError\n",
+                "tests/test_store.py": OPAQUE_HAPPY}
+OPAQUE_CASE = "tests/test_store.py::test_large_ids_are_accepted"
+OPAQUE_PROOF = H.proofs_for("R1", "tests/test_store.py", operation="remove ID 2**63", state="that item stored",
+                            expect="it is removed")[0]
+OPAQUE_PLAN = ("REQUIREMENTS:\nR1: " + R_OPAQUE + "\nKIND: backend simple\nSCOPE: "
+               + json.dumps({"permitted_paths": ["store.py", "tests/test_store.py"], "intended_result": "remove works",
+                             "acceptance": ["large IDs are accepted"], "max_lines": 200, "proofs": [OPAQUE_PROOF]})
+               + "\nImplement remove for arbitrary-precision IDs with tests.\nCOVERS: R1")
+
+
+@pytest.mark.requirements_ledger
+def test_valid_large_ids_stay_accepted_where_the_contract_says_so(tmp_path, monkeypatch):
+    """The ID requirement is an error clause, so the candidate classes are
+    shown, conditionally; the candidate accepts 2**63 and an over-limit
+    decimal as the contract says, its tests prove it, and the run is
+    accepted. No class turns into a refusal the goal never asked for."""
+    replay = _run(tmp_path, monkeypatch, source=OPAQUE, tests=OPAQUE_TESTS,
+                  review=f"NO FINDINGS\nR1: MET - {OPAQUE_CASE}[len19]", plan=OPAQUE_PLAN, proof=OPAQUE_PROOF,
+                  case=OPAQUE_CASE, shown=f"the project check executed {OPAQUE_CASE}[len19], which removes 2**63",
+                  r1=R_OPAQUE, files=OPAQUE_FILES)
+    assert replay.result.completed, replay.result.error
+    assert _final(replay)["verdicts"]["R1"]["met"] is True
+    lead = replay.of("lead")[0].prompt
+    assert "## Input boundaries these requirements may reach" in lead and "must stay accepted" in lead
+    assert H.result_json(replay)["checks"][-1]["passed"]

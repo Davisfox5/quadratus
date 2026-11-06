@@ -1425,6 +1425,38 @@ _NOT_RUN_FOR = re.compile(r"\s*\|\s*for:\s*(R\d+(?:\s*,\s*R\d+)*)\s*$", re.IGNOR
 #: "Read tickets/store.py tests/test_dependencies_store.py"), never a run.
 _INSPECTION_ITEM = re.compile(r"^\s*(?:read|reading|inspect|inspecting|open|view|examine|look\s+at|review)\b\s*:?",
                               re.IGNORECASE)
+#: A reviewer's judgment on an inspection gap it was handed.
+_INSPECTION_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?(READ|UNREAD)\s+(IG-[0-9a-f]{10})\b\s*[-:]?\s*(.*)$",
+                                 re.IGNORECASE | re.MULTILINE)
+#: Words that join file names in a pure reading request.
+_READING_JOINERS = frozenset({"and", "&", ",", "+"})
+
+
+def _pure_reading(item: str) -> List[str]:
+    """The files of a NOT RUN item that asks only to read files: a reading
+    verb, then file paths and joiners, nothing else. Anything more (a
+    command, a run, prose) is not a reading, and its execution obligation
+    stands (root review of a3de6d6, item 1). Empty when not pure."""
+    m = _INSPECTION_ITEM.match(item or "")
+    if not m:
+        return []
+    import shlex
+    rest = item[m.end():]
+    try:
+        tokens = shlex.split(rest)
+    except ValueError:
+        return []
+    paths = []
+    for token in tokens:
+        bare = token.strip(",;")
+        if not bare or bare.lower() in _READING_JOINERS:
+            continue
+        if "::" in bare or not ("/" in bare or re.search(r"\.[A-Za-z]\w*$", bare)):
+            return []
+        paths.append(bare[2:] if bare.startswith("./") else bare)
+    return paths
+
+
 #: Documentation files a reading scenario may name (never a source file).
 _DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
 _PROVES_ANY = re.compile(r"^\s*PROVES:(.*)$", re.MULTILINE)
@@ -2732,7 +2764,7 @@ _REVIEW_COMPLETE = "REVIEW: COMPLETE"
 def _review_complete(text: str) -> bool:
     """Whether a collaborator's reply carries a verdict in one of the three
     forms the prompt names."""
-    body = (text or "").strip()
+    body = _INSPECTION_VERDICT.sub("", text or "").strip()
     if body.upper().rstrip(".") == "NO FINDINGS" or _has_blocking_finding(body):
         return True
     for line in body.splitlines():
@@ -2829,23 +2861,29 @@ def _int_conversion_limit():
 
 def boundary_classes(texts) -> list:
     """(rid, classes) for each covered error or refusal requirement whose
-    text names an integer or identifier input: the input classes at its
-    representation edges, derived from the runtime, never from a candidate.
-    They are risks to exercise, never new requirements."""
+    text names an integer or identifier input: candidate input classes at
+    common representation edges, each with the condition under which it
+    applies, derived from the runtime, never from a candidate. They are
+    questions to answer from the requirement's own contract, which may be
+    successful handling; never new requirements (root review of a3de6d6,
+    item 7: an opaque or arbitrary-precision ID must not be held to a
+    refusal the goal never asked for)."""
     limit = _int_conversion_limit()
-    classes = ["non-numeric text", "an empty or missing value", "a negative value", "zero",
-               "2**63 (9223372036854775808, one past the signed 64-bit and SQLite INTEGER range)"]
+    classes = ["non-numeric text, where the ID is numeric", "an empty or missing value",
+               "a negative value and zero, where the ID is a positive integer",
+               "2**63 (9223372036854775808), where values reach a signed 64-bit or SQLite INTEGER store"]
     if limit:
-        classes.append(f"a decimal of {limit + 1} digits (one past this Python's int-from-text limit of "
-                       f"{limit}, sys.get_int_max_str_digits())")
+        classes.append(f"a decimal of {limit + 1} digits, where text is converted with this Python's int() "
+                       f"(its limit is {limit} digits, sys.get_int_max_str_digits())")
     return [(rid, list(classes)) for rid, text in texts
             if _error_clause(text) and _INTEGER_INPUT.search(text or "")]
 
 
 def boundary_note(texts) -> str:
-    """The boundary classes for the lead and the reviewer, labelled as
-    untested risks: a class nobody exercised is a gap to test, not an
-    observed defect, and an observed failure is reported as what it is."""
+    """The candidate boundary classes for the lead and the reviewer,
+    labelled as conditional, untested risks: a class nobody exercised is a
+    gap to test, not an observed defect, and what the code must do there is
+    the requirement's own contract, never a refusal this list implies."""
     rows = boundary_classes(texts)
     if not rows:
         return ""
@@ -2853,12 +2891,15 @@ def boundary_note(texts) -> str:
     for rid, classes in rows:
         by_classes.setdefault(tuple(classes), []).append(rid)
     lines = [f"- {', '.join(rids)}: " + "; ".join(classes) for classes, rids in by_classes.items()]
-    return ("\n\n## Input boundaries these requirements reach (risks to exercise, not new requirements)\n\n"
+    return ("\n\n## Input boundaries these requirements may reach (candidates to check, not new requirements)\n\n"
             + "\n".join(lines)
-            + "\nEach requirement's own words decide what must happen at each boundary (its refusal, status "
-              "or message). Do not lower Python's limit or add a limit the goal does not state; the code must "
-              "refuse each value as the requirement says, without a traceback or a crash, and leave no change "
-              "behind. A test case per class that applies is the cheap proof; an approved check runs it. Write "
+            + "\nA class applies only where its condition holds for the input the requirement declares; skip "
+              "the rest. Where one applies, the requirement's own words decide the expected behaviour, which "
+              "may be successful handling: a value the contract accepts (an opaque ID, an arbitrary-precision "
+              "integer) must stay accepted, and nothing here asks for a refusal the goal does not state. Do not "
+              "lower Python's limit or add a limit the goal does not state. Where the contract requires a "
+              "refusal, the code refuses as it says, without a traceback or a crash, and leaves no change "
+              "behind. A test case per applicable class is the cheap proof; an approved check runs it. Write "
               "each case so a crash fails an assertion (assert on the exit status, response status, output and "
               "stored state the requirement names; catch what the call raises and assert on it), so a "
               "traceback is a failed case the repair route acts on, not an error that stops the check. A "
@@ -2958,8 +2999,8 @@ def _clean_goal_review(text: str, rids) -> bool:
     verdicts = _requirement_verdicts(text)
     if not rids or any(verdicts.get(rid) is not True for rid in rids):
         return False
-    return all(_REQUIREMENT_VERDICT.match(line) or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE
-               for line in lines[1:])
+    return all(_REQUIREMENT_VERDICT.match(line) or _INSPECTION_VERDICT.match(line)
+               or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE for line in lines[1:])
 
 
 def _approving_review(text: str, rids) -> bool:
@@ -5675,7 +5716,7 @@ class Session:
                 elif rv is not None and rv.get("result") == "pending":
                     self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
                 if _review_complete(note) or _clean_goal_review(note, [r for r, _ in self._covered_texts()]):
-                    self._attest_inspections(spec.task_id, peer, "review")
+                    self._attest_inspections(spec.task_id, peer, "review", note)
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
@@ -11446,8 +11487,8 @@ class Session:
         if inspections:
             return dict(kind="inspection", challengeable=False, route=(
                 "inspection: " + "; ".join(f"{g['task']} could not read {', '.join(g['files'])}" for g in inspections)
-                + "; attested only by a completed review or recheck shown these files, on these files (a review-only "
-                  "verification task is shown them); never a challenge "
+                + "; attested only by the READ line of a completed review or recheck it was handed to, on those "
+                  "bytes (a review-only verification task is handed them); never a challenge "
                   "and never a test run")[:500])
         standing = [e for e in self._standing_not_run() if rid in (e.get("requirements") or ())]
         if standing:
@@ -12124,48 +12165,62 @@ class Session:
         """Which of the task's covered requirements a NOT RUN item holds
         (Davis, 2026-11-06, turn-tracking-01 O34: an unexecuted interpreter
         fallback in a test helper held every requirement its task covered,
-        a documentation one among them). In order: the requirements of the
-        declared scenarios the item binds; of the scenarios whose bound
-        cases it binds; of the scenarios whose declared location it names.
-        Failing all three, the reporting seat's own ``| for: R<n>`` line,
-        only with ids its task covers. Failing that, every covered
-        requirement stays held and the association says it is unknown and
-        how it resolves. The item, its reason and its execution are never
-        changed or dropped; ``requirements_covered`` keeps what the task
-        covered, and the record says how the association was reached."""
+        a documentation one among them). The hold narrows only when the
+        whole item is accounted for by the task's own declared scenarios:
+        every scenario it names, every case it binds and, for an item bound
+        by path operands, every path it names is a declared scenario, a case
+        of one, or a scenario's location; the hold is then the union of
+        their requirements within the task's covers. One unmatched part, or
+        nothing bound, keeps every covered requirement held, and the record
+        names the unmatched part (root review of a3de6d6, item 5). The
+        reporting seat's own ``| for: R<n>`` is kept as a claim and never
+        narrows the hold: an editor's word is not acceptance authority
+        (same review, item 4). The item, its reason and its execution are
+        never changed or dropped; ``requirements_covered`` keeps what the
+        task covered."""
         covers = [r for r in (entry.get("requirements") or []) if r]
         entry["requirements_covered"] = list(covers)
         rows = [r for r in self.evidence_obligations
                 if r.get("task") == entry.get("task") and r.get("kind") == "acceptance" and not r.get("superseded_by")]
+
         def held_by(match) -> set:
             return {str(ref[0]) for r in rows if match(r) for ref in (r.get("requirements") or ())}
         binding = entry.get("binding") or {}
         pids = [p.strip() for p in str(binding.get("scenario") or "").split(",") if p.strip()]
-        cases = set(entry.get("cases") or ())
-        paths = set(_item_paths(str(entry.get("item") or "")))
-        found, how = set(), ""
-        for label, match in ((f"scenario {', '.join(pids)}", lambda r: r.get("proof_id") in pids if pids else False),
-                             ("the scenarios whose cases it binds", lambda r: bool(cases & set(r.get("cases") or ()))),
-                             ("the scenarios whose location it names", lambda r: str(r.get("location") or "") in paths)):
-            found = held_by(match) & set(covers)
-            if found:
-                how = label
-                break
-        valid = [r for r in dict.fromkeys(declared) if r in covers]
-        if found:
-            entry["requirements"], entry["association"] = [r for r in covers if r in found], f"bound: {how}"
-        elif valid and len(valid) == len(list(dict.fromkeys(declared))):
-            entry["requirements"] = valid
-            entry["association"] = f"declared by {entry.get('author')} ({', '.join(valid)})"
+        cases = list(dict.fromkeys(str(c) for c in (entry.get("cases") or ())))
+        paths = (list(dict.fromkeys(_item_paths(str(entry.get("item") or ""))))
+                 if binding.get("kind") == "paths" and not pids and not cases else [])
+        found, unmatched, parts = set(), [], []
+        named = ([(pid, lambda r, pid=pid: r.get("proof_id") == pid) for pid in pids]
+                 + [(case, lambda r, case=case: case in (r.get("cases") or ())) for case in cases]
+                 + [(path, lambda r, path=path: str(r.get("location") or "") == path) for path in paths])
+        for part, match in named:
+            reqs = held_by(match)
+            if reqs:
+                found.update(reqs)
+                parts.append(part)
+            else:
+                unmatched.append(part)
+        found &= set(covers)
+        claimed = list(dict.fromkeys(declared))
+        if claimed:
+            entry["association_claimed"] = claimed
+        claim = (f"; {entry.get('author')} claims it serves {', '.join(claimed)} (recorded, never narrows the hold)"
+                 if claimed else "")
+        if parts and not unmatched and found:
+            entry["requirements"] = [r for r in covers if r in found]
+            entry["association"] = "bound: the whole item matches declared scenarios (" + ", ".join(parts)[:200] + ")" + claim
+        elif unmatched:
+            entry["association"] = ("unknown: part of the item matches no declared scenario, case or location of this "
+                                    "task (" + ", ".join(unmatched)[:200] + "); every covered requirement stays held "
+                                    "until it runs or the whole item is bound to declared scenarios" + claim)
         else:
-            entry["association"] = ("unknown: the item names no declared scenario, case or location of this task"
-                                    + (f" and its declared {', '.join(declared)} is not within the task's covers"
-                                       if declared else "")
-                                    + "; every covered requirement stays held until it runs, is bound to a scenario, "
-                                      "or the reporting seat names the requirement it serves")
+            entry["association"] = ("unknown: the item names no declared scenario, case or location of this task; "
+                                    "every covered requirement stays held until it runs or the whole item is bound "
+                                    "to declared scenarios" + claim)
         if entry["requirements"] != covers:
             self._note(f"task {entry.get('task')}: NOT RUN item held against {', '.join(entry['requirements'])} "
-                       f"({entry['association']}): {str(entry.get('item'))[:80]}")
+                       f"({entry['association'][:160]}): {str(entry.get('item'))[:80]}")
 
     def _record_inspection_gap(self, entry: dict) -> bool:
         """Route a NOT RUN item that only names reading files to inspection,
@@ -12180,9 +12235,8 @@ class Session:
         after it, the gap stays open and holds the task's covered
         requirements; tests never stand in for it. True when routed."""
         item = str(entry.get("item") or "")
-        paths = _item_paths(item)
-        if (not _INSPECTION_ITEM.match(item) or not paths or (entry.get("binding") or {}).get("kind") != "paths"
-                or not self.project):
+        paths = _pure_reading(item)
+        if not paths or (entry.get("binding") or {}).get("kind") != "paths" or not self.project:
             return False
         root = Path(self.project)
         if not all((root / p).is_file() for p in paths):
@@ -12191,11 +12245,14 @@ class Session:
                for g in self.inspection_gaps):
             return True
         self.inspection_gaps.append(dict(
-            id=f"I{len(self.inspection_gaps) + 1}", task=entry["task"], role=entry.get("role"), author=entry.get("author"), item=item, why=entry.get("why"),
-            files=sorted(set(paths)), requirements=list(entry.get("requirements") or []),
-            route="the reviewer of this task, or of a review-only verification task, reads these files in its "
-                  "source copy; a completed review or recheck shown them attests them on that source",
-            attested=None))
+            # Globally unambiguous: a parallel child's gaps merge into the
+            # parent beside its siblings' (root review of a3de6d6, item 2).
+            id=f"IG-{uuid.uuid4().hex[:10]}", task=entry["task"], role=entry.get("role"), author=entry.get("author"),
+            item=item, why=entry.get("why"), files=sorted(set(paths)),
+            requirements=list(entry.get("requirements") or []),
+            route="the reviewer of this task, or of a review-only verification task, is handed these files in its "
+                  "source copy; its 'READ <id>' line in a completed review or recheck attests the bytes it was handed",
+            handed=[], attested=None))
         self._note(f"task {entry['task']}: NOT RUN '{item[:80]}' is a reading, routed to the task's review "
                    "(inspection), not execution")
         return True
@@ -12210,19 +12267,40 @@ class Session:
                 out[rel] = None
         return out
 
-    def _attest_inspections(self, task: str, peer: str, stage: str) -> None:
-        """A completed review or recheck in ``task`` attests each inspection
-        gap its prompt listed (``_inspection_note``): the files' digests as
-        they are in the source this seat was handed, which is the current
-        source. A gap the seat was never shown is never attested by it."""
-        shown = set((getattr(self, "_inspections_shown", None) or {}).get(task) or ())
+    def _attest_inspections(self, task: str, peer: str, stage: str, reply: str) -> None:
+        """A completed review or recheck attests the inspection gaps its own
+        prompt handed it, and only on its explicit judgment (root review of
+        a3de6d6, items 2 and 3). Each hand-off (``_inspection_note``) is
+        bound to this task, seat and stage and to the files' bytes and the
+        source as they were dispatched; the reply must carry 'READ <id> -
+        <what they show>' for the gap and no 'UNREAD <id>' line. The
+        attestation records the dispatched digests, never the bytes after
+        the reply, so a file changed in between is not attested as read and
+        reopens the gap. The hand-off is consumed either way; a missing,
+        empty or refused judgment leaves the gap open, recorded."""
+        verdicts: Dict[str, List[tuple]] = {}
+        for m in _INSPECTION_VERDICT.finditer(reply or ""):
+            verdicts.setdefault(m.group(2).upper(), []).append((m.group(1).upper(), m.group(3).strip()))
         for gap in self.inspection_gaps:
-            if gap.get("id") not in shown:
+            handed = next((h for h in reversed(gap.get("handed") or [])
+                           if h.get("task") == task and h.get("peer") == peer and h.get("stage") == stage
+                           and not h.get("consumed")), None)
+            if handed is None:
                 continue
-            digests = self._file_digests(gap["files"])
-            if any(d is None for d in digests.values()):
+            handed["consumed"] = True
+            said = verdicts.get(str(gap.get("id")).upper(), [])
+            reads = [text for kind, text in said if kind == "READ" and text]
+            problem = ("the reviewer said it could not read them" if any(kind == "UNREAD" for kind, _ in said)
+                       else "no 'READ <id> - <what they show>' line" if not reads
+                       else "a file was unreadable when it was handed" if any(
+                           d is None for d in (handed.get("files") or {}).values()) else "")
+            if problem:
+                gap.setdefault("refusals", []).append(dict(by=peer, stage=stage, task=task, why=problem))
+                self._note(f"task {task}: {peer}'s {stage} does not attest the reading of "
+                           f"{', '.join(gap['files'])}: {problem}")
                 continue
-            gap["attested"] = dict(by=peer, stage=stage, files=digests, source=self._source_fingerprint())
+            gap["attested"] = dict(by=peer, stage=stage, task=task, files=dict(handed["files"]),
+                                   source=handed.get("source"), judgment=reads[0][:300], handed_at=handed.get("at"))
             self._note(f"task {task}: {peer}'s completed {stage} attests the reading of {', '.join(gap['files'])}")
 
     def _open_inspections(self) -> List[dict]:
@@ -12230,24 +12308,29 @@ class Session:
         return [g for g in self.inspection_gaps
                 if not g.get("attested") or self._file_digests(g["files"]) != g["attested"].get("files")]
 
-    def _inspection_note(self, spec) -> str:
-        """For the task's reviewer: the readings its lead reported it could
-        not make, which this review attests."""
+    def _inspection_note(self, spec, peer: str, stage: str) -> str:
+        """For a reviewer: the readings an editing call reported it could not
+        make, handed to this seat for this stage with the files' bytes as
+        they are now, which is the copy it reads (``_attest_inspections``)."""
         task = getattr(spec, "task_id", None)
-        # The task's own gaps; a review-only verification task is shown all
+        # The task's own gaps; a review-only verification task is handed all
         # of them, which is its route when no recheck of the task followed.
         gaps = [g for g in self._open_inspections() if g["task"] == task or is_review_only(spec)]
-        if not hasattr(self, "_inspections_shown"):
-            self._inspections_shown = {}
-        self._inspections_shown.setdefault(task, set()).update(g.get("id") for g in gaps)
         if not gaps:
             return ""
-        rows = "\n".join(f"- {g['task']}: {', '.join(g['files'])} (reported: {g['item'][:160]}"
+        source = self._source_fingerprint()
+        for gap in gaps:
+            gap.setdefault("handed", []).append(dict(task=task, peer=peer, stage=stage, source=source,
+                                                     files=self._file_digests(gap["files"]), consumed=False,
+                                                     at=len(gap.get("handed") or [])))
+        rows = "\n".join(f"- {g['id']} ({g['task']}): {', '.join(g['files'])} (reported: {g['item'][:160]}"
                          + (f" - {g['why'][:120]}" if g.get("why") else "") + ")" for g in gaps)
-        return ("\n\nThe editing call reported it could not read these files. They are in your copy: read them "
-                "and judge the work with them. Your completed review is recorded as the reading of exactly these "
-                "files on this source; until a review shown them completes, the reading stays open and holds "
-                "the requirements of the task that reported it.\n" + rows)
+        return ("\n\nAn editing call reported it could not read these files. They are in your copy: read them and "
+                "judge the work with them. For each, write one line 'READ <id> - <what the files show for this "
+                "work>' once you have read every file it lists, or 'UNREAD <id> - <why>' if you could not. These "
+                "lines do not change your verdict form. Only a READ line in a completed reply records the reading, "
+                "of exactly the files as they are in your copy; without it the reading stays open and holds the "
+                "requirements of the task that reported it.\n" + rows)
 
     def _bind_not_run(self, entry: dict) -> None:
         """Bind a NOT RUN item to what it names, as the harness can identify
@@ -12845,7 +12928,7 @@ class Session:
         for gap in unread:
             lines.append(f"- task {gap['task']} ({gap.get('role')}) could not read {', '.join(gap['files'])} "
                          f"(covers {', '.join(gap.get('requirements') or [])}): a reading, not a run; attested only "
-                         "by a completed review or recheck shown these files, on these files")
+                         "by the READ line of a completed review or recheck it was handed to, on those bytes")
         if unrun:
             lines.append("- test files no required check names (not shown to have run): " + ", ".join(unrun))
         for entry in standing:
@@ -17232,7 +17315,7 @@ class Session:
             + self._proof_rows(spec)
             + (self._scope_size_note(spec, audience="reviewer") if self._writes() else "")
             + self._sibling_note()
-            + self._inspection_note(spec)
+            + self._inspection_note(spec, peer, "review")
             + self._measured_change(
                 since, "## The change under review, as the harness measured it",
                 "Start from this change: it is the work as it is on disk, whatever an account above says. "
@@ -17606,7 +17689,8 @@ class Session:
                         "evidence (harness: its MET line cites no exact test case shown executed and passed, by "
                         "this review's scratch demonstration or a recorded check on this source); an untested "
                         "risk, no counterexample observed; add a test that exercises the rejecting path"
-                        + (" at each input boundary listed for it" if m.group(1).upper() in bounded else ""))
+                        + (" at each listed input boundary that applies to it" if m.group(1).upper() in bounded
+                           else ""))
             lines.append(line)
         source = self._source_fingerprint() if self.project else None
         for rid in held:
@@ -18064,7 +18148,7 @@ class Session:
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       + self._routing_facts(mine)
                       + f"The revised work:\n{revision}"
-                      + self._inspection_note(spec)
+                      + self._inspection_note(spec, peer, "recheck")
                       + self._measured_change(
                           getattr(self, "_review_before", None),
                           "## What changed since your review, as the harness measured it",
@@ -18146,7 +18230,7 @@ class Session:
                 if reading.judged_any:
                     self._recovery_result(rv, "recovered: the same seat completed its recheck with a verdict")
             if reading.judged_any:
-                self._attest_inspections(spec.task_id, peer, "recheck")
+                self._attest_inspections(spec.task_id, peer, "recheck", verdict)
             new = self._apply_review_reading(spec, peer, "recheck", reading, binding)
             current = {r["fid"]: r for r in self.review_findings}
             for fid in ids:
