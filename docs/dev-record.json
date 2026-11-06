@@ -2900,6 +2900,40 @@
       "decisions": [
         "claude: Overlap resolution: root (PR73 comment 6675338686) released the overlapping scope of T-stage-b-timeout-fix (codex, reviewed, October) for this batch only, and allowed the 28 older claude records to overlap under coordinator resolution; claimed with --resolve. Old tasks are not marked integrated, their receipts and blockers are kept, and the candidate 6a6c59f stays unqualified."
       ]
+    },
+    {
+      "id": "T-accepted-assertion-regression",
+      "purpose": "Davis-authorized offline two-task regression from digest85: same-name assertion weakening must not reuse earlier sufficient evidence; tests/docs only, no runtime or active milestone changes. Base is published PR73 head; separate stacked branch preserves owner work.",
+      "base": "bc63971914400116bf5b7b699e1c4222b22c47a2",
+      "owns": [
+        "tests/test_accepted_assertion_currency.py",
+        "docs/ACCEPTED_ASSERTION_DIAGNOSTIC.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-11-06T14:22:23Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "3566a8addb3262a77591eb889654378d5a12a2fa",
+        "at": "2026-11-06T14:29:05Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "3566a8addb3262a77591eb889654378d5a12a2fa",
+          "verdict": "cleared",
+          "evidence": "Independent Codex review of Claude-authored exact delivery: 5 new offline cases passed; 165 related tests passed (127 delivery/evidence/original-tests plus 38 evidence-routing/probes); repository Ruff clean and diff whitespace clean. Actual bounded pytest subprocess reports prove the strong assertion fails on the regressed fixture, weak same-name assertion passes, old approval becomes stale for assertion-only and app edits, raw R1 MET cannot restore sufficiency, removal/rename cannot discharge, and restored meaningful evidence plus fresh synthetic judgment recovers acceptance. Every model invoke raises, no Session.run/run_task or provider calls. Reviewer verdicts synthetic; no live handoff/completion proof. Fresh erroneous approval remains a limitation. Documentation wording narrowed by review; no runtime source changes. Full remote CI pending; active milestone/candidate unchanged.",
+          "scope": [
+            "tests/test_accepted_assertion_currency.py",
+            "docs/ACCEPTED_ASSERTION_DIAGNOSTIC.md"
+          ],
+          "at": "2026-11-06T14:29:05Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [],
+      "acknowledged_at": "2026-11-06T14:22:23Z"
     }
   ],
   "receipts": [
