@@ -125,6 +125,59 @@ def test_root_attestation_binds_the_bytes_handed_never_the_bytes_after_the_reply
     assert session._open_inspections(), "the reviewer read the old bytes; the new ones stay unread"
 
 
+@pytest.mark.parametrize("tail", [
+    " -\nNO FINDINGS\nREVIEW: COMPLETE",     # root control empty-read-cannot-borrow-next-line
+    "\nNO FINDINGS",
+    ":   \nREVIEW: COMPLETE",
+])
+def test_root_an_empty_read_never_borrows_the_next_line(tmp_path, tail):
+    session, spec, _ = _session(tmp_path)
+    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _, ids, _ = _read(session, spec=spec)
+    session._attest_inspections("t1", "claude:opus", "review", f"READ {ids[0]}" + tail)
+    assert session._open_inspections() and session.inspection_gaps[0]["attested"] is None
+    assert session.inspection_gaps[0]["refusals"][-1]["why"] == "no 'READ <id> - <what they show>' line"
+
+
+def test_read_and_unread_for_one_gap_in_either_order_is_unread(tmp_path):
+    for order in ("READ {g} - fine\nUNREAD {g} - no copy", "UNREAD {g} - no copy\nREAD {g} - fine"):
+        session, spec, _ = _session(tmp_path / str(len(order)) / order[:2])
+        session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+        _, ids, _ = _read(session, spec=spec)
+        session._attest_inspections("t1", "claude:opus", "review", "NO FINDINGS\n" + order.format(g=ids[0]))
+        assert session._open_inspections()
+
+
+def test_root_live_and_saved_readers_agree_on_missing_authority(tmp_path):
+    """Root control missing-authority-live-saved-parity: a carried gap whose
+    attestation holds only correct digests and the current source is open
+    live and unverified saved, and each authority field is required by both."""
+    session, spec, project = _session(tmp_path)
+    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _, _, reply = _read(session, spec=spec)
+    session._attest_inspections("t1", "claude:opus", "review", reply)
+    good = json.loads(json.dumps(session.inspection_gaps[0]))
+    record = dict(source_fingerprint=session._source_fingerprint())
+    variants = {
+        "files+source only": dict(good, attested=dict(files=good["attested"]["files"],
+                                                      source=good["attested"]["source"])),
+        "no judgment": dict(good, attested=dict(good["attested"], judgment="")),
+        "no reviewer": dict(good, attested=dict(good["attested"], by="")),
+        "bad stage": dict(good, attested=dict(good["attested"], stage="audit")),
+        "no hand-off": dict(good, handed=[]),
+        "hand-off not consumed": dict(good, handed=[dict(h, consumed=False) for h in good["handed"]]),
+        "hand-off to another seat": dict(good, handed=[dict(h, peer="openai:sol") for h in good["handed"]]),
+        "other bytes handed": dict(good, handed=[dict(h, files={"app.py": "0" * 64}) for h in good["handed"]]),
+    }
+    for name, gap in variants.items():
+        session.inspection_gaps = [gap]
+        assert session._open_inspections() == [gap], name
+        assert truth_check._inspection_problems(dict(record, inspection_gaps=[gap])), name
+    session.inspection_gaps = [good]
+    assert session._open_inspections() == []
+    assert truth_check._inspection_problems(dict(record, inspection_gaps=[good])) == []
+
+
 def test_a_completed_review_with_read_lines_is_still_a_clean_verdict(tmp_path):
     from quadratus.session import _clean_goal_review, _review_complete
     reply = "NO FINDINGS\nR1: MET - app.py:2\nREAD IG-0123456789 - app.py adds"
@@ -228,6 +281,12 @@ ALL = ["R1", "R2", "R3"]
     (dict(item="tests/test_a.py::test_x", binding=dict(kind="case"), cases=["tests/test_a.py::test_x"]), (),
      ["R1"], "bound"),
     (dict(item="python3.9 tests/test_a.py", binding=dict(kind="paths")), (), ["R1"], "bound"),
+    (dict(item="P1 tests/test_a.py::test_x", binding=dict(kind="mixed", scenario="P1"),
+          cases=["tests/test_a.py::test_x"]), (), ["R1"], "bound"),
+    # Root control scenario-plus-unmatched-path-must-hold-whole-item.
+    (dict(item="P1 and other.py", binding=dict(kind="scenario", scenario="P1"),
+          cases=["tests/test_a.py::test_x"]), (), ALL, "unknown: part"),
+    (dict(item="the fallback in tests/test_a.py", binding=dict(kind="none")), (), ALL, "unknown"),
     # Root control partly-unbound-item-must-not-narrow-to-matched-subset.
     (dict(item="python tests/test_a.py other.py", binding=dict(kind="paths")), (), ALL, "unknown: part"),
     (dict(item="P1 tests/test_b.py::test_y", binding=dict(kind="mixed", scenario="P1"),
@@ -236,7 +295,8 @@ ALL = ["R1", "R2", "R3"]
     (dict(item="all acceptance checks", binding=dict(kind="none")), ("R1",), ALL, "unknown"),
     (dict(item="the python3.9 fallback in helper.py", binding=dict(kind="none")), ("R3", "R9"), ALL, "unknown"),
     (dict(item="the python3.9 fallback in helper.py", binding=dict(kind="none")), (), ALL, "unknown"),
-], ids=["scenario", "two-scenarios", "case", "location", "partly-unbound-path", "partly-unbound-case",
+], ids=["scenario", "two-scenarios", "case", "location", "scenario-with-its-case", "scenario-plus-unmatched-path",
+        "unbound-prose-naming-a-location", "partly-unbound-path", "partly-unbound-case",
         "self-declared", "declared-outside-covers", "unknown"])
 def test_the_hold_narrows_only_when_the_whole_item_is_bound(tmp_path, entry, declared, held, how):
     session, _, _ = _session(tmp_path)
@@ -249,6 +309,29 @@ def test_the_hold_narrows_only_when_the_whole_item_is_bound(tmp_path, entry, dec
         assert "every covered requirement stays held" in entry["association"]
     if declared:
         assert entry["association_claimed"] == list(declared) and "never narrows the hold" in entry["association"]
+
+
+def test_root_the_production_bind_and_associate_chain_holds_a_scenario_plus_an_unmatched_path(tmp_path):
+    """The same control through ``_bind_not_run`` then ``_associate_not_run``
+    via ``_record_not_run``, with a declared scenario whose case exists."""
+    from quadratus.scope import TaskScope, read_proofs
+    session, spec, project = _session(tmp_path)
+    (project / "tests" / "test_a.py").write_text("def test_x():\n    pass\n")
+    (project / "other.py").write_text("X = 1\n")
+    proofs = read_proofs([dict(id="P1", requirements=["R1"], operation="x", state="y", expect="z",
+                               location="tests/test_a.py")])
+    spec.scope = TaskScope(permitted_paths=["app.py"], intended_result="x", acceptance=["x"], max_lines=20,
+                           proofs=proofs)
+    session.evidence_obligations = [dict(oid="O1", task="t1", kind="acceptance", proof_id="P1",
+                                         requirements=[("R1", 1)], location="tests/test_a.py",
+                                         cases=["tests/test_a.py::test_x"], behavior="x")]
+    session._record_not_run("openai:sol", "lead", "NOT RUN: P1 and other.py - no runner")
+    entry = session.unexecuted_acceptance[-1]
+    assert entry["binding"]["kind"] == "scenario", entry
+    assert entry["requirements"] == ["R1", "R2"] and "other.py" in entry["association"], entry
+    session._record_not_run("openai:sol", "lead", "NOT RUN: P1 - no runner")
+    entry = session.unexecuted_acceptance[-1]
+    assert entry["binding"]["kind"] == "scenario" and entry["requirements"] == ["R1"], entry
 
 
 def test_a_declared_association_is_kept_as_a_claim_and_shown_to_the_audit(tmp_path):

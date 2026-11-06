@@ -2870,6 +2870,33 @@
       "decisions": [
         "claude: Scoped CLEAR of cadbcb9 corrections by root and two independent reviewers (6548215559; manifests 06fe21fd..., e6768e1c...). Not full validation: full local suite, exact CI (41234856123 running), installed/privacy/freeze and live remain pending, root-owned. Kept: original refutation results, spy run 1328 passed/27 skipped on a8a9af2, six environment unit failures identical on 1dbbf9f, root raw 4PASS/1FAIL learning receipt."
       ]
+    },
+    {
+      "id": "T-evidence-routing",
+      "purpose": "Batch 6674444836 (Davis authorized, PR73) with root's corrections 6674996693 and 6675338686: vendor reading tools; pure readings routed to dispatch-bound one-line READ attestation with global ids, the same authority read live and saved; mixed items stay execution debt; a NOT RUN hold narrows only on a whole-item declared-scenario binding across grammars, self-declared association kept as a claim; atomic multi-field scenario correction; conditional runtime-derived boundary candidates with an opaque-ID control; generic error-boundary regressions; truth_check holds the same attestation authority.",
+      "base": "6a6c59f5176c4ad4afedbb0273fe5f0231ac4b18",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/runtime.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tools/truth_check.py",
+        "tests/test_evidence_routing_units.py",
+        "tests/lifecycle/test_boundary_regressions.py",
+        "tests/test_finding_identity_units.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-11-06T02:41:18Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: Overlap resolution: root (PR73 comment 6675338686) released the overlapping scope of T-stage-b-timeout-fix (codex, reviewed, October) for this batch only, and allowed the 28 older claude records to overlap under coordinator resolution; claimed with --resolve. Old tasks are not marked integrated, their receipts and blockers are kept, and the candidate 6a6c59f stays unqualified."
+      ]
     }
   ],
   "receipts": [

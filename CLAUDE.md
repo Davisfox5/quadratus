@@ -3770,16 +3770,20 @@ Key design decisions already settled:
   execution debt. A gap is handed to the task's next review or recheck
   (or a review-only verification task) with the files' digests and source
   at dispatch; only that seat's completed reply with `READ <id> - <what
-  they show>` and no `UNREAD <id>` attests it, on the dispatched bytes, so
+  they show>` (one line, never borrowing the next) and no `UNREAD <id>`
+  attests it, on the dispatched bytes, so
   a file changed while the review ran is not attested and a later change
   reopens it. An open gap holds the reporting task's requirements at the
   audit, the evidence route and the verification handoff; tests never stand
-  in for it. `truth_check` requires the same authority (seat, stage, READ
-  judgment, a consumed hand-off of exactly those bytes) and reports
-  anything less as unverified. O34: a NOT RUN item's hold narrows only when
-  the whole item is bound to the task's declared scenarios (every scenario,
-  case and, for a path-bound item, path it names); one unmatched part keeps
-  every covered requirement held and is named. The seat's `| for: R<n>` is
+  in for it. The live reader (`_inspection_attested`) and `truth_check`
+  require the same authority (seat, stage, READ judgment, a consumed
+  hand-off of exactly those bytes), so a carried or resumed record with
+  less is open live and unverified saved. O34: a NOT RUN item's hold narrows only when
+  the whole item is bound to the task's declared scenarios: every scenario
+  and case it names, and every path it names that is not a bound case's
+  file, whatever grammar bound the rest; an item the binder could not bind
+  never narrows. One unmatched part keeps every covered requirement held
+  and is named. The seat's `| for: R<n>` is
   kept as `association_claimed` and never narrows the hold. O11: a
   correction may change several fields of one scenario, applied as one
   revision with every field's before and after, or not at all. R19: the

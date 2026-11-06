@@ -1426,8 +1426,36 @@ _NOT_RUN_FOR = re.compile(r"\s*\|\s*for:\s*(R\d+(?:\s*,\s*R\d+)*)\s*$", re.IGNOR
 _INSPECTION_ITEM = re.compile(r"^\s*(?:read|reading|inspect|inspecting|open|view|examine|look\s+at|review)\b\s*:?",
                               re.IGNORECASE)
 #: A reviewer's judgment on an inspection gap it was handed.
-_INSPECTION_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?(READ|UNREAD)\s+(IG-[0-9a-f]{10})\b\s*[-:]?\s*(.*)$",
+#: One line each: the fields are separated by spaces or tabs only, so an
+#: empty judgment never borrows the next line (root review of 508a9a8).
+_INSPECTION_VERDICT = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(READ|UNREAD)[ \t]+(IG-[0-9a-f]{10})\b[ \t]*[-:]?[ \t]*([^\n]*)$",
                                  re.IGNORECASE | re.MULTILINE)
+def _inspection_attested(gap) -> bool:
+    """Whether a gap's attestation carries the authority the engine grants
+    one: a named seat, a review or recheck stage, a non-empty READ judgment,
+    digests for exactly the gap's files, and a consumed hand-off of exactly
+    those digests and source to that seat and stage. Missing, legacy or
+    malformed authority is no attestation. ``tools/truth_check.py`` applies
+    the same rule to the saved record."""
+    if not isinstance(gap, dict):
+        return False
+    attested, files = gap.get("attested"), [str(f) for f in gap.get("files") or []]
+    if not isinstance(attested, dict) or not files:
+        return False
+    digests = attested.get("files")
+    if (not isinstance(digests, dict) or sorted(digests) != sorted(files)
+            or any(not isinstance(v, str) or not v for v in digests.values())):
+        return False
+    by, stage, judgment = attested.get("by"), attested.get("stage"), attested.get("judgment")
+    if not (isinstance(by, str) and by and stage in ("review", "recheck")
+            and isinstance(judgment, str) and judgment.strip()):
+        return False
+    return any(isinstance(h, dict) and h.get("peer") == by and h.get("stage") == stage and h.get("consumed") is True
+               and h.get("files") == digests and h.get("source") == attested.get("source")
+               and (attested.get("task") is None or h.get("task") == attested.get("task"))
+               for h in gap.get("handed") or [])
+
+
 #: Words that join file names in a pure reading request.
 _READING_JOINERS = frozenset({"and", "&", ",", "+"})
 
@@ -12188,8 +12216,12 @@ class Session:
         binding = entry.get("binding") or {}
         pids = [p.strip() for p in str(binding.get("scenario") or "").split(",") if p.strip()]
         cases = list(dict.fromkeys(str(c) for c in (entry.get("cases") or ())))
-        paths = (list(dict.fromkeys(_item_paths(str(entry.get("item") or ""))))
-                 if binding.get("kind") == "paths" and not pids and not cases else [])
+        # Every path the item names is accounted for, whatever grammar bound
+        # the rest: a path that is the file of a bound case is that case, and
+        # any other path must be a declared scenario's location (root review
+        # of 508a9a8: "P1 and other.py" narrowed to P1's requirement).
+        case_files = {c.split("::")[0] for c in cases}
+        paths = [p for p in dict.fromkeys(_item_paths(str(entry.get("item") or ""))) if p not in case_files]
         found, unmatched, parts = set(), [], []
         named = ([(pid, lambda r, pid=pid: r.get("proof_id") == pid) for pid in pids]
                  + [(case, lambda r, case=case: case in (r.get("cases") or ())) for case in cases]
@@ -12207,6 +12239,10 @@ class Session:
             entry["association_claimed"] = claimed
         claim = (f"; {entry.get('author')} claims it serves {', '.join(claimed)} (recorded, never narrows the hold)"
                  if claimed else "")
+        # An item the binder could not bind at all never narrows on a path
+        # it happens to mention: prose around it is not accounted for.
+        if binding.get("kind") in (None, "none") and not unmatched:
+            unmatched = ["the item is bound to no scenario, case or path operand"] if parts else []
         if parts and not unmatched and found:
             entry["requirements"] = [r for r in covers if r in found]
             entry["association"] = "bound: the whole item matches declared scenarios (" + ", ".join(parts)[:200] + ")" + claim
@@ -12304,9 +12340,12 @@ class Session:
             self._note(f"task {task}: {peer}'s completed {stage} attests the reading of {', '.join(gap['files'])}")
 
     def _open_inspections(self) -> List[dict]:
-        """Inspection gaps not attested on the files as they are now."""
+        """Inspection gaps without a valid attestation on the files as they
+        are now. Valid is the same rule ``tools/truth_check.py`` applies to
+        the saved record, so a resumed or carried record is read the same
+        way live and saved (root review of 508a9a8)."""
         return [g for g in self.inspection_gaps
-                if not g.get("attested") or self._file_digests(g["files"]) != g["attested"].get("files")]
+                if not _inspection_attested(g) or self._file_digests(g["files"]) != g["attested"].get("files")]
 
     def _inspection_note(self, spec, peer: str, stage: str) -> str:
         """For a reviewer: the readings an editing call reported it could not

@@ -953,7 +953,7 @@ def _inspection_problems(record: dict, project=None) -> list:
             out.append(f"{where} is not attested by a completed review's READ judgment")
             continue
         digests = attested.get("files") if isinstance(attested.get("files"), dict) else {}
-        if sorted(digests) != sorted(files) or any(not isinstance(v, str) for v in digests.values()):
+        if sorted(digests) != sorted(files) or any(not isinstance(v, str) or not v for v in digests.values()):
             out.append(f"{where}: the attestation does not name exactly these files")
             continue
         # The same authority the engine requires (root review of a3de6d6,
