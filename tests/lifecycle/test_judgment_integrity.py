@@ -445,7 +445,11 @@ def test_a_completion_whose_bound_identity_drifts_is_void_and_spends_the_claim(t
     assert owed["kind"] == "unreviewed"
     settled = [a for a in rv["attempts"] if a["action"] == "owner_settlement" and a["outcome"].startswith("reviewed")]
     if changed == "gate":
-        assert replay.result.error.startswith("CheckUnattributable") and not owed["closed"] and not settled
+        # Since PR73 6693873055 the stricter minimum is an ordinary failed
+        # check that buys the bounded repair, not an operator stop; the run
+        # still ends on its own rule with the debt open.
+        assert not replay.result.error.startswith("CheckUnattributable"), replay.result.error
+        assert not owed["closed"] and not settled
         stop = next(r for r in result["recoveries"] if r["kind"] == "run")
         assert stop["outcome_class"] == "stop_rule" and stop["failed_call"] is None, "no call caused this stop"
     else:

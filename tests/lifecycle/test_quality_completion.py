@@ -1042,17 +1042,25 @@ def test_a_capped_close_words_each_finding_by_what_its_recheck_came_to(tmp_path,
     result = H.result_json(replay)
     assert result["turn_limited_tasks"] == ["t1"], replay.result.error
     by_id = {f["fid"]: f for f in result["review_findings"]}
-    (handoff,) = [h for h in result["capped_handoffs"] if h["task"] == "t1"]
+    handoffs = [h for h in result["capped_handoffs"] if h["task"] == "t1"]
+    handoff = handoffs[-1]
     planner = replay.of("orchestrator")[1].prompt
     view = {fid: next((line for line in planner.splitlines() if line.startswith(f"- {fid} (")), "")
             for fid in by_id}
     if case == "new":
-        assert handoff["findings"] == {"RFT1-2": "raised"} and handoff["resolved"] == ["RFT1-1"]
+        # PR73 6693873055: the recheck settled RFT1-1, so the task continued
+        # once on the finding it raised (only that one), and that capped fix
+        # closed as before; the raised finding is still never worded as the
+        # reviewer's UNRESOLVED.
+        first = handoffs[0]
+        assert first["continued"] is True and first["outcome"] == "continued: 1 settled, 1 open"
+        assert first["findings"] == {"RFT1-2": "raised"} and first["resolved"] == ["RFT1-1"]
+        assert len(handoffs) == 2 and handoff["stage"] == "fix" and not handoff.get("continued")
         assert by_id["RFT1-1"].get("closed") and not by_id["RFT1-2"].get("closed")
-        assert by_id["RFT1-2"]["hold"].startswith("raised by claude:opus at the recheck of t1's capped source")
-        assert "re-checked its finding once on it: RESOLVED (RFT1-1); raised during the recheck: RFT1-2" in planner
-        assert "UNRESOLVED (RFT1-2)" not in planner
-        assert "held: raised by claude:opus at the recheck" in view["RFT1-2"]
+        raised = [fid for fid, state in handoff["findings"].items() if state == "raised"]
+        assert raised and f"raised during the recheck: {raised[0]}" in planner
+        assert f"UNRESOLVED ({raised[0]})" not in planner
+        assert "held: raised by claude:opus at the recheck" in view[raised[0]]
     elif case == "invalidated":
         assert handoff["invalidated"] == ["RFT1-1"] and handoff["resolved"] == []
         assert handoff["outcome"] == "unresolved: other findings open"

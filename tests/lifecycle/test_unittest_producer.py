@@ -288,8 +288,9 @@ def test_a_dual_gate_body_assertion_gets_exactly_one_repair(tmp_path, monkeypatc
     """R21's shape: a required unittest check and a required pytest check,
     a passing subtest test beside a test the run wrote wrong. Declared, both
     reports attribute the failure to a body assertion and the run gets one
-    gate-fix call and completes. Undeclared unittest, or a non-assertion
-    failure, still hands off with no repair call."""
+    gate-fix call and completes. Since PR73 6693873055 an undeclared
+    unittest report or a non-assertion failure gets the same one repair:
+    attribution is the diagnosis, not the eligibility."""
     body = _BUGGY if unittest_gate != "error" else _BUGGY.replace(
         "self.assertEqual(add(2, 2), 5)", "raise RuntimeError('not a product assertion')")
 
@@ -312,13 +313,12 @@ def test_a_dual_gate_body_assertion_gets_exactly_one_repair(tmp_path, monkeypatc
                    check=" ".join((PY, "-m", "pytest", "-q", TOKEN)), extra_checks=[unittest_check], max_tasks=2,
                    record_complete=False)
     fixes = replay.of("gate-fix")
-    if unittest_gate == "declared":
-        assert len(fixes) == 1, (replay.result.error, [c.role for c in replay.calls])
-        assert "CheckUnattributable" not in (replay.result.error or ""), replay.result.error
-        assert (replay.project / "tests" / "test_app.py").read_text() == _REPAIRED, (
-            replay.result.error, [(c.role, c.cwd) for c in replay.calls])
-    else:
-        assert not fixes and "CheckUnattributable" in (replay.result.error or ""), replay.result.error
+    assert len(fixes) == 1, (replay.result.error, [c.role for c in replay.calls])
+    assert "CheckUnattributable" not in (replay.result.error or ""), replay.result.error
+    assert (replay.project / "tests" / "test_app.py").read_text() == _REPAIRED, (
+        replay.result.error, [(c.role, c.cwd) for c in replay.calls])
+    if unittest_gate != "declared":
+        assert "Harness diagnosis" in fixes[0].prompt
 
 
 # -- root review of f0b4827: skipped subcases and the reporter's cache identity -------------
