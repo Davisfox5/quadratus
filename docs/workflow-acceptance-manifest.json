@@ -81,7 +81,7 @@
     {
       "id": "J4",
       "tests": [
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix"
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_one_diagnosed_gate_fix"
       ],
       "required_obligations": [
         "calls",
@@ -91,14 +91,14 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix"
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_one_diagnosed_gate_fix"
         ]
       }
     },
     {
       "id": "J5",
       "tests": [
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix"
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_one_diagnosed_gate_fix"
       ],
       "required_obligations": [
         "calls",
@@ -108,15 +108,15 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix"
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_one_diagnosed_gate_fix"
         ]
       }
     },
     {
       "id": "J6",
       "tests": [
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix",
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix"
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_one_diagnosed_gate_fix",
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_one_diagnosed_gate_fix"
       ],
       "required_obligations": [
         "calls",
@@ -126,8 +126,8 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix",
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix"
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_one_diagnosed_gate_fix",
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_one_diagnosed_gate_fix"
         ]
       }
     },

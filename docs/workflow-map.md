@@ -95,7 +95,7 @@ from `6382cf2`.
 | Transport error | retried by `_retryable` (at most 4, backoff), then `ProviderError` | lead gets one recovery on a fresh lead if the tree is unchanged | below cap |
 | Window exhausted | `WindowExhausted` | one re-seat for the orchestrator; stops for others | |
 | Run budget | `RunBudgetExceeded` (latched) | stop; responses kept | |
-| Gate failed (any cause) | receipt `failed` / `error` / `blocked` | **always** a gate-fix, the same prompt for every cause | none: environment and product look alike |
+| Gate failed (any cause) | receipt `failed` / `error` / `blocked` | the bounded gate-fix with the harness diagnosis (`integration.attribute`, now a diagnostic record), unless `integration.repair_route` names a blocker no project edit can change: a blocked or skipped receipt (the runner or working folder unavailable or not configured, the launch itself failed), the source changed during the gate, leftover processes whose stop was not confirmed, or a report from another invocation; a blocker is `CheckUnattributable` with no repair call (PR73 6693873055; before it, only an attributable assertion bought a gate-fix, and before P3.2 every cause did) | `operator` on a blocker; a surviving failure stays cause-unestablished |
 | Gate still failing after the fix round | `check.failed` finding on the task's COVERS (2026-09-30, `_record_check_debt`) | requirement debt; the orchestrator names a RESOLVES task, settled when that task's own check passes and it closes clean; needs the ledger and a COVERS line, else `CheckFailing` as before | `product` fact recovered on resolution |
 | Capture failed | `capture_task` string / `integrity` record | one design-fix, whatever the cause | none |
 | Product overflow in an audit | `product.overflow` | audit debt `F<n>` | |
@@ -278,9 +278,9 @@ review.
 | J1 | Clean completion: draft, review, gate, close-out, DONE, audit met | completed | `clean`; completed | P1 |
 | J2 | Product repair succeeds: structured assertion failure, gate-fix, gate passes | gate-fix, then pass | `clean`; repair attempt recorded | P1 (P3 requires the structured report) |
 | J3 | Product repair fails: gate still failing after the allowance | open failure, incomplete, `error ""` | `product`, unresolved; stop names it | P3 (G9) |
-| J4 | Runner crashes before any test (exit ≠ 0, no summary) | gate-fix sent to the app | operator handoff, **no gate-fix** | P3 |
-| J5 | Runner has no structured report and fails | gate-fix | operator handoff with diagnostics | P3 |
-| J6 | Capability lost mid-suite (some tests ran, then the browser died) | gate-fix | operator handoff | P3 |
+| J4 | Runner crashes before any test (exit ≠ 0, no summary) | gate-fix sent to the app | one gate-fix told the harness diagnosis (structured report missing); cause stays unestablished, and a failure that survives is the operator's, never a product fact (PR73 6693873055; P3.2 handed it off with no gate-fix) | P3 |
+| J5 | Runner has no structured report and fails | gate-fix | one gate-fix told the harness diagnosis (structured report undeclared); a failure that survives is the operator's (PR73 6693873055; P3.2 handed it off) | P3 |
+| J6 | Capability lost mid-suite (some tests ran, then the browser died) | gate-fix | one gate-fix told the harness diagnosis (a setup error, or a non-assertion exception in a test body); a failure that survives is the operator's (PR73 6693873055; P3.2 handed it off) | P3 |
 | J7 | Preflight capability probe fails | no probe exists | stop before any model call | P2 |
 | J8 | Evidence invalid, source and capability fine: recapture intended state | one design-fix | `invalid proof`, bounded recapture | P1, then P3 |
 | J9a | Evidence missing, stale or invalid | design-fix, then unverified | `invalid proof`, then unverified; never approved | P1 |
@@ -525,7 +525,9 @@ is a blocker. Any blocker turns completion into `CompletionUnproven` (typed
 `unverified`) with no model call.
 
 **P3.2, gate attribution (0a4ae0d, privacy f2b664d).** Retires "generic gate-fix for any
-failure" (section 8) and closes J4, J5, J6 and J33 (G10).
+failure" (section 8) and closes J4, J5, J6 and J33 (G10). J4 to J6 have since moved from an operator handoff to one diagnosed
+gate-fix (PR73 6693873055; the selectors end `gets_one_diagnosed_gate_fix`); J33's
+unavailable runner is still handed off with no repair.
 
 - The only supported report producer is harness-owned:
   `quadratus/_gate_producer/quadratus_gate_report.py`, a pytest plugin that
