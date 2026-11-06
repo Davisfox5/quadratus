@@ -2900,6 +2900,25 @@
       "decisions": [
         "claude: Overlap resolution: root (PR73 comment 6675338686) released the overlapping scope of T-stage-b-timeout-fix (codex, reviewed, October) for this batch only, and allowed the 28 older claude records to overlap under coordinator resolution; claimed with --resolve. Old tasks are not marked integrated, their receipts and blockers are kept, and the candidate 6a6c59f stays unqualified."
       ]
+    },
+    {
+      "id": "T-accepted-assertion-regression",
+      "purpose": "Davis-authorized offline two-task regression from digest85: same-name assertion weakening must not reuse earlier sufficient evidence; tests/docs only, no runtime or active milestone changes. Base is published PR73 head; separate stacked branch preserves owner work.",
+      "base": "bc63971914400116bf5b7b699e1c4222b22c47a2",
+      "owns": [
+        "tests/test_accepted_assertion_currency.py",
+        "docs/ACCEPTED_ASSERTION_DIAGNOSTIC.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-11-06T14:22:23Z",
+      "acknowledged": true,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [],
+      "acknowledged_at": "2026-11-06T14:22:23Z"
     }
   ],
   "receipts": [
