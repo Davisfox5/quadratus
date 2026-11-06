@@ -1485,6 +1485,23 @@ def _test_diff(path: str, before: bytes, after: Optional[bytes]) -> str:
     return text if text.endswith("\n") or not text else text + "\n"
 
 
+def _test_repair_settled(entry, findings) -> bool:
+    """A verified INTACT, or a WEAKENED whose finding its own reviewer has
+    since settled (closed, last disposition RESOLVED, or a reasoned
+    INVALIDATED retracting its own finding, by that author): the ordinary
+    correction route reached its end. ``truth_check`` reads the saved
+    record the same way."""
+    if _test_repair_verified(entry):
+        return True
+    if not isinstance(entry, dict) or entry.get("verdict") != "weakened" or not entry.get("finding_id"):
+        return False
+    record = next((f for f in findings or [] if isinstance(f, dict) and f.get("fid") == entry["finding_id"]), None)
+    history = (record or {}).get("history") or []
+    last = history[-1] if history and isinstance(history[-1], dict) else {}
+    return bool(record and record.get("closed") and last.get("state") in ("resolved", "invalidated")
+                and last.get("author") == entry.get("reviewer"))
+
+
 #: Words that join file names in a pure reading request.
 _READING_JOINERS = frozenset({"and", "&", ",", "+"})
 
@@ -3486,6 +3503,9 @@ class Session:
         #: Generated tests a gate repair changed, each with its bytes before
         #: the repair and the original reviewer's comparison (PR73 6693873055).
         self.generated_test_repairs: List[dict] = []
+        #: WEAKENED comparison findings of the running gate, awaiting the
+        #: task's one bounded correction (``_correct_weakened_tests``).
+        self._weakened_now: List[tuple] = []
         #: Replies a rejection kept (bounded-editor format or application):
         #: metadata only, the text is in the named artifact (PR73 6693873055).
         self.rejected_responses: List[dict] = []
@@ -13049,7 +13069,8 @@ class Session:
         unrun = self._unnamed_standing()
         standing = self._standing_not_run()
         unread = self._open_inspections()
-        repaired = [e for e in getattr(self, "generated_test_repairs", []) or [] if not _test_repair_verified(e)]
+        repaired = [e for e in getattr(self, "generated_test_repairs", []) or []
+                    if not _test_repair_settled(e, self.review_findings)]
         if not unrun and not standing and not unread and not repaired:
             return ""
         lines = []
@@ -18949,46 +18970,56 @@ class Session:
         task.record("user", result.for_models())
         attempt_facts = [self._record_check_attempt(result, gate_kind=kind)]
         self._handoff_unattributable(gate, result, task)
-        while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
-            # The failure has selected a route: this repair, the check that
-            # judges it, and what the task still owes after it. Admitted
-            # whole before the editor writes, or the failed check stands
-            # (root's narrowed route finding on 04a967d).
-            wall_extra, wall_known = self._gate_repair_wall(spec, gate, kind)
-            if not self._admit_repair(spec, "gate fix", "gate-repair", self._gate_repair_stages(spec, gate, kind),
-                                      after="check", wall_extra=wall_extra, wall_known=wall_known):
-                break
-            self._fix_cycle_now = getattr(self, "_gate_fixes_used", 0) + 1
-            generated = self._generated_tests() if self._writes() else {}
-            try:
-                fix = self._edit(
-                    lead,
-                    f"Task: {spec.description}\n\n"
-                    f"The project's own integration check failed after your "
-                    f"work:\n{result.for_models()}"
-                    + self._repair_diagnosis(result) + "\n\n"
-                    "Fix the failure. Produce the complete revised work."
-                    + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
-                    + _NO_REQUESTS_IN_FIX,
-                    role="gate-fix",
-                )
-            except TurnLimitReached as exc:
-                fix = self._capped_fix(lead, spec, task, exc, "gate-fix")
-            except FinishReserved as exc:
-                # No fix call to keep the finish: the failed check stands.
-                self._finish_refused(spec, "gate fix", exc)
-                break
-            finally:
-                self._fix_cycle_now = 0
-            task.record("assistant", fix)
-            task.keep(fix, kind="gate-fix")
-            latest_fix = fix
-            self._gate_fixes_used = getattr(self, "_gate_fixes_used", 0) + 1
-            result = self._check(gate)
-            task.record("user", result.for_models())
-            attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
-            self._compare_repaired_tests(spec, task, generated, lead=lead)
-            self._handoff_unattributable(gate, result, task)
+        try:
+            while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
+                # The failure has selected a route: this repair, the check that
+                # judges it, and what the task still owes after it. Admitted
+                # whole before the editor writes, or the failed check stands
+                # (root's narrowed route finding on 04a967d).
+                wall_extra, wall_known = self._gate_repair_wall(spec, gate, kind)
+                if not self._admit_repair(spec, "gate fix", "gate-repair", self._gate_repair_stages(spec, gate, kind),
+                                          after="check", wall_extra=wall_extra, wall_known=wall_known):
+                    break
+                self._fix_cycle_now = getattr(self, "_gate_fixes_used", 0) + 1
+                generated = self._generated_tests() if self._writes() else {}
+                try:
+                    fix = self._edit(
+                        lead,
+                        f"Task: {spec.description}\n\n"
+                        f"The project's own integration check failed after your "
+                        f"work:\n{result.for_models()}"
+                        + self._repair_diagnosis(result) + "\n\n"
+                        "Fix the failure. Produce the complete revised work."
+                        + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
+                        + _NO_REQUESTS_IN_FIX,
+                        role="gate-fix",
+                    )
+                except TurnLimitReached as exc:
+                    fix = self._capped_fix(lead, spec, task, exc, "gate-fix")
+                except FinishReserved as exc:
+                    # No fix call to keep the finish: the failed check stands.
+                    self._finish_refused(spec, "gate fix", exc)
+                    break
+                finally:
+                    self._fix_cycle_now = 0
+                task.record("assistant", fix)
+                task.keep(fix, kind="gate-fix")
+                latest_fix = fix
+                self._gate_fixes_used = getattr(self, "_gate_fixes_used", 0) + 1
+                result = self._check(gate)
+                task.record("user", result.for_models())
+                attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
+                self._compare_repaired_tests(spec, task, generated, lead=lead)
+                self._handoff_unattributable(gate, result, task)
+        except BaseException:
+            # A stop after a WEAKENED verdict never drops it: held as open
+            # work before the stop passes on (root, PR73 6695526328).
+            weakened, self._weakened_now = list(self._weakened_now), []
+            for owner, record, entry in weakened:
+                self._hold_weakened(spec, owner, record, entry)
+            raise
+        if self._weakened_now:
+            result = self._correct_weakened_tests(lead, spec, task, gate, kind, result, attempt_facts)
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cases": result.cases,
                             # The identity a receipt is read with: the gate,
@@ -19469,10 +19500,77 @@ class Session:
                                        call=getattr(self._call_event(entry["task"], "test-comparison", owner),
                                                     "invocation_id", "") or ""))
             if kind == "WEAKENED":
-                self._register_review_findings(
+                made = self._register_review_findings(
                     spec, owner, f"BLOCKING: the repair weakened {entry['path']}: {why or 'no reason given'} "
                                  f"| basis: {entry['path']} | impact: correctness")
+                # Held where every reader of open work looks, ledger or not:
+                # the legacy open text and the held entry a RESOLVES recheck
+                # by this owner settles, as the fix loop holds an unresolved
+                # finding (root, PR73 6695526328: a no-ledger run completed
+                # over the registered finding).
+                for record in made:
+                    entry["finding_id"] = record["fid"]
+                    if task is not None:
+                        # In a task: the ordinary bounded correction follows
+                        # (``_correct_weakened_tests``), then the hold.
+                        self._weakened_now.append((owner, record, entry))
+                    else:
+                        self._hold_weakened(spec, owner, record, entry)
         return all(e["verdict"] != "pending" for e in pending)
+
+    def _hold_weakened(self, spec, owner, record, entry) -> None:
+        """A WEAKENED comparison finding left open: held where every reader
+        of open work looks, ledger or not, as the fix loop holds an
+        unresolved finding; its owner's recheck (a RESOLVES task, the owed
+        settlement) settles it (root, PR73 6695526328)."""
+        self._hold_open_finding(
+            spec, owner, f"{record['fid']}: UNRESOLVED (judged by {owner} comparing the repaired {entry['path']} "
+                         f"with its version before the repair): {record['text']}", record=record)
+
+    def _correct_weakened_tests(self, lead, spec, task, gate, kind, result, attempt_facts):
+        """The ordinary bounded route for a repair its reviewer found
+        weakened (root, PR73 6695526328), ledger or not: one correction
+        call by the lead carrying only those findings, admitted like any fix
+        cycle; the check again; then the same reviewer rechecks its own
+        findings. A finding it resolves is closed by that judgment; one it
+        does not, or a refused or capped correction, is held as open work.
+        Returns the latest check result."""
+        weakened, self._weakened_now = list(self._weakened_now), []
+        pending = [(owner, record["text"]) for owner, record, _ in weakened]
+        wall_extra, wall_known = self._route_wall(spec)
+        corrected = None
+        if self._writes() and self._admit_repair(spec, "correction of a weakened test", "fix-cycle",
+                                                 self._fix_cycle_stages(spec, pending, editor=True),
+                                                 after="comparison", wall_extra=wall_extra, wall_known=wall_known):
+            try:
+                corrected = self._edit(lead, self._fix_prompt(spec, "the repaired work on disk",
+                                                              [(owner, f"{record['fid']}: UNRESOLVED: {record['text']}")
+                                                               for owner, record, _ in weakened]),
+                                       role="revision", capped=(spec, task))
+            except FinishReserved as exc:
+                self._finish_refused(spec, "correction of a weakened test", exc)
+        if corrected is None:
+            for owner, record, entry in weakened:
+                self._hold_weakened(spec, owner, record, entry)
+            return result
+        task.record("assistant", corrected)
+        task.keep(corrected, kind="revision")
+        result = self._check(gate)
+        task.record("user", result.for_models())
+        attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
+        self._handoff_unattributable(gate, result, task)
+        unresolved = self._recheck_blocking(spec, pending, corrected, task)
+        still = {_finding_id(v) for _p, v in unresolved}
+        for owner, record, entry in weakened:
+            current = next((r for r in self.review_findings if r["fid"] == record["fid"]), record)
+            if current.get("closed") and record["fid"] not in still:
+                last = (current.get("history") or [{}])[-1]
+                entry["resolved_by"] = dict(finding=record["fid"], by=owner, stage="recheck",
+                                            state=last.get("state"),
+                                            sha256=(self._generated_tests().get(entry["path"]) or {}).get("sha256"))
+                continue
+            self._hold_weakened(spec, owner, current, entry)
+        return result
 
     def _comparison_call(self, spec, owner, prompt):
         """The comparison as a capped review-role call (``test-comparison``

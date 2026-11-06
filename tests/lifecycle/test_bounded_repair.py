@@ -18,7 +18,7 @@ import json
 import pytest
 
 from tests.lifecycle import harness as H
-from tests.lifecycle.replies import judging_scenarios
+from tests.lifecycle.replies import judging_scenarios, recheck_reply
 from tests.lifecycle.test_boundary_regressions import FILES, HAPPY, LEAKING, SOUND, VERBOSE
 from tests.lifecycle.test_lifecycle_matrix import Script, judging
 
@@ -85,8 +85,11 @@ def test_a_storage_failure_is_a_json_error_and_changes_nothing():
 
 
 def _run(tmp_path, monkeypatch, *, source, failures, fixed_source, fixed_failures, comparison=None,
-         check=VERBOSE, extra=None, settings=None, fixed_extra=None, plan=None):
+         check=VERBOSE, extra=None, settings=None, fixed_extra=None, plan=None, plans=None, later_lead=None,
+         recheck=None, max_tasks=1, revision=None):
     def lead(call, replay):
+        if later_lead is not None and call.task != "t1":
+            return later_lead(call, replay)
         H.write(call, {"store.py": source, FAILURES: failures, **(extra or {})})
         return (f"Implemented remove.\nPROVES: P1 - {CASE}\n"
                 + 'CHANGED: ' + json.dumps(["store.py", FAILURES, *(extra or {})]))
@@ -95,16 +98,24 @@ def _run(tmp_path, monkeypatch, *, source, failures, fixed_source, fixed_failure
         H.write(call, {"store.py": fixed_source, FAILURES: fixed_failures, **(fixed_extra or {})})
         return 'Repaired.\nCHANGED: ' + json.dumps(["store.py", FAILURES, *(fixed_extra or {})])
 
-    plan = plan or PLAN
-    script = Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
-                    collaborator=lambda c, r: f"NO FINDINGS\nR1: MET - {CASE}",
+    sequence = list(plans or [plan or PLAN])
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        return sequence[n - 1] if n <= len(sequence) else "DONE"
+    script = Script(orchestrator=orchestrator, lead=lead,
+                    # Without a requirements ledger a clean review is exactly NO FINDINGS.
+                    collaborator=lambda c, r: (f"NO FINDINGS\nR1: MET - {CASE}" if "REQUIREMENTS:" in sequence[0]
+                                               else "NO FINDINGS"),
                     auditor=judging_scenarios(judging(lambda c, r: f"R1: MET - {CASE}"), PROOF, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE",
-                       "revision": lambda c, r: "Nothing to change.\nCHANGED: []",
+                       "revision": revision or (lambda c, r: "Nothing to change.\nCHANGED: []"),
                        "gate-fix": gate_fix,
-                       **({"test-comparison": comparison} if comparison else {})})
-    return H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False, check=check,
-                 goal="Add item removal to the store's command line. " + R1, settings=settings)
+                       **({"test-comparison": comparison} if comparison else {}),
+                       **({"recheck": recheck} if recheck else {})})
+    _r = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=max_tasks, record_complete=False, check=check,
+               goal="Add item removal to the store's command line. " + R1, settings=settings)
+    return _r
 
 
 @pytest.mark.requirements_ledger
@@ -145,13 +156,19 @@ def test_the_64_bit_edge_is_refused(tmp_path, capsys):
 '''
 
 
+def STILL_WEAK(call, replay):
+    """The comparing reviewer's recheck after the correction: still weakened."""
+    return recheck_reply(call.prompt, default="UNRESOLVED the case still asserts nothing")
+
+
 @pytest.mark.requirements_ledger
 def test_a_repair_that_weakens_the_generated_test_never_counts_as_recovery(tmp_path, monkeypatch):
     """The repair empties the fixture so the check passes. The original
     reviewer says it is weakened: that is its blocking finding, the run does
     not complete, and the saved record says so."""
     replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=WEAKENED,
-                  comparison=lambda c, r: f"TEST WEAKENED {FAILURES} - the storage failure case asserts nothing now")
+                  comparison=lambda c, r: f"TEST WEAKENED {FAILURES} - the storage failure case asserts nothing now",
+                  recheck=STILL_WEAK)
     assert len(replay.of("gate-fix")) == 1 and H.result_json(replay)["checks"][-1]["passed"]
     (entry,) = H.result_json(replay)["generated_test_repairs"]
     assert entry["verdict"] == "weakened"
@@ -499,7 +516,7 @@ def test_root_a_later_weakened_from_the_same_owner_overrides_an_earlier_intact(t
         return f"TEST WEAKENED {FAILURES} - the cleanup assertion is gone\nTEST INTACT {SECOND} - same assertions"
     replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=CORRECTED,
                   comparison=comparison, extra={SECOND: second_broken}, fixed_extra={SECOND: second_fixed},
-                  plan=None)
+                  plan=None, recheck=STILL_WEAK)
     result = H.result_json(replay)
     entries = {e["path"]: e for e in result["generated_test_repairs"]}
     assert entries[FAILURES]["verdict"] == "weakened" and entries[SECOND]["verdict"] == "intact"
@@ -508,3 +525,86 @@ def test_root_a_later_weakened_from_the_same_owner_overrides_an_earlier_intact(t
     assert "TEST WEAKENED" in store.get(entries[FAILURES]["judgment"]["reply_artifact"])
     assert any("the repair weakened" in f["text"] and not f.get("closed") for f in result["review_findings"])
     assert not replay.result.completed
+
+
+
+STANDARD_NO_LEDGER = NO_PEER_PLAN.replace("KIND: backend simple", "KIND: backend standard")
+
+
+NO_LEDGER = pytest.mark.parametrize("plan", [NO_PEER_PLAN, STANDARD_NO_LEDGER], ids=["simple-no-peer", "standard"])
+WEAKENS = f"TEST WEAKENED {FAILURES} - the storage failure case asserts nothing now"
+
+
+@NO_LEDGER
+def test_root_without_the_ledger_a_weakened_comparison_holds_the_run(tmp_path, monkeypatch, plan):
+    """Root, PR73 6695526328: without a requirements ledger the registered
+    WEAKENED finding was ignored and the run completed. It now gets the
+    ordinary bounded correction; the lead changes nothing, the comparing
+    reviewer rechecks it UNRESOLVED, the finding stays open and the run does
+    not complete."""
+    rechecks = []
+
+    def recheck(call, replay):
+        rechecks.append(call)
+        return STILL_WEAK(call, replay)
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=WEAKENED,
+                  comparison=lambda c, r: WEAKENS, recheck=recheck, plan=plan)
+    result = H.result_json(replay)
+    (entry,) = result["generated_test_repairs"]
+    assert entry["verdict"] == "weakened" and not entry.get("resolved_by")
+    (finding,) = [f for f in result["review_findings"] if "the repair weakened" in f["text"]]
+    assert not finding.get("closed") and finding["author"] == entry["reviewer"]
+    assert rechecks and rechecks[0].vendor == replay.of("test-comparison")[0].vendor, "its own reviewer"
+    assert any(finding["fid"] in text for text in result.get("open_findings") or []), result.get("open_findings")
+    from tools.truth_check import _generated_test_problems
+    assert _generated_test_problems(result)
+    assert not replay.result.completed, replay.result.error
+
+
+@NO_LEDGER
+def test_root_a_genuine_correction_resolved_by_the_comparing_reviewer_completes(tmp_path, monkeypatch, plan):
+    """The ordinary bounded route, not a permanent veto: the correction
+    restores the case, the reviewer who judged the repair rechecks its own
+    finding RESOLVED, and the run completes."""
+    def revision(call, replay):
+        if "the repair weakened" not in call.prompt:
+            return "Nothing to change.\nCHANGED: []"
+        H.write(call, {FAILURES: CORRECTED})
+        return f'Restored the storage failure case.\nCHANGED: ["{FAILURES}"]'
+    rechecks = []
+
+    def recheck(call, replay):
+        rechecks.append(call)
+        return recheck_reply(call.prompt, default="RESOLVED the case asserts the JSON error and the kept item again")
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=WEAKENED,
+                  comparison=lambda c, r: WEAKENS, recheck=recheck, revision=revision, plan=plan)
+    result = H.result_json(replay)
+    (finding,) = [f for f in result["review_findings"] if "the repair weakened" in f["text"]]
+    assert finding.get("closed"), finding
+    (entry,) = result["generated_test_repairs"]
+    assert entry["verdict"] == "weakened" and entry.get("resolved_by")
+    assert rechecks and rechecks[0].vendor == replay.of("test-comparison")[0].vendor, "its own reviewer"
+    from quadratus.session import _test_repair_settled
+    from tools.truth_check import _generated_test_problems
+    assert _test_repair_settled(entry, result["review_findings"]) and not _generated_test_problems(result)
+    assert replay.result.completed, replay.result.error
+
+
+@NO_LEDGER
+def test_root_the_comparing_reviewer_may_retract_its_own_finding_on_unchanged_bytes(tmp_path, monkeypatch, plan):
+    """Root, PR73: no byte-change rule. The lead changes nothing and the
+    reviewer retracts its own WEAKENED finding with a reasoned INVALIDATED
+    citing the file on the record; that settles the comparison."""
+    def recheck(call, replay):
+        return recheck_reply(call.prompt, default=f"INVALIDATED {FAILURES} still asserts the JSON error and the "
+                                                  "kept item; my comparison misread the diff")
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=CORRECTED,
+                  comparison=lambda c, r: f"TEST WEAKENED {FAILURES} - the cleanup assertion looks gone",
+                  recheck=recheck, plan=plan)
+    result = H.result_json(replay)
+    (entry,) = result["generated_test_repairs"]
+    assert entry["verdict"] == "weakened" and (entry.get("resolved_by") or {}).get("state") == "invalidated", entry
+    from quadratus.session import _test_repair_settled
+    from tools.truth_check import _generated_test_problems
+    assert _test_repair_settled(entry, result["review_findings"]) and not _generated_test_problems(result)
+    assert replay.result.completed, replay.result.error

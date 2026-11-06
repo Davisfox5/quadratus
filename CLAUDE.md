@@ -3835,7 +3835,14 @@ Key design decisions already settled:
   0ffc9e9). No verdict gets the one judgment completion, then
   becomes the owner's owed review debt (owed kind `test comparison`), which
   holds completion like any owed review and settles only by that owner's
-  comparison; WEAKENED is the owner's blocking finding. A failure that survives is the ordinary check debt or
+  comparison; WEAKENED is the owner's blocking finding, ledger or not (root,
+  PR73 6695526328: a no-ledger run completed over it). In a task it buys
+  the ordinary bounded correction (one admitted `revision` call carrying
+  only those findings, the check again, then the same reviewer's recheck);
+  it settles only by that reviewer's RESOLVED or reasoned INVALIDATED
+  (`_test_repair_settled`, the same rule in `truth_check`), and anything
+  else is held as open work. No byte-change rule: the reviewer may retract
+  its own finding on unchanged source. A failure that survives is the ordinary check debt or
   `CheckFailing`, cause unestablished. A bounded editor's reply is read by
   `runtime.bounded_patch`: one `PATCH:`-marked fenced diff, CRLF, BOM and
   framing prose normalised, no model call; more than one marker or diff,

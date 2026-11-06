@@ -1013,6 +1013,17 @@ def _generated_test_problems(record: dict) -> list:
                     and (entry.get("removed") or isinstance(entry.get("after_sha256"), str)))
         if verified:
             continue
+        if verdict == "weakened" and entry.get("finding_id"):
+            # The ordinary correction route reached its end: the finding its
+            # reviewer raised is closed, last judged RESOLVED (or retracted by
+            # a reasoned INVALIDATED) by that author.
+            finding = next((f for f in record.get("review_findings") or []
+                            if isinstance(f, dict) and f.get("fid") == entry["finding_id"]), None)
+            history = (finding or {}).get("history") or []
+            last = history[-1] if history and isinstance(history[-1], dict) else {}
+            if finding and finding.get("closed") and last.get("state") in ("resolved", "invalidated") \
+                    and last.get("author") == reviewer:
+                continue
         out.append(f"{where}; " + ("its reviewer found it weakened" if verdict == "weakened"
                                     else "an intact verdict without the reviewer's own judgment of these bytes"
                                     if verdict == "intact" else "no reviewer called it intact")
