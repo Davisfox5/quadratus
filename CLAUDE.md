@@ -3821,11 +3821,18 @@ Key design decisions already settled:
   for any generated test the repair changed or removed, the task's
   original reviewer comparing it with its pre-repair text
   (`generated_test_repairs`, root review of b49a0cb): one capped
-  `test-comparison` call reserved on the repair route, exactly one
-  `TEST INTACT|WEAKENED <exact path> - <why>` line per file, a verdict
-  bound to the bytes handed (`_test_repair_verified`, the same rule in
-  `truth_check`), a file past the kept or prompt bound named incomplete and
-  never certified INTACT. No verdict gets the one judgment completion, then
+  `test-comparison` call reserved on the repair route (a task that drew no
+  reviewer gets an available brain-trust member of another vendor than the
+  lead; with none at all the rewrite is an open unverified finding),
+  showing every changed line as a unified diff with context, whole per
+  file, up to 60k characters per call with the rest judged in one more
+  in-task call or the owed settlement; exactly one
+  `TEST INTACT|WEAKENED <exact path> - <why>` line per file, read by one
+  reader (`_test_verdict`) live and saved, each verdict bound to the reply
+  that gave it and to the bytes handed (`_test_repair_verified`, the same
+  rule in `truth_check`); a file whose changes cannot be shown whole is
+  named incomplete and never certified INTACT (root reviews of b49a0cb and
+  0ffc9e9). No verdict gets the one judgment completion, then
   becomes the owner's owed review debt (owed kind `test comparison`), which
   holds completion like any owed review and settles only by that owner's
   comparison; WEAKENED is the owner's blocking finding. A failure that survives is the ordinary check debt or

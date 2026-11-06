@@ -1001,10 +1001,13 @@ def _generated_test_problems(record: dict) -> list:
         verdict = entry.get("verdict")
         judgment = entry.get("judgment") if isinstance(entry.get("judgment"), dict) else {}
         reviewer = entry.get("reviewer")
+        line = re.match(r"^[ \t]*(?:[-*+][ \t]+)?TEST[ \t]+(INTACT|WEAKENED)[ \t]+(\S+)[ \t]+-[ \t]*([^\n]*)$",
+                        str(judgment.get("line") or "").strip("\n"), re.IGNORECASE)
         verified = (verdict == "intact" and entry.get("complete") is True and isinstance(reviewer, str) and reviewer
                     and judgment.get("by") == reviewer and isinstance(judgment.get("reply_artifact"), str)
-                    and bool(judgment.get("reply_artifact")) and isinstance(judgment.get("line"), str)
-                    and judgment["line"].strip().upper().startswith("TEST INTACT")
+                    and bool(judgment.get("reply_artifact")) and line is not None
+                    and line.group(1).upper() == "INTACT" and line.group(2).strip("`") == entry.get("path")
+                    and bool(line.group(3).strip())
                     and judgment.get("after_sha256") == entry.get("after_sha256")
                     and judgment.get("before_sha256") == entry.get("before_sha256")
                     and (entry.get("removed") or isinstance(entry.get("after_sha256"), str)))
