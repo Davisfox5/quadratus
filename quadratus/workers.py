@@ -573,8 +573,16 @@ class WorkerPool:
         except Exception as exc:
             with self._lock:
                 self._failed.add(fingerprint)
-                if getattr(exc, 'provider_response', ''):
-                    self.store.put(exc.provider_response, kind=f'worker-stopped:{label}', author=model_key)
+                from .runtime import response_record
+                kept = response_record(exc)
+                if kept is not None:
+                    # The kept reply with its labelled metadata (root review of
+                    # b49a0cb, R6); a store failure is noted, never hidden.
+                    try:
+                        self.store.put(json.dumps(kept), kind=f'worker-stopped:{label}', author=model_key)
+                    except Exception as stored:  # noqa: BLE001 -- evidence never replaces the failure
+                        exc.retention_error = f'{type(stored).__name__}: {str(stored)[:160]}'
+                        log.warning('could not keep the rejected worker reply: %s', exc.retention_error)
             raise
         finally:
             worker_loop_control.reset(marker)

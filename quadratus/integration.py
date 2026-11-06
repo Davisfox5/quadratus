@@ -437,10 +437,6 @@ def attribute(result) -> dict:
     return dict(product=not reasons, reasons=reasons)
 
 
-#: Exit statuses a shell gives a command it could not execute.
-_UNEXECUTABLE_EXITS = (126, 127)
-
-
 def repair_route(result) -> dict:
     """Whether a failed gate may buy the task's bounded repair (Davis,
     2026-11-06, PR73 6693873055, replacing assertion-only eligibility).
@@ -454,10 +450,12 @@ def repair_route(result) -> dict:
     other than 1, or a mix of these with assertion failures is repairable:
     an edit to the project can cause and can fix each. What is not is a
     fact no project edit can change or a state nobody can vouch for: a
-    runner or working folder that is unavailable or not configured, a
-    command a shell could not execute (126, 127), a source that changed
+    runner or working folder that is unavailable or not configured (the
+    launch itself failed: not found, not permitted), a source that changed
     while the gate ran, a report from another invocation or producer, and
-    leftover processes whose stop was not confirmed. ``attribute`` stays as
+    leftover processes whose stop was not confirmed. An exit status alone,
+    126 and 127 included, names no cause: project code can exit with it
+    (root review of b49a0cb, R1). ``attribute`` stays as
     the diagnostic record of what kind of failure it was.
 
     Returns ``repairable`` and ``blockers``, plus ``attribution``."""
@@ -475,15 +473,11 @@ def repair_route(result) -> dict:
                 blockers.append(f"{r.id}: the source changed while the check ran")
             elif r.cleanup_complete is False:
                 blockers.append(f"{r.id}: left processes whose stop was not confirmed")
-            elif r.returncode in _UNEXECUTABLE_EXITS:
-                blockers.append(f"{r.id}: exit {r.returncode}: the runner could not be executed")
             elif (r.report or {}).get("state") == "foreign":
                 blockers.append(f"{r.id}: the structured report is not this invocation's")
     else:
         if getattr(result, "blocker", ""):
             blockers.append(f"check: {result.blocker}")
-        elif result.returncode in _UNEXECUTABLE_EXITS:
-            blockers.append(f"check: exit {result.returncode}: the runner could not be executed")
         elif (result.report or {}).get("state") == "foreign":
             blockers.append("check: the structured report is not this invocation's")
     return dict(repairable=not blockers, blockers=blockers, attribution=attribution)
@@ -1154,6 +1148,11 @@ class GateSuite:
                         status, reason = 'blocked', 'test count unavailable'
                     elif count < command.minimum_tests:
                         status, reason = 'failed', 'fewer tests than required'
+                if base.get('cleanup_complete') is False:
+                    # Whatever the exit said: processes the command left
+                    # behind were not confirmed stopped, an unknown effect,
+                    # never a pass (root review of b49a0cb, R5).
+                    status, reason = 'error', 'left processes whose stop was not confirmed'
                 receipt = GateReceipt(**base, status=status, reason=reason,
                                       returncode=returncode, output=output[-_TAIL_CHARS:], tests=count,
                                       report=report, cases=case_record(output, runner_of(command.argv)))

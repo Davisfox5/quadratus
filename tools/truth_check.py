@@ -999,9 +999,20 @@ def _generated_test_problems(record: dict) -> list:
         where = f"task {entry.get('task')}: the repair {'removed' if entry.get('removed') else 'changed'} " \
                 f"generated test {entry.get('path')}"
         verdict = entry.get("verdict")
-        if verdict == "intact" and isinstance(entry.get("reviewer"), str) and entry.get("reviewer"):
+        judgment = entry.get("judgment") if isinstance(entry.get("judgment"), dict) else {}
+        reviewer = entry.get("reviewer")
+        verified = (verdict == "intact" and entry.get("complete") is True and isinstance(reviewer, str) and reviewer
+                    and judgment.get("by") == reviewer and isinstance(judgment.get("reply_artifact"), str)
+                    and bool(judgment.get("reply_artifact")) and isinstance(judgment.get("line"), str)
+                    and judgment["line"].strip().upper().startswith("TEST INTACT")
+                    and judgment.get("after_sha256") == entry.get("after_sha256")
+                    and judgment.get("before_sha256") == entry.get("before_sha256")
+                    and (entry.get("removed") or isinstance(entry.get("after_sha256"), str)))
+        if verified:
             continue
-        out.append(f"{where}; {'its reviewer found it weakened' if verdict == 'weakened' else 'no reviewer called it intact'}"
+        out.append(f"{where}; " + ("its reviewer found it weakened" if verdict == "weakened"
+                                    else "an intact verdict without the reviewer's own judgment of these bytes"
+                                    if verdict == "intact" else "no reviewer called it intact")
                    + (f" ({str(entry.get('why'))[:120]})" if entry.get("why") else ""))
     return out
 

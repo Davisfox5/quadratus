@@ -77,7 +77,8 @@ def _run(store, rec, **config):
 
 
 def test_the_capped_sets_are_disjoint_and_name_every_review_seat():
-    assert REVIEW_CAPPED_ROLES == {"collaborator", "recheck", "design-review", "verifier", "auditor"}
+    assert REVIEW_CAPPED_ROLES == {"collaborator", "recheck", "design-review", "verifier", "auditor",
+                                   "test-comparison"}  # root review of b49a0cb, R4
     assert not (REVIEW_CAPPED_ROLES & LEAD_CAPPED_ROLES)
 
 

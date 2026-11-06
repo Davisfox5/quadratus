@@ -487,19 +487,34 @@ def test_a_failure_without_an_attributable_report_gets_the_bounded_fix_with_its_
     assert "Harness diagnosis" in fixes[0] and "structured report undeclared" in fixes[0]
 
 
-def test_a_runner_that_could_not_execute_gets_no_fix(store):
+def test_a_runner_whose_launch_failed_gets_no_fix(store):
     from quadratus.integration import CheckUnattributable
 
-    class Unexecutable(StubGate):
+    class Unlaunchable(StubGate):
         def run(self):
             self.runs += 1
-            return GateResult(passed=False, command="pytest -q", returncode=127, output="pytest: not found")
+            return GateResult(passed=False, command="pytest -q", returncode=None,
+                              output="(command not found: pytest)", blocker="runner unavailable: pytest")
     rec = Recorder()
-    gate = Unexecutable([])
+    gate = Unlaunchable([])
     s = _session(store, rec, config=SessionConfig(integration_gate=gate))
-    with pytest.raises(CheckUnattributable, match="runner could not be executed"):
+    with pytest.raises(CheckUnattributable, match="runner unavailable"):
         s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     assert gate.runs == 1 and not any("integration check failed" in c["prompt"] for c in rec.calls)
+
+
+@pytest.mark.parametrize("code", [126, 127])
+def test_an_exit_status_alone_names_no_cause_and_is_repaired(store, code):
+    """Root review of b49a0cb, R1: project code can exit 126 or 127."""
+    class Exiting(StubGate):
+        def run(self):
+            self.runs += 1
+            return GateResult(passed=False, command="pytest -q", returncode=code, output="app exited")
+    rec = Recorder()
+    gate = Exiting([])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert gate.runs == 2 and sum("integration check failed" in c["prompt"] for c in rec.calls) == 1
 
 
 def test_a_persistent_failure_is_carried_loudly_to_the_closeout(store):

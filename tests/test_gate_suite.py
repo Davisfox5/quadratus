@@ -219,3 +219,28 @@ def test_real_failed_pytest_counts_executions_without_hiding_failure(tmp_path):
 def test_mixed_runner_summary_counts_executed_cases(output, count):
     from quadratus.integration import _test_count
     assert _test_count(output) == count
+
+
+@pytest.mark.parametrize("code", [126, 127])
+def test_project_code_exiting_126_or_127_is_repairable_not_a_launch_failure(tmp_path, code):
+    """Root review of b49a0cb, R1: the real interpreter runs project code
+    that exits with the status a shell uses for an unexecutable command."""
+    from quadratus.integration import repair_route
+    (tmp_path / 'app.py').write_text(f'raise SystemExit({code})\n')
+    result = GateSuite([GateCommand('check', (sys.executable, '-c', 'import app'))], cwd=tmp_path).run()
+    assert not result.passed and result.receipts[0].returncode == code
+    assert repair_route(result)['repairable'] is True
+
+
+def test_a_passing_suite_command_that_left_unconfirmed_processes_is_not_a_pass(tmp_path, monkeypatch):
+    """Root review of b49a0cb, R5: exit 0 with leftover processes whose stop
+    was not confirmed is an unknown effect, never a pass."""
+    from quadratus import integration
+    from quadratus.integration import repair_route
+    cleanup = dict(found=[999999], terminated=[], killed=[], remaining=[999999], unreadable=[],
+                   complete=False)
+    monkeypatch.setattr(integration, '_run_owned', lambda *a, **k: (0, '1 passed', cleanup))
+    result = GateSuite([command()], cwd=tmp_path).run()
+    (receipt,) = result.receipts
+    assert not result.passed and receipt.status == 'error' and receipt.cleanup_complete is False
+    assert repair_route(result)['blockers'] == ['check: left processes whose stop was not confirmed']

@@ -1456,6 +1456,24 @@ def _inspection_attested(gap) -> bool:
                for h in gap.get("handed") or [])
 
 
+def _test_repair_verified(entry) -> bool:
+    """Whether a generated-test repair entry carries a verified INTACT: its
+    original reviewer's own exact-path judgment, on content supplied whole,
+    of the bytes the entry records. ``tools/truth_check.py`` applies the
+    same rule to the saved record (root review of b49a0cb, R3)."""
+    if not isinstance(entry, dict) or entry.get("verdict") != "intact" or entry.get("complete") is not True:
+        return False
+    judgment = entry.get("judgment")
+    reviewer = entry.get("reviewer")
+    return (isinstance(judgment, dict) and isinstance(reviewer, str) and bool(reviewer)
+            and judgment.get("by") == reviewer and isinstance(judgment.get("reply_artifact"), str)
+            and bool(judgment.get("reply_artifact")) and isinstance(judgment.get("line"), str)
+            and judgment["line"].strip().upper().startswith("TEST INTACT")
+            and judgment.get("after_sha256") == entry.get("after_sha256")
+            and judgment.get("before_sha256") == entry.get("before_sha256")
+            and (entry.get("removed") or isinstance(entry.get("after_sha256"), str)))
+
+
 #: Words that join file names in a pure reading request.
 _READING_JOINERS = frozenset({"and", "&", ",", "+"})
 
@@ -3080,7 +3098,19 @@ _NO_VERDICT_CLASSES = {
     ("review", True): "review_capped", ("review", False): "review_unfinished",
     ("recheck", True): "recheck_capped", ("recheck", False): "recheck_unfinished",
     ("design review", True): "design_review_capped", ("verification", True): "verification_capped",
+    ("test comparison", True): "review_capped", ("test comparison", False): "review_unfinished",
 }
+
+#: Generated-test comparison bounds (root review of b49a0cb, R3): bytes are
+#: kept per file up to this size and for this many files; past either the
+#: digest is kept and the entry is incomplete, never silently covered.
+_GENERATED_KEEP_BYTES = 1 << 20
+_GENERATED_KEEP_FILES = 200
+#: The most characters of one file's before or after text a comparison
+#: prompt carries; a longer file is incomplete and never certified INTACT.
+_TEST_COMPARE_CHARS = 40_000
+_TEST_VERDICT_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?TEST[ \t]+(INTACT|WEAKENED)[ \t]+(\S+)[ \t]+-[ \t]*([^\n]*)$",
+                                re.IGNORECASE | re.MULTILINE)
 
 #: How many owner judgments one owed-review record may draw after the one
 #: in-task completion, each on a different source: bounded, so a seat that
@@ -3431,6 +3461,9 @@ class Session:
         #: Generated tests a gate repair changed, each with its bytes before
         #: the repair and the original reviewer's comparison (PR73 6693873055).
         self.generated_test_repairs: List[dict] = []
+        #: Replies a rejection kept (bounded-editor format or application):
+        #: metadata only, the text is in the named artifact (PR73 6693873055).
+        self.rejected_responses: List[dict] = []
         #: Each renewal of the final-audit hold before a post-audit writer
         #: (``_renew_audit_hold``); carried.
         self.finish_renewals: List[dict] = []
@@ -3826,16 +3859,24 @@ class Session:
             if isinstance(exc, FinishReserved):
                 # Refused at admission: nothing was sent, so nothing written.
                 edit_started = None
-            response = getattr(exc, "provider_response", None)
-            if isinstance(response, str) and response and not getattr(exc, "response_artifact", None):
-                # A reply the harness rejected (a bounded editor's format, a
-                # post-return budget refusal) is kept privately in the run's
-                # artifacts, whatever store the operation receipt has (PR73
-                # 6693873055: the t5 reply was unrecoverable).
+            from .runtime import response_record
+            kept = response_record(exc)
+            if kept is not None and not getattr(exc, "response_artifact", None):
+                # A reply the harness rejected (a bounded editor's format or
+                # application, a post-return budget refusal) is kept privately
+                # in the run's artifacts with its labelled metadata, and the
+                # metadata without the text goes on the run record, so a
+                # failed retention is visible too (PR73 6693873055; root
+                # review of b49a0cb, R6).
+                meta = {k: v for k, v in kept.items() if k != "text"}
+                meta.update(task=context.get("task", "run"), role=context.get("role", "direct"), model=key)
                 try:
-                    exc.response_artifact = self.store.put(response, kind="rejected-response", author=key).id
-                except Exception:  # noqa: BLE001 -- evidence never replaces the failure
-                    log.debug("could not keep the rejected response", exc_info=True)
+                    exc.response_artifact = self.store.put(json.dumps(kept), kind="rejected-response",
+                                                           author=key).id
+                    meta["artifact"] = exc.response_artifact
+                except Exception as stored:  # noqa: BLE001 -- evidence never replaces the failure
+                    meta.update(artifact=None, retention_error=f"{type(stored).__name__}: {str(stored)[:160]}")
+                self.rejected_responses.append(meta)
             if self._task_memory is not None:
                 try:
                     ref = self._task_memory.keep(prompt, kind="interrupted-prompt", author=key)
@@ -9566,6 +9607,7 @@ class Session:
                 # digests it recorded are compared with the merged source.
                 self.inspection_gaps.extend(dict(g) for g in getattr(child, "inspection_gaps", []) or [])
                 self.generated_test_repairs.extend(dict(g) for g in getattr(child, "generated_test_repairs", []) or [])
+                self.rejected_responses.extend(dict(g) for g in getattr(child, "rejected_responses", []) or [])
                 for entry in child.unexecuted_acceptance:
                     # Re-based whole: the binding (scenario, cases) the child
                     # recorded survives; only the parent's own gate and
@@ -12982,7 +13024,7 @@ class Session:
         unrun = self._unnamed_standing()
         standing = self._standing_not_run()
         unread = self._open_inspections()
-        repaired = [e for e in getattr(self, "generated_test_repairs", []) or [] if e.get("verdict") != "intact"]
+        repaired = [e for e in getattr(self, "generated_test_repairs", []) or [] if not _test_repair_verified(e)]
         if not unrun and not standing and not unread and not repaired:
             return ""
         lines = []
@@ -14515,6 +14557,18 @@ class Session:
             occurrence["debt"] = [fid]
         source = self._source_fingerprint() if self.project else None
         tried = self._owed_settlements(fid)
+        if record.get("owed_kind") == "test comparison":
+            reason = ("kept: the owner is unavailable" if not self._available(owner)
+                      else "kept: the owner already judged this exact source without a verdict"
+                      if any(a.get("source") == source for a in tried)
+                      else f"kept: the owner's {_OWED_SETTLEMENT_ATTEMPTS} settlement attempts are spent"
+                      if len(tried) >= _OWED_SETTLEMENT_ATTEMPTS else "")
+            if reason:
+                row["verdict"] = reason
+                self._recovery_attempt(occurrence, "owner_settlement", "not attempted: " + reason[6:], site=site,
+                                       source=source)
+                return row
+            return self._settle_test_comparison(spec, record, owner, site=site, occurrence=occurrence)
         if record.get("owed_kind") not in ("review", None):
             reason = (f"kept: a {record.get('owed_kind')} is settled by its owner's completed "
                       f"{record.get('owed_kind')} of a continuation of {record.get('task')}, not by a code review")
@@ -15224,6 +15278,11 @@ class Session:
         where a model makes one. The check that judges the repair is wall
         time, counted by ``_gate_wall_of``."""
         rows = [delivery.PlanStage("gate fix", "editing" if self._writes() else "reserve", editing=self._writes())]
+        peers_now = list(getattr(self, "_route_peers", None) or [])
+        if self._writes() and peers_now and self._generated_tests():
+            # The original reviewer's comparison a repair of a generated test
+            # draws (root review of b49a0cb, R4): on the route, reserved.
+            rows.append(delivery.PlanStage(f"generated test comparison by {peers_now[0]}", "reserve"))
         after_merge = getattr(self, "_route_after_merge", None)
         if after_merge is not None:
             # The merge gate: no review and no model close-out follow it; the
@@ -18870,7 +18929,7 @@ class Session:
                                       after="check", wall_extra=wall_extra, wall_known=wall_known):
                 break
             self._fix_cycle_now = getattr(self, "_gate_fixes_used", 0) + 1
-            generated = self._generated_test_bytes() if self._writes() else {}
+            generated = self._generated_tests() if self._writes() else {}
             try:
                 fix = self._edit(
                     lead,
@@ -19146,108 +19205,254 @@ class Session:
                 "action under test uses, and read state before and after through a handle the injection does "
                 "not touch. A run-start test is restored and run as it was.")
 
-    def _generated_test_bytes(self) -> Dict[str, bytes]:
-        """The test and test-support files this run created (not run-start
-        originals), as bytes, bounded: what a repair may change and its
-        reviewer compares (PR73 6693873055)."""
+    def _generated_tests(self) -> Dict[str, dict]:
+        """Each test or test-support file this run created (not a run-start
+        original): its sha256 and, within ``_GENERATED_KEEP_BYTES`` and the
+        first ``_GENERATED_KEEP_FILES`` files, its bytes. A file over a bound
+        keeps its digest and no bytes, and says so: nothing past a bound is
+        silently treated as covered (root review of b49a0cb, R3)."""
         from .integration import is_test_support
         if not self.project:
             return {}
         originals = self._original_tests or {}
-        out: Dict[str, bytes] = {}
+        out: Dict[str, dict] = {}
         try:
             from .project import Project
             files = Project(self.project, exclude=self.config.project_excludes).files()
         except Exception:  # noqa: BLE001 -- observation never fails a check
             return {}
         root = Path(self.project)
-        for name in files:
+        kept = 0
+        for name in sorted(str(f) for f in files):
             path = Path(name)
             rel = (path.relative_to(root) if path.is_absolute() else path).as_posix()
-            if not is_test_support(rel) or rel in originals or len(out) >= 200:
+            if not is_test_support(rel) or rel in originals:
                 continue
             full = root / rel
             try:
-                if full.is_file() and not full.is_symlink() and full.stat().st_size <= 1 << 20:
-                    out[rel] = full.read_bytes()
+                if not full.is_file() or full.is_symlink():
+                    continue
+                size = full.stat().st_size
+                digest = hashlib.sha256()
+                data = b""
+                with open(full, "rb") as handle:
+                    for chunk in iter(lambda: handle.read(1 << 20), b""):
+                        digest.update(chunk)
+                        if size <= _GENERATED_KEEP_BYTES:
+                            data += chunk
             except OSError:
+                out[rel] = dict(sha256=None, data=None, why="unreadable")
                 continue
+            keep = size <= _GENERATED_KEEP_BYTES and kept < _GENERATED_KEEP_FILES
+            kept += 1 if keep else 0
+            out[rel] = dict(sha256=digest.hexdigest(), data=data if keep else None,
+                            why="" if keep else f"over the kept bound ({size} bytes, file {kept + 1})")
         return out
 
-    def _compare_repaired_tests(self, spec, task, before: Dict[str, bytes]) -> None:
-        """A repair that changed or removed a test this run wrote goes to the
-        task's original reviewer with the version before the repair (PR73
-        6693873055: deleting or weakening a scenario never counts as
-        recovery). One call; INTACT keeps the change, WEAKENED is that
-        reviewer's blocking finding, and no verdict (unavailable, capped,
-        refused) leaves the change unreviewed, which the audit and
-        truth_check read as unverified. Declared scenarios stay bound to
-        their executed cases whatever is said here."""
-        import difflib
+    def _compare_repaired_tests(self, spec, task, before: Dict[str, dict]) -> None:
+        """A repair that changed or removed a test this run wrote is judged
+        by the task's original reviewer against its pre-repair bytes (PR73
+        6693873055; root review of b49a0cb, R2-R4). Each change is an entry
+        in ``generated_test_repairs`` with both digests, both texts kept as
+        artifacts where they fit, and whether its content is complete. The
+        reviewer's judgment is one capped review-role call; a reply with no
+        valid per-file verdict gets the one judgment completion; anything
+        still pending becomes the owner's owed review debt, which holds the
+        run's completion exactly as any owed review does and is settled only
+        by that owner's completed comparison on the current bytes. WEAKENED
+        is that reviewer's blocking finding. The repair itself is never
+        undone or stopped by any of this."""
         if not before:
             return
-        after = self._generated_test_bytes()
-        changed = {p: b for p, b in before.items() if after.get(p) != b}
-        if not changed:
-            return
-        peers = [p for p in (getattr(self, "_route_peers", None) or []) if self._available(p)]
+        after = self._generated_tests()
         entries = []
-        for path, old in sorted(changed.items()):
-            new = after.get(path)
-            entry = dict(task=spec.task_id, path=path, removed=new is None,
-                         before_sha256=hashlib.sha256(old).hexdigest(),
-                         after_sha256=hashlib.sha256(new).hexdigest() if new is not None else None,
-                         before_artifact=self.store.put(old.decode("utf-8", "replace"),
-                                                        kind="generated-test-before-repair", author="harness").id,
-                         reviewer=peers[0] if peers else None, verdict="unreviewed", why="")
-            entries.append((entry, old, new))
-            self.generated_test_repairs.append(entry)
-        if not peers:
-            for entry, _, _ in entries:
-                entry["why"] = "no reviewer of this task is available"
-            self._note(f"task {spec.task_id}: a repair changed generated tests with no reviewer to compare them")
+        peers = list(getattr(self, "_route_peers", None) or [])
+        owner = peers[0] if peers else None
+        for path in sorted(before):
+            old, new = before[path], after.get(path)
+            if new is not None and new.get("sha256") and new.get("sha256") == old.get("sha256"):
+                continue
+            removed = new is None
+            complete = (old.get("data") is not None and (removed or new.get("data") is not None)
+                        and all(len((d or b"").decode("utf-8", "replace")) <= _TEST_COMPARE_CHARS
+                                for d in (old.get("data"), None if removed else new.get("data"))))
+            entry = dict(id=f"GT-{uuid.uuid4().hex[:10]}", task=spec.task_id, path=path, removed=removed,
+                         before_sha256=old.get("sha256"), after_sha256=None if removed else new.get("sha256"),
+                         before_artifact=(self.store.put(old["data"].decode("utf-8", "replace"),
+                                                         kind="generated-test-before-repair", author="harness").id
+                                          if old.get("data") is not None else None),
+                         after_artifact=(self.store.put(new["data"].decode("utf-8", "replace"),
+                                                        kind="generated-test-after-repair", author="harness").id
+                                         if not removed and new.get("data") is not None else None),
+                         complete=complete,
+                         incomplete_why=("" if complete else (old.get("why") or (new or {}).get("why")
+                                                              or f"over {_TEST_COMPARE_CHARS} characters")),
+                         reviewer=owner, verdict="pending", why="", judgment=None,
+                         source=self._source_fingerprint())
+            entries.append(entry)
+        if not entries:
             return
-        peer = peers[0]
-        diffs = []
-        for entry, old, new in entries:
-            lines = difflib.unified_diff(old.decode("utf-8", "replace").splitlines(),
-                                         (new or b"").decode("utf-8", "replace").splitlines(),
-                                         f"a/{entry['path']}", f"b/{entry['path']}" if new is not None else "/dev/null",
-                                         lineterm="")
-            diffs.append("\n".join(lines)[:12_000])
-        prompt = (self._role_packet(spec, "reviewer") + "\n\n"
-                  f"Task: {spec.description}\n\nA repair after a failed check changed tests this task wrote. You "
-                  "reviewed this task. Compare each change with the version before the repair: does every test "
-                  "still exercise and assert what it was written to check, including each declared scenario?"
-                  + self._proof_rows(spec) + "\n\n~~~diff\n" + "\n\n".join(diffs) + "\n~~~\n\n"
-                  "Reply with one line per file: 'TEST INTACT <path> - <why>' or 'TEST WEAKENED <path> - "
-                  "<what it no longer checks>'. A removed test is weakened unless another test now checks "
-                  "the same thing; name it.")
+        self.generated_test_repairs.extend(entries)
+        settled = self._judge_test_repairs(spec, task, owner, entries, stage="comparison", recover=True)
+        pending = [e for e in entries if e["verdict"] == "pending"]
+        if pending and owner is not None and not settled:
+            why = "; ".join(f"{e['path']}: {e['why'] or e['incomplete_why'] or 'no verdict'}" for e in pending)
+            self._owe_review(spec, owner, "test comparison", why[:300], role="test-comparison")
+        elif pending:
+            for entry in pending:
+                entry["why"] = entry["why"] or "no reviewer of this task to compare it"
+        self._note(f"task {spec.task_id}: repaired generated tests: "
+                   + ", ".join(f"{e['path']} {e['verdict']}" for e in entries))
+
+    def _judge_test_repairs(self, spec, task, owner, entries, *, stage: str, recover: bool) -> bool:
+        """One comparison by ``owner`` of the pending ``entries``; True when
+        every one has a verdict. Exact per-file lines only; a contradictory,
+        duplicated, empty or path-mismatched line certifies nothing, an
+        incomplete entry is never certified INTACT, and a verdict counts only
+        if the file still has the bytes the reviewer was handed."""
+        pending = [e for e in entries if e["verdict"] == "pending"]
+        if not pending:
+            return True
+        if owner is None or not self._available(owner):
+            for entry in pending:
+                entry["why"] = "the task's reviewer is unavailable" if owner else "no reviewer of this task"
+            return False
+        texts = {}
+        for entry in pending:
+            before = self.store.get(entry["before_artifact"]) if entry.get("before_artifact") else None
+            after = self.store.get(entry["after_artifact"]) if entry.get("after_artifact") else None
+            texts[entry["id"]] = (before, after)
+        blocks = []
+        for entry in pending:
+            before, after = texts[entry["id"]]
+            if not entry["complete"]:
+                blocks.append(f"### {entry['path']}\nNot supplied whole ({entry['incomplete_why']}): it cannot be "
+                              "certified INTACT here; say TEST WEAKENED if what you can read shows a loss, otherwise "
+                              "leave it without a line.")
+                continue
+            blocks.append(f"### {entry['path']}\nBefore the repair:\n~~~\n{before}\n~~~\n"
+                          + ("Removed by the repair." if entry["removed"] else f"After the repair:\n~~~\n{after}\n~~~"))
+        handed = {e["id"]: e.get("after_sha256") for e in pending}
+        dispatch_source = self._source_fingerprint()
+        prompt = (self._role_packet(spec, "reviewer") + "\n\n" if getattr(spec, "scope", None) is not None else "") + (
+            f"Task: {getattr(spec, 'description', '')}\n\nA repair after a failed check changed tests this task wrote. "
+            "You reviewed this task. Compare each test with its version before the repair: does it still exercise and "
+            "assert what it was written to check, including each declared scenario?"
+            + (self._proof_rows(spec) if getattr(spec, "scope", None) is not None else "")
+            + "\n\n" + "\n\n".join(blocks) + "\n\nReply with exactly one line per file, naming the path "
+            "exactly as shown: 'TEST INTACT <path> - <why>' or 'TEST WEAKENED <path> - <what it no longer checks>'. "
+            "A removed test is weakened unless another test now checks the same thing; name it."
+            + self._review_turn_budget_note(owner))
+        reply, error = self._comparison_call(spec, owner, prompt)
+        if reply is None and isinstance(error, TurnLimitReached) and recover:
+            reply, _ = self._recover_judgment(spec, owner, "test comparison", role="test-comparison", prompt=prompt,
+                                              task=task, exc=error)
+        if reply is None:
+            for entry in pending:
+                entry["why"] = f"the comparison gave no reply ({type(error).__name__ if error else 'refused'})"
+            return False
+        verdicts = self._read_test_verdicts(reply, pending)
+        if recover and any(e["id"] not in verdicts for e in pending if e["complete"]):
+            missing = [e["path"] for e in pending if e["complete"] and e["id"] not in verdicts]
+            completed, _ = self._recover_judgment(
+                spec, owner, "test comparison", role="test-comparison", prompt=prompt, task=task, raw=reply,
+                gaps=[f"one 'TEST INTACT <path> - <why>' or 'TEST WEAKENED <path> - <what>' line for {p}"
+                      for p in missing])
+            if completed is not None:
+                reply = completed
+                verdicts.update({k: v for k, v in self._read_test_verdicts(completed, pending).items()
+                                 if k not in verdicts})
+        reply_artifact = self.store.put(reply, kind="test-comparison", author=owner).id
+        if task is not None:
+            task.keep(reply, kind="test-comparison", author=owner)
+        current = self._generated_tests()
+        for entry in pending:
+            got = verdicts.get(entry["id"])
+            now = (current.get(entry["path"]) or {}).get("sha256")
+            if got is None:
+                entry["why"] = "no single valid TEST INTACT or TEST WEAKENED line for its exact path"
+                continue
+            kind, line, why = got
+            if now != handed[entry["id"]]:
+                entry["why"] = "the file changed after it was handed to the reviewer"
+                continue
+            if kind == "INTACT" and not entry["complete"]:
+                entry["why"] = f"INTACT cannot certify content not supplied whole ({entry['incomplete_why']})"
+                continue
+            entry.update(verdict="intact" if kind == "INTACT" else "weakened", why=why[:300],
+                         judgment=dict(by=owner, stage=stage, reply_artifact=reply_artifact, line=line[:400],
+                                       source=dispatch_source, after_sha256=handed[entry["id"]],
+                                       before_sha256=entry["before_sha256"],
+                                       call=getattr(self._call_event(entry["task"], "test-comparison", owner),
+                                                    "invocation_id", "") or ""))
+            if kind == "WEAKENED":
+                self._register_review_findings(
+                    spec, owner, f"BLOCKING: the repair weakened {entry['path']}: {why or 'no reason given'} "
+                                 f"| basis: {entry['path']} | impact: correctness")
+        return all(e["verdict"] != "pending" for e in pending)
+
+    def _comparison_call(self, spec, owner, prompt):
+        """The comparison as a capped review-role call (``test-comparison``
+        is in ``runtime.REVIEW_CAPPED_ROLES``) under the finish hold:
+        (reply, None) or (None, the exception)."""
         try:
             with invocation(spec.task_id, "test-comparison"):
-                reply = self._invoke_model(peer, prompt)
-        except (TurnLimitReached, FinishReserved, ProviderError) as exc:
-            for entry, _, _ in entries:
-                entry["why"] = f"the comparison gave no verdict ({type(exc).__name__})"
-            self._note(f"task {spec.task_id}: {peer}'s comparison of repaired generated tests gave no verdict")
-            return
-        task.keep(reply, kind="test-comparison", author=peer)
-        for entry, _, _ in entries:
-            said = re.findall(r"^[ \t]*(?:[-*+][ \t]+)?TEST[ \t]+(INTACT|WEAKENED)[ \t]+" + re.escape(entry["path"])
-                              + r"\b[ \t]*[-:]?[ \t]*([^\n]*)$", reply or "", re.IGNORECASE | re.MULTILINE)
-            kinds = {k.upper() for k, _ in said}
-            if kinds == {"INTACT"}:
-                entry.update(verdict="intact", why=said[0][1][:300])
-            elif "WEAKENED" in kinds:
-                why = next(w for k, w in said if k.upper() == "WEAKENED")[:300]
-                entry.update(verdict="weakened", why=why)
-                self._register_review_findings(
-                    spec, peer, f"BLOCKING: the repair weakened {entry['path']}: {why or 'no reason given'} "
-                                f"| basis: {entry['path']} | impact: correctness")
-            else:
-                entry["why"] = "no TEST INTACT or TEST WEAKENED line for it"
-        self._note(f"task {spec.task_id}: {peer} compared repaired generated tests: "
-                   + ", ".join(f"{e['path']} {e['verdict']}" for e, _, _ in entries))
+                return self._invoke_model(owner, prompt), None
+        except FinishReserved as exc:
+            self._finish_refused(spec, f"test comparison by {owner}", exc)
+            return None, exc
+        except (TurnLimitReached, ProviderError) as exc:
+            return None, exc
+
+    @staticmethod
+    def _read_test_verdicts(reply: str, entries) -> dict:
+        """entry id -> (INTACT|WEAKENED, line, why) for exactly one valid line
+        per exact path; two lines for one path, or a line with no reason,
+        is no verdict."""
+        by_path = {e["path"]: e["id"] for e in entries}
+        found: Dict[str, list] = {}
+        for match in _TEST_VERDICT_LINE.finditer(reply or ""):
+            path = match.group(2).strip("`")
+            if path in by_path:
+                found.setdefault(by_path[path], []).append((match.group(1).upper(), match.group(0).strip(),
+                                                            match.group(3).strip()))
+        return {fid: lines[0] for fid, lines in found.items() if len(lines) == 1 and lines[0][2]}
+
+    def _settle_test_comparison(self, spec, record: dict, owner: str, *, site: str, occurrence) -> dict:
+        """The owner's settlement of an owed test comparison: one more
+        comparison of the task's pending entries on the bytes as they are
+        now, under the owed-review bounds already checked by the caller."""
+        task_id = record.get("task") or spec.task_id
+        pending = [e for e in self.generated_test_repairs if e.get("task") == task_id and e["verdict"] == "pending"]
+        row = dict(peer=owner, findings=1, verdict=None, resolved=[], kept=[], new=[], owed=record["fid"])
+        source = self._source_fingerprint() if self.project else None
+        current = self._generated_tests()
+        for entry in pending:
+            now = current.get(entry["path"])
+            if entry["removed"] and now is None:
+                continue
+            if now is None or now.get("sha256") != entry.get("after_sha256"):
+                # The bytes moved since the repair: the comparison is of what
+                # is on disk now, kept as its own after-text.
+                entry["after_sha256"] = None if now is None else now.get("sha256")
+                entry["removed"] = now is None
+                entry["after_artifact"] = (self.store.put(now["data"].decode("utf-8", "replace"),
+                                                          kind="generated-test-after-repair", author="harness").id
+                                           if now is not None and now.get("data") is not None else None)
+                entry["complete"] = bool(entry.get("before_artifact")) and (now is None or now.get("data") is not None)
+        owner_spec = SimpleNamespace(task_id=task_id, description=record.get("description") or "")
+        settled = self._judge_test_repairs(owner_spec, None, owner, pending, stage="settlement", recover=False)
+        self._recovery_attempt(occurrence, "owner_settlement",
+                               "compared" if settled else "no valid verdict", site=site, source=source,
+                               task=task_id, role="test-comparison", peer=owner)
+        if settled:
+            self._close_owed(record, owner, f"completed test comparison on source {str(source)[:16]}")
+            row["resolved"].append(record["fid"])
+            row["verdict"] = "reviewed: " + ", ".join(f"{e['path']} {e['verdict']}" for e in pending)
+            self._recovery_result(occurrence, "recovered: the owner completed the owed test comparison")
+        else:
+            row["verdict"] = "kept: the owner's comparison gave no valid verdict"
+        return row
 
     def _record_check_attempt(self, result, gate_kind="full"):
         """One executed check, as a typed record: receipts in full, the output

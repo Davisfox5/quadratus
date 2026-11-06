@@ -829,11 +829,18 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     gate = s.config.integration_gate
     s._max_tasks, s._slots_used = 4, 0
     s._route_peers = ["openai:sol", "xai:grok:default"]
+    monkeypatch.setattr(s, "_generated_tests", lambda: {})
     names = [r.name for r in s._gate_repair_stages(spec, gate, "subset")]
     # The reviews ahead are known; the correction they may select is
     # admitted when they do (admission/2), never costed here.
     assert names == ["gate fix", "review by openai:sol", "review by xai:grok:default"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix"]
+    # With a generated test the repair may change, the original reviewer's
+    # comparison is on the route too (root review of b49a0cb, R4).
+    monkeypatch.setattr(s, "_generated_tests", lambda: {"tests/test_new.py": dict(sha256="x", data=b"", why="")})
+    assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == [
+        "gate fix", "generated test comparison by openai:sol"]
+    monkeypatch.setattr(s, "_generated_tests", lambda: {})
     # Every repair carries the task's known remainder (root's control on
     # fef1e27): a required design review still ahead is on the fix cycle's,
     # the gate fix's and the render fix's routes; nothing is listed twice.

@@ -91,11 +91,12 @@ class SerialAttributableMergeNot(MergeGate):
     def run(self):
         result = super().run()
         if self.runs[-1] == "merge":
-            return GateResult(False, "check", 127, "merge: runner not found", report=None)
+            return GateResult(False, "check", None, "merge: runner not found", report=None,
+                              blocker="runner unavailable: check")
         return result
 
 
-def test_a_merged_tree_whose_runner_cannot_execute_gets_no_merge_repair(tmp_path):
+def test_a_merged_tree_whose_runner_cannot_launch_gets_no_merge_repair(tmp_path):
     import pytest
 
     from quadratus.integration import CheckUnattributable
@@ -116,7 +117,7 @@ def test_a_merged_tree_whose_runner_cannot_execute_gets_no_merge_repair(tmp_path
             return 'Wrote it\nCHANGED: ["c.py"]'
         return parent(model, prompt, system, allow_writes)
     session.invoke = invoke
-    with pytest.raises(CheckUnattributable, match="runner could not be executed"):
+    with pytest.raises(CheckUnattributable, match="runner unavailable"):
         session.run(max_tasks=6)
     assert fixes == ["serial"], "the serial failure was repaired; the merged tree got no repair"
     assert gate.runs[-1] == "merge"

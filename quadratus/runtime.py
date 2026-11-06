@@ -151,7 +151,8 @@ LEAD_CAPPED_ROLES = frozenset({"lead", "revision", "gate-fix", "design-fix"})
 #: bare pytest and ls in the copy); an audit that stops at the cap is a failed
 #: audit, which the session already counts as nothing met. The orchestrator,
 #: closeout and workers stay uncapped.
-REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor"})
+REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor",
+                                 "test-comparison"})
 
 
 def inspection_tools(model_key: str) -> str:
@@ -803,6 +804,9 @@ class Fleet:
                 if worker_loop_control.get() is not None:
                     role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
             reply = self._generate(model_key, view, prompt, role)
+            # The text exactly as returned, before any path rewrite: what a
+            # rejection keeps (root review of b49a0cb, R6).
+            raw_reply = reply
             _raise_if_infrastructure(model_key, view)
             altered = _copy_altered(directory, handed)
             if context.get("probe"):
@@ -843,7 +847,7 @@ class Fleet:
                 except Exception as exc:
                     # A patch that does not apply is a rejection with the
                     # reply kept, never a silent drop (PR73 6693873055).
-                    _attach_response(exc, reply, "apply")
+                    _attach_response(exc, raw_reply, "apply", normalized=reply)
                     raise
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
@@ -854,7 +858,7 @@ class Fleet:
                 raise _attach_response(ProviderError(
                     "Bounded editor returned no PATCH or explicit NO CHANGES result"
                     f" ({_PATCH_STAGES.get(stage, stage)}; reply {len(reply)} chars, sha256 "
-                    f"{hashlib.sha256(reply.encode()).hexdigest()[:16]})."), reply, stage)
+                    f"{hashlib.sha256(raw_reply.encode()).hexdigest()[:16]})."), raw_reply, stage, normalized=reply)
         return reply
 
     def _closeout(self, key, provider, prompt):
@@ -1374,17 +1378,40 @@ _DIFF_HEADER = re.compile(r"(?m)^(?:diff --git |--- \S|\+\+\+ \S|@@ )")
 RESPONSE_KEEP_CHARS = 200_000
 
 
-def _attach_response(exc, reply: str, stage: str):
-    """Keep the exact reply on a bounded-editor rejection, with the parser
-    stage, its length and digest, and whether the kept text is cut. The
-    session and worker seams store ``provider_response`` privately."""
+def _attach_response(exc, reply: str, stage: str, *, normalized: Optional[str] = None):
+    """Keep the reply exactly as returned on a bounded-editor rejection
+    (before any path rewrite), with the parser stage, the whole reply's
+    length and digest, whether what is kept is only a prefix, and whether
+    the parser read a path-rewritten form. ``response_record`` is what the
+    session and worker seams persist (root review of b49a0cb, R6)."""
     text = reply or ""
     exc.provider_response = text[:RESPONSE_KEEP_CHARS]
     exc.response_chars = len(text)
     exc.response_sha256 = hashlib.sha256(text.encode()).hexdigest()
     exc.response_truncated = len(text) > RESPONSE_KEEP_CHARS
+    exc.response_normalized = normalized is not None and normalized != text
     exc.parse_stage = stage
     return exc
+
+
+def response_record(exc) -> Optional[dict]:
+    """The durable record of a reply a rejection kept, or None: the kept
+    text labelled as the whole raw reply or a retained prefix of it, the
+    whole reply's length and sha256, the parser stage, and whether the
+    parser read a path-rewritten form. Diagnostics for the run record carry
+    everything but ``text``."""
+    text = getattr(exc, "provider_response", None)
+    if not isinstance(text, str) or not text:
+        return None
+    chars = getattr(exc, "response_chars", None)
+    truncated = getattr(exc, "response_truncated", None)
+    return dict(text=text,
+                text_kind=("retained prefix of the raw returned text" if truncated
+                           else "raw returned text" if truncated is False else "returned text (kept by the caller)"),
+                kept_chars=len(text), chars=chars if isinstance(chars, int) else len(text),
+                sha256=getattr(exc, "response_sha256", None) or hashlib.sha256(text.encode()).hexdigest(),
+                truncated=bool(truncated), normalized=bool(getattr(exc, "response_normalized", False)),
+                stage=getattr(exc, "parse_stage", None), error=type(exc).__name__)
 
 
 def bounded_patch(reply: str):

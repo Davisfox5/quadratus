@@ -86,18 +86,84 @@ def test_a_rejection_keeps_the_exact_reply_and_changes_nothing(project_env, monk
     assert (project.root / "add.py").read_text() == before, "nothing applied"
 
 
-def test_the_session_keeps_a_rejected_reply_as_a_private_artifact(tmp_path):
-    """The runtime exception reaches the session's call seam, which keeps
-    the reply in the run's artifacts whatever store the receipt has."""
+def test_the_session_keeps_a_rejected_reply_with_its_labelled_metadata(tmp_path):
+    """The runtime exception reaches the session's call seam: the reply
+    exactly as returned and its metadata go to a private artifact, and the
+    metadata without the text goes on the run record (root review of
+    b49a0cb, R6)."""
+    import json
+
     from quadratus.runtime import _attach_response
     reply = "Reading.\n" + ONE + "\nPATCH:\n```diff\n" + DIFF + "```"
 
     def invoke(*args, **kwargs):
         raise _attach_response(ProviderError("Bounded editor returned no PATCH (more than one PATCH: marker)."),
-                               reply, "multiple-markers")
+                               reply, "multiple-markers", normalized=reply.replace("Reading.", "Read."))
     store = ArtifactStore(tmp_path / "artifacts")
     session = Session("goal", store, invoke, config=SessionConfig())
     with pytest.raises(ProviderError) as caught:
         session._invoke_model_call("grok:worker", "edit", allow_writes=False)
-    artifact = caught.value.response_artifact
-    assert store.get(artifact) == reply
+    kept = json.loads(store.get(caught.value.response_artifact))
+    assert kept["text"] == reply and kept["text_kind"] == "raw returned text"
+    assert kept["chars"] == len(reply) and kept["sha256"] == hashlib.sha256(reply.encode()).hexdigest()
+    assert kept["stage"] == "multiple-markers" and kept["normalized"] is True and kept["truncated"] is False
+    (meta,) = session.rejected_responses
+    assert "text" not in meta and meta["artifact"] == caught.value.response_artifact
+    assert meta["chars"] == len(reply) and meta["model"] == "grok:worker"
+
+
+def test_a_reply_over_the_bound_is_a_labelled_prefix_with_the_whole_replys_digest():
+    from quadratus.runtime import RESPONSE_KEEP_CHARS, _attach_response, response_record
+    reply = "PATCH:\n" + "x" * (RESPONSE_KEEP_CHARS + 50)
+    record = response_record(_attach_response(ProviderError("no"), reply, "no-fence"))
+    assert record["text"] == reply[:RESPONSE_KEEP_CHARS] and record["kept_chars"] == RESPONSE_KEEP_CHARS
+    assert record["text_kind"] == "retained prefix of the raw returned text" and record["truncated"] is True
+    assert record["chars"] == len(reply) and record["sha256"] == hashlib.sha256(reply.encode()).hexdigest()
+
+
+def test_a_failed_retention_is_visible_on_the_record(tmp_path):
+    from quadratus.runtime import _attach_response
+
+    class Refusing(ArtifactStore):
+        def put(self, content, *, kind, author):
+            if kind == "rejected-response":
+                raise OSError("disk full")
+            return super().put(content, kind=kind, author=author)
+
+    def invoke(*args, **kwargs):
+        raise _attach_response(ProviderError("rejected"), ONE + ONE, "multiple-markers")
+    session = Session("goal", Refusing(tmp_path / "artifacts"), invoke, config=SessionConfig())
+    with pytest.raises(ProviderError):
+        session._invoke_model_call("grok:worker", "edit", allow_writes=False)
+    (meta,) = session.rejected_responses
+    assert meta["artifact"] is None and meta["retention_error"].startswith("OSError: disk full")
+
+
+def test_the_worker_seam_keeps_the_same_labelled_record(tmp_path):
+    import json
+
+    from quadratus.runtime import _attach_response
+    from quadratus.workers import WorkerPool
+    from tests.test_reliability_repair import OPUS, _memory
+    store = ArtifactStore(tmp_path / "artifacts")
+    reply = ONE + "\n" + ONE
+
+    def run(model, prompt, allow_writes=False):
+        raise _attach_response(ProviderError("Bounded editor returned no PATCH."), reply, "multiple-markers")
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        if "Name the single next task" in prompt:
+            return "DONE"
+        if "The task is finished" in prompt:
+            return "SUMMARY: closed incomplete"
+        if "Worker errand" in prompt and "failed" in prompt:
+            return "Closing incomplete."
+        return 'WORKER {"errand":"draft","instruction":"write the design"}'
+    session = Session("goal", store, invoke, config=SessionConfig())
+    session.workers = WorkerPool(store=store, run=run)
+    from quadratus.session import TaskSpec
+    session._draft_with_channels(OPUS, TaskSpec("t1", "design it"), _memory(store))
+    kept = [json.loads(store.get(i)) for i in store.ids()
+            if (store.ref(i).kind or "").startswith("worker-stopped:")]
+    assert kept and kept[0]["text"] == reply and kept[0]["stage"] == "multiple-markers"
+    assert kept[0]["chars"] == len(reply) and kept[0]["text_kind"] == "raw returned text"

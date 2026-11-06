@@ -85,7 +85,7 @@ def test_a_storage_failure_is_a_json_error_and_changes_nothing():
 
 
 def _run(tmp_path, monkeypatch, *, source, failures, fixed_source, fixed_failures, comparison=None,
-         check=VERBOSE, extra=None):
+         check=VERBOSE, extra=None, settings=None):
     def lead(call, replay):
         H.write(call, {"store.py": source, FAILURES: failures, **(extra or {})})
         return (f"Implemented remove.\nPROVES: P1 - {CASE}\n"
@@ -103,7 +103,7 @@ def _run(tmp_path, monkeypatch, *, source, failures, fixed_source, fixed_failure
                        "gate-fix": gate_fix,
                        **({"test-comparison": comparison} if comparison else {})})
     return H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False, check=check,
-                 goal="Add item removal to the store's command line. " + R1)
+                 goal="Add item removal to the store's command line. " + R1, settings=settings)
 
 
 @pytest.mark.requirements_ledger
@@ -123,10 +123,13 @@ def test_a_combined_fault_is_repaired_once_and_the_reviewer_finds_the_fixture_in
     (fix,) = replay.of("gate-fix")
     assert "Harness diagnosis" in fix.prompt and "sqlite3.OperationalError" in fix.prompt
     assert "never removed or weakened" in fix.prompt
-    assert "-    monkeypatch.setattr(sqlite3, \"connect\", _unavailable)" in seen["prompt"]
-    assert "TEST INTACT <path>" in seen["prompt"]
+    assert 'monkeypatch.setattr(sqlite3, "connect", _unavailable)' in seen["prompt"], "the whole before text"
+    assert "After the repair:" in seen["prompt"] and "TEST INTACT <path>" in seen["prompt"]
     (entry,) = H.result_json(replay)["generated_test_repairs"]
     assert entry["path"] == FAILURES and entry["verdict"] == "intact" and entry["reviewer"]
+    from quadratus.session import _test_repair_verified
+    assert _test_repair_verified(entry) and entry["judgment"]["by"] == entry["reviewer"]
+    assert entry["judgment"]["after_sha256"] == entry["after_sha256"] and entry["complete"] is True
     assert replay.artifacts("generated-test-before-repair")
     assert replay.result.completed, replay.result.error
     assert H.result_json(replay)["requirements"]["audits"][-1]["verdicts"]["R1"]["met"] is True
@@ -156,14 +159,82 @@ def test_a_repair_that_weakens_the_generated_test_never_counts_as_recovery(tmp_p
     assert not replay.result.completed
 
 
-def test_a_repair_with_no_comparison_verdict_stays_unreviewed_and_unverified(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND,
-                  fixed_failures=CORRECTED, comparison=lambda c, r: "Looks fine to me.")
-    (entry,) = H.result_json(replay)["generated_test_repairs"]
-    assert entry["verdict"] == "unreviewed" and "no TEST INTACT" in entry["why"]
+@pytest.mark.requirements_ledger
+def test_root_an_emptied_test_with_no_comparison_verdict_never_completes(tmp_path, monkeypatch):
+    """Root review of b49a0cb, R2: the repair reduces the new scenario to
+    `assert True` and the reviewer never gives a per-file verdict. The one
+    judgment completion is spent, the comparison becomes the owner's owed
+    review debt, its settlement on the same bytes gives no verdict either,
+    and the run does not complete; live and saved readers agree."""
+    calls = []
+
+    def comparison(call, replay):
+        calls.append(call)
+        return "Looks fine to me."
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=WEAKENED,
+                  comparison=comparison)
+    result = H.result_json(replay)
+    (entry,) = result["generated_test_repairs"]
+    assert entry["verdict"] == "pending" and entry["judgment"] is None
+    owed = [f for f in result["review_findings"] if f.get("owed_kind") == "test comparison"]
+    assert owed and not owed[0].get("closed") and owed[0]["author"] == entry["reviewer"]
+    assert 2 <= len(calls) <= 3, "the call, its one completion, at most one settlement: bounded"
+    assert not replay.result.completed, replay.result.error
     from tools import truth_check
-    lines = truth_check._generated_test_problems(H.result_json(replay))
-    assert lines and "no reviewer called it intact" in lines[0]
+    assert truth_check._generated_test_problems(result)
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("reply", [
+    f"TEST INTACT {FAILURES}.bak - safe",                                   # suffix of another path
+    f"TEST INTACT {FAILURES} - same\nTEST WEAKENED {FAILURES} - gone",      # contradictory
+    f"TEST INTACT {FAILURES} -",                                            # no reason
+], ids=["wrong-path-suffix", "contradictory", "no-reason"])
+def test_root_only_one_exact_reasoned_line_certifies(tmp_path, monkeypatch, reply):
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND,
+                  fixed_failures=CORRECTED, comparison=lambda c, r: reply)
+    (entry,) = H.result_json(replay)["generated_test_repairs"]
+    assert entry["verdict"] == "pending" and not replay.result.completed
+
+
+def test_root_a_saved_intact_without_the_reviewers_judgment_is_unverified():
+    """Root review of b49a0cb, R3: verdict and reviewer name alone pass
+    neither reader."""
+    from quadratus.session import _test_repair_verified
+    from tools import truth_check
+    base = dict(task="t1", path=FAILURES, removed=False, before_sha256="a" * 64, after_sha256="b" * 64,
+                complete=True, reviewer="claude:opus", verdict="intact")
+    good = dict(base, judgment=dict(by="claude:opus", reply_artifact="r1", line=f"TEST INTACT {FAILURES} - same",
+                                    after_sha256="b" * 64, before_sha256="a" * 64))
+    variants = {"no judgment": dict(base, judgment=None),
+                "another seat": dict(good, judgment=dict(good["judgment"], by="openai:sol")),
+                "other bytes": dict(good, judgment=dict(good["judgment"], after_sha256="c" * 64)),
+                "incomplete": dict(good, complete=False),
+                "no reply": dict(good, judgment=dict(good["judgment"], reply_artifact=""))}
+    assert _test_repair_verified(good) and truth_check._generated_test_problems(dict(generated_test_repairs=[good])) == []
+    for name, entry in variants.items():
+        assert not _test_repair_verified(entry), name
+        assert truth_check._generated_test_problems(dict(generated_test_repairs=[entry])), name
+
+
+def test_root_the_comparison_is_a_capped_reviewer_call_on_the_reserved_route(tmp_path, monkeypatch):
+    """Root review of b49a0cb, R4: the comparison role takes the review
+    seats' turn cap, and the repair route reserves it."""
+    from quadratus.config import Settings
+    from quadratus.runtime import REVIEW_CAPPED_ROLES
+    assert "test-comparison" in REVIEW_CAPPED_ROLES
+    seen = []
+
+    def comparison(call, replay):
+        seen.append(call)
+        return f"TEST INTACT {FAILURES} - same assertions on the action's own path"
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=CORRECTED,
+                  comparison=comparison, settings=Settings(backend="cli", lead_max_turns=8))
+    (call,) = seen
+    assert call.vendor == "claude", "the task's original reviewer in this fixture"
+    assert call.argv[call.argv.index("--max-turns") + 1] == "8", call.argv
+    stages = [s for a in H.result_json(replay)["plan_admissions"] for s in a.get("stages") or []]
+    assert any("generated test comparison by" in str(s) for s in stages), stages
 
 
 @pytest.mark.requirements_ledger
@@ -240,3 +311,23 @@ def test_a_capped_revision_that_settled_a_finding_continues_on_only_the_rest(tmp
     assert handoff["continued"] is True and handoff["outcome"].startswith("continued: 1 settled, 1 open")
     assert result["turn_limited_tasks"] == []
     assert replay.result.completed, replay.result.error
+
+
+@pytest.mark.requirements_ledger
+def test_root_content_not_supplied_whole_is_never_certified_intact(tmp_path, monkeypatch):
+    """Root review of b49a0cb, R3: a test past the prompt bound is named as
+    not supplied whole, and an INTACT on it certifies nothing."""
+    from quadratus import session as S
+    monkeypatch.setattr(S, "_TEST_COMPARE_CHARS", 50)
+    seen = []
+
+    def comparison(call, replay):
+        seen.append(call.prompt)
+        return f"TEST INTACT {FAILURES} - looks the same"
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=CORRECTED,
+                  comparison=comparison)
+    (entry,) = H.result_json(replay)["generated_test_repairs"]
+    assert entry["complete"] is False and "over 50 characters" in entry["incomplete_why"]
+    assert "Not supplied whole" in seen[0] and entry["verdict"] == "pending"
+    assert "INTACT cannot certify content not supplied whole" in entry["why"]
+    assert not replay.result.completed
