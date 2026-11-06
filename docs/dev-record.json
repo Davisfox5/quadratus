@@ -2911,11 +2911,26 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "reviewed",
       "claimed_at": "2026-11-06T14:22:23Z",
       "acknowledged": true,
-      "delivery": null,
-      "reviews": [],
+      "delivery": {
+        "sha": "3566a8addb3262a77591eb889654378d5a12a2fa",
+        "at": "2026-11-06T14:29:05Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "3566a8addb3262a77591eb889654378d5a12a2fa",
+          "verdict": "cleared",
+          "evidence": "Independent Codex review of Claude-authored exact delivery: 5 new offline cases passed; 165 related tests passed (127 delivery/evidence/original-tests plus 38 evidence-routing/probes); repository Ruff clean and diff whitespace clean. Actual bounded pytest subprocess reports prove the strong assertion fails on the regressed fixture, weak same-name assertion passes, old approval becomes stale for assertion-only and app edits, raw R1 MET cannot restore sufficiency, removal/rename cannot discharge, and restored meaningful evidence plus fresh synthetic judgment recovers acceptance. Every model invoke raises, no Session.run/run_task or provider calls. Reviewer verdicts synthetic; no live handoff/completion proof. Fresh erroneous approval remains a limitation. Documentation wording narrowed by review; no runtime source changes. Full remote CI pending; active milestone/candidate unchanged.",
+          "scope": [
+            "tests/test_accepted_assertion_currency.py",
+            "docs/ACCEPTED_ASSERTION_DIAGNOSTIC.md"
+          ],
+          "at": "2026-11-06T14:29:05Z"
+        }
+      ],
       "blockers": [],
       "decisions": [],
       "acknowledged_at": "2026-11-06T14:22:23Z"
