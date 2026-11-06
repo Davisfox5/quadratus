@@ -19422,7 +19422,11 @@ class Session:
             if task is not None:
                 task.keep(reply, kind="test-comparison", author=owner)
             for fid, got in self._read_test_verdicts(reply, pending).items():
-                verdicts.setdefault(fid, got + (artifact,))
+                # The same owner's adverse judgment in any reply stands: a
+                # later WEAKENED replaces an earlier INTACT, and nothing
+                # replaces a WEAKENED (root, PR73 6695349150).
+                if fid not in verdicts or (got[0] == "WEAKENED" and verdicts[fid][0] != "WEAKENED"):
+                    verdicts[fid] = got + (artifact,)
 
         reply, error = self._comparison_call(spec, owner, prompt)
         if reply is None and isinstance(error, TurnLimitReached) and recover:

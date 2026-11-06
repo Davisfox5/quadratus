@@ -479,3 +479,32 @@ def test_root_with_no_reviewer_anywhere_the_rewrite_holds_completion(tmp_path, m
     assert entry["reviewer"] is None and entry["verdict"] == "pending"
     assert "no reviewer is available to compare it" in (replay.result.error or ""), replay.result.error
     assert not replay.result.completed
+
+
+
+@pytest.mark.requirements_ledger
+def test_root_a_later_weakened_from_the_same_owner_overrides_an_earlier_intact(tmp_path, monkeypatch):
+    """Root, PR73 6695349150: the first reply calls A intact and omits B;
+    the judgment completion calls A weakened and B intact. A is weakened
+    (bound to the completion), that owner's blocking finding holds, and the
+    run does not complete."""
+    second_broken = BROKEN.replace("test_a_storage_failure", "test_another_storage_failure")
+    second_fixed = CORRECTED.replace("test_a_storage_failure", "test_another_storage_failure")
+    calls = []
+
+    def comparison(call, replay):
+        calls.append(call)
+        if len(calls) == 1:
+            return f"TEST INTACT {FAILURES} - same assertions"
+        return f"TEST WEAKENED {FAILURES} - the cleanup assertion is gone\nTEST INTACT {SECOND} - same assertions"
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=CORRECTED,
+                  comparison=comparison, extra={SECOND: second_broken}, fixed_extra={SECOND: second_fixed},
+                  plan=None)
+    result = H.result_json(replay)
+    entries = {e["path"]: e for e in result["generated_test_repairs"]}
+    assert entries[FAILURES]["verdict"] == "weakened" and entries[SECOND]["verdict"] == "intact"
+    from quadratus.artifacts import ArtifactStore
+    store = ArtifactStore(replay.result.run_dir / "artifacts")
+    assert "TEST WEAKENED" in store.get(entries[FAILURES]["judgment"]["reply_artifact"])
+    assert any("the repair weakened" in f["text"] and not f.get("closed") for f in result["review_findings"])
+    assert not replay.result.completed
