@@ -169,12 +169,24 @@ def test_failed_cheap_gate_stops_before_collaborators(tmp_path):
     assert len(calls) == 1, 'Only the draft: no paid review of a failed check, and no summary call'
 
 
-def test_an_unattributable_cheap_gate_failure_is_handed_off_before_collaborators(tmp_path):
-    from quadratus.integration import CheckUnattributable
+def test_a_cheap_gate_failure_without_a_report_is_ordinary_work_not_a_handoff(tmp_path):
+    """PR73 6693873055: a failure the harness cannot attribute is no longer
+    the operator's by that fact alone. With no repair allowance it is the
+    same open failure an assertion is; the runner being unavailable is not."""
     calls = []
     suite = GateSuite([command(code='raise SystemExit(1)', cheap=True)], cwd=tmp_path)
     s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 0)
-    with pytest.raises(CheckUnattributable, match='check: structured report undeclared'):
+    s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
+    assert s.open_findings
+    assert len(calls) == 1, 'Only the draft: no paid review of a failed check, and no summary call'
+
+
+def test_an_unavailable_runner_is_still_handed_off_before_collaborators(tmp_path):
+    from quadratus.integration import CheckUnattributable
+    calls = []
+    suite = GateSuite([GateCommand('check', (str(tmp_path / 'no-such-runner'),), cheap=True)], cwd=tmp_path)
+    s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 1)
+    with pytest.raises(CheckUnattributable, match='runner unavailable'):
         s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
     assert len(calls) == 1, 'Only the draft: no review, no repair, no close-out call'
 

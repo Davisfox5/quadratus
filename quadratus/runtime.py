@@ -644,10 +644,7 @@ class Fleet:
                     "Report each check or acceptance step you could not run on its own line "
                     "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
                     "with the edits and available evidence; a NOT RUN line keeps the requirement it "
-                    "serves open until a check runs it. It holds every requirement the task covers "
-                    "unless everything it names is a declared scenario, a case of one or a scenario's "
-                    "file; you may end it with ' | for: R<n>, R<m>' to say which requirements it serves, "
-                    "which is recorded as your claim and releases none of the others. "
+                    "serves open until a check runs it. "
                     "Do not change permissions."
                 )
             before = self.project.contents()
@@ -839,15 +836,25 @@ class Fleet:
             # a reporting defect, separate from the isolation working correctly.
             reply = _relativise_snapshot_paths(reply, directory)
         if allow_writes:
-            match = re.fullmatch(r"\s*PATCH:\s*```(?:diff)?\n(.*?)```\s*", reply, re.DOTALL)
-            if match:
-                self.project.apply_patch(_add_missing_headers(match.group(1), prompt, self.project.root))
+            diff, stage = bounded_patch(reply)
+            if diff is not None:
+                try:
+                    self.project.apply_patch(_add_missing_headers(diff, prompt, self.project.root))
+                except Exception as exc:
+                    # A patch that does not apply is a rejection with the
+                    # reply kept, never a silent drop (PR73 6693873055).
+                    _attach_response(exc, reply, "apply")
+                    raise
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
             from .taskmeta import lead_request
-            if (not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply)
-                    and lead_request(reply) is None):
-                raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
+            if (stage == "no-marker" and not continuation
+                    and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply)
+                    and lead_request(reply) is None) or stage not in ("no-marker",):
+                raise _attach_response(ProviderError(
+                    "Bounded editor returned no PATCH or explicit NO CHANGES result"
+                    f" ({_PATCH_STAGES.get(stage, stage)}; reply {len(reply)} chars, sha256 "
+                    f"{hashlib.sha256(reply.encode()).hexdigest()[:16]})."), reply, stage)
         return reply
 
     def _closeout(self, key, provider, prompt):
@@ -1345,6 +1352,79 @@ def _roster_for(vendor: str):
     from .registry import ROSTER
 
     return [m for m in ROSTER if m.provider == vendor]
+
+
+#: Why a bounded editor's reply was not one applicable patch: the parser's
+#: own stage, recorded with the kept reply (PR73 6693873055).
+_PATCH_STAGES = {
+    "no-marker": "no PATCH: marker",
+    "multiple-markers": "more than one PATCH: marker",
+    "no-fence": "no fenced block after PATCH:",
+    "unterminated-fence": "the fence after PATCH: is not closed",
+    "empty-diff": "the fenced block after PATCH: is empty",
+    "not-a-diff": "the fenced block after PATCH: is not a unified diff",
+    "multiple-diffs": "more than one unified diff in the reply",
+    "conflicting-no-changes": "both PATCH: and NO CHANGES:",
+    "apply": "the patch did not apply",
+}
+_PATCH_MARKER = re.compile(r"(?m)^[ \t]*(?:\*\*)?PATCH:(?:\*\*)?[ \t]*")
+_FENCE_OPEN = re.compile(r"[ \t]*\n?[ \t]*(```+|~~~+)[ \t]*(?:diff|patch|udiff)?[ \t]*\n")
+_DIFF_HEADER = re.compile(r"(?m)^(?:diff --git |--- \S|\+\+\+ \S|@@ )")
+#: The reply kept with a rejection, bounded; length and digest are of the whole.
+RESPONSE_KEEP_CHARS = 200_000
+
+
+def _attach_response(exc, reply: str, stage: str):
+    """Keep the exact reply on a bounded-editor rejection, with the parser
+    stage, its length and digest, and whether the kept text is cut. The
+    session and worker seams store ``provider_response`` privately."""
+    text = reply or ""
+    exc.provider_response = text[:RESPONSE_KEEP_CHARS]
+    exc.response_chars = len(text)
+    exc.response_sha256 = hashlib.sha256(text.encode()).hexdigest()
+    exc.response_truncated = len(text) > RESPONSE_KEEP_CHARS
+    exc.parse_stage = stage
+    return exc
+
+
+def bounded_patch(reply: str):
+    """(diff, stage) from a bounded editor's reply, deterministically, with
+    no model call (PR73 6693873055). Line endings (CRLF, CR) and a byte
+    order mark are normalised; prose before the one ``PATCH:`` marker and
+    after the closing fence is framing, not content. Exactly one marker,
+    followed by one fenced unified diff, and no other unified diff anywhere
+    in the reply; ``NO CHANGES:`` beside a patch is a conflict. ``diff`` is
+    None when the reply is not one applicable patch, and ``stage`` says why
+    ("ok" when it is). What applies is still held to the diff's own paths,
+    the task scope and atomic application, and the checks and review still
+    judge it."""
+    text = (reply or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    markers = list(_PATCH_MARKER.finditer(text))
+    if not markers:
+        return None, "no-marker"
+    if len(markers) > 1:
+        return None, "multiple-markers"
+    if re.search(r"(?m)^[ \t]*NO CHANGES:", text):
+        return None, "conflicting-no-changes"
+    after = text[markers[0].end():]
+    opened = _FENCE_OPEN.match(after)
+    if not opened:
+        return None, "no-fence"
+    fence = opened.group(1)
+    body_start = opened.end()
+    close = re.compile(r"(?m)^[ \t]*" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$")
+    closed = close.search(after, body_start)
+    if not closed:
+        return None, "unterminated-fence"
+    diff = after[body_start:closed.start()]
+    if not diff.strip():
+        return None, "empty-diff"
+    if not _DIFF_HEADER.search(diff):
+        return None, "not-a-diff"
+    outside = text[:markers[0].start()] + after[closed.end():]
+    if _DIFF_HEADER.search(outside):
+        return None, "multiple-diffs"
+    return diff if diff.endswith("\n") else diff + "\n", "ok"
 
 
 def _relativise_snapshot_paths(reply: str, directory) -> str:

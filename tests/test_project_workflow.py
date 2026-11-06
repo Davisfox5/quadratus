@@ -71,6 +71,8 @@ elif 'You are leading' in prompt or 'Fix the failure' in prompt:
         reply = 'Saved add.py'
 elif mode == 'patch':
     reply = 'PATCH:\n```diff\n--- a/add.py\n+++ b/add.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return 0\n+    return a + b\n```'
+elif mode == 'reply':
+    reply = os.environ['FAKE_REPLY']
 else:
     reply = 'NO FINDINGS'
 if 'You are leading' in prompt or 'Fix the failure' in prompt:

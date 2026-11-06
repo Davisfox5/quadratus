@@ -165,12 +165,9 @@ class _ReleaseFails:
 
 
 def _cli(raw, path):
-    """The exit status, or the crash in its place: a traceback is a failed
-    refusal, asserted here like any wrong status."""
-    try:
-        return store.cli([raw], path)
-    except Exception as exc:  # noqa: BLE001
-        return repr(exc)
+    """The command line as a caller runs it: a crash raises here, raw (PR73
+    6693873055: no assertion wrapper is needed for a repair to follow)."""
+    return store.cli([raw], path)
 
 
 @pytest.mark.parametrize("raw", BOUNDARY, ids=lambda v: f"len{len(v)}")
@@ -278,7 +275,7 @@ def test_the_classes_come_from_the_runtime_and_name_no_candidate(monkeypatch):
     assert "candidates to check, not new requirements" in note and "Do not lower Python's limit" in note
     assert "applies only where its condition holds" in note and "must stay accepted" in note
     assert "must refuse each" not in note and "where values reach a signed 64-bit or SQLite INTEGER store" in note
-    assert "never a defect anyone observed" in note and "so a crash fails an assertion" in note
+    assert "never a defect anyone observed" in note and "crash fails an assertion" not in note
     for word in ("ticket", "sqlite3", "OverflowError", "argparse", "depend", "close"):
         assert word not in note, word
 
@@ -305,10 +302,13 @@ def test_a_sound_candidate_is_accepted_on_its_executed_state_based_cases(tmp_pat
 @pytest.mark.requirements_ledger
 def test_a_leaking_candidate_fails_its_own_cases_and_buys_the_ordinary_repair(tmp_path, monkeypatch):
     """The real leak is an observed counterexample: the 64-bit edge escapes
-    the command line, and a release failure after a committed delete is
-    reported as a failure at both entry points. The over-limit decimal is
-    refused cleanly by the same candidate. The check fails on those cases,
-    the lead gets them in a gate fix, and the repaired source passes."""
+    the command line as a raw OverflowError, the HTTP handler returns 500,
+    and a release failure after a committed delete is reported as a failure
+    at both entry points. The over-limit decimal is refused cleanly by the
+    same candidate. A raw exception mixed with assertion failures used to
+    stop the run with no repair; it now buys the ordinary gate fix with the
+    harness's diagnosis, and the repaired source passes (PR73 6693873055,
+    root's baseline control 1)."""
     replay = _run(tmp_path, monkeypatch, source=LEAKING, tests=NEGATIVE,
                   review=f"NO FINDINGS\nR1: MET - {CASE}[len19]", repaired=SOUND)
     (fix,) = replay.of("gate-fix")
@@ -318,6 +318,9 @@ def test_a_leaking_candidate_fails_its_own_cases_and_buys_the_ordinary_repair(tm
     assert "test_a_release_failure_after_the_change_reports_the_change[cli]" in shown
     assert "test_a_release_failure_after_the_change_reports_the_change[http]" in shown
     assert "FAILED tests/test_store.py::test_a_storage_failure_before" not in shown, "refused before the change"
+    assert "Harness diagnosis" in shown and "builtins.OverflowError" in shown
+    check = H.result_json(replay)["checks"]
+    assert check[-1]["passed"]
     limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
     if limit:
         assert f"FAILED tests/test_store.py::test_cli_refuses_each_boundary_and_changes_nothing[len{limit + 1}]" \

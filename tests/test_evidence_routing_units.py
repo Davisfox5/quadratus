@@ -32,7 +32,7 @@ def test_each_vendor_is_told_its_own_reading_tools_and_reading_is_never_not_run(
         assert "never a NOT RUN item" in text
     source = inspect.getsource(runtime)
     assert "inspection_tools(model_key)" in source and '"Use Read, Grep and Glob for inspection. ' not in source
-    assert "' | for: R<n>, R<m>'" in source and "releases none of the others" in source
+    assert "' | for: R<n>" not in source, "no grammar that changes nothing (PR73 6693873055)"
 
 
 # -- A2. a reading NOT RUN is an inspection, attested by a review it was shown --------------------------
@@ -49,20 +49,28 @@ def _session(tmp_path):
     return session, spec, project
 
 
-def test_a_reading_not_run_is_an_inspection_gap_never_execution_debt(tmp_path):
+def test_a_reading_not_run_holds_nothing_and_makes_no_gap(tmp_path):
+    """PR73 6693873055: reading is not a check and the reviewer reads the
+    source anyway, so a reading-only NOT RUN creates no obligation and no
+    attestation ritual; it is a note."""
     session, spec, project = _session(tmp_path)
     session._record_not_run("openai:sol", "revision",
                             "NOT RUN: Read app.py tests/test_app.py - Read/Grep/Glob unavailable\nCHANGED: []")
     assert session.unexecuted_acceptance == [] and not session._standing_not_run()
-    (gap,) = session.inspection_gaps
-    assert gap["files"] == ["app.py", "tests/test_app.py"] and gap["requirements"] == ["R1", "R2"]
-    assert gap["attested"] is None and gap["author"] == "openai:sol"
-    route = session._evidence_route("R1")
-    assert route["kind"] == "inspection" and route["challengeable"] is False and "never a test run" in route["route"]
-    assert "could not read app.py, tests/test_app.py" in session._not_run_block()
-    # Reported twice before any review: one gap.
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py tests/test_app.py - again")
-    assert len(session.inspection_gaps) == 1
+    assert session.inspection_gaps == [] and session.evidence_obligations == []
+    assert session._evidence_route("R1")["kind"] not in ("inspection", "execution debt")
+    assert session._not_run_block() == ""
+
+
+def _carried_gap(session, path="app.py", task="t1"):
+    """An inspection gap as a record written by 1970b0e carries it: still
+    read and held on resume, never created any more."""
+    import uuid
+    gap = dict(id=f"IG-{uuid.uuid4().hex[:10]}", task=task, role="revision", author="openai:sol",
+               item=f"Read {path}", why="unavailable", files=[path], requirements=["R1", "R2"],
+               route="carried", handed=[], attested=None)
+    session.inspection_gaps.append(gap)
+    return gap
 
 
 @pytest.mark.parametrize("line", [
@@ -86,7 +94,7 @@ def _read(session, task="t1", peer="claude:opus", stage="review", spec=None, ver
 
 def test_only_the_seat_handed_the_gap_attests_it_on_its_explicit_read_line(tmp_path):
     session, spec, project = _session(tmp_path)
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _carried_gap(session)
     (gap,) = session.inspection_gaps
     session._attest_inspections("t1", "claude:opus", "review", f"NO FINDINGS\nREAD {gap['id']} - fine")
     assert session._open_inspections(), "a seat never handed the gap attests nothing"
@@ -109,7 +117,7 @@ def test_only_the_seat_handed_the_gap_attests_it_on_its_explicit_read_line(tmp_p
 
 def test_an_unread_line_never_attests(tmp_path):
     session, spec, _ = _session(tmp_path)
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _carried_gap(session)
     _, ids, reply = _read(session, spec=spec)
     session._attest_inspections("t1", "claude:opus", "review", reply + f"UNREAD {ids[0]} - the copy had no app.py\n")
     assert session._open_inspections() and session.inspection_gaps[0]["attested"] is None
@@ -118,7 +126,7 @@ def test_an_unread_line_never_attests(tmp_path):
 def test_root_attestation_binds_the_bytes_handed_never_the_bytes_after_the_reply(tmp_path):
     """Root control attestation-must-bind-source-handed-to-review."""
     session, spec, project = _session(tmp_path)
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _carried_gap(session)
     _, _, reply = _read(session, spec=spec)
     (project / "app.py").write_text("changed while the review ran\n")
     session._attest_inspections("t1", "claude:opus", "review", reply)
@@ -132,7 +140,7 @@ def test_root_attestation_binds_the_bytes_handed_never_the_bytes_after_the_reply
 ])
 def test_root_an_empty_read_never_borrows_the_next_line(tmp_path, tail):
     session, spec, _ = _session(tmp_path)
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _carried_gap(session)
     _, ids, _ = _read(session, spec=spec)
     session._attest_inspections("t1", "claude:opus", "review", f"READ {ids[0]}" + tail)
     assert session._open_inspections() and session.inspection_gaps[0]["attested"] is None
@@ -142,7 +150,7 @@ def test_root_an_empty_read_never_borrows_the_next_line(tmp_path, tail):
 def test_read_and_unread_for_one_gap_in_either_order_is_unread(tmp_path):
     for order in ("READ {g} - fine\nUNREAD {g} - no copy", "UNREAD {g} - no copy\nREAD {g} - fine"):
         session, spec, _ = _session(tmp_path / str(len(order)) / order[:2])
-        session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+        _carried_gap(session)
         _, ids, _ = _read(session, spec=spec)
         session._attest_inspections("t1", "claude:opus", "review", "NO FINDINGS\n" + order.format(g=ids[0]))
         assert session._open_inspections()
@@ -153,7 +161,7 @@ def test_root_live_and_saved_readers_agree_on_missing_authority(tmp_path):
     attestation holds only correct digests and the current source is open
     live and unverified saved, and each authority field is required by both."""
     session, spec, project = _session(tmp_path)
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _carried_gap(session)
     _, _, reply = _read(session, spec=spec)
     session._attest_inspections("t1", "claude:opus", "review", reply)
     good = json.loads(json.dumps(session.inspection_gaps[0]))
@@ -190,7 +198,7 @@ def test_root_mixed_read_and_execution_must_not_clear(tmp_path):
     session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py and execute python app.py - unavailable")
     assert session.inspection_gaps == [] and len(session._standing_not_run()) == 1
     session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py and tests/test_app.py - unavailable")
-    assert len(session.inspection_gaps) == 1 and len(session._standing_not_run()) == 1
+    assert session.inspection_gaps == [] and len(session._standing_not_run()) == 1
 
 
 def test_root_batch_sibling_gap_must_remain_unattested(tmp_path):
@@ -204,7 +212,7 @@ def test_root_batch_sibling_gap_must_remain_unattested(tmp_path):
         child, _, child_project = _session(tmp_path / task)
         (child_project / "other.py").write_text("X = 1\n")
         child._active_spec = TaskSpec(task_id=task, description="x")
-        child._record_not_run("openai:sol", "revision", f"NOT RUN: Read {path} - unavailable")
+        _carried_gap(child, path, task)
         children.append(child)
     for child in children:
         parent.inspection_gaps.extend(dict(g) for g in child.inspection_gaps)
@@ -218,7 +226,7 @@ def test_root_batch_sibling_gap_must_remain_unattested(tmp_path):
 
 def test_a_review_only_task_is_handed_every_open_gap(tmp_path):
     session, spec, _ = _session(tmp_path)
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _carried_gap(session)
     from quadratus import session as S
     verify = TaskSpec(task_id="t2", description="verify")
     original = S.is_review_only
@@ -235,7 +243,7 @@ def test_a_review_only_task_is_handed_every_open_gap(tmp_path):
 def test_the_gaps_are_carried_and_judged_outside_the_engine_with_the_same_authority(tmp_path):
     assert "inspection_gaps" in checkpoint._CARRIED
     session, spec, project = _session(tmp_path)
-    session._record_not_run("openai:sol", "revision", "NOT RUN: Read app.py - unavailable")
+    _carried_gap(session)
     record = dict(inspection_gaps=json.loads(json.dumps(session.inspection_gaps)),
                   source_fingerprint=session._source_fingerprint())
     assert truth_check._inspection_problems(record) == [

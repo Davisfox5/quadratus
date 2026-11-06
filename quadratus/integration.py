@@ -437,6 +437,58 @@ def attribute(result) -> dict:
     return dict(product=not reasons, reasons=reasons)
 
 
+#: Exit statuses a shell gives a command it could not execute.
+_UNEXECUTABLE_EXITS = (126, 127)
+
+
+def repair_route(result) -> dict:
+    """Whether a failed gate may buy the task's bounded repair (Davis,
+    2026-11-06, PR73 6693873055, replacing assertion-only eligibility).
+
+    A repair is an attempt, not a verdict: the existing protections decide
+    what it achieved (run-start test restoration, the dependency-tree
+    watch, scope measurement, declared scenarios bound to executed cases,
+    the original reviewer's comparison of any generated test it changed,
+    and the next check). So a raw exception, a broken generated fixture, a
+    collection error, a timeout whose processes were all stopped, an exit
+    other than 1, or a mix of these with assertion failures is repairable:
+    an edit to the project can cause and can fix each. What is not is a
+    fact no project edit can change or a state nobody can vouch for: a
+    runner or working folder that is unavailable or not configured, a
+    command a shell could not execute (126, 127), a source that changed
+    while the gate ran, a report from another invocation or producer, and
+    leftover processes whose stop was not confirmed. ``attribute`` stays as
+    the diagnostic record of what kind of failure it was.
+
+    Returns ``repairable`` and ``blockers``, plus ``attribution``."""
+    attribution = attribute(result)
+    if result.passed:
+        return dict(repairable=False, blockers=[], attribution=attribution)
+    blockers = []
+    if result.receipts:
+        for r in result.receipts:
+            if not r.required or r.status == "passed":
+                continue
+            if r.status in ("blocked", "skipped"):
+                blockers.append(f"{r.id}: {r.status}: {r.reason}")
+            elif r.status == "error" and r.reason == "source changed during gate":
+                blockers.append(f"{r.id}: the source changed while the check ran")
+            elif r.cleanup_complete is False:
+                blockers.append(f"{r.id}: left processes whose stop was not confirmed")
+            elif r.returncode in _UNEXECUTABLE_EXITS:
+                blockers.append(f"{r.id}: exit {r.returncode}: the runner could not be executed")
+            elif (r.report or {}).get("state") == "foreign":
+                blockers.append(f"{r.id}: the structured report is not this invocation's")
+    else:
+        if getattr(result, "blocker", ""):
+            blockers.append(f"check: {result.blocker}")
+        elif result.returncode in _UNEXECUTABLE_EXITS:
+            blockers.append(f"check: exit {result.returncode}: the runner could not be executed")
+        elif (result.report or {}).get("state") == "foreign":
+            blockers.append("check: the structured report is not this invocation's")
+    return dict(repairable=not blockers, blockers=blockers, attribution=attribution)
+
+
 #: Seconds a gate command's own processes get to exit after SIGTERM, then
 #: after SIGKILL, and the readers to drain their pipes once they are gone.
 _TERM_GRACE, _KILL_GRACE, _DRAIN_GRACE = 2.0, 1.0, 2.0
@@ -575,6 +627,12 @@ def _run_owned(argv, *, cwd, timeout, env):
     return returncode, output, cleanup
 
 
+def _cleanup_confirmed(cleanup) -> bool:
+    """Whether a command's leftover processes were all confirmed stopped."""
+    return (not cleanup) or bool(cleanup.get("complete") and not cleanup.get("unreadable")
+                                 and not cleanup.get("remaining"))
+
+
 def _cleanup_note(cleanup) -> str:
     if not cleanup:
         return ''
@@ -628,6 +686,9 @@ class GateResult:
     #: Case names read from the whole output before the tail is kept
     #: (case_record); a suite carries one per receipt instead.
     cases: Optional[dict] = None
+    #: A fact no edit to the project can change, for the single-command
+    #: gate (``repair_route``); a suite carries its facts per receipt.
+    blocker: str = ""
 
     def render(self) -> str:
         """The operator's view: the exact command, for the run record."""
@@ -740,7 +801,7 @@ class IntegrationGate:
         except FileNotFoundError as exc:
             return GateResult(
                 passed=False, command=shown, returncode=None,
-                output=f"(command not found: {exc})",
+                output=f"(command not found: {exc})", blocker=f"runner unavailable: {exc}",
             )
         if returncode is None:
             # The partial output is kept: a hang must name what it was doing.
@@ -748,9 +809,16 @@ class IntegrationGate:
                 passed=False, command=shown, returncode=None,
                 output=(f"(timed out after {self.timeout}s) {_cleanup_note(cleanup)}\n"
                         + combined[-_TAIL_CHARS:]).strip(),
+                blocker="" if _cleanup_confirmed(cleanup) else
+                        "the timed-out command left processes whose stop was not confirmed",
             )
         if cleanup:
             combined = (combined + "\n" + _cleanup_note(cleanup)).strip()
+            if not _cleanup_confirmed(cleanup):
+                return GateResult(passed=False, command=shown, returncode=returncode,
+                                  output=combined[-_TAIL_CHARS:], report=report,
+                                  cases=case_record(combined, runner_of(self.command)),
+                                  blocker="the command left processes whose stop was not confirmed")
         passed = returncode == 0
         if passed and self.minimum_tests is not None:
             count = _test_count(combined)
@@ -947,6 +1015,9 @@ class GateReceipt:
     #: (case_record), None past its bound (Codex review of 67c9fad, S1: the
     #: 2,000-character tail lost the names that told two skips apart).
     cases: Optional[dict] = None
+    #: Whether the command's own leftover processes were confirmed stopped;
+    #: None when it left none. False is an unknown external effect.
+    cleanup_complete: Optional[bool] = None
 
 
 def _test_count(output):
@@ -1073,6 +1144,7 @@ class GateSuite:
                     raise _GateTimeout(output, cleanup)
                 if cleanup:
                     output = (output + '\n' + _cleanup_note(cleanup)).strip()
+                    base['cleanup_complete'] = _cleanup_confirmed(cleanup)
                 count = _test_count(output)
                 status, reason = ('passed', 'exit 0') if returncode == 0 else ('failed', 'nonzero exit')
                 if count == 0:
@@ -1089,7 +1161,9 @@ class GateSuite:
                 # Still an error, never a product failure: what was printed
                 # before the deadline is kept so the hang can be diagnosed.
                 receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s',
-                                      output=((_cleanup_note(exc.cleanup) + '\n' + exc.output).strip())[-_TAIL_CHARS:])
+                                      output=((_cleanup_note(exc.cleanup) + '\n' + exc.output).strip())[-_TAIL_CHARS:],
+                                      cleanup_complete=(None if not exc.cleanup
+                                                        else _cleanup_confirmed(exc.cleanup)))
             except OSError as exc:
                 receipt = GateReceipt(**base, status='blocked', reason=f'runner unavailable: {exc}')
             if self.project.fingerprint() != source:

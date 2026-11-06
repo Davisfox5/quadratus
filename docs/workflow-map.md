@@ -211,9 +211,13 @@ review.
 
 - A check declares its report format: JUnit XML for pytest (`--junitxml`) or a
   TAP/JSON reporter for node, written to a harness-owned path.
-- Only a parsed, attributable assertion failure with valid setup and no
-  dominating signal routes to product repair.
-- Everything else routes to operator handoff with bounded diagnostics.
+- Historical (phase 3): only a parsed, attributable assertion failure routed
+  to product repair, and everything else to operator handoff.
+- Current (PR73 6693873055): any failure gets the task's bounded repair with
+  the harness's diagnosis unless no project edit can change it (runner or
+  cwd unavailable or unconfigured, exit 126/127, the source changed under
+  the gate, a report from another invocation, leftover processes not
+  confirmed stopped); see `integration.repair_route`.
 
 ## 6. Gaps found while mapping (each becomes a journey)
 
@@ -304,7 +308,7 @@ review.
 | J30 | Worker errand: optional failure vs required failure | error-as-result | optional recorded; required fails its edge | P2 |
 | J31 | Design-fix role packet (G11) | reviewer packet | lead packet | P3 |
 | J32 | Preflight passes, then the source or dependency tree changes, or the identity becomes unavailable | dependency stop | `integrity` above everything but refusal and security | P1 (dependency), P2 (preflight) |
-| J33 | Compound: product assertion failure plus a setup failure, denial or latched budget | gate-fix, or the stop | the dominating stop; **no repair call** | P3 |
+| J33 | Compound: product assertion failure plus a setup failure, denial or latched budget | gate-fix, or the stop | a denial or latched budget dominates; a mixed assertion and setup or runtime failure gets the bounded repair (PR73 6693873055) | P3 |
 | J34 | CONTINUES carries unresolved requirement and finding ids | ids re-listed | carried once, never double-counted or settled early | P2 |
 | J35 | Parallel child debt | child finding kept open | the merge gate cannot close unresolved child debt | P1, then P3 |
 | J36 | CHANGED report mismatch | PartialWorkStopped | recorded as a non-terminal `unverified` fact, reply kept, run continues on the measured diff; an unparsed request line with no CHANGED line still stops | P1, revised after the phase-4 run |
@@ -537,12 +541,14 @@ failure" (section 8) and closes J4, J5, J6 and J33 (G10).
   required check exited 1 with reason `nonzero exit`, its report is this
   invocation's (nonce, producer), exit status 1, no collection or
   setup/teardown error, a consistent and untruncated record, and every
-  failure is `when=call` with `assertion` true. Anything else raises
-  `CheckUnattributable` (operator) with the reasons, the returncode and the
-  output artifact, and makes no repair call.
-- A check with no declared report is never repaired. Other runners have no
-  producer yet, so their failures are always handoffs. The operator
-  profile's checks are P4 work.
+  failure is `when=call` with `assertion` true. (Superseded for repair eligibility by PR73 6693873055: attribution is now a diagnostic record; `integration.repair_route` decides.)
+  `CheckUnattributable` (operator), with the reasons, the returncode and the
+  output artifact and no repair call, is now raised only on the blockers
+  `repair_route` names.
+- A check with no declared report gets the bounded repair with its output;
+  what the repair achieved is judged by the next check, the restored
+  original tests, scope, scenarios and the original reviewer's comparison
+  of any generated test it changed.
 - `redact_command_paths` now also redacts the relative and bare spellings of
   a gate's command files, which pytest prints for a grader outside the
   project. It matches only the private file's own trailing path components,

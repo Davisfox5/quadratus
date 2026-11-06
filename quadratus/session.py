@@ -2927,10 +2927,7 @@ def boundary_note(texts) -> str:
               "integer) must stay accepted, and nothing here asks for a refusal the goal does not state. Do not "
               "lower Python's limit or add a limit the goal does not state. Where the contract requires a "
               "refusal, the code refuses as it says, without a traceback or a crash, and leaves no change "
-              "behind. A test case per applicable class is the cheap proof; an approved check runs it. Write "
-              "each case so a crash fails an assertion (assert on the exit status, response status, output and "
-              "stored state the requirement names; catch what the call raises and assert on it), so a "
-              "traceback is a failed case the repair route acts on, not an error that stops the check. A "
+              "behind. A test case per applicable class is the cheap proof; an approved check runs it. A "
               "class nobody exercised is an untested risk, never a defect anyone observed: report a failure "
               "only when a run or a read of the code shows it, and name which.")
 
@@ -3347,8 +3344,10 @@ class Session:
         #: Acceptance an editing call said it did not run ('NOT RUN:' lines):
         #: evidence that can only lower an audit verdict, never raise one.
         self.unexecuted_acceptance: List[dict] = []
-        #: NOT RUN items that only name reading files, routed to the task's
-        #: review as inspections (``_record_inspection_gap``), never execution.
+        #: Inspection gaps a checkpoint or record written by 1970b0e may carry
+        #: (reading-only NOT RUN items). No new ones are made since PR73
+        #: 6693873055; carried ones still hold until a READ attestation, so a
+        #: resumed run never completes over them.
         self.inspection_gaps: List[dict] = []
         #: Review-only tasks not dispatched because the harness had already
         #: verified the current source (Session._verification_handoff).
@@ -3429,6 +3428,9 @@ class Session:
         #: slot, reviewers and outcome of each one-shot recheck of a capped,
         #: gated, in-scope revision, resolved or not; carried.
         self.capped_handoffs: List[dict] = []
+        #: Generated tests a gate repair changed, each with its bytes before
+        #: the repair and the original reviewer's comparison (PR73 6693873055).
+        self.generated_test_repairs: List[dict] = []
         #: Each renewal of the final-audit hold before a post-audit writer
         #: (``_renew_audit_hold``); carried.
         self.finish_renewals: List[dict] = []
@@ -3824,6 +3826,16 @@ class Session:
             if isinstance(exc, FinishReserved):
                 # Refused at admission: nothing was sent, so nothing written.
                 edit_started = None
+            response = getattr(exc, "provider_response", None)
+            if isinstance(response, str) and response and not getattr(exc, "response_artifact", None):
+                # A reply the harness rejected (a bounded editor's format, a
+                # post-return budget refusal) is kept privately in the run's
+                # artifacts, whatever store the operation receipt has (PR73
+                # 6693873055: the t5 reply was unrecoverable).
+                try:
+                    exc.response_artifact = self.store.put(response, kind="rejected-response", author=key).id
+                except Exception:  # noqa: BLE001 -- evidence never replaces the failure
+                    log.debug("could not keep the rejected response", exc_info=True)
             if self._task_memory is not None:
                 try:
                     ref = self._task_memory.keep(prompt, kind="interrupted-prompt", author=key)
@@ -5849,10 +5861,14 @@ class Session:
                 # unless it is the last slot's checked, in-scope source, which
                 # meets the reviewers whose findings it answered (r10).
                 handoff = self._capped_revision_recheck(lead, spec, task, exc, before, blocking, labels,
-                                                        stage="revision")
+                                                        stage="revision",
+                                                        cycle_left=1 + retried < self.config.max_fix_cycles)
                 if handoff is None:
                     return self._close_turn_limited(lead, spec, task, exc, before)
-                revision, unresolved, capped_writer = handoff[0], handoff[1], True
+                revision, unresolved = handoff[0], handoff[1]
+                # A continued handoff keeps the writer for the open findings.
+                capped_writer = not (self.capped_handoffs and self.capped_handoffs[-1].get("continued")
+                                     and self.capped_handoffs[-1].get("task") == spec.task_id)
             except FinishReserved as exc:
                 # Refused before it started, to keep the finish (or at its
                 # admission above, already recorded): nothing answered the
@@ -5906,7 +5922,8 @@ class Session:
                                                                      [(labels[p], v) for p, v in actionable]))
                     except TurnLimitReached as exc:
                         handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels,
-                                                                stage="fix")
+                                                                stage="fix",
+                                                                cycle_left=cycles + 1 < self.config.max_fix_cycles)
                         # Findings of peers outside this round's recheck stay
                         # held (the workflow refutation of this batch); with
                         # slots left they make the handoff an unfinished one.
@@ -5923,7 +5940,12 @@ class Session:
                         if others and not self._final_work_slot(spec):
                             self.capped_handoffs[-1]["outcome"] = "unresolved: other findings open"
                             return self._close_turn_limited(lead, spec, task, exc, before)
-                        revision, unresolved, capped_writer = handoff[0], others + handoff[1], True
+                        revision, unresolved = handoff[0], others + handoff[1]
+                        entry = self.capped_handoffs[-1] if self.capped_handoffs else {}
+                        if entry.get("continued") and entry.get("task") == spec.task_id:
+                            cycles += 1
+                            continue
+                        capped_writer = True
                         break
                     except FinishReserved as exc:
                         # The findings the last recheck left open stay open.
@@ -6115,7 +6137,8 @@ class Session:
                  + f" Bound to source {current[:16]} and checks {identity[:16]}.")
         return draft, list(collaborators) + [p for p in reviewers if p not in collaborators]
 
-    def _capped_revision_recheck(self, lead, spec, task, exc, before, pending, labels, *, stage: str = "revision"):
+    def _capped_revision_recheck(self, lead, spec, task, exc, before, pending, labels, *, stage: str = "revision",
+                                 cycle_left: bool = False):
         """A capped revision or fix whose work is the measured, in-scope
         source with the task's checks passing on exactly it meets the
         reviewers whose blocking findings it answered, once, on the current
@@ -6265,6 +6288,24 @@ class Session:
                 (handoff["invalidated"] if state == "invalidated" else handoff["resolved"]).append(fid)
             handoff["outcome"] = "unresolved" if open_after else "resolved"
         handoff["unresolved"] = [_finding_id(v) or v[:120] for _p, v in unresolved]
+        progress = len(handoff["resolved"]) + len(handoff["invalidated"])
+        if (unresolved or open_after) and not final and cycle_left and progress and handoff["outcome"] == "unresolved":
+            # Observed progress inside the task's own fix allowance (PR73
+            # 6693873055): the capped call settled some findings on checked
+            # source, so the remaining ones go to one more bounded fix call
+            # of this task, carrying only those findings, rather than a new
+            # task re-sending the whole bundle. Measured by the reviewers'
+            # own verdicts, never a findings-per-turn guess; no cap, budget
+            # or allowance grows, and admission still decides the call.
+            handoff["outcome"] = f"continued: {progress} settled, {len(unresolved)} open"
+            handoff["continued"] = True
+            self._note(f"task {spec.task_id}: the capped {stage} settled {progress} finding(s); the "
+                       f"{len(unresolved)} still open go to the task's next bounded fix call")
+            if said:
+                self._record_proves(lead, "lead", said)
+            if self._outcome is not None:
+                self._outcome.note("cap", cap_fact, terminal=False)
+            return record, unresolved
         if (unresolved or open_after) and not final:
             # Slots are left: the reviewer's own verdict stands on the
             # registry and the task stays the unfinished debt it was, for
@@ -9524,6 +9565,7 @@ class Session:
                 # A child's readings come back with their attestation: the
                 # digests it recorded are compared with the merged source.
                 self.inspection_gaps.extend(dict(g) for g in getattr(child, "inspection_gaps", []) or [])
+                self.generated_test_repairs.extend(dict(g) for g in getattr(child, "generated_test_repairs", []) or [])
                 for entry in child.unexecuted_acceptance:
                     # Re-based whole: the binding (scenario, cases) the child
                     # recorded survives; only the parent's own gate and
@@ -12177,7 +12219,13 @@ class Session:
             # What the item names, bound now so a later genuine execution
             # can discharge it (evidence lifecycle batch, 2026-10-29).
             self._bind_not_run(entry)
-            if self._record_inspection_gap(entry):
+            if self._reading_only(entry):
+                # Reading the source is not a check, and the reviewer reads
+                # it anyway: no obligation, no attestation ritual, only a
+                # note (PR73 6693873055, subtracting the inspection gap that
+                # 6674444836 added; old persisted gaps are still read).
+                self._note(f"task {task}: {role} said it could not read {', '.join(_pure_reading(item))}; "
+                           "reading is not a check, so nothing is held for it")
                 continue
             self._associate_not_run(entry, re.findall(r"R\d+", declared.group(1).upper()) if declared else ())
             # A report after a check is a new report: an earlier run cannot
@@ -12258,40 +12306,13 @@ class Session:
             self._note(f"task {entry.get('task')}: NOT RUN item held against {', '.join(entry['requirements'])} "
                        f"({entry['association'][:160]}): {str(entry.get('item'))[:80]}")
 
-    def _record_inspection_gap(self, entry: dict) -> bool:
-        """Route a NOT RUN item that only names reading files to inspection,
-        never to execution debt (Davis, 2026-11-06, turn-tracking-01 O10:
-        "Read tickets/store.py tests/test_dependencies_store.py", written by a
-        codex revision told to read with claude's tool names, held nine
-        requirements with no runner that could ever discharge it). A reading
-        is satisfied by the task's own reviewer, who holds a copy of exactly
-        this source: the gap is put in that reviewer's prompt, and a
-        completed review or recheck of the task records the files' digests as
-        a source-bound read attestation. Until then, or when the files change
-        after it, the gap stays open and holds the task's covered
-        requirements; tests never stand in for it. True when routed."""
-        item = str(entry.get("item") or "")
-        paths = _pure_reading(item)
+    def _reading_only(self, entry: dict) -> bool:
+        """A NOT RUN item that only asks to read existing project files."""
+        paths = _pure_reading(str(entry.get("item") or ""))
         if not paths or (entry.get("binding") or {}).get("kind") != "paths" or not self.project:
             return False
         root = Path(self.project)
-        if not all((root / p).is_file() for p in paths):
-            return False
-        if any(g["task"] == entry["task"] and g["item"] == item and g.get("attested") is None
-               for g in self.inspection_gaps):
-            return True
-        self.inspection_gaps.append(dict(
-            # Globally unambiguous: a parallel child's gaps merge into the
-            # parent beside its siblings' (root review of a3de6d6, item 2).
-            id=f"IG-{uuid.uuid4().hex[:10]}", task=entry["task"], role=entry.get("role"), author=entry.get("author"),
-            item=item, why=entry.get("why"), files=sorted(set(paths)),
-            requirements=list(entry.get("requirements") or []),
-            route="the reviewer of this task, or of a review-only verification task, is handed these files in its "
-                  "source copy; its 'READ <id>' line in a completed review or recheck attests the bytes it was handed",
-            handed=[], attested=None))
-        self._note(f"task {entry['task']}: NOT RUN '{item[:80]}' is a reading, routed to the task's review "
-                   "(inspection), not execution")
-        return True
+        return all((root / p).is_file() for p in paths)
 
     def _file_digests(self, files) -> Dict[str, Optional[str]]:
         import hashlib
@@ -12961,9 +12982,15 @@ class Session:
         unrun = self._unnamed_standing()
         standing = self._standing_not_run()
         unread = self._open_inspections()
-        if not unrun and not standing and not unread:
+        repaired = [e for e in getattr(self, "generated_test_repairs", []) or [] if e.get("verdict") != "intact"]
+        if not unrun and not standing and not unread and not repaired:
             return ""
         lines = []
+        for entry in repaired:
+            lines.append(f"- task {entry['task']}: a repair {'removed' if entry.get('removed') else 'changed'} the "
+                         f"generated test {entry['path']}; reviewer verdict: {entry.get('verdict')}"
+                         + (f" ({str(entry.get('why'))[:120]})" if entry.get("why") else "")
+                         + ": a requirement whose evidence is that test is not shown by it")
         for gap in unread:
             lines.append(f"- task {gap['task']} ({gap.get('role')}) could not read {', '.join(gap['files'])} "
                          f"(covers {', '.join(gap.get('requirements') or [])}): a reading, not a run; attested only "
@@ -18386,7 +18413,15 @@ class Session:
                 "the verdict well inside the budget.")
 
     def _fix_prompt(self, spec: TaskSpec, revision: str, unresolved: List[tuple]) -> str:
-        remaining = "\n\n".join(f"[{p}]\n{v}" for p, v in unresolved)
+        # Each open finding with its original text beside the latest verdict
+        # (PR73 6693873055: a follow-up after a capped revision saw only
+        # "RFT1-2: UNRESOLVED: no docstring yet", never what was asked).
+        texts = {r["fid"]: r.get("text") or "" for r in self.review_findings}
+
+        def shown(verdict: str) -> str:
+            original = texts.get(_finding_id(verdict) or "", "")
+            return verdict if not original or original in verdict else f"{verdict}\n  (finding: {original})"
+        remaining = "\n\n".join(f"[{p}]\n{shown(v)}" for p, v in unresolved)
         return (
             f"Task: {spec.description}\n\n"
             f"Your current work:\n{revision}\n\n"
@@ -18835,12 +18870,14 @@ class Session:
                                       after="check", wall_extra=wall_extra, wall_known=wall_known):
                 break
             self._fix_cycle_now = getattr(self, "_gate_fixes_used", 0) + 1
+            generated = self._generated_test_bytes() if self._writes() else {}
             try:
                 fix = self._edit(
                     lead,
                     f"Task: {spec.description}\n\n"
                     f"The project's own integration check failed after your "
-                    f"work:\n{result.for_models()}\n\n"
+                    f"work:\n{result.for_models()}"
+                    + self._repair_diagnosis(result) + "\n\n"
                     "Fix the failure. Produce the complete revised work."
                     + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
                     + _NO_REQUESTS_IN_FIX,
@@ -18861,6 +18898,7 @@ class Session:
             result = self._check(gate)
             task.record("user", result.for_models())
             attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
+            self._compare_repaired_tests(spec, task, generated)
             self._handoff_unattributable(gate, result, task)
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cases": result.cases,
@@ -19055,18 +19093,25 @@ class Session:
         return False
 
     def _handoff_unattributable(self, gate, result, task) -> None:
-        """Stop, with diagnostics and no repair call, on a failure that is not
-        an attributable assertion failure (integration.attribute). Only a
-        product failure may reach a gate-fix; a runner crash, a setup or
-        collection error, a runtime exception, a timeout, a missing runner or
-        an undeclared report is the operator's (phase 3, #25; map J4-J6, J33)."""
-        from .integration import CheckUnattributable
+        """Stop, with diagnostics and no repair call, only on a failed check
+        no project edit can address (``integration.repair_route``): an
+        unavailable or unconfigured runner, a command that could not be
+        executed, a source that changed under the gate, a report that is not
+        this invocation's, or leftover processes whose stop was not
+        confirmed. Every other failure, an assertion, a raw exception, a
+        broken generated fixture, a collection error, a timeout whose
+        processes were stopped or a mix of these, buys the task's bounded
+        repair, whose outcome the existing protections verify (Davis,
+        2026-11-06, PR73 6693873055; replacing the assertion-only rule of
+        phase 3, #25)."""
+        from .integration import CheckUnattributable, repair_route
+        if result.passed:
+            return
         attempt = self._outcome.checks[-1] if self._outcome is not None and self._outcome.checks else {}
-        verdict = attempt.get("attribution") if attempt else None
-        if verdict is None:
-            from .integration import attribute
-            verdict = attribute(result)
-        if result.passed or verdict["product"]:
+        route = attempt.get("repair_route") if attempt else None
+        if route is None:
+            route = repair_route(result)
+        if route["repairable"]:
             return
         self.checks.append({"passed": False, "command": result.command, "output": result.output,
                             "cases": result.cases,
@@ -19078,13 +19123,131 @@ class Session:
                                          for r in result.receipts]})
         if self._outcome is not None:
             self._outcome.edge("checks", False)
-        task.record("user", "The check failure is not attributable to the application; handed to the "
-                            "operator without a repair call.")
+        task.record("user", "The check failed on a condition no edit to the project can change; handed to "
+                            "the operator without a repair call.")
         raise CheckUnattributable(
-            f"the check failed without an attributable assertion failure "
-            f"({'; '.join(verdict['reasons'])[:400]}); returncode {result.returncode}; "
+            f"the check failed on a condition no project edit can change "
+            f"({'; '.join(route['blockers'])[:400]}); returncode {result.returncode}; "
             f"output artifact {attempt.get('output_artifact', 'unavailable')}. No repair call was made. "
             "Work preserved.")
+
+    def _repair_diagnosis(self, result) -> str:
+        """The harness's own facts about a failed check for the repair call:
+        what kind of failure each was, never a verdict on whose it is."""
+        from .integration import attribute
+        reasons = attribute(result)["reasons"]
+        if not reasons:
+            return ""
+        return ("\n\nHarness diagnosis (facts about the failure, not a verdict on its cause): "
+                + "; ".join(reasons)[:600] + ". The failure may be in the application or in a test this task "
+                "wrote. Fix whichever it is. A test you added may be corrected, never removed or weakened: it "
+                "must still exercise what it was written to check, and the reviewer of this task compares any "
+                "test you change with its version before this fix. Inject a failure only on the path the "
+                "action under test uses, and read state before and after through a handle the injection does "
+                "not touch. A run-start test is restored and run as it was.")
+
+    def _generated_test_bytes(self) -> Dict[str, bytes]:
+        """The test and test-support files this run created (not run-start
+        originals), as bytes, bounded: what a repair may change and its
+        reviewer compares (PR73 6693873055)."""
+        from .integration import is_test_support
+        if not self.project:
+            return {}
+        originals = self._original_tests or {}
+        out: Dict[str, bytes] = {}
+        try:
+            from .project import Project
+            files = Project(self.project, exclude=self.config.project_excludes).files()
+        except Exception:  # noqa: BLE001 -- observation never fails a check
+            return {}
+        root = Path(self.project)
+        for name in files:
+            path = Path(name)
+            rel = (path.relative_to(root) if path.is_absolute() else path).as_posix()
+            if not is_test_support(rel) or rel in originals or len(out) >= 200:
+                continue
+            full = root / rel
+            try:
+                if full.is_file() and not full.is_symlink() and full.stat().st_size <= 1 << 20:
+                    out[rel] = full.read_bytes()
+            except OSError:
+                continue
+        return out
+
+    def _compare_repaired_tests(self, spec, task, before: Dict[str, bytes]) -> None:
+        """A repair that changed or removed a test this run wrote goes to the
+        task's original reviewer with the version before the repair (PR73
+        6693873055: deleting or weakening a scenario never counts as
+        recovery). One call; INTACT keeps the change, WEAKENED is that
+        reviewer's blocking finding, and no verdict (unavailable, capped,
+        refused) leaves the change unreviewed, which the audit and
+        truth_check read as unverified. Declared scenarios stay bound to
+        their executed cases whatever is said here."""
+        import difflib
+        if not before:
+            return
+        after = self._generated_test_bytes()
+        changed = {p: b for p, b in before.items() if after.get(p) != b}
+        if not changed:
+            return
+        peers = [p for p in (getattr(self, "_route_peers", None) or []) if self._available(p)]
+        entries = []
+        for path, old in sorted(changed.items()):
+            new = after.get(path)
+            entry = dict(task=spec.task_id, path=path, removed=new is None,
+                         before_sha256=hashlib.sha256(old).hexdigest(),
+                         after_sha256=hashlib.sha256(new).hexdigest() if new is not None else None,
+                         before_artifact=self.store.put(old.decode("utf-8", "replace"),
+                                                        kind="generated-test-before-repair", author="harness").id,
+                         reviewer=peers[0] if peers else None, verdict="unreviewed", why="")
+            entries.append((entry, old, new))
+            self.generated_test_repairs.append(entry)
+        if not peers:
+            for entry, _, _ in entries:
+                entry["why"] = "no reviewer of this task is available"
+            self._note(f"task {spec.task_id}: a repair changed generated tests with no reviewer to compare them")
+            return
+        peer = peers[0]
+        diffs = []
+        for entry, old, new in entries:
+            lines = difflib.unified_diff(old.decode("utf-8", "replace").splitlines(),
+                                         (new or b"").decode("utf-8", "replace").splitlines(),
+                                         f"a/{entry['path']}", f"b/{entry['path']}" if new is not None else "/dev/null",
+                                         lineterm="")
+            diffs.append("\n".join(lines)[:12_000])
+        prompt = (self._role_packet(spec, "reviewer") + "\n\n"
+                  f"Task: {spec.description}\n\nA repair after a failed check changed tests this task wrote. You "
+                  "reviewed this task. Compare each change with the version before the repair: does every test "
+                  "still exercise and assert what it was written to check, including each declared scenario?"
+                  + self._proof_rows(spec) + "\n\n~~~diff\n" + "\n\n".join(diffs) + "\n~~~\n\n"
+                  "Reply with one line per file: 'TEST INTACT <path> - <why>' or 'TEST WEAKENED <path> - "
+                  "<what it no longer checks>'. A removed test is weakened unless another test now checks "
+                  "the same thing; name it.")
+        try:
+            with invocation(spec.task_id, "test-comparison"):
+                reply = self._invoke_model(peer, prompt)
+        except (TurnLimitReached, FinishReserved, ProviderError) as exc:
+            for entry, _, _ in entries:
+                entry["why"] = f"the comparison gave no verdict ({type(exc).__name__})"
+            self._note(f"task {spec.task_id}: {peer}'s comparison of repaired generated tests gave no verdict")
+            return
+        task.keep(reply, kind="test-comparison", author=peer)
+        for entry, _, _ in entries:
+            said = re.findall(r"^[ \t]*(?:[-*+][ \t]+)?TEST[ \t]+(INTACT|WEAKENED)[ \t]+" + re.escape(entry["path"])
+                              + r"\b[ \t]*[-:]?[ \t]*([^\n]*)$", reply or "", re.IGNORECASE | re.MULTILINE)
+            kinds = {k.upper() for k, _ in said}
+            if kinds == {"INTACT"}:
+                entry.update(verdict="intact", why=said[0][1][:300])
+            elif "WEAKENED" in kinds:
+                why = next(w for k, w in said if k.upper() == "WEAKENED")[:300]
+                entry.update(verdict="weakened", why=why)
+                self._register_review_findings(
+                    spec, peer, f"BLOCKING: the repair weakened {entry['path']}: {why or 'no reason given'} "
+                                f"| basis: {entry['path']} | impact: correctness")
+            else:
+                entry["why"] = "no TEST INTACT or TEST WEAKENED line for it"
+        self._note(f"task {spec.task_id}: {peer} compared repaired generated tests: "
+                   + ", ".join(f"{e['path']} {e['verdict']}" for e, _, _ in entries))
 
     def _record_check_attempt(self, result, gate_kind="full"):
         """One executed check, as a typed record: receipts in full, the output
@@ -19105,17 +19268,21 @@ class Session:
                                     returncode=r.returncode, cached=r.cached, source_hash=r.source_hash,
                                     runner_hash=r.runner_hash, report=r.report) for r in result.receipts],
                      report=result.report)
-        from .integration import attribute
-        verdict = attribute(result)
+        from .integration import repair_route
+        route = repair_route(result)
         if not result.passed:
-            entry["attribution"] = verdict
+            entry["attribution"] = route["attribution"]
+            entry["repair_route"] = route
         if target is not None:
             entry["attempt"] = len(target.checks) + 1
             target.checks.append(entry)
             if not result.passed:
-                # Classed by attribution: only an attributable assertion
-                # failure is a product failure; anything else is the operator's.
-                return target.note("product" if verdict["product"] else "operator",
+                # Classed by what the harness established, as before: an
+                # attributable assertion failure is the product's, anything
+                # else has no established cause ("operator"). Whether a
+                # repair may be tried is the separate ``repair_route`` (PR73
+                # 6693873055); the class never decides it.
+                return target.note("product" if route["attribution"]["product"] else "operator",
                                    f"check attempt {entry['attempt']} failed", stage="checks")
             return None
         if not result.passed:

@@ -78,25 +78,24 @@ def test_the_merge_allowance_is_the_configured_one_and_exhausts(tmp_path):
     assert "the merge gate still fails" in session.stop_reason
 
 
-def test_an_unattributable_failure_at_the_serial_gate_stops_before_any_batch(tmp_path):
-    """Renamed coverage (Codex 5859838257): with no declared report at any
-    gate the run stops at the serial task's gate; the merge is never reached."""
-    import pytest
-
-    from quadratus.integration import CheckUnattributable
-    with pytest.raises(CheckUnattributable, match="structured report undeclared"):
-        _run(tmp_path, attributable=False)
+def test_a_failure_with_no_declared_report_is_repaired_like_any_other(tmp_path):
+    """PR73 6693873055 (replacing Codex 5859838257's stop): with no
+    declared report at any gate, the serial and the merge failure each get
+    their bounded repair and the run completes."""
+    session, gate, fixes = _run(tmp_path, attributable=False)
+    assert fixes == ["serial", "merge"]
+    assert gate.runs[-1] == "pass" and session.completed, session.stop_reason
 
 
 class SerialAttributableMergeNot(MergeGate):
     def run(self):
         result = super().run()
         if self.runs[-1] == "merge":
-            return GateResult(False, "check", 1, "merge: runner crashed", report=None)
+            return GateResult(False, "check", 127, "merge: runner not found", report=None)
         return result
 
 
-def test_an_unattributable_merged_tree_failure_gets_no_merge_repair(tmp_path):
+def test_a_merged_tree_whose_runner_cannot_execute_gets_no_merge_repair(tmp_path):
     import pytest
 
     from quadratus.integration import CheckUnattributable
@@ -117,7 +116,7 @@ def test_an_unattributable_merged_tree_failure_gets_no_merge_repair(tmp_path):
             return 'Wrote it\nCHANGED: ["c.py"]'
         return parent(model, prompt, system, allow_writes)
     session.invoke = invoke
-    with pytest.raises(CheckUnattributable, match="merge|structured report undeclared"):
+    with pytest.raises(CheckUnattributable, match="runner could not be executed"):
         session.run(max_tasks=6)
     assert fixes == ["serial"], "the serial failure was repaired; the merged tree got no repair"
     assert gate.runs[-1] == "merge"

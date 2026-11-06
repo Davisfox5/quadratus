@@ -450,6 +450,7 @@ Key design decisions already settled:
   `assertion` now requires it. Expected-exception failures (`pytest.raises`
   with nothing raised, `builtins.Failed`) stay unattributable: that is a
   stated capability gap, not something this change widens.
+  (Superseded for repair eligibility by PR73 6693873055: attribution is now a diagnostic record; `integration.repair_route` decides.)
 - **The GUI can bound a run, and off is the old run** (Codex GUI plan on
   #35, 2026-10-09). The Project tab's Run limits form builds the existing
   `RunLimits` and `SurveyConfig` in the callback, refuses a bad field by
@@ -3794,11 +3795,43 @@ Key design decisions already settled:
   through int()). They are candidates, never requirements: the
   requirement's own contract decides the behaviour, a value it accepts
   (an opaque or arbitrary-precision ID) stays accepted, and no limit is
-  lowered or added. The lead is told to write each case so a crash fails an
-  assertion; a held MET says "untested risk, no counterexample observed".
-  An exception escaping product code in a check is still unattributable by
-  the attribution rule above and buys no repair; only a case that asserts
-  on the outcome does.
+  lowered or added. A held MET says "untested risk, no counterexample
+  observed".
+  Since PR73 6693873055 no NOT RUN reading creates a gap (carried gaps are
+  still read and held), and the boundary note no longer asks for crash
+  wrappers: a raw exception buys the bounded repair.
+- **A failed check buys a bounded repair; the protections judge the
+  outcome** (Davis, 2026-11-06, PR73 6693873055, after acceptance-routing-01
+  stopped on a generated fixture with 3.2M tokens left). Codex 5858008514
+  required every non-assertion failure to stop with zero repair calls; the
+  class of an exception never decided who could fix it. `integration.
+  repair_route` now stops (`CheckUnattributable`, operator) only on what no
+  project edit can change: an unavailable or unconfigured runner or cwd,
+  exit 126/127, a source that changed under the gate, a report from
+  another invocation, leftover processes not confirmed stopped. A raw
+  exception, a broken generated fixture, a collection error (including
+  restored originals executing nothing after a product syntax error), a
+  timeout whose processes stopped, an exit other than 1, or a mix with
+  assertions gets the task's existing gate fix (`max_gate_fixes`), with the
+  harness's diagnosis (`attribute` reasons, kept as the record and the fact
+  class) in the prompt. What it achieved is judged by the next check,
+  restored run-start tests, scope, scenarios bound to executed cases and,
+  for any generated test the repair changed or removed, the task's
+  original reviewer comparing it with its pre-repair bytes
+  (`generated_test_repairs`: INTACT, WEAKENED as that reviewer's blocking
+  finding, or unreviewed, which the audit and `truth_check` read as not
+  shown). A failure that survives is the ordinary check debt or
+  `CheckFailing`, cause unestablished. A bounded editor's reply is read by
+  `runtime.bounded_patch`: one `PATCH:`-marked fenced diff, CRLF, BOM and
+  framing prose normalised, no model call; more than one marker or diff,
+  or `NO CHANGES:` beside it, is refused before anything applies, and
+  every rejection, application failures included, keeps the exact reply
+  (`provider_response`, length, sha256, truncation, `parse_stage`), stored
+  by the session as a `rejected-response` artifact. A capped revision or
+  fix whose recheck settled at least one finding, with a fix cycle left,
+  continues in the task on only the open findings (each shown with its
+  original text) instead of a continuation task re-sending the bundle;
+  no cap, budget or allowance grew.
 
 ## How development is coordinated
 

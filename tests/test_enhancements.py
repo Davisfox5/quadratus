@@ -471,9 +471,9 @@ def test_a_failing_gate_feeds_the_output_back_for_one_fix(store):
     assert gate.runs == 2
 
 
-def test_a_failure_without_an_attributable_report_gets_no_fix(store):
-    from quadratus.integration import CheckUnattributable
-
+def test_a_failure_without_an_attributable_report_gets_the_bounded_fix_with_its_diagnosis(store):
+    """PR73 6693873055: an undeclared report is a diagnostic fact, not a
+    stop. The repair call gets the output and the harness's diagnosis."""
     class Undeclared(StubGate):
         def run(self):
             self.runs += 1
@@ -481,7 +481,23 @@ def test_a_failure_without_an_attributable_report_gets_no_fix(store):
     rec = Recorder()
     gate = Undeclared([])
     s = _session(store, rec, config=SessionConfig(integration_gate=gate))
-    with pytest.raises(CheckUnattributable, match="structured report undeclared"):
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    fixes = [c["prompt"] for c in rec.calls if "integration check failed" in c["prompt"]]
+    assert gate.runs == 2 and len(fixes) == 1, "one bounded fix, then the check decides"
+    assert "Harness diagnosis" in fixes[0] and "structured report undeclared" in fixes[0]
+
+
+def test_a_runner_that_could_not_execute_gets_no_fix(store):
+    from quadratus.integration import CheckUnattributable
+
+    class Unexecutable(StubGate):
+        def run(self):
+            self.runs += 1
+            return GateResult(passed=False, command="pytest -q", returncode=127, output="pytest: not found")
+    rec = Recorder()
+    gate = Unexecutable([])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    with pytest.raises(CheckUnattributable, match="runner could not be executed"):
         s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     assert gate.runs == 1 and not any("integration check failed" in c["prompt"] for c in rec.calls)
 

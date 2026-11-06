@@ -986,6 +986,26 @@ def _inspection_problems(record: dict, project=None) -> list:
     return out
 
 
+def _generated_test_problems(record: dict) -> list:
+    """Generated tests a gate repair changed or removed (the engine's
+    ``generated_test_repairs``): shown only by the task's original reviewer
+    calling the change intact. Weakened, unreviewed or malformed is a line
+    for the reader, never a pass (PR73 6693873055)."""
+    out = []
+    for entry in record.get("generated_test_repairs") or []:
+        if not isinstance(entry, dict):
+            out.append("a generated test repair record is not an object")
+            continue
+        where = f"task {entry.get('task')}: the repair {'removed' if entry.get('removed') else 'changed'} " \
+                f"generated test {entry.get('path')}"
+        verdict = entry.get("verdict")
+        if verdict == "intact" and isinstance(entry.get("reviewer"), str) and entry.get("reviewer"):
+            continue
+        out.append(f"{where}; {'its reviewer found it weakened' if verdict == 'weakened' else 'no reviewer called it intact'}"
+                   + (f" ({str(entry.get('why'))[:120]})" if entry.get("why") else ""))
+    return out
+
+
 def judge(run_dir, project=None) -> dict:
     run_dir = Path(run_dir)
     failed, unshown = [], []
@@ -1089,6 +1109,7 @@ def judge(run_dir, project=None) -> dict:
             unshown.append(f"task {entry.get('task')} reported NOT RUN and no later check shows it ran: "
                            f"{str(entry.get('item'))[:120]}")
     unshown.extend(_inspection_problems(record, project))
+    unshown.extend(_generated_test_problems(record))
     for repair in record.get("test_repairs") or []:
         # Kept case names and executed cases do not show a repaired test's
         # assertions were not weakened; only an independent review can.
