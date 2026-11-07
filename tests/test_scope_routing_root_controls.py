@@ -1,3 +1,4 @@
+# ruff: noqa: E702 -- root review of b9d136e, its control file kept verbatim
 """Root controls: malformed input and superseded failure identity, no providers."""
 from copy import deepcopy
 
