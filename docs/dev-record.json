@@ -2939,6 +2939,33 @@
       "decisions": [
         "claude: Overlap resolution: claimed with --resolve over the delivered or reviewed but never-integrated records on these files (T-evidence-routing at 1970b0e and the older claude records; T-stage-b-timeout-fix scope released by root for the current batch, PR73 6675338686, and again for this batch, 6693873055). None is marked integrated or cleared; their receipts and blockers stand. Candidate 6a6c59f stays unqualified."
       ]
+    },
+    {
+      "id": "T-cycle01-binding-settlement",
+      "purpose": "Cycle01 (PR73 6702597850): missing proof binding to a declaration-only lead call; unasked RESOLVES recheck held as pending work",
+      "base": "54ae506de02810dd5b7521f87e0f0ac20b89be46",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/runtime.py",
+        "quadratus/effort.py",
+        "tools/truth_check.py",
+        "tests/lifecycle/test_binding_settlement.py",
+        "tests/lifecycle/test_bounded_repair.py",
+        "CLAUDE.md",
+        "docs/workflow-map.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-11-07T06:06:13Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "9b0280bd6126458d341ca8abbb8bb6b3a4388c26",
+        "at": "2026-11-07T06:06:23Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
