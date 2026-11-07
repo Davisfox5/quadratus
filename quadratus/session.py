@@ -12879,17 +12879,34 @@ class Session:
         ``unexecuted_acceptance[].discharged_at`` stayed null). Skip facts
         keep the decision ``_discharge_named`` wrote. The mark is display
         only: nothing reads it as evidence, and the independent checker
-        reports a mark the record does not justify."""
+        reports a mark the record does not justify.
+
+        A restated item whose cases ran but whose independent judgment does
+        not hold on the current source (missing, insufficient, or stale) is
+        executed, not discharged (root review of bae3830, item 1: the mark
+        said discharged while both deciders held it): ``discharged_*`` stay
+        null and the run is kept as ``executed_*`` with ``discharge_state``
+        "executed, awaiting judgment", so the display, the live decision
+        (``_discharging_check``) and the saved checker say one thing."""
         for entry in self.unexecuted_acceptance:
             if entry.get("kind") == "skipped":
                 continue
             decided = self._discharge_record(entry)
             entry["discharge_display"] = "bound/1"
+            awaiting = bool(decided is not None and entry.get("restatements")
+                            and not self._restated_judged(entry))
             if decided is None:
+                entry.update(executed_at=None, executed_run=None, executed_cases=None)
+            else:
+                entry.update(executed_at=decided["index"], executed_run=decided["run"],
+                             executed_cases=list(decided["cases"]))
+            if decided is None or awaiting:
                 entry.update(discharged_at=None, discharged_run=None, discharged_cases=None)
+                entry["discharge_state"] = "executed, awaiting judgment" if awaiting else "standing"
             else:
                 entry.update(discharged_at=decided["index"], discharged_run=decided["run"],
                              discharged_cases=list(decided["cases"]))
+                entry["discharge_state"] = "discharged"
 
     def _mark_not_run_display_safely(self) -> None:
         try:
@@ -14579,12 +14596,18 @@ class Session:
         ``_admit_plan`` admits, against what is left after the held finish,
         the planning call that names the task (``_planning_stages`` sizing:
         the larger of the reserve and the last planning call), the task's
-        lead call (editing when a blocker needs a code or test change,
-        else a declaration or verification call at the reserve), one review,
-        and the planning call after it where a slot would still be left.
-        Known rechecks and the design review follow findings or a design
-        scope the quote cannot know; they are admitted on the route itself
-        when they arise. With no budget, the slot decides."""
+        lead draft priced as dispatch prices it (``_plan_stages``: at the
+        editing ceiling whenever the run grants writes, since the named task
+        is an ordinary task and its lead holds the grant whatever the
+        blockers need; root review of bae3830, item 2: a cheaper
+        "declaration" quote bought a planner call the dispatch then could not
+        follow), one review, and the planning call after it where a slot
+        would still be left. ``needs_editing`` (whether a blocker needs a
+        code or test change) is recorded, never priced: no declaration-only
+        route with a narrower grant exists. Known rechecks and the design
+        review follow findings or a design scope the quote cannot know; they
+        are admitted on the route itself when they arise. With no budget,
+        the slot decides."""
         used = int(getattr(self, "_slots_used", 0) or 0)
         total = getattr(self, "_max_tasks", None)
         if total is not None and used >= total:
@@ -14597,9 +14620,11 @@ class Session:
         reserve = int((snap.get("limits") or {}).get("reserve_tokens_per_call") or 0)
         naming = delivery.PlanStage("planning call that names the task", "reserve",
                                     tokens=max(reserve, self._last_planning_tokens() or 0) if reserve else None)
-        editing = bool(needs_editing and self._writes())
+        # The lead's exposure class is the dispatch's (``_plan_stages``): the
+        # write grant, not what the blocker needs, decides it.
+        editing = bool(self._writes())
         rows = [naming,
-                delivery.PlanStage("continuation lead" + ("" if editing else " (declaration or verification)"),
+                delivery.PlanStage("continuation lead draft" + ("" if editing else " (read-only)"),
                                    "editing" if editing else "reserve", editing=editing),
                 delivery.PlanStage("continuation review", "reserve")]
         # The planning call after the continuation, where a slot would still
@@ -14609,7 +14634,8 @@ class Session:
                                            tokens=max(reserve, self._last_planning_tokens() or 0) if reserve else None))
         verdict = self._admit_plan("done-continuation", rows, scope="done-continuation")
         return dict(feasible=bool(verdict.feasible), detail=verdict.detail, kind="budget",
-                    route="editing" if editing else "declaration", stages=[r.name for r in rows])
+                    route="write-granted" if editing else "read-only", needs_editing=bool(needs_editing),
+                    stages=[r.name for r in rows], short=dict(verdict.short))
 
     def _known_incomplete(self) -> str:
         """Why completion is already impossible on the current source with

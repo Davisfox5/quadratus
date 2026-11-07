@@ -2908,7 +2908,13 @@ Key design decisions already settled:
     `<O-id>: SUFFICIENT <why>` line on exactly those cases, by the
     restating task's reviewer (review or recheck) or the audit, never by
     the restatement's author (`_restated_judged`, the same rule in
-    `truth_check._restated_not_run_cleared`). The judgment is of the
+    `truth_check._restated_not_run_cleared`, which requires the saved
+    judgment's revisions to name exactly the typed row's requirements with
+    the same whole-number revisions; an empty, partial, extra or boolean
+    map clears nothing). Executed but not yet judged sufficient is shown
+    as such: `discharged_at` stays null while `executed_at`/`executed_run`/
+    `executed_cases` and `discharge_state: executed, awaiting judgment`
+    record the run, so the display and the checker agree. The judgment is of the
     current source and the item's requirement revisions: one made before a
     later edit (root review of 7a141e3: t2 rewrote the judged case to
     `assert True` and both readers still cleared it) is stale, and any
@@ -2936,12 +2942,15 @@ Key design decisions already settled:
     the audit) are sent back once per blocker set and source, with their
     routes, when a slot is left and the continuation's actual route is
     admitted (`_continuation_admission`): the planning call that names it
-    (sized like `_planning_stages`), the lead call (editing only when a
-    blocker needs a code or test change, else a declaration or
-    verification call at the reserve), one review, and the planning call
+    (sized like `_planning_stages`), the lead draft priced as dispatch
+    prices it (`_plan_stages`: the editing ceiling whenever the run grants
+    writes; root review of bae3830: a cheaper "declaration" quote named a
+    route the controller does not take, since the named task is ordinary
+    and its lead holds the grant), one review, and the planning call
     after it where a slot would still be left (root review of 7a141e3: the
     first quote left out the planner and admitted a route that could not
-    be paid); `done_gates` records it with the stages. A repeated DONE, or no admissible continuation, gets the
+    be paid); `done_gates` records it with the stages, the shortfall and
+    whether a blocker needed an edit (recorded, never priced). A repeated DONE, or no admissible continuation, gets the
     audit as before.
   - *The cap's goal question* is not asked when an audit already judged
     the current source and such blockers remain (`goal_question_skipped`,

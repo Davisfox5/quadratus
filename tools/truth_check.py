@@ -443,16 +443,47 @@ def _bound_not_run_cleared(entry, checks, record) -> bool:
     return False
 
 
-def _restated_not_run_cleared(entry, checks, record) -> bool:
-    """A NOT RUN item its owning lead restated as exact cases (cycle02),
-    validated from the saved record alone: the last restatement names exactly
-    the entry's cases and was written by the reporting task or one that took
-    the item over; an independent seat (not the restatement's author) judged
-    exactly those cases SUFFICIENT on the final source and the requirement
-    revisions the item's typed row binds; and a later passing check on the final
-    source, under the entry's own gate and environment, required and passed
-    from the project root with no filter and no skip, shows every case
-    passed. Anything missing or mismatched is not cleared."""
+def _restated_judgment_revisions_ok(entry, judged, record) -> bool:
+    """Whether a restated item's saved judgment names the complete
+    requirement identity the item's typed rows bind (root review of
+    bae3830, item 3): a revision map whose keys are exactly each live row's
+    requirement ids and whose values are the same whole-number revisions
+    (``_revision``: a bool, null or text is no revision), every row pair
+    well formed. An empty, partial or extra map, or one any row disagrees
+    with, is no judgment of this item. A record written before typed rows
+    existed has none to compare: its judgment is held to source and cases
+    alone, by intent (older-record compatibility)."""
+    rows = _typed_not_run_rows(entry, record)
+    if not rows:
+        return True
+    revisions = judged.get("revisions")
+    if not isinstance(revisions, dict) or not revisions:
+        return False
+    stated = {}
+    for rid, rev in revisions.items():
+        if _revision(rev) is None:
+            return False
+        stated[str(rid)] = rev
+    for row in rows:
+        pairs = row.get("requirements")
+        if not isinstance(pairs, list) or not pairs:
+            return False
+        bound = {}
+        for pair in pairs:
+            if not (isinstance(pair, (list, tuple)) and len(pair) == 2) or _revision(pair[1]) is None:
+                return False
+            bound[str(pair[0])] = pair[1]
+        if bound != stated:
+            return False
+    return True
+
+
+def _restated_executed(entry, checks, record) -> bool:
+    """The execution half of a restated item's clearance, from the saved
+    record alone: its exact cases, a valid restatement by an owner, and a
+    later passing check on the final source, under the entry's own gate and
+    environment, bound to its typed rows, that shows every case passed.
+    Says nothing about the judgment."""
     restatements = entry.get("restatements")
     cases = entry.get("cases")
     binding = entry.get("binding")
@@ -467,28 +498,6 @@ def _restated_not_run_cleared(entry, checks, record) -> bool:
     owners = {entry.get("task")} | {t.get("task") for t in entry.get("taken_over_by") or [] if isinstance(t, dict)}
     if last.get("task") not in owners or not isinstance(last.get("author"), str) or not last.get("author"):
         return False
-    judged = entry.get("restated_judgment")
-    if not (isinstance(judged, dict) and judged.get("verdict") == "sufficient"
-            and list(judged.get("cases") or []) == cases and isinstance(judged.get("by"), str)
-            and judged.get("by") and judged.get("by") != last.get("author")):
-        return False
-    # The judgment is of the final source and the requirement revisions the
-    # item's typed row binds; a judgment of an earlier source or revision is
-    # stale, whatever passed since (root review of 7a141e3, item 1).
-    if not (judged.get("source") and judged.get("source") == record.get("source_fingerprint")):
-        return False
-    rows = _typed_not_run_rows(entry, record)
-    if rows:
-        revisions = judged.get("revisions") if isinstance(judged.get("revisions"), dict) else None
-        if revisions is None:
-            return False
-        for row in rows:
-            bound = {}
-            for pair in row.get("requirements") or []:
-                if isinstance(pair, (list, tuple)) and len(pair) == 2:
-                    bound[str(pair[0])] = pair[1]
-            if any(str(rid) in bound and bound[str(rid)] != rev for rid, rev in revisions.items()):
-                return False
     gate, environment = entry.get("gate"), entry.get("environment")
     start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
     if not isinstance(gate, str) or not isinstance(environment, str) or start is None:
@@ -503,6 +512,31 @@ def _restated_not_run_cleared(entry, checks, record) -> bool:
             if _row_ok(row) and set(cases) <= _row_passed_cases(row):
                 return True
     return False
+
+
+def _restated_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item its owning lead restated as exact cases (cycle02),
+    validated from the saved record alone: the item was executed as
+    restated (``_restated_executed``), and an independent seat (not the
+    restatement's author) judged exactly those cases SUFFICIENT on the final
+    source and under the complete requirement identity the item's typed
+    rows bind (``_restated_judgment_revisions_ok``). Anything missing or
+    mismatched is not cleared."""
+    if not _restated_executed(entry, checks, record):
+        return False
+    last = entry["restatements"][-1]
+    cases = entry["cases"]
+    judged = entry.get("restated_judgment")
+    if not (isinstance(judged, dict) and judged.get("verdict") == "sufficient"
+            and list(judged.get("cases") or []) == cases and isinstance(judged.get("by"), str)
+            and judged.get("by") and judged.get("by") != last.get("author")):
+        return False
+    # The judgment is of the final source and the requirement revisions the
+    # item's typed row binds; a judgment of an earlier source or revision is
+    # stale, whatever passed since (root review of 7a141e3, item 1).
+    if not (judged.get("source") and judged.get("source") == record.get("source_fingerprint")):
+        return False
+    return _restated_judgment_revisions_ok(entry, judged, record)
 
 
 def _historical_paths_cleared(entry, checks, record) -> bool:
@@ -1219,7 +1253,25 @@ def judge(run_dir, project=None) -> dict:
                 unshown.append(f"task {entry.get('task')}: the engine shows the NOT RUN item "
                                f"{'discharged' if marked else 'not discharged'} but the record "
                                f"{'does not show it ran' if marked else 'shows it ran'}: {str(entry.get('item'))[:120]}")
-        if not cleared:
+            state = entry.get("discharge_state")
+            if state is not None and entry.get("restatements") is not None:
+                # A restated item's state names the half that holds: run and
+                # judged, run and awaiting judgment, or neither (root review
+                # of bae3830, item 1). An older record has no state.
+                expected = ("discharged" if cleared else "executed, awaiting judgment"
+                            if _restated_executed(entry, checks, record) else "standing")
+                if state != expected:
+                    unshown.append(f"task {entry.get('task')}: the engine shows the restated NOT RUN item as "
+                                   f"{str(state)[:40]} but the record shows {expected}: "
+                                   f"{str(entry.get('item'))[:120]}")
+        if not cleared and entry.get("kind") != "skipped" and entry.get("restatements") is not None \
+                and _restated_executed(entry, checks, record):
+            # Ran as restated, but no independent judgment holds for the
+            # final source and requirement identity: executed, awaiting
+            # judgment, never "did not run" (root review of bae3830, item 1).
+            unshown.append(f"task {entry.get('task')} reported NOT RUN; its restated cases ran but no independent "
+                           f"SUFFICIENT judgment holds for the final source: {str(entry.get('item'))[:120]}")
+        elif not cleared:
             unshown.append(f"task {entry.get('task')} reported NOT RUN and no later check shows it ran: "
                            f"{str(entry.get('item'))[:120]}")
     unshown.extend(_inspection_problems(record, project))

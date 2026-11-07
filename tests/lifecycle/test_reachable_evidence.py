@@ -476,9 +476,18 @@ def test_root_a_judgment_of_cases_a_later_task_changed_does_not_clear_the_item(t
     entry = _item(replay)
     assert entry["restated_judgment"]["verdict"] == "sufficient"
     assert entry["restated_judgment"]["source"] != record["source_fingerprint"], "judged on t1's source"
+    from tools import truth_check
     from tools.truth_check import _not_run_cleared
     assert not _not_run_cleared(entry, record["checks"], record)
     assert not replay.result.completed
+    # Root review of bae3830, item 1: the display says what both deciders
+    # say. The cases ran on the final source; the judgment no longer holds.
+    assert entry["discharged_at"] is None and entry["discharged_cases"] is None
+    assert entry["discharge_state"] == "executed, awaiting judgment" and entry["executed_at"] is not None
+    assert entry["executed_cases"] == entry["cases"]
+    unverified = truth_check.judge(replay.result.run_dir, None)["unverified"]
+    assert not any("the engine shows" in u for u in unverified), unverified
+    assert any("its restated cases ran but no independent SUFFICIENT judgment holds" in u for u in unverified)
 
 
 @pytest.mark.requirements_ledger
@@ -498,9 +507,23 @@ def test_root_a_stale_judgment_is_judged_afresh_by_a_later_reviewer_with_no_reru
     record = H.result_json(replay)
     entry = _item(replay)
     assert len(entry["judgment_history"]) == 2 and entry["restated_judgment"]["source"] == record["source_fingerprint"]
+    from tools import truth_check
     from tools.truth_check import _not_run_cleared
     assert _not_run_cleared(entry, record["checks"], record)
     assert replay.result.completed, replay.result.error
+    assert entry["discharge_state"] == "discharged" and entry["discharged_at"] == entry["executed_at"] is not None
+    unverified = truth_check.judge(replay.result.run_dir, None)["unverified"]
+    assert not any("the engine shows" in u or "NOT RUN" in u for u in unverified), unverified
+    # Root review of bae3830, item 3, at the reader boundary on this real
+    # record (in memory, the saved file untouched): the judgment must name
+    # the typed row's complete identity with whole-number revisions.
+    (row,) = [o for o in record["evidence_obligations"] if o.get("kind") == "not_run"]
+    assert [list(p) for p in row["requirements"]] == [["R1", 1]]
+    assert entry["restated_judgment"]["revisions"] == {"R1": 1}
+    for bad in ({}, {"R1": True}, {"unrelated": 1}, {"R1": 1, "R2": 1}, {"R1": "1"}, {"R1": None}, None, [["R1", 1]]):
+        forged = dict(entry, restated_judgment=dict(entry["restated_judgment"], revisions=bad))
+        assert not _not_run_cleared(forged, record["checks"], record), bad
+    assert _not_run_cleared(dict(entry), record["checks"], record), "the unchanged positive still clears"
 
 
 def test_root_a_malformed_runs_line_for_an_item_applies_none_of_its_lines(tmp_path):
@@ -556,11 +579,61 @@ def test_root_the_continuation_quote_includes_the_planner_call_that_names_the_ta
     assert not editing["feasible"] and editing["stages"][0] == "planning call that names the task"
     assert "next planning call" in editing["stages"], "a slot is still left after it: its planning call is owed"
     declaration = session._continuation_admission(False)
-    assert not declaration["feasible"], "266,113 + 200,000 + 200,000 + 266,113 exceeds 759,903"
+    assert not declaration["feasible"], "a write-granted lead is priced at the editing ceiling whatever it needs"
     session._slots_used = 7
+    # Root review of bae3830, item 2: slot 7 of 8, writes granted. The named
+    # task is ordinary, so its lead holds the grant: 266,113 + 500,000 +
+    # 200,000 = 966,113 against 759,903, short 206,210. The old quote priced
+    # a "declaration" lead at the reserve and said feasible.
     last = session._continuation_admission(False)
-    assert last["feasible"] and last["route"] == "declaration" and "next planning call" not in last["stages"]
-    assert not session._continuation_admission(True)["feasible"]
+    assert not last["feasible"] and last["route"] == "write-granted" and last["needs_editing"] is False
+    assert last["short"].get("tokens") == 206_210 and "next planning call" not in last["stages"]
+    assert last == {**session._continuation_admission(True), "needs_editing": False}, "need is recorded, not priced"
+    # Read-only run: the lead holds no grant and dispatch prices it at the
+    # reserve, and so does the quote: 666,113 fits.
+    monkeypatch.setattr(session, "_writes", lambda: False)
+    assert session._continuation_admission(False)["feasible"]
+    assert session._continuation_admission(True)["route"] == "read-only"
+
+
+@pytest.mark.parametrize("writes, reported", [(True, 4_840_097), (True, 4_300_000), (False, 4_840_097),
+                                              (True, 4_400_000), (False, 5_100_000)])
+def test_root_the_continuation_quote_agrees_with_the_dispatch_admission_that_follows_it(tmp_path, monkeypatch,
+                                                                                        writes, reported):
+    """Affordability to dispatch (root review of bae3830, item 2): whatever
+    the quote says, the dispatch admission of the task it names, after the
+    planning call that names it is spent at its quoted size, says the same
+    for the lead and one review (``_refuse_unpayable_dispatch``'s mandatory
+    rows from ``_plan_stages``)."""
+    from types import SimpleNamespace
+
+    from tests.lifecycle.test_proof_binding import _session
+    session = _session(tmp_path)
+    state = dict(reported=reported, attempts=35)
+
+    class Budget:
+        def snapshot(self):
+            return dict(limits=dict(max_calls=60, max_reported_tokens=6_000_000, reserve_tokens_per_call=200_000,
+                                    wall_seconds=5400), reserved_attempts=state["attempts"],
+                        reported_tokens=state["reported"], elapsed_seconds=2000.0,
+                        finish_protection=dict(pending=["audit", "goal"], editing_exposure=500_000,
+                                               held_wall_seconds=300))
+
+        def finish_pending(self):
+            return ["audit", "goal"]
+    monkeypatch.setattr(session, "_budget", lambda: Budget())
+    monkeypatch.setattr(session, "_last_planning_tokens", lambda: 266_113)
+    monkeypatch.setattr(session, "_writes", lambda: writes)
+    session._max_tasks, session._slots_used = 8, 7
+    quote = session._continuation_admission(False)
+    # The planner names the task at its quoted size; then the dispatch.
+    state["reported"] += 266_113
+    state["attempts"] += 1
+    spec = SimpleNamespace(task_id="t9")
+    rows = session._plan_stages(spec, ["lead draft", "review by anthropic:opus"])
+    mandatory = [r for r in rows if r.name in ("lead draft", "review by anthropic:opus")]
+    dispatch = session._admit_plan("t9", mandatory, scope="mandatory")
+    assert quote["feasible"] is dispatch.feasible, (quote["detail"], dispatch.detail)
 
 
 @pytest.mark.requirements_ledger
