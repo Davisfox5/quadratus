@@ -3024,6 +3024,32 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-cycle04-scope-routing",
+      "purpose": "Cycle04 (PR73 6713487831): scope-blocked repair routing by a validated OUTSIDE SCOPE declaration, and a persisted causal explanation for an unsettled check finding",
+      "base": "b926759577041ecce185df50ee037d6e9e4759c3",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tools/truth_check.py",
+        "tests/test_scope_routing_units.py",
+        "tests/lifecycle/test_scope_routing.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-11-07T22:30:40Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "b9d136e9c8a5e64b4daf6f24b8f64f4d15382d98",
+        "at": "2026-11-07T22:30:43Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
