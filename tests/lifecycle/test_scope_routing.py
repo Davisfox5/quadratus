@@ -234,3 +234,22 @@ def test_a_child_declaration_survives_the_parallel_merge(tmp_path, monkeypatch):
     rft = next(r for r in record["review_findings"] if r["fid"] == "RFT2-1")
     assert rft["route"] == "scope" and rft["scope_paths"] == ["app.py"], "kept whole through the merge"
     assert not rft["closed"] and not replay.result.completed
+
+
+def test_a_materially_new_failure_of_a_declared_case_gets_its_in_scope_gate_fix(tmp_path, monkeypatch):
+    """Root review of b9d136e, R2, at the lifecycle boundary: the case was
+    declared against the observed run (AssertionError from app.py), then the
+    lead's own in-scope test edit makes it fail with a NameError. That is a
+    new failure the grant can repair: the gate fix is bought, never skipped
+    on the old claim."""
+    def revision(call, replay):
+        H.write(call, {"README.md": README,
+                       "tests/test_app.py": "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == three\n"})
+        return ("Documented add and touched the test.\nOUTSIDE SCOPE: RFT1-1 - app.py\n"
+                f"OUTSIDE SCOPE: {CASE} - app.py\nCHANGED: [\"README.md\", \"tests/test_app.py\"]")
+    replay = H.run(_at(tmp_path, "newfail"), monkeypatch, _script(t1_recheck=_docs_fixed, revision=revision),
+                   files=FILES, max_tasks=3, record_complete=False)
+    record = H.result_json(replay)
+    assert record["scope_gate_skips"] == [], "the old claim suppressed nothing"
+    assert len(_of(replay, "gate-fix", "t1")) == 1
+    assert "NameError" in _of(replay, "gate-fix", "t1")[0].prompt

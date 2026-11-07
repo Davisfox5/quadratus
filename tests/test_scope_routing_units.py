@@ -170,3 +170,79 @@ def test_the_taught_line_is_the_parsed_line_with_the_parsers_bounds():
         _OUTSIDE_SCOPE_RULE
     assert _OUTSIDE_SCOPE.findall(example) == [("RFT1-1", "app.py, lib/util.py")]
     assert "grants nothing, edits nothing and proves nothing" in _OUTSIDE_SCOPE_RULE
+
+
+# -- root review of b9d136e: robust paths and the current failure episode ---------------------------
+
+def test_malformed_and_directory_paths_are_rejected_and_a_new_file_name_is_kept(tmp_path):
+    session, _ = _session(tmp_path)
+    for raw in (".", "./", "lib", "lib/", "a/./b.py"):
+        _declare(session, f"OUTSIDE SCOPE: RFT1-1 - {raw}")
+        assert session.scope_declarations[-1]["status"] == "rejected", raw
+    _declare(session, "OUTSIDE SCOPE: RFT1-1 - lib/new_module.py")
+    assert session.scope_declarations[-1]["status"] == "routed", "a file that does not exist yet is a valid name"
+
+
+def test_a_crash_while_reading_a_declaration_is_recorded_and_the_reply_still_returns(tmp_path, monkeypatch):
+    session, _ = _session(tmp_path)
+    session._writes = lambda: False
+    monkeypatch.setattr(session, "_scope_path_problem", lambda spec, raw: 1 / 0)
+    monkeypatch.setattr(session, "_invoke_model", lambda key, prompt, **k: "Done.\nOUTSIDE SCOPE: RFT1-1 - app.py")
+    for name in ("_record_proves", "_record_not_run", "_record_runs", "_stop_repeated_environment_failure"):
+        monkeypatch.setattr(session, name, lambda *a, **k: None)
+    session._last_changed_report = None
+    assert session._edit("openai:sol", "p", role="revision").startswith("Done.")
+    assert session.scope_declarations[-1]["status"] == "rejected"
+    assert "could not be read: ZeroDivisionError" in session.scope_declarations[-1]["why"]
+
+
+def _attempt(passed, failures=(), kind="builtins.AssertionError", attempt=2, seq=None):
+    report = dict(state="parsed", failures=[dict(nodeid=n, when="call", exc_type=kind, assertion=True, body=True)
+                                            for n in failures], counts=dict(failed=len(failures), errors=0))
+    run = dict(passed=passed, attempt=attempt, source="s", receipts=[dict(id="check", status="passed" if passed else
+                                                                      "failed", report=report)])
+    if seq is not None:
+        run["seq"] = seq
+    return run
+
+
+def test_a_case_claim_lasts_through_its_episode_and_ends_when_the_case_passes_or_fails_otherwise(tmp_path):
+    session, _ = _session(tmp_path)
+    spec = session._active_spec
+    _declare(session, f"OUTSIDE SCOPE: {CASE} - app.py")
+    # Benign in-scope work: the same case still fails the same way on a new source.
+    session._outcome.checks.append(dict(_attempt(False, [CASE]), source="after-readme-edit"))
+    assert session._scope_covers(spec, _result([CASE])) is not None, "kept across in-scope edits"
+    # The same case now fails with another exception type: a new failure.
+    session._outcome.checks.append(_attempt(False, [CASE], kind="builtins.NameError", attempt=3))
+    assert session._scope_covers(spec, _result([CASE])) is None
+    fresh, _ = _session(tmp_path / "fresh")
+    _declare(fresh, f"OUTSIDE SCOPE: {CASE} - app.py")
+    fresh._outcome.checks.append(_attempt(True))
+    fresh._outcome.checks.append(_attempt(False, [CASE], attempt=3))
+    assert fresh._scope_covers(fresh._active_spec, _result([CASE])) is None, "passed in between: superseded"
+    # Declared again on the new episode, it routes again.
+    _declare(fresh, f"OUTSIDE SCOPE: {CASE} - app.py")
+    assert fresh._scope_covers(fresh._active_spec, _result([CASE])) is not None
+
+
+def test_run_order_follows_run_numbers_when_records_carry_them(tmp_path):
+    session, _ = _session(tmp_path)
+    session._outcome.checks[0]["seq"] = 1
+    session.review_checks.append(dict(_attempt(True), task="t1", stage="review", seq=2))
+    cases, anchor = session._task_failed_cases("t1")
+    assert cases == set() and anchor["kind"] == "observed", "the later observed pass is current"
+    assert session._next_run_seq() == 3
+
+
+def test_a_reviewer_restating_a_scope_routed_finding_lapses_the_route(tmp_path):
+    session, _ = _session(tmp_path)
+    _declare(session, "OUTSIDE SCOPE: RFT1-1 - app.py")
+    record = session.review_findings[0]
+    assert record["route"] == "scope"
+    session._read_restatement(session._active_spec, record,
+                              "SCENARIO P1 - the state should be 'nothing stored' | proposal: state: nothing stored")
+    assert record["restated"]
+    assert record["route"] != "scope" and record["scope_lapsed"]
+    assert record["route_history"][-1]["lapsed"] == "restated by its reviewer"
+    assert "RFT1-1" not in session._routed_ids(session._active_spec) or record.get("route")

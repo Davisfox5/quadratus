@@ -3022,7 +3022,20 @@ Key design decisions already settled:
     or version-control path is refused, an operator-forbidden or
     policy-denied one is `forbidden` (no route is invented), and a path the
     grant permits (an unrestricted scope permits everything) is inside it.
-    A review-only task declares nothing. Repeats change nothing.
+    A review-only task declares nothing. Repeats change nothing. A path
+    that is empty, `.`, contains a `.` or `..` component, or names an
+    existing directory is refused (a new file's name is kept), and a reply
+    whose declaration cannot be read keeps its work, the line recorded as
+    rejected (root review of b9d136e, R1).
+  - *Current failure only* (root review of b9d136e, R2). Runs carry a run
+    number (`seq`), and a case is declarable only from the task's latest
+    run. A case claim lasts for its failure episode
+    (`_case_declaration_current`): every later run must still show the case
+    failing with the same exception type. A run that passes it, or a failure
+    of another type, ends the claim, so a gate fix for the new failure is
+    bought. A source change alone does not end it: in-scope edits beside a
+    production blocker keep the route. A reviewer's typed restatement of a
+    scope-routed finding lapses the route (`route_history` keeps it).
   - *Effect.* An accepted finding is routed `scope` and leaves the editor's
     lines (`_routed_ids`); other findings keep their rounds. A gate fix is
     skipped only when every failed case of a complete, parsed, test-body

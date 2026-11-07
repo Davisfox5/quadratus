@@ -4164,7 +4164,13 @@ class Session:
             self._record_proves(key, role, reply)
             self._record_not_run(key, role, reply)
             self._record_runs(key, role, reply)
-            self._record_scope_declarations(key, role, reply)
+            try:
+                self._record_scope_declarations(key, role, reply)
+            except Exception as exc:  # noqa: BLE001 -- a malformed claim never costs the reply's work
+                self.scope_declarations.append(dict(task=getattr(self._active_spec, "task_id", None), role=role,
+                                                    author=key, status="rejected",
+                                                    why=f"the declaration could not be read: {type(exc).__name__}"))
+                log.warning("could not read an OUTSIDE SCOPE declaration", exc_info=True)
             return reply
         except TurnLimitReached as exc:
             if capped is None:
@@ -8729,6 +8735,8 @@ class Session:
         consumed = self._consumed_identity(frozen)
         self.review_checks.append({
             "task": spec.task_id, "stage": stage, "passed": bool(result.passed) and not moved,
+            # The task's run order (cycle04 correction): which failure is current.
+            "seq": self._next_run_seq(),
             "command": result.command, "report": result.report,
             "receipts": [dict(dataclasses.asdict(r), output=(r.output or "")[-4000:]) for r in result.receipts],
             # A single-command gate has no receipts: its own output tail,
@@ -13975,7 +13983,7 @@ class Session:
         if path.startswith(("/", "~")) or "\\" in path or any(c in path for c in "*?[]{}") or ":" in path:
             return "not a project-relative file path (absolute, home, glob or drive)", False
         parts = PurePosixPath(path).parts
-        if any(p in ("..", ".") for p in parts) or path.endswith("/"):
+        if not parts or any(p in ("..", ".") for p in path.split("/")) or path.endswith("/"):
             return "escapes the project or names a directory", False
         if parts[0] in (".quadratus", ".git") or ".git" in parts:
             return "a harness or version-control path", True
@@ -13990,7 +13998,11 @@ class Session:
         try:
             if not (Path(self.project) / path).resolve().is_relative_to(root):
                 return "resolves outside the project", False
-        except (OSError, RuntimeError):
+            if (Path(self.project) / path).is_dir():
+                # A file the repair must touch, not a folder grant; a new file
+                # that does not exist yet is still a valid name.
+                return "names an existing directory, not a file", False
+        except (OSError, RuntimeError, ValueError):
             return "cannot be resolved inside the project", False
         scope = getattr(spec, "scope", None)
         if scope is not None and any(_scope_matches(path, g) for g in scope.forbidden_paths or ()):
@@ -14003,30 +14015,91 @@ class Session:
             return "inside this task's grant", False
         return "", False
 
-    def _task_failed_cases(self, task_id: str) -> Tuple[set, dict]:
-        """The failed case ids of ``task_id``'s latest check attempt and its
-        latest observed run before a review (the harness's parsed reports),
-        with the attempt identity they were read from."""
-        cases, anchor = set(), {}
+    def _next_run_seq(self) -> int:
+        """The next run number across this session's check attempts and
+        observed runs (cycle04 correction): their order decides which failure
+        is current. Derived from the records, so a restored session goes on
+        counting from what it carried."""
+        seqs = [c.get("seq") for o in self.task_outcomes for c in o.checks]
+        if self._outcome is not None and self._outcome not in self.task_outcomes:
+            seqs += [c.get("seq") for c in self._outcome.checks]
+        seqs += [c.get("seq") for c in getattr(self, "review_checks", []) or []]
+        return 1 + max([q for q in seqs if isinstance(q, int)] or [0])
+
+    def _task_runs(self, task_id: str) -> List[Tuple[str, dict]]:
+        """``task_id``'s check runs in order: its observed pre-review runs and
+        its check attempts, by run number; records without one (an earlier
+        engine) in the order they happen, observed before attempts."""
         outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == task_id), None)
         if outcome is None and self._outcome is not None and self._outcome.task_id == task_id:
             outcome = self._outcome
-        runs = []
-        if outcome is not None and outcome.checks:
-            runs.append(("attempt", outcome.checks[-1]))
-        seen = next((c for c in reversed(getattr(self, "review_checks", []) or []) if c.get("task") == task_id), None)
-        if seen is not None:
-            runs.append(("observed", seen))
-        for kind, run in runs:
-            if run.get("passed"):
-                continue
-            receipts = [r for r in run.get("receipts") or [] if r.get("status") not in ("passed", "skipped")]
-            reports = [r.get("report") for r in receipts] if receipts else [run.get("report")]
-            for report in reports:
-                if isinstance(report, dict) and report.get("state") == "parsed":
-                    cases |= {str(f.get("nodeid")) for f in report.get("failures") or [] if isinstance(f, dict)}
-            anchor[kind] = dict(attempt=run.get("attempt"), stage=run.get("stage"), source=run.get("source"))
+        observed = [("observed", c) for c in getattr(self, "review_checks", []) or [] if c.get("task") == task_id]
+        attempts = [("attempt", c) for c in (outcome.checks if outcome is not None else [])]
+        runs = observed + attempts
+        if all(isinstance(r.get("seq"), int) for _, r in runs):
+            runs.sort(key=lambda kr: kr[1]["seq"])
+        return runs
+
+    @staticmethod
+    def _case_state(run: dict, case: str) -> Tuple[str, Optional[str]]:
+        """Whether ``case`` failed in ``run`` (with its exception type),
+        passed, or is unknown: a passing run passed it; a failed run whose
+        every failed command has a parsed report failed it if a record names
+        it and passed it otherwise; anything else is unknown."""
+        if run.get("passed"):
+            return "passed", None
+        receipts = [r for r in run.get("receipts") or [] if r.get("status") not in ("passed", "skipped")]
+        reports = [r.get("report") for r in receipts] if receipts else [run.get("report")]
+        if not reports or any(not (isinstance(rep, dict) and rep.get("state") == "parsed") for rep in reports):
+            return "unknown", None
+        for rep in reports:
+            for f in rep.get("failures") or []:
+                if isinstance(f, dict) and str(f.get("nodeid")) == case:
+                    return "failed", str(f.get("exc_type") or "")
+        return "passed", None
+
+    def _task_failed_cases(self, task_id: str) -> Tuple[set, dict]:
+        """The failed case ids of ``task_id``'s latest check run only (an
+        attempt or an observed pre-review run), with that run's position and
+        identity: an earlier failure a later run superseded is not current
+        (root review of b9d136e, R2)."""
+        runs = self._task_runs(task_id)
+        if not runs:
+            return set(), {}
+        kind, run = runs[-1]
+        anchor = dict(kind=kind, position=len(runs) - 1, seq=run.get("seq"), attempt=run.get("attempt"),
+                      stage=run.get("stage"), source=run.get("source"))
+        if run.get("passed"):
+            return set(), anchor
+        cases = set()
+        receipts = [r for r in run.get("receipts") or [] if r.get("status") not in ("passed", "skipped")]
+        for report in ([r.get("report") for r in receipts] if receipts else [run.get("report")]):
+            if isinstance(report, dict) and report.get("state") == "parsed":
+                cases |= {str(f.get("nodeid")) for f in report.get("failures") or [] if isinstance(f, dict)}
+        anchor["exc_types"] = {c: self._case_state(run, c)[1] for c in cases}
         return cases, anchor
+
+    def _case_declaration_current(self, decl: dict) -> bool:
+        """Whether a case declaration still describes the same failure
+        episode (root review of b9d136e, R2): every run of its task after the
+        one it was made against still shows that case failing with the same
+        exception type. A run that passed it, or a failure of another type,
+        ends the episode and the claim with it. An unknown run (no parsed
+        report) says nothing either way. Source changes alone do not end it:
+        in-scope edits beside a production blocker keep the claim."""
+        anchor = decl.get("anchor") or {}
+        position = anchor.get("position")
+        if not isinstance(position, int):
+            return False
+        runs = self._task_runs(decl.get("task"))
+        if position >= len(runs):
+            return False
+        expected = (anchor.get("exc_types") or {}).get(decl.get("id"))
+        for _, run in runs[position + 1:]:
+            state, kind = self._case_state(run, decl.get("id"))
+            if state == "passed" or (state == "failed" and expected is not None and kind != expected):
+                return False
+        return True
 
     def _record_scope_declarations(self, key, role, reply) -> None:
         """Read the owning lead's 'OUTSIDE SCOPE: <id> - <path>[, ...]' lines
@@ -14078,7 +14151,7 @@ class Session:
                 elif record.get("closed") or record.get("kind") == "unreviewed":
                     entry.update(status="rejected", why=f"{ident} is not an open blocking finding")
             elif ident in failed:
-                entry.update(kind="case", anchor=anchor)
+                entry.update(kind="case", anchor=dict(anchor, exc_types={ident: (anchor.get("exc_types") or {}).get(ident)}))
             else:
                 entry.update(kind="unknown", status="rejected",
                              why=f"{ident} is neither an open finding of {task_id} nor a failed case of its latest "
@@ -14101,7 +14174,8 @@ class Session:
                 else:
                     entry.update(status="rejected", why="no named path is a project file outside this task's grant")
             previous = [d for d in self.scope_declarations if d.get("task") == task_id and d.get("id") == ident
-                        and d.get("status") == "routed"]
+                        and d.get("status") == "routed"
+                        and (d.get("kind") != "case" or self._case_declaration_current(d))]
             known = sorted({p for d in previous for p in d.get("paths") or []})
             if entry.get("status") == "routed" and set(entry["paths"]) <= set(known):
                 entry["repeat"] = True
@@ -14124,7 +14198,8 @@ class Session:
         """Accepted outside-scope paths of ``task_id``, by failed case id."""
         out: Dict[str, List[str]] = {}
         for d in self.scope_declarations:
-            if d.get("task") == task_id and d.get("kind") == "case" and d.get("status") == "routed":
+            if (d.get("task") == task_id and d.get("kind") == "case" and d.get("status") == "routed"
+                    and self._case_declaration_current(d)):
                 out[d["id"]] = sorted(set(out.get(d["id"], [])) | set(d.get("paths") or []))
         return out
 
@@ -20085,6 +20160,13 @@ class Session:
             return
         record["restated"] = (why or "").strip()
         history = list(record.get("route_history") or [])
+        if record.get("route") == "scope":
+            # The reviewer restated what it holds (cycle04 correction): the
+            # lead's claim was about the earlier text, so the route lapses
+            # and the restated claim is routed by its own type.
+            history.append(dict(route="scope", note=record.get("route_note"), paths=record.get("scope_paths"),
+                                lapsed="restated by its reviewer"))
+            record.update(route=None, route_note="", route_history=history, scope_lapsed=True)
         if record.get("route") == "unroutable":
             history.append(dict(route=record["route"], note=record.get("route_note")))
             record["route"] = None
@@ -21421,6 +21503,7 @@ class Session:
             entry["repair_route"] = route
         if target is not None:
             entry["attempt"] = len(target.checks) + 1
+            entry["seq"] = self._next_run_seq()
             target.checks.append(entry)
             if not result.passed:
                 # Classed by what the harness established, as before: an
