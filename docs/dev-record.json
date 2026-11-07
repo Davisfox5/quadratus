@@ -2960,8 +2960,8 @@
       "claimed_at": "2026-11-07T06:06:13Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "9b0280bd6126458d341ca8abbb8bb6b3a4388c26",
-        "at": "2026-11-07T06:06:23Z"
+        "sha": "30abc72f18b61344dfd8757bd490178b714fb59d",
+        "at": "2026-11-07T06:46:04Z"
       },
       "reviews": [],
       "blockers": [],
