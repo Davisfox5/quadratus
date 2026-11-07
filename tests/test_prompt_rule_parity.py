@@ -93,7 +93,8 @@ def test_the_parallel_request_carries_the_configured_limit_and_the_exclusions(tm
             "captures, are named alone") in text
     assert "its first block runs alone" in text
     import inspect
-    assert "_parallel_request(self.config.max_parallel_tasks)" in inspect.getsource(S.Session.next_task)
+    # next_task wraps one planning decision (cycle03); the prompt is built in it.
+    assert "_parallel_request(self.config.max_parallel_tasks)" in inspect.getsource(S.Session._next_task_decision)
 
 
 def test_the_first_decomposition_asks_for_covers_with_the_requirements(tmp_path):

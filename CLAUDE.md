@@ -2959,6 +2959,49 @@ Key design decisions already settled:
   - *Guidance.* A framework's or server's default responses are held to
     the interface contract, and an assertion accepting more than one
     outcome where the goal names one proves neither. Effect unmeasured.
+- **Cycle03: failure context up front, and planning that leaves the
+  continuation payable** (PR73 6710677736, after completion-cycle02 ended
+  INCOMPLETE: its planning call 36, 70,670 characters, held neither the
+  failed case, its error nor the check's output artifact; the planner spent
+  a 347,776-token FETCH re-ask and the next task was then refused).
+  - *Failure context.* A failed command's facts carry its failure records
+    from the harness's own parsed report (`_failure_rows`: case id, phase,
+    exception type, assertion in the body or not; at most 5, ids bounded,
+    omissions counted, any other report state said as unavailable). Review
+    seats get one redacted excerpt of the shown check's stored output; the
+    planner gets a "Failed checks still standing" block and each
+    `check.failed` line names its output artifact; a lead whose task
+    RESOLVES such a finding or CONTINUES the failing task gets the same
+    block (`_failure_context`). Excerpts are at most 1,500 characters,
+    redacted against every recorded and configured command path (the
+    gate-fix call's own boundary), fenced and labelled untrusted data, at
+    most two per prompt and deduplicated by artifact; each attempt keeps its
+    task, attempt, gate and a source label, so an earlier source is said.
+    Nothing here settles a check, finding or requirement.
+  - *Planning.* `_continuation_admission` now quotes the terminal
+    alternative dispatch itself takes (no next planning call) when the
+    ordinary route cannot be paid. Before a planning call
+    (`_planning_forfeit`), only when the record holds work no DONE, audit or
+    decision can settle (`_editing_work`: a failing check not settled, the
+    merge gate, capped work, an open render finding, a deterministic blocker
+    that needs an edit) and neither route can be paid, the existing route
+    forfeit is recorded (site `before planning`) and no planner call is
+    bought. Inside a planning decision every re-ask (FETCH, evidence, an
+    operator answer, a correction, on the seated planner or a fallback seat)
+    is priced first (`_reask_refusal`): refused only when it would cost a
+    continuation payable now, or when none is payable and editing work is
+    known; refused, it raises `PlanningUnaffordable` before any call, the
+    forfeit is recorded (site `planning re-ask`) and the cap's decision
+    applies. With no known editing work a low budget blocks nothing: DONE,
+    evidence and the audit are reached and the shared budget's own
+    admission decides. An operator's answer is recorded as a ruling before
+    its re-ask is priced. When the rule would refuse, the prompt says FETCH
+    and EVIDENCE are unavailable (`_REASK_CLOSED`) instead of offering them.
+    Only future calls are priced: a spent planning call is already in the
+    reported total. Refused quotes are kept in `planning_refusals`
+    (result.json, checkpoint). Quotes are estimates (the last planning
+    call's size); per-call admission and the post-return ceiling are
+    unchanged, and nothing here guarantees a dispatch or a completion.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

@@ -407,6 +407,14 @@ def _reached(inputs: CompletionInputs) -> str:
     stop reason: the fresh end-to-end job on 21b342d read 'the task cap
     (3) was reached' when one slot was refused and two forfeited)."""
     forfeit = inputs.route_forfeit
+    if forfeit and forfeit.get("site") in ("before planning", "planning re-ask"):
+        # Cycle03: decided by a quote before a planning call or before a
+        # planner re-ask, so no task was named.
+        what = ("no continuation of the known remaining work could be paid"
+                if forfeit.get("site") == "before planning" else "the planner's re-ask could not be paid")
+        return (f"{what} from the allowance left ({forfeit.get('detail')}), so "
+                f"{forfeit.get('slots_unused')} of {inputs.max_tasks} task slot(s) were forfeited "
+                f"{forfeit.get('site')}")
     if forfeit:
         return (f"{forfeit.get('task')}'s route could not be paid from the allowance left "
                 f"({forfeit.get('detail')}), so {forfeit.get('slots_unused')} of {inputs.max_tasks} task "
