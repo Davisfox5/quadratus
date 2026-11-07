@@ -8787,8 +8787,10 @@ class Session:
         against the current source; an earlier source is said), the failure
         records of each failed command from the harness's report, and, for
         at most ``_EXCERPTS_PER_PROMPT`` distinct outputs, a redacted excerpt
-        of the stored output. Read from the record, never re-run; an output
-        that cannot be read is said to be unavailable. Diagnosis only: nothing
+        of the stored output. Every attempt is listed with its own facts;
+        only an output already excerpted (the same artifact) is not shown
+        twice. Read from the record, never re-run; an output that cannot be
+        read is said to be unavailable. Diagnosis only: nothing
         here settles a check, a finding or a requirement (cycle03)."""
         if not attempts:
             return ""
@@ -8796,10 +8798,10 @@ class Session:
         current = self._source_fingerprint() if self.project else None
         seen, excerpts, lines = set(), 0, [heading]
         for task_id, attempt in attempts:
+            # Every attempt keeps its own task, attempt, gate, source and
+            # failed cases; only identical output bytes (artifacts are content
+            # addressed) are excerpted once (root review of d8225fc, item 2).
             artifact = attempt.get("output_artifact") or "unavailable"
-            if artifact in seen and artifact != "unavailable":
-                continue
-            seen.add(artifact)
             failed = [r for r in attempt.get("receipts") or [] if r.get("status") not in ("passed", "skipped")]
             lines.append(f"- task {task_id}, check attempt {attempt.get('attempt', '?')} (gate "
                          f"{attempt.get('gate', 'full')}), output artifact {artifact}, "
@@ -8810,6 +8812,9 @@ class Session:
                     lines.extend(f"    - {r.get('id')}: {row}" for row in _failure_rows(r.get("report"), paths))
             else:
                 lines.extend(f"    - {row}" for row in _failure_rows(attempt.get("report"), paths))
+            if artifact != "unavailable" and artifact in seen:
+                lines.append(f"    (the same output as excerpted above, artifact {artifact})")
+                continue
             if excerpts >= _EXCERPTS_PER_PROMPT:
                 lines.append("    (output not excerpted here; FETCH the output artifact for it)")
                 continue
@@ -8821,6 +8826,7 @@ class Session:
             if excerpt:
                 lines.append(excerpt)
                 excerpts += 1
+                seen.add(artifact)
             else:
                 lines.append("    (the stored output is unavailable)")
         return "\n".join(lines)
@@ -14975,12 +14981,14 @@ class Session:
         reserve and the last planning call's size, ahead of the continuation
         the dispatch could pay (``_continuation_admission``, ordinary or
         terminal; the naming call is the re-ask itself). Refused only when
-        it would cost a continuation that is payable now, or when no
-        continuation is payable and the record holds work only an editing
-        task can settle (``_editing_work``), so the re-ask could lead
-        nowhere. With no continuation payable and no such work, a re-ask may
-        still reach a decision (a DONE, an evidence reassessment, the audit)
-        and the shared budget's own admission decides it. Applies only inside
+        the record holds work only an editing task can settle
+        (``_editing_work``) and, after the re-ask, no continuation of it
+        could be paid: the re-ask would cost the repair, or lead nowhere.
+        Without such work it is never refused here, whatever an edit would
+        cost (root review of d8225fc, item 1: a FETCH on the way to DONE was
+        refused at 450 left because a hypothetical edit fit before it): the
+        decision may end in DONE, evidence or the audit, and the shared
+        budget's own admission decides it. Applies only inside
         a planner decision after the first plan with a budget; the planner
         call already made is in the reported total and is not priced again.
         A refused re-ask makes no call."""
@@ -15000,14 +15008,14 @@ class Session:
         reserve = int((snap.get("limits") or {}).get("reserve_tokens_per_call") or 0)
         reask = delivery.PlanStage(name, "reserve",
                                    tokens=max(reserve, self._last_planning_tokens() or 0) if reserve else None)
+        # Only known editing work is protected (root review of d8225fc,
+        # item 1): without it the decision may end in DONE, evidence or the
+        # audit, and an edit that merely happens to fit is hypothetical, so
+        # the shared budget's per-call admission and the finish hold decide.
+        if not self._editing_work():
+            return None
         after = self._continuation_admission(True, naming=naming, before=(reask,), scope="planning re-ask")
         if after["feasible"] or after.get("kind") != "budget":
-            return None
-        now = self._continuation_admission(True, naming=naming, scope="planning re-ask")
-        if not now["feasible"] and not self._editing_work():
-            # No route to protect and nothing known that only an edit can
-            # settle: a decision may still come of it, and the budget's own
-            # per-call admission decides.
             return None
         return after
 

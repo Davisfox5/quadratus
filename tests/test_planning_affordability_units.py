@@ -172,3 +172,30 @@ def test_the_quote_prices_the_lead_as_dispatch_does(tmp_path):
     read_only = session._continuation_admission(True, scope="planning")
     assert granted["route"] == "write-granted" and not granted["feasible"]
     assert read_only["route"] == "read-only" and read_only["feasible"], "a read-only lead is at the reserve"
+
+
+@pytest.mark.parametrize("kind", ["FETCH", "evidence", "operator answer", "correction"])
+def test_root_without_known_editing_work_no_re_ask_is_refused_in_the_middle_band(tmp_path, monkeypatch, kind):
+    """Root review of d8225fc, item 1, through every re-ask: 702,293 left after
+    the planning call pays lead + review (700,000) now, not a re-ask first
+    (997,576). With no known editing work nothing is refused: the shared
+    budget's admission decides."""
+    first = {"FETCH": "FETCH: 0e0ec5132f1b",
+             "evidence": ("EVIDENCE: R1 - the helper closes early\nFILE: tests/test_probe.py\n```python\n"
+                          "def test_probe():\n    assert True\n```"),
+             "operator answer": "ASK: may the public interface change?",
+             "correction": "KIND: backend simple\nKIND: frontend simple\nFix it."}[kind]
+    session, calls, prompts = _session(tmp_path, [first, "DONE"], editing_work=False, ask=lambda q: "no")
+    served = []
+    monkeypatch.setattr(session, "_serve_evidence", lambda r: served.append(r) or "receipt")
+    assert session.next_task() is None
+    assert len(calls) == 2 and session.planning_refusals == [], session.planning_refusals
+    assert FETCH_OFFER in prompts[0], "offered: nothing known needs an edit"
+    assert len(served) == (1 if kind == "evidence" else 0)
+
+
+def test_with_known_editing_work_the_same_band_still_refuses(tmp_path):
+    session, calls, _ = _session(tmp_path, ["FETCH: 0e0ec5132f1b", "never"])
+    with pytest.raises(PlanningUnaffordable):
+        session.next_task()
+    assert len(calls) == 1

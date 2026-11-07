@@ -176,7 +176,7 @@ def _session_with_attempts(tmp_path, monkeypatch, attempts):
 
     from quadratus.artifacts import ArtifactStore
     from quadratus.session import Session, SessionConfig
-    (tmp_path / "project").mkdir(exist_ok=True)
+    (tmp_path / "project").mkdir(parents=True, exist_ok=True)
     session = Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
                       config=SessionConfig(project=tmp_path / "project"))
     monkeypatch.setattr(session, "_source_fingerprint", lambda: "s2")
@@ -218,3 +218,52 @@ def test_a_check_attempt_whose_output_was_not_stored_says_so(tmp_path, monkeypat
     block = session._planner_failure_context()
     assert "output artifact unavailable" in block and "(the stored output is unavailable)" in block
     assert "Check output (" not in block
+
+
+def test_root_equal_output_is_excerpted_once_and_every_attempt_keeps_its_facts(tmp_path, monkeypatch):
+    """Root review of d8225fc, item 2 (its exact control): artifacts are
+    content addressed, so two failed attempts with identical terse output
+    shared one id and the earlier attempt, its case and its EARLIER label
+    were dropped. Only the excerpt is deduplicated."""
+    session = _session_with_attempts(tmp_path, monkeypatch, [
+        ("t1", "s1", "identical terse failure output", [_failure("first_case")]),
+        ("t2", "s2", "identical terse failure output", [_failure("second_case")]),
+    ])
+    block = session._planner_failure_context()
+    assert "task t1, check attempt 2" in block and "task t2, check attempt 2" in block, block
+    assert "first_case" in block and "second_case" in block
+    assert "EARLIER source" in block
+    assert block.count("Check output (the harness's stored output") == 1
+    assert "(the same output as excerpted above, artifact" in block
+
+
+def test_an_output_past_the_excerpt_cap_is_pointed_to_not_called_excerpted(tmp_path, monkeypatch):
+    session = _session_with_attempts(tmp_path, monkeypatch, [
+        ("t1", "s1", "same tail", [_failure("a")]),
+        ("t2", "s1", "other tail", [_failure("b")]),
+        ("t3", "s2", "third tail", [_failure("c")]),
+        ("t4", "s2", "same tail", [_failure("d")]),
+    ])
+    block = session._planner_failure_context()
+    for case in ("a", "b", "c", "d"):
+        assert f"tests/test_app.py::{case} " in block
+    # Newest first: t4 and t3 are excerpted (the cap); t2's distinct output is
+    # pointed to; t1's output is t4's, already shown.
+    assert block.count("Check output (the harness's stored output") == 2
+    t2 = block[block.index("- task t2,"):block.index("- task t1,")]
+    t1 = block[block.index("- task t1,"):]
+    assert "(output not excerpted here; FETCH the output artifact for it)" in t2
+    assert "(the same output as excerpted above" in t1
+
+    capped = _session_with_attempts(tmp_path / "capped", monkeypatch, [
+        ("t1", "s1", "same tail", [_failure("a")]),
+        ("t2", "s1", "other tail", [_failure("b")]),
+        ("t3", "s2", "third tail", [_failure("c")]),
+        ("t4", "s2", "fourth tail", [_failure("d")]),
+        ("t5", "s2", "same tail", [_failure("e")]),
+    ])
+    block = capped._planner_failure_context()
+    # t5 is excerpted; t1 shares t5's bytes. An output pointed to past the
+    # cap is never later called "excerpted above".
+    assert block.count("Check output (the harness's stored output") == 2
+    assert block[block.index("- task t1,"):].count("(the same output as excerpted above") == 1

@@ -163,3 +163,23 @@ def test_with_no_known_editing_work_a_low_budget_still_reaches_done_and_the_audi
     assert _record(replay)["planning_refusals"] == []
     assert replay.of("auditor"), "the audit decided"
     assert replay.result.completed, replay.result.error
+
+
+@pytest.mark.parametrize("spendable", [340, 450, 700])
+def test_root_completed_work_fetch_then_done_is_never_refused_at_any_budget(tmp_path, monkeypatch, spendable):
+    """Root review of d8225fc, item 1 (its exact control): with no known
+    editing work, 450 left after the planning call has lead + review (400)
+    payable now and re-ask + lead + review (510) not; the FETCH was refused
+    and the slots forfeited for a hypothetical edit. All three bands serve
+    the FETCH and complete through the audit."""
+    def reply(call, replay):
+        if "With that read, answer now" not in call.prompt:
+            ids = re.findall(r"\b([0-9a-f]{12})\b", call.prompt)
+            return f"FETCH: {ids[-1]}"
+        return "DONE"
+    replay = _calibrated(tmp_path, monkeypatch, reply, {"t1": _fixes}, spendable=spendable)
+    assert _record(replay)["planning_refusals"] == [], _record(replay)["planning_refusals"]
+    assert "reply with exactly 'FETCH: <artifact-id>'" in _planning(replay)[1].prompt, "offered, not closed"
+    assert len(_planning(replay)) == 3
+    assert replay.of("auditor")
+    assert replay.result.completed, replay.result.error

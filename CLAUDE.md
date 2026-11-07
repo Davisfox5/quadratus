@@ -2975,8 +2975,10 @@ Key design decisions already settled:
     block (`_failure_context`). Excerpts are at most 1,500 characters,
     redacted against every recorded and configured command path (the
     gate-fix call's own boundary), fenced and labelled untrusted data, at
-    most two per prompt and deduplicated by artifact; each attempt keeps its
-    task, attempt, gate and a source label, so an earlier source is said.
+    most two per prompt; identical output (artifacts are content addressed)
+    is excerpted once, while every attempt keeps its own task, attempt, gate,
+    source label and failed cases (root review of d8225fc: deduplicating the
+    attempt dropped an earlier task, its case and its EARLIER label).
     Nothing here settles a check, finding or requirement.
   - *Planning.* `_continuation_admission` now quotes the terminal
     alternative dispatch itself takes (no next planning call) when the
@@ -2988,13 +2990,15 @@ Key design decisions already settled:
     forfeit is recorded (site `before planning`) and no planner call is
     bought. Inside a planning decision every re-ask (FETCH, evidence, an
     operator answer, a correction, on the seated planner or a fallback seat)
-    is priced first (`_reask_refusal`): refused only when it would cost a
-    continuation payable now, or when none is payable and editing work is
-    known; refused, it raises `PlanningUnaffordable` before any call, the
-    forfeit is recorded (site `planning re-ask`) and the cap's decision
-    applies. With no known editing work a low budget blocks nothing: DONE,
-    evidence and the audit are reached and the shared budget's own
-    admission decides. An operator's answer is recorded as a ruling before
+    is priced first (`_reask_refusal`): refused only when editing work is
+    known and, after the re-ask, no continuation of it could be paid;
+    refused, it raises `PlanningUnaffordable` before any call, the forfeit
+    is recorded (site `planning re-ask`) and the cap's decision applies.
+    With no known editing work no re-ask is refused at any budget, even
+    when an edit happens to fit before it (root review of d8225fc: a FETCH
+    on the way to DONE was refused at 450 left and the slots forfeited for a
+    hypothetical edit); DONE, evidence and the audit are reached and the
+    shared budget's own admission and the finish hold decide. An operator's answer is recorded as a ruling before
     its re-ask is priced. When the rule would refuse, the prompt says FETCH
     and EVIDENCE are unavailable (`_REASK_CLOSED`) instead of offering them.
     Only future calls are priced: a spent planning call is already in the
