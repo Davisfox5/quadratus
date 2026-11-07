@@ -2995,6 +2995,35 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-cycle03-failure-context",
+      "purpose": "Cycle03 (PR73 6710677736): bounded failure context for planner, review seats and repairing leads; planning and re-ask affordability without blocking DONE, evidence or the audit",
+      "base": "cc06687c38246b9ea34f35b413f2d1f218190617",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/completion_decision.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tests/test_failure_context_units.py",
+        "tests/test_planning_affordability_units.py",
+        "tests/lifecycle/test_failure_context.py",
+        "tests/lifecycle/test_affordable_planning.py",
+        "tests/test_prompt_rule_parity.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-11-07T18:27:47Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "d8225fcb7fbf5a73f979f7d77b5dff770ded34b3",
+        "at": "2026-11-07T18:27:49Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
