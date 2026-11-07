@@ -8364,8 +8364,8 @@ class Session:
                 break
             if stop == "FindingsUnresolved":
                 # An explicit attempt its owner judged and did not accept, or
-                # one left again without the owner's verdict on an unchanged
-                # source, is a stop, never an automatic second repair
+                # one left again without the owner's verdict in an unchanged
+                # decision state, is a stop, never an automatic second repair
                 # (contract v3). A recheck never asked is pending work, held
                 # (cycle01, PR73 6702597850).
                 row = next((r for r in reversed(self.review_resolutions) if r.get("task") == spec.task_id), {})
@@ -16744,8 +16744,11 @@ class Session:
         review debt (cycle01, PR73 6702597850: bounded-recovery-01 stopped
         on a RESOLVES whose recheck was never asked, with five slots left).
         A repeat is caught by state, not by count: a named finding left
-        without its owner's verdict again on the same source as before is
-        no progress, and that stops it. Returns the named ids that stop."""
+        without its owner's verdict again in the same decision state
+        (``_decision_state``: source, evidence and bindings, blocking
+        findings, reason, owner availability) is no progress, and that stops
+        it; a changed state, or an unknown one, is not a repeat. Returns the
+        named ids that stop."""
         reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
         targets = [reviews[fid] for fid in named if fid in reviews] + [r for r in inherited if r["fid"] in reviews]
         if not targets:
@@ -16809,18 +16812,52 @@ class Session:
         stop = []
         for target in targets:
             fid, cls = target["fid"], classes[target["fid"]]
-            earlier = [a for a in target.get("resolution_attempts") or ()
-                       if a.get("outcome") in ("not_attempted", "unavailable", "owed")]
-            repeated = cls in ("not_attempted", "unavailable") and any(a.get("source") == source for a in earlier)
+            state = self._decision_state(target, cls, record["refused"] or "", source)
+            # No progress is the same decision state again, never the same
+            # bytes alone: a declared binding, new exact-source evidence, a
+            # changed blocking finding, settlement reason or owner
+            # availability is progress with the source unchanged (root
+            # review of 9b0280b, R1). An unknown state proves nothing.
+            repeated = cls in ("not_attempted", "unavailable") and state is not None and any(
+                a.get("state") == state for a in target.get("resolution_attempts") or ())
             target.setdefault("resolution_attempts", []).append(dict(
                 task=spec.task_id, outcome=cls, source=source, why=(record["refused"] or "")[:300],
-                repeated=repeated))
-            record["outcomes"][fid] = cls + (" (again on an unchanged source)" if repeated else "")
+                state=state, repeated=repeated))
+            record["outcomes"][fid] = cls + (" (again in an unchanged decision state)" if repeated else "")
             if fid in named and (cls == "adverse" or repeated):
                 stop.append(fid)
         if any(c == "closed" for c in classes.values()):
             self._discharge_pending_settlements(spec.task_id)
         return stop
+
+    def _decision_state(self, target: dict, cls: str, why: str, source: Optional[str]) -> Optional[str]:
+        """The identity of what a RESOLVES settlement decided on, for the
+        no-progress check (root review of 9b0280b, R1): the source; every
+        acceptance row's scenario, binding, bound cases, execution and
+        judgment, read as a set without task, row or receipt ids (so a later
+        task restating the same evidence adds nothing, and a new receipt of
+        the same result is not progress); the open blocking findings by
+        claim, without ids; the settlement's reason and outcome; and whether
+        the owner can be asked. None when the source is unknown: an unknown
+        state never proves no progress."""
+        if not source:
+            return None
+        rows = sorted({json.dumps([sorted(r.get("requirements") or []) if isinstance(r.get("requirements"), list)
+                                   else str(r.get("requirements")),
+                                   {k: v for k, v in dict(r.get("scenario") or ()).items() if k != "proof_id"},
+                                   r.get("modality"), r.get("binding"), sorted(r.get("cases") or []),
+                                   r.get("execution"), r.get("sufficiency")], sort_keys=True, default=str)
+                       for r in self.evidence_obligations if r.get("kind") == "acceptance"
+                       and not r.get("superseded_by")})
+        blocking = sorted({re.sub(r"\bRFT\d+-\d+\b|\bF\d+\b", "", str(r.get("claim") or r.get("text") or ""))
+                           for r in self.review_findings if not r.get("closed")}
+                          | {str(f.get("text") or f.get("claim") or "") for f in self.findings
+                             if f.get("status") == "open"})
+        reason = re.sub(r"\bt\d+\b", "", why)
+        payload = json.dumps(dict(source=source, rows=rows, blocking=blocking, reason=reason, outcome=cls,
+                                  owner=target.get("author"), available=bool(self._available(target.get("author")))),
+                             sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode()).hexdigest()
 
     def _resolution_pending(self, task_id: str) -> List[str]:
         """The review findings ``task_id`` named in RESOLVES that its
@@ -16832,7 +16869,7 @@ class Session:
         closed = {r["fid"] for r in self.review_findings if r.get("closed")}
         return [fid for fid in row.get("named") or () if fid not in closed
                 and not str((row.get("outcomes") or {}).get(fid, "")).startswith(("closed", "adverse"))
-                and "unchanged source" not in str((row.get("outcomes") or {}).get(fid, ""))]
+                and "unchanged decision state" not in str((row.get("outcomes") or {}).get(fid, ""))]
 
     def _discharge_pending_settlements(self, task_id: Optional[str]) -> None:
         """An earlier task's settlement edge left pending (its named review
@@ -16997,8 +17034,8 @@ class Session:
         decision, which asks the goal question and the audit as the finish
         reservation held capacity for and never completes over them. A
         RESOLVES whose owner rechecked and did not accept it, or that was
-        left again without its owner's verdict on an unchanged source, stops
-        FindingsUnresolved; a recheck that was never asked is pending work
+        left again without its owner's verdict in an unchanged decision state
+        (``_decision_state``), stops FindingsUnresolved; a recheck that was never asked is pending work
         held like the rest (cycle01, PR73 6702597850). A capped
         or failed task never reaches this policy: its close continues to the
         planner by its own rule."""
@@ -17023,7 +17060,7 @@ class Session:
         if record["stop"] is None and unresolved:
             record.update(stop="FindingsUnresolved")
             record["reasons"].append(f"RESOLVES {', '.join(unresolved)} did not establish acceptance (owner's "
-                                     "verdict, or no progress on an unchanged source)")
+                                     "verdict, or no progress in an unchanged decision state)")
         return record
 
     def _close_decision(self, site: str, closed, *, slot_left: bool, debt_recorded: bool, unresolved=()) -> Optional[str]:
@@ -18769,14 +18806,22 @@ class Session:
         return bool(rows) and any(r.get("binding") != "bound" or not r.get("cases") for r in rows)
 
     def _binding_requested(self, spec, pid: str) -> str:
-        """The earlier binding request for ``pid`` on this exact source, or
-        "": asking again with nothing changed is the same request (the
-        no-progress identity, never a count)."""
+        """The earlier binding request for ``pid`` that saw exactly the
+        scenario's present state, or "": the same source (known) and the
+        same binding and cases after that request as now. Asking again with
+        nothing changed is the same request; a binding that changed since
+        (a later declaration, a correction) is a new state (root review of
+        9b0280b). An unknown source proves no sameness."""
         source = self._source_fingerprint() if self.project else None
+        if not source:
+            return ""
+        rows = self._scenario_rows(spec, pid)
+        now = ([r.get("binding") for r in rows], sorted(c for r in rows for c in (r.get("cases") or [])))
         for route in self.evidence_routes:
             if (route.get("task") == spec.task_id and route.get("proof_id") == pid
                     and str(route.get("action") or "").startswith("binding requested")
-                    and route.get("source") == source):
+                    and route.get("source") == source
+                    and (list(route.get("binding_after") or []), sorted(route.get("cases") or [])) == now):
                 return f"finding {route.get('finding')}"
         return ""
 
@@ -18785,9 +18830,10 @@ class Session:
         bindings, for the PROVES lines of the scenarios whose EVIDENCE
         findings say they bind no case (cycle01, PR73 6702597850). Run in a
         source copy with no write grant and the declaration round cap; only
-        PROVES lines naming a requested scenario are read (any other line,
-        malformed or naming another scenario, is recorded and dropped, so it
-        can neither rebind nor reset a scenario nobody asked about). The new
+        PROVES lines naming a requested scenario are read. Any other PROVES
+        line (malformed, or naming another scenario) is dropped and recorded
+        in ``proof_binding_problems``, so it can neither rebind nor reset a
+        scenario nobody asked about; prose is ignored and not recorded. The new
         binding is then settled against checks already recorded on this
         exact source (``_refresh_obligations``: the exact case, executed and
         passed, unskipped, current gate and environment); no suite is rerun

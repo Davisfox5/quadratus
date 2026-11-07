@@ -2950,12 +2950,14 @@ Key design decisions already settled:
   (bounded-recovery-01 t3) it goes first to one declaration-only call to
   the task's own lead (`proof-binding`, a declaration role: source copy,
   no write grant, `DECLARATION_MAX_TURNS`), which may only state PROVES
-  lines for the named scenarios; any other line is dropped and recorded.
+  lines for the named scenarios; any other PROVES line is dropped and
+  recorded in `proof_binding_problems`, and prose is ignored.
   The binding settles against checks already recorded on that exact source
   (the exact case executed and passed, unskipped; no suite rerun), the
   same reviewer rechecks it, and a reviewer's own PROVES line binds
-  nothing. A second request for the same scenario on an unchanged source
-  is not made: the finding takes the harness route. A child declares and
+  nothing. A second request for the same scenario is not made while the
+  source (known) and the scenario's binding and cases are what the first
+  request left: the finding takes the harness route. A child declares and
   still holds it for the post-merge recheck. A round whose every blocking line
   was routed makes no editing call and the planner stage is costed in the
   fix-cycle admission. A kept, unanswered or stray SCENARIO finding, and
@@ -3076,8 +3078,15 @@ Key design decisions already settled:
   and it is satisfied by fact once an owner's later recheck closes every
   finding it named (`settled_later_by`). No count bounds this: task slots,
   calls, tokens and time do, RunStalled catches the same task twice, and
-  the same finding left again without its owner's verdict on an unchanged
-  source is no progress and stops FindingsUnresolved. `truth_check` names
+  the same finding left again without its owner's verdict in an unchanged
+  decision state is no progress and stops FindingsUnresolved. The state
+  (`_decision_state`, kept on each attempt) is the known source, every
+  acceptance row's scenario, binding, cases, execution and judgment read
+  as a set without task, row or receipt ids, the open blocking findings by
+  claim without ids, the settlement reason and the owner's availability;
+  identical bytes with a newly declared binding or new exact-source
+  evidence are progress (root review of 9b0280b, R1), and an unknown
+  source proves no repeat. `truth_check` names
   each unestablished RESOLVES by its outcome. A reviewer that is
   unavailable cannot be named. The rechecks are costed on the route (`resolution recheck by
   <peer>`), recorded in `review_resolutions` (result.json, checkpoint).

@@ -269,8 +269,8 @@ def test_a_second_unasked_resolves_on_an_unchanged_source_is_no_progress_and_sto
                                _resolving("RFT1-1", text="Handle negatives in add in app.py.")], max_tasks=5,
                               review=review, recheck=recheck)
     assert _resolution(replay, "t2")["outcomes"] == {"RFT1-1": "not_attempted"}
-    assert _resolution(replay, "t3")["outcomes"] == {"RFT1-1": "not_attempted (again on an unchanged source)"}
-    assert "RFT1-1: not_attempted (again on an unchanged source)" in (replay.result.error or "")
+    assert _resolution(replay, "t3")["outcomes"] == {"RFT1-1": "not_attempted (again in an unchanged decision state)"}
+    assert "RFT1-1: not_attempted (again in an unchanged decision state)" in (replay.result.error or "")
     assert (replay.result.error or "").startswith("FindingsUnresolved: task t3"), replay.result.error
     assert not replay.result.completed
 
@@ -437,3 +437,65 @@ def test_a_parallel_child_declares_its_missing_binding_and_the_merge_gate_shows_
     finding = next(f for f in record["review_findings"] if f["fid"] == "RFT1-1")
     assert finding["closed"] and finding["history"][-1]["role"] == "recheck"
     assert replay.result.completed, replay.result.error
+
+
+# -- 3. no progress is the same decision state, not the same bytes (root review of 9b0280b, R1) --
+
+@pytest.mark.requirements_ledger
+def test_root_binding_evidence_progress_without_a_source_edit_lets_the_next_task_run(tmp_path, monkeypatch):
+    """Root's reproducer: t2 leaves P1 unbound and missing, t3 changes no
+    byte but declares the existing case so P1 is bound and ran. That is
+    progress: t4 runs and settles every finding with its owner."""
+    review, recheck = _settling(own=lambda task: task in ("t1", "t2", "t3"))
+
+    def lead(call, replay):
+        return _lead(proves=() if call.task == "t2" else (CASE,))(call, replay)
+    _, replay = _run_tasks(tmp_path, monkeypatch, "binding-progress",
+                           [PLAN1, _resolving("RFT1-1"),
+                            _resolving("RFT1-1", text="Declare existing proof for add and address the pending finding."),
+                            _resolving("RFT1-1", "RFT2-1", "RFT3-1", text="Settle the remaining findings with their owners.")],
+                           max_tasks=5, review=review, recheck=recheck, lead=lead)
+    record = H.result_json(replay)
+    rows = {t: [r for r in record["evidence_obligations"] if r.get("task") == t and r.get("kind") == "acceptance"]
+            for t in ("t2", "t3")}
+    assert any(r.get("binding") != "bound" for r in rows["t2"])
+    assert any(r.get("binding") == "bound" and r.get("execution") == "ran" for r in rows["t3"])
+    attempts = next(f for f in record["review_findings"] if f["fid"] == "RFT1-1")["resolution_attempts"]
+    assert attempts[0]["source"] == attempts[1]["source"], "the bytes did not change"
+    assert attempts[0]["state"] != attempts[1]["state"] and not attempts[1]["repeated"]
+    assert "t4" in [c.task for c in replay.of("lead")], replay.result.error
+    assert replay.result.completed, replay.result.error
+
+
+def test_an_unknown_source_never_proves_an_unchanged_decision_state(tmp_path):
+    from tests.lifecycle.test_proof_binding import _session
+    session = _session(tmp_path)
+    target = dict(fid="RFT1-1", author="claude:opus")
+    assert session._decision_state(target, "not_attempted", "it closed with open findings", None) is None
+    known = session._decision_state(target, "not_attempted", "it closed with open findings", "S")
+    assert known and known == session._decision_state(target, "not_attempted", "it closed with open findings", "S")
+    assert known != session._decision_state(target, "not_attempted", "its integration gate failed", "S")
+    session._available = lambda key: False
+    assert known != session._decision_state(target, "not_attempted", "it closed with open findings", "S"), \
+        "an owner who can no longer be asked is a different state"
+
+
+def test_a_binding_is_requested_again_once_the_scenario_state_changed(tmp_path):
+    from types import SimpleNamespace
+
+    from tests.lifecycle.test_proof_binding import _session
+    session = _session(tmp_path)
+    session.project = tmp_path
+    session._source_fingerprint = lambda: "S"
+    spec = SimpleNamespace(task_id="t1")
+    row = dict(oid="O1", task="t1", proof_id="P1", kind="acceptance", modality="test", binding="unbound", cases=[])
+    session.evidence_obligations = [row]
+    session.evidence_routes = [dict(task="t1", proof_id="P1", finding="RFT1-1", source="S",
+                                    action="binding requested from claude:opus: no PROVES line for a requested scenario",
+                                    binding_after=["unbound"], cases=[])]
+    assert session._binding_requested(spec, "P1"), "same source, same binding: the same request"
+    row.update(binding="invalid declaration: not one case", cases=[])
+    assert session._binding_requested(spec, "P1") == "", "the binding changed since: a new state"
+    row.update(binding="unbound")
+    session._source_fingerprint = lambda: None
+    assert session._binding_requested(spec, "P1") == "", "an unknown source proves no sameness"
