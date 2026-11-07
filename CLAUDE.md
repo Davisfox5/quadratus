@@ -3006,6 +3006,47 @@ Key design decisions already settled:
     (result.json, checkpoint). Quotes are estimates (the last planning
     call's size); per-call admission and the post-return ceiling are
     unchanged, and nothing here guarantees a dispatch or a completion.
+- **Cycle04: scope-blocked repair is routed, and an unsettled check finding
+  names its cause** (PR73 6713487831, after completion-cycle03's t5, a
+  README/tests task whose blocker was in production code, received a second
+  revision, its recheck and a gate fix under the same grant).
+  - *Declaration.* The owning lead's draft, revision and gate-fix prompts
+    under a restricted grant teach one line, `OUTSIDE SCOPE: <finding id |
+    failed case id> - <path>[, <path>...]` (`_OUTSIDE_SCOPE_RULE`; at most 8
+    lines read per reply, 5 paths per id). No call is made to ask for it.
+    `_record_scope_declarations` keeps every line with its reasons, and
+    accepts one only for an open blocking finding of this task or a failed
+    case of its latest check or observed run, and only for paths that
+    `_scope_path_problem` finds are project files outside the grant: an
+    absolute, home, glob, parent-escaping, linked, dependency-tree, harness
+    or version-control path is refused, an operator-forbidden or
+    policy-denied one is `forbidden` (no route is invented), and a path the
+    grant permits (an unrestricted scope permits everything) is inside it.
+    A review-only task declares nothing. Repeats change nothing.
+  - *Effect.* An accepted finding is routed `scope` and leaves the editor's
+    lines (`_routed_ids`); other findings keep their rounds. A gate fix is
+    skipped only when every failed case of a complete, parsed, test-body
+    failure record is declared (`_scope_covers`); mixed, unparsed, setup,
+    truncated or no-result failures keep the existing repair route, and a
+    finding naming a file covers no case. The failed check's debt carries
+    `scope` (paths, cases declared and not), the review finding
+    `scope_paths`, and both reach the planner's lines. A RESOLVES task whose
+    SCOPE permits none of the declared paths is sent back once per finding
+    and path set; named again as written, it proceeds. Closure is
+    unchanged: the resolving task's own exact-source check and the original
+    reviewer's recheck. Nothing is granted, edited, closed or proved by a
+    declaration; a false one defers work and leaves the finding open.
+    Records: `scope_declarations`, `scope_gate_skips`, `scope_sendbacks`
+    (result.json, checkpoint); a parallel child's come back whole.
+  - *Cause.* A FindingsUnresolved stop over a check finding persists
+    `unsettled` on the finding (`_explain_unsettled_check`): the resolving
+    task's latest check (missing, failed or passed; current or earlier
+    source; counts), the blocking findings it left open, the latest refused
+    repair or correction round with tokens needed, available and short (from
+    `plan_admissions`, which now keeps `needed` and `left`), and the owner
+    resolution outcomes. The stop text, result.json and truth_check read
+    that one record; a passing check is stated, never treated as acceptance,
+    and an unasked recheck stays `not_attempted`.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

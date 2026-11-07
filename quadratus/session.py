@@ -99,6 +99,9 @@ from .scope import (
     count_change_lines_by_path,
     is_test_path,
 )
+from .scope import (
+    _matches as _scope_matches,
+)
 from .structured import StructuredError, parse_security_verdict
 from .task_kinds import (
     KNOWN_NEEDS,
@@ -1462,6 +1465,26 @@ _COVERS_REQUEST = (
 #: genuinely needs more operator input than that is a scoping conversation,
 #: which belongs in the interview, not the loop.
 _MAX_ASKS_PER_DECISION = 3
+
+#: A lead's typed claim that a blocking finding or a failed case of its own
+#: task needs files outside its grant (cycle04, PR73 6713487831: completion-
+#: cycle03's t5 said so in prose and still received a second revision, its
+#: recheck and a gate-fix under the same README/tests grant). Bounded: at most
+#: ``_MAX_SCOPE_LINES`` lines read per reply and ``_MAX_SCOPE_PATHS`` paths per
+#: id, each path at most ``_MAX_SCOPE_PATH_CHARS``.
+_OUTSIDE_SCOPE = re.compile(r"^[ \t]*OUTSIDE SCOPE:[ \t]*(\S+?)[ \t]+-[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+_MAX_SCOPE_LINES = 8
+_MAX_SCOPE_PATHS = 5
+_MAX_SCOPE_PATH_CHARS = 300
+_OUTSIDE_SCOPE_RULE = (
+    f"If repairing one of your task's blocking findings or a failed case of its latest check needs a file "
+    f"this task may not edit, say so on its own line: 'OUTSIDE SCOPE: <finding id or failed case id> - "
+    f"<project-relative path>[, <path>...]' (at most {_MAX_SCOPE_PATHS} paths per id and {_MAX_SCOPE_LINES} "
+    "lines; the case id exactly as the check reported it). The harness accepts it only for an open finding of "
+    "this task or a failed case of its latest check, and only for paths inside the project and outside this "
+    "task's grant. An accepted line stops further fix rounds for that item in this task and hands it to the "
+    "planner with those paths; everything inside your grant is still yours to fix. It grants nothing, edits "
+    "nothing and proves nothing: the finding stays open until its own reviewer accepts a repair.")
 
 #: The planner's FETCH and evidence channels when this decision cannot pay
 #: one more planner call and still leave a payable continuation (cycle03).
@@ -3603,6 +3626,14 @@ class Session:
         #: Refused planning quotes (cycle03): before a planning call, or for a
         #: re-ask inside one.
         self.planning_refusals: List[dict] = []
+        #: Outside-scope repair declarations (cycle04): every line read,
+        #: accepted or not, with its reasons; and the gate fixes skipped
+        #: because every failed case was declared.
+        self.scope_declarations: List[dict] = []
+        self.scope_gate_skips: List[dict] = []
+        #: RESOLVES send-backs already made for a scope route (cycle04), so
+        #: the same naming proceeds the second time.
+        self.scope_sendbacks: List[str] = []
         self._planning_decision = False
         #: The job's commitment to end after one task whose ordinary route
         #: could not be paid (admission/3, ``_commit_terminal``); carried.
@@ -3952,6 +3983,14 @@ class Session:
             budget = self._writer_turn_budget_note(key, context.get('role'), allow_writes)
             if budget and budget not in prompt:
                 prompt += "\n\n" + budget
+        if (context.get('origin') != 'worker' and spec is not None and context.get('role') in ("lead", "revision",
+                                                                                               "gate-fix")
+                and allow_writes and spec.scope is not None and spec.scope.permitted_paths
+                and not getattr(spec.scope, "review_only", False) and _OUTSIDE_SCOPE_RULE not in prompt):
+            # The repair-location declaration (cycle04), taught wherever the
+            # owning lead edits under a restricted grant: draft, revision and
+            # gate fix. No call is ever made to ask for it.
+            prompt += "\n\n" + _OUTSIDE_SCOPE_RULE
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
             if spec.scope.render() not in prompt:
                 prompt += "\n\n" + spec.scope.render()
@@ -4125,6 +4164,7 @@ class Session:
             self._record_proves(key, role, reply)
             self._record_not_run(key, role, reply)
             self._record_runs(key, role, reply)
+            self._record_scope_declarations(key, role, reply)
             return reply
         except TurnLimitReached as exc:
             if capped is None:
@@ -8573,6 +8613,12 @@ class Session:
                 row = next((r for r in reversed(self.review_resolutions) if r.get("task") == spec.task_id), {})
                 outcomes = row.get("outcomes") or {}
                 why = "; ".join(f"{fid}: {outcomes[fid]}" for fid in unresolved if fid in outcomes)
+                # A check finding's cause, persisted on the finding and read
+                # by the stop, the report and the checker alike (cycle04).
+                causes = [self._explain_unsettled_check(spec, fid) for fid in unresolved
+                          if fid not in outcomes and any(f["id"] == fid and f.get("kind") == "check.failed"
+                                                         for f in self.findings)]
+                why = "; ".join([why] * bool(why) + [c for c in causes if c])
                 self._stop_with("unverified", (f"FindingsUnresolved: task {spec.task_id} named RESOLVES "
                                                f"{', '.join(unresolved)} but did not establish their "
                                                f"acceptance{f' ({why})' if why else ''}. Work preserved."))
@@ -10035,6 +10081,8 @@ class Session:
                     # parent's to recheck now (workflow repair, 2026-10-24).
                     finding.pop("held", None)
                 self.review_findings.extend(child.review_findings)
+                self.scope_declarations.extend(dict(d) for d in getattr(child, "scope_declarations", []) or [])
+                self.scope_gate_skips.extend(dict(d) for d in getattr(child, "scope_gate_skips", []) or [])
                 self.deferred_evidence.extend(child.deferred_evidence)
                 self.scenario_corrections.extend(child.scenario_corrections)
                 self.evidence_routes.extend(child.evidence_routes)
@@ -11766,7 +11814,9 @@ class Session:
                          "closes it, so the requirements they touch are not met while they stand):")
             lines.extend(f"- {r['fid']} ({r['task']}, {r['author']}, basis {r['basis']['kind']}"
                          f"{': ' + r['basis']['ref'] if r['basis'].get('ref') else ''}, impact {r['impact']}, "
-                         f"{r['state']}): {r['claim']}" for r in standing)
+                         f"{r['state']}): {r['claim']}"
+                         + (f" [{self._scope_route_text(r['task'], r['scope_paths'])}]" if r.get("scope_paths") else "")
+                         for r in standing)
         return "\n".join(lines)
 
     @staticmethod
@@ -13910,6 +13960,306 @@ class Session:
         return [e for e in self._standing_not_run() if e.get("oid") and self._not_run_owned(e, task)
                 and not e.get("restatements")
                 and not (e.get("executable") if "executable" in e else self._not_run_executable(e))]
+
+    # -- scope-blocked repair routing (cycle04) ---------------------------------
+    def _scope_path_problem(self, spec, raw: str) -> Tuple[str, bool]:
+        """Why ``raw`` cannot be an outside-scope repair site for ``spec``, and
+        whether the reason is an operator prohibition; ("", False) when it is
+        a project file a later authorized task could be granted. Read with
+        the existing scope semantics: a path the task's grant permits (an
+        unrestricted scope permits everything) is inside it."""
+        from .deptree import DEPENDENCY_DIRS
+        path = str(raw or "").strip().strip("`'\"").removeprefix("./")
+        if not path or len(path) > _MAX_SCOPE_PATH_CHARS:
+            return "not a project-relative path", False
+        if path.startswith(("/", "~")) or "\\" in path or any(c in path for c in "*?[]{}") or ":" in path:
+            return "not a project-relative file path (absolute, home, glob or drive)", False
+        parts = PurePosixPath(path).parts
+        if any(p in ("..", ".") for p in parts) or path.endswith("/"):
+            return "escapes the project or names a directory", False
+        if parts[0] in (".quadratus", ".git") or ".git" in parts:
+            return "a harness or version-control path", True
+        if any(p in DEPENDENCY_DIRS for p in parts):
+            return "inside a dependency tree", True
+        root = Path(self.project).resolve()
+        here = Path(self.project)
+        for part in parts:
+            here = here / part
+            if here.is_symlink():
+                return "passes through a link", True
+        try:
+            if not (Path(self.project) / path).resolve().is_relative_to(root):
+                return "resolves outside the project", False
+        except (OSError, RuntimeError):
+            return "cannot be resolved inside the project", False
+        scope = getattr(spec, "scope", None)
+        if scope is not None and any(_scope_matches(path, g) for g in scope.forbidden_paths or ()):
+            return "forbidden by the operator", True
+        if any(not limit.permits(path) for limit in self._outer_limits(spec)):
+            return "outside the operator's limits", True
+        if self._policy_denies(path):
+            return "policy-denied or sensitive", True
+        if scope is None or scope.permits(path):
+            return "inside this task's grant", False
+        return "", False
+
+    def _task_failed_cases(self, task_id: str) -> Tuple[set, dict]:
+        """The failed case ids of ``task_id``'s latest check attempt and its
+        latest observed run before a review (the harness's parsed reports),
+        with the attempt identity they were read from."""
+        cases, anchor = set(), {}
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == task_id), None)
+        if outcome is None and self._outcome is not None and self._outcome.task_id == task_id:
+            outcome = self._outcome
+        runs = []
+        if outcome is not None and outcome.checks:
+            runs.append(("attempt", outcome.checks[-1]))
+        seen = next((c for c in reversed(getattr(self, "review_checks", []) or []) if c.get("task") == task_id), None)
+        if seen is not None:
+            runs.append(("observed", seen))
+        for kind, run in runs:
+            if run.get("passed"):
+                continue
+            receipts = [r for r in run.get("receipts") or [] if r.get("status") not in ("passed", "skipped")]
+            reports = [r.get("report") for r in receipts] if receipts else [run.get("report")]
+            for report in reports:
+                if isinstance(report, dict) and report.get("state") == "parsed":
+                    cases |= {str(f.get("nodeid")) for f in report.get("failures") or [] if isinstance(f, dict)}
+            anchor[kind] = dict(attempt=run.get("attempt"), stage=run.get("stage"), source=run.get("source"))
+        return cases, anchor
+
+    def _record_scope_declarations(self, key, role, reply) -> None:
+        """Read the owning lead's 'OUTSIDE SCOPE: <id> - <path>[, ...]' lines
+        from an editing reply (cycle04). Each is an untrusted routing claim:
+        accepted only for this task's open blocking finding or a failed case
+        of its latest check, and only for paths inside the project and
+        outside this task's grant (``_scope_path_problem``). An accepted
+        finding is routed ``scope`` (no further editor round for it in this
+        task: ``_routed_ids``); an accepted case can let a later gate fix be
+        skipped (``_scope_covers``) and is carried into the task's check
+        debt. Every line, accepted or not, is kept with its reasons; a
+        repeated identical declaration changes nothing. Nothing is granted,
+        edited, closed or proved."""
+        spec = self._active_spec
+        if role not in _EDITING_ROLES or spec is None or not self.project or not reply:
+            return
+        lines = _OUTSIDE_SCOPE.findall(reply)
+        if not lines:
+            return
+        task_id = spec.task_id
+        scope = getattr(spec, "scope", None)
+        grouped: Dict[str, List[str]] = {}
+        for ident, paths in lines[:_MAX_SCOPE_LINES]:
+            ident = ident.strip().strip("`'\".,;")
+            listed = grouped.setdefault(ident, [])
+            for raw in re.split(r"\s*,\s*", paths):
+                raw = raw.strip().strip("`'\"")
+                if raw and raw not in listed:
+                    listed.append(raw)
+        source = self._source_fingerprint()
+        failed, anchor = self._task_failed_cases(task_id)
+        for ident, raw_paths in grouped.items():
+            entry = dict(task=task_id, role=role, author=key, id=ident, source=source, at_check=len(self.checks),
+                         lines_read=min(len(lines), _MAX_SCOPE_LINES), paths=[], forbidden=[], rejected=[])
+            if len(lines) > _MAX_SCOPE_LINES:
+                entry["lines_ignored"] = len(lines) - _MAX_SCOPE_LINES
+            if len(raw_paths) > _MAX_SCOPE_PATHS:
+                entry["rejected"].extend(dict(path=p[:_MAX_SCOPE_PATH_CHARS], why="past the per-id path bound")
+                                         for p in raw_paths[_MAX_SCOPE_PATHS:])
+            record = next((r for r in self.review_findings if r.get("fid") == ident), None)
+            if scope is not None and getattr(scope, "review_only", False):
+                entry.update(kind="none", status="rejected",
+                             why="a review-only task reports and does not repair; its findings already go to "
+                                 "separately scoped tasks")
+            elif record is not None:
+                entry["kind"] = "finding"
+                if record.get("task") != task_id:
+                    entry.update(status="rejected", why=f"{ident} belongs to {record.get('task')}, not {task_id}")
+                elif record.get("closed") or record.get("kind") == "unreviewed":
+                    entry.update(status="rejected", why=f"{ident} is not an open blocking finding")
+            elif ident in failed:
+                entry.update(kind="case", anchor=anchor)
+            else:
+                entry.update(kind="unknown", status="rejected",
+                             why=f"{ident} is neither an open finding of {task_id} nor a failed case of its latest "
+                                 "check")
+            if entry.get("status") != "rejected":
+                for raw in raw_paths[:_MAX_SCOPE_PATHS]:
+                    problem, forbidden = self._scope_path_problem(spec, raw)
+                    path = raw.strip().strip("`'\"").removeprefix("./")
+                    if not problem:
+                        entry["paths"].append(path)
+                    elif forbidden:
+                        entry["forbidden"].append(dict(path=path[:_MAX_SCOPE_PATH_CHARS], why=problem))
+                    else:
+                        entry["rejected"].append(dict(path=path[:_MAX_SCOPE_PATH_CHARS], why=problem))
+                if entry["paths"]:
+                    entry["status"] = "routed"
+                elif entry["forbidden"]:
+                    entry.update(status="forbidden",
+                                 why="every named path is one the operator forbids; no task may be routed to it")
+                else:
+                    entry.update(status="rejected", why="no named path is a project file outside this task's grant")
+            previous = [d for d in self.scope_declarations if d.get("task") == task_id and d.get("id") == ident
+                        and d.get("status") == "routed"]
+            known = sorted({p for d in previous for p in d.get("paths") or []})
+            if entry.get("status") == "routed" and set(entry["paths"]) <= set(known):
+                entry["repeat"] = True
+            self.scope_declarations.append(entry)
+            if entry.get("status") == "routed" and record is not None:
+                paths = sorted(set(known) | set(entry["paths"]))
+                if not record.get("route") or record.get("route") == "scope":
+                    record.update(route="scope", scope_paths=paths,
+                                  route_note=f"its lead declared the repair site outside {task_id}'s scope: "
+                                             + ", ".join(paths))
+                else:
+                    record["scope_paths"] = paths
+            elif entry.get("status") == "forbidden" and record is not None:
+                record["scope_forbidden"] = True
+            if entry.get("status") != "routed" or not entry.get("repeat"):
+                self._note(f"{task_id}: OUTSIDE SCOPE {ident}: {entry.get('status')}"
+                           + (f" ({', '.join(entry['paths'])})" if entry["paths"] else f" ({entry.get('why', '')})"))
+
+    def _scope_case_paths(self, task_id: str) -> Dict[str, List[str]]:
+        """Accepted outside-scope paths of ``task_id``, by failed case id."""
+        out: Dict[str, List[str]] = {}
+        for d in self.scope_declarations:
+            if d.get("task") == task_id and d.get("kind") == "case" and d.get("status") == "routed":
+                out[d["id"]] = sorted(set(out.get(d["id"], [])) | set(d.get("paths") or []))
+        return out
+
+    def _check_failures_complete(self, result) -> Tuple[Optional[set], str]:
+        """The failed case ids of a failed check when every failed command's
+        harness report names every failure as a test-body case, or (None,
+        why) for anything else: a command with no parsed report, a timeout or
+        a runner error, a setup or collection error, a failure count the
+        record does not cover, or a truncated record."""
+        receipts = list(getattr(result, "receipts", None) or [])
+        failed = [r for r in receipts if getattr(r, "status", None) not in ("passed", "skipped")]
+        reports = [getattr(r, "report", None) for r in failed] if receipts else [getattr(result, "report", None)]
+        if receipts and any(getattr(r, "status", None) != "failed" for r in failed):
+            return None, "a command did not run to a test result"
+        cases = set()
+        for report in reports:
+            if not isinstance(report, dict) or report.get("state") != "parsed":
+                return None, "a failed command has no parsed harness report"
+            failures = [f for f in report.get("failures") or [] if isinstance(f, dict)]
+            counts = report.get("counts") or {}
+            if (report.get("truncated") or report.get("collect_errors")
+                    or int(counts.get("errors") or 0) or not failures
+                    or int(counts.get("failed") or 0) + int(counts.get("errors") or 0) != len(failures)):
+                return None, "the failure record is incomplete, truncated or has setup or collection errors"
+            if any(f.get("when") != "call" for f in failures):
+                return None, "a failure was raised outside a test body"
+            cases |= {str(f.get("nodeid")) for f in failures}
+        return cases, ""
+
+    def _scope_covers(self, spec, result) -> Optional[dict]:
+        """Whether every failed case of ``result`` has this task's accepted
+        outside-scope declaration (cycle04), so a gate fix under the same
+        grant cannot repair any of it: the coverage record, or None. Mixed,
+        unknown, unparsed, setup and incomplete failures are never covered:
+        the existing repair route decides them."""
+        cases, why = self._check_failures_complete(result)
+        if not cases:
+            return None
+        declared = self._scope_case_paths(spec.task_id)
+        if not all(c in declared for c in cases):
+            return None
+        return dict(task=spec.task_id, cases=sorted(cases),
+                    paths=sorted({p for c in cases for p in declared[c]}), at_check=len(self.checks))
+
+    def _check_scope(self, task_id: str, attempt: dict) -> Optional[dict]:
+        """The outside-scope view of one failed check attempt for its debt:
+        the accepted paths, which failed cases are declared and which are
+        not (an incomplete record is said, never filled in). None when no
+        case of it was declared."""
+        declared = self._scope_case_paths(task_id)
+        if not declared:
+            return None
+        cases = set()
+        complete = True
+        receipts = [r for r in attempt.get("receipts") or [] if r.get("status") not in ("passed", "skipped")]
+        for report in ([r.get("report") for r in receipts] if receipts else [attempt.get("report")]):
+            if isinstance(report, dict) and report.get("state") == "parsed":
+                cases |= {str(f.get("nodeid")) for f in report.get("failures") or [] if isinstance(f, dict)}
+            else:
+                complete = False
+        covered = sorted(c for c in cases if c in declared)
+        if not covered:
+            return None
+        return dict(paths=sorted({p for c in covered for p in declared[c]}), cases_declared=covered,
+                    cases_undeclared=sorted(cases - set(covered)), record_complete=complete)
+
+    def _explain_unsettled_check(self, spec, fid: str) -> str:
+        """Why the check finding ``fid`` that ``spec`` named in RESOLVES is
+        still open, from the current records, persisted on the finding as
+        ``unsettled`` (cycle04; completion-cycle03 read 'did not establish
+        acceptance' while t6's own check had passed and three new blockers
+        and a refused fix round were the barrier): the task's latest check
+        on which source (missing, failed, passed; current or earlier), the
+        blocking review findings the task left open, the latest refused
+        repair or correction round with its numbers, and the owner
+        resolution outcomes of the review findings it named. A passing check
+        is stated as such and settles nothing; an owner recheck never asked
+        is ``not_attempted``, never an adverse verdict."""
+        finding = next((f for f in self.findings if f["id"] == fid), None)
+        if finding is None:
+            return ""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        last = outcome.checks[-1] if outcome is not None and outcome.checks else None
+        current = self._source_fingerprint() if self.project else None
+        if last is None:
+            check = dict(state="missing")
+        else:
+            counts = dict(passed=0, failed=0, skipped=0)
+            parsed = True
+            for receipt in last.get("receipts") or [dict(report=last.get("report"))]:
+                report = receipt.get("report")
+                if isinstance(report, dict) and report.get("state") == "parsed":
+                    c = report.get("counts") or {}
+                    counts["passed"] += int(c.get("passed") or 0)
+                    counts["failed"] += int(c.get("failed") or 0) + int(c.get("errors") or 0)
+                    counts["skipped"] += int(c.get("skipped") or 0)
+                else:
+                    parsed = False
+            source = last.get("source")
+            check = dict(state="passed" if last.get("passed") else "failed", attempt=last.get("attempt"),
+                         source="current" if source and source == current else "earlier" if source else "unknown",
+                         counts=counts if parsed else None)
+        blockers = sorted(r["fid"] for r in self.review_findings
+                          if r.get("task") == spec.task_id and not r.get("closed") and r.get("kind") != "unreviewed")
+        refused = next((a for a in reversed(self.plan_admissions)
+                        if a.get("task") == spec.task_id and not a.get("feasible")
+                        and a.get("scope") not in ("mandatory", "full", "terminal")), None)
+        row = next((r for r in reversed(self.review_resolutions) if r.get("task") == spec.task_id), {})
+        record = dict(task=spec.task_id, check=check, blockers_left=blockers,
+                      refused_round=(dict(scope=refused.get("scope"), needed=(refused.get("needed") or {}).get("tokens"),
+                                          available=(refused.get("left") or {}).get("tokens"),
+                                          short=(refused.get("short") or {}).get("tokens"),
+                                          detail=str(refused.get("detail"))[:300]) if refused else None),
+                      owner_resolution=dict(row.get("outcomes") or {}), source=current)
+        parts = [f"{fid} not settled by {spec.task_id}: "
+                 + ("it has no check of its own on record" if check["state"] == "missing" else
+                    f"its last check (attempt {check.get('attempt')}) {check['state']} on the {check['source']} source"
+                    + (f" ({check['counts']['passed']} passed, {check['counts']['failed']} failed, "
+                       f"{check['counts']['skipped']} skipped)" if check.get("counts") else ""))]
+        if blockers:
+            parts.append(f"{spec.task_id} closed with blocking findings {', '.join(blockers)} open")
+        if record["refused_round"] and record["refused_round"].get("needed") is not None:
+            r = record["refused_round"]
+            parts.append(f"the {r['scope']} round was refused: {r['needed']:,} tokens needed, "
+                         f"{r['available']:,} available, short {r['short'] or 0:,}")
+        if record["owner_resolution"]:
+            parts.append("owner resolution: " + ", ".join(f"{k} {v}" for k, v in record["owner_resolution"].items()))
+        record["why"] = "; ".join(parts)[:600]
+        finding.setdefault("unsettled_history", []).append(dict(record))
+        finding["unsettled"] = record
+        return record["why"]
+
+    def _scope_route_text(self, task_id: str, paths: List[str]) -> str:
+        return (f"its lead declared the repair site outside {task_id}'s scope: {', '.join(paths)}; a task whose "
+                "SCOPE includes them may RESOLVES it (a claim, not proof: its reviewer still decides)")
 
     def _record_runs(self, key, role, reply) -> None:
         """An owning lead's restatement of standing NOT RUN items as exact
@@ -16627,7 +16977,13 @@ class Session:
         self.plan_admissions.append(dict(task=task_id, scope=scope, feasible=verdict.feasible, detail=detail,
                                          stages=list(verdict.stages), finishing=[r.name for r in finishing],
                                          short=dict(verdict.short), at_attempt=snap["reserved_attempts"],
-                                         wall_extra=wall_extra, wall_known=wall_known))
+                                         wall_extra=wall_extra, wall_known=wall_known,
+                                         # The numbers behind the detail (cycle04), for a
+                                         # stop that names a refused round.
+                                         needed=dict(calls=verdict.calls_needed, tokens=verdict.tokens_needed),
+                                         left=dict(calls=max(0, limits["max_calls"] - snap["reserved_attempts"] - held),
+                                                   tokens=max(0, limits["max_reported_tokens"]
+                                                              - snap["reported_tokens"] - held * reserve))))
         return verdict
 
     def _refuse_unpayable_dispatch(self, spec, stages, *, collaborators=(), security: bool = False) -> None:
@@ -16861,6 +17217,8 @@ class Session:
                          + (f", held: {r['hold'][:120]}" if r.get("hold") else "")
                          + (f", inherited by {', '.join(r['inherited_by'])}" if r.get("inherited_by") else "")
                          + f"): {r['claim'][:140]}"
+                         + (f" [{self._scope_route_text(r['task'], r['scope_paths'])}]" if r.get("scope_paths")
+                            else "")
                          for r in open_findings)
         return obligations.View(requirements=requirements, tasks=tuple(tasks), evidence=evidence,
                                 judgments=judgments, capacity=capacity, notes=tuple(notes))
@@ -17125,7 +17483,35 @@ class Session:
         if missing:
             return (f"COVERS must include every requirement of the findings it resolves; missing: "
                     f"{', '.join(missing)}.")
-        return ""
+        return self._scope_resolves_problem(resolves, spec)
+
+    def _scope_resolves_problem(self, resolves, spec) -> str:
+        """A RESOLVES naming a finding whose repair site its lead declared
+        outside its task's scope, from a task whose SCOPE permits none of
+        those paths, is sent back once per finding and path set (cycle04):
+        the same grant would meet the same block. Named again as written,
+        it proceeds: the declaration is a claim, and the planner decides."""
+        scope = getattr(spec, "scope", None)
+        if scope is None or not scope.permitted_paths:
+            return ""
+        by_id = {f["id"]: f for f in self.findings}
+        reviews = {r["fid"]: r for r in self.review_findings}
+        blocked = []
+        for fid in resolves:
+            paths = (list((by_id[fid].get("scope") or {}).get("paths") or []) if fid in by_id
+                     else list(reviews[fid].get("scope_paths") or []) if fid in reviews else [])
+            if not paths or any(scope.permits(p) for p in paths):
+                continue
+            key = f"{fid}:{','.join(sorted(paths))}"
+            if key in self.scope_sendbacks:
+                continue
+            self.scope_sendbacks.append(key)
+            blocked.append(f"{fid} (declared repair site: {', '.join(paths)})")
+        if not blocked:
+            return ""
+        return ("RESOLVES names findings whose repair site was declared outside the finding task's scope, and "
+                "this task's SCOPE permits none of those paths: " + "; ".join(blocked) + ". Include the "
+                "paths the repair needs, or name the task again as written to proceed (sent back once).")
 
     def _findings_prompt(self) -> str:
         opened = [f for f in self.findings if f["status"] == "open"]
@@ -17143,6 +17529,10 @@ class Session:
                     f"{f['viewport']}px viewport" if f.get("target") else f["message"])
                  + (f" (output artifact {(f.get('check') or {}).get('output_artifact') or 'unavailable'})"
                     if f.get("kind") == "check.failed" else "")
+                 + (f" ({self._scope_route_text(f['task'], f['scope']['paths'])}; failed cases declared: "
+                    f"{len(f['scope']['cases_declared'])}, not declared: {len(f['scope']['cases_undeclared'])}"
+                    + ("" if f["scope"].get("record_complete") else ", failure record incomplete") + ")"
+                    if f.get("scope") else "")
                  + (f" (reopened: {f['reopened']})" if f.get("reopened") else "")
                  + (f" (last attempt: {f['last_attempt'][:160]})" if f.get("last_attempt") else "")
                  for f in opened]
@@ -18167,12 +18557,17 @@ class Session:
         message = (f"the project check still failed after {spec.task_id}'s work (attempt "
                    f"{last.get('attempt', '?')}, gate {last.get('gate', 'full')}; failed: "
                    f"{', '.join(failed_checks)})")
+        scope = self._check_scope(spec.task_id, last)
         self.findings.append(dict(
             id=fid, task=spec.task_id, requirements=list(covers), kind="check.failed",
             target=None, steps=[], view=None, width=None, viewport=None, message=message[:300],
             check=dict(attempt=last.get("attempt"), gate=last.get("gate"), failed_checks=failed_checks,
                        output_artifact=last.get("output_artifact"), attribution=last.get("attribution")),
-            evidence=None, status="open"))
+            evidence=None, status="open",
+            # The lead's accepted outside-scope declarations for this check's
+            # failed cases (cycle04): the paths a repair task's SCOPE needs.
+            # A claim, carried for routing only.
+            **({"scope": scope} if scope else {})))
         for rid in covers:
             self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {', '.join(self._open_findings_for(rid))}"
         self._note(f"task {spec.task_id}: failed check recorded as finding {fid}; the orchestrator re-plans")
@@ -20318,6 +20713,17 @@ class Session:
         self._handoff_unattributable(gate, result, task)
         try:
             while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
+                covered = self._scope_covers(spec, result)
+                if covered is not None:
+                    # Every failed case is one the lead declared outside this
+                    # task's grant (cycle04): a fix under the same grant cannot
+                    # touch it. No fix call; the failed check stands and its
+                    # debt carries the declared paths to the planner.
+                    self.scope_gate_skips.append(covered)
+                    task.record("user", "No gate fix: every failed case was declared outside this task's scope ("
+                                + ", ".join(covered["paths"]) + "). The failed check stands as open debt.")
+                    self._note(f"{spec.task_id}: gate fix skipped, every failed case declared outside its scope")
+                    break
                 # The failure has selected a route: this repair, the check that
                 # judges it, and what the task still owes after it. Admitted
                 # whole before the editor writes, or the failed check stands

@@ -1285,7 +1285,11 @@ def judge(run_dir, project=None) -> dict:
                            "checked against the kept original")
     for finding in record.get("findings") or []:
         if finding.get("status") == "open":
-            unshown.append(f"open finding {finding.get('id')}: {str(finding.get('message'))[:120]}")
+            unsettled = finding.get("unsettled") if isinstance(finding.get("unsettled"), dict) else {}
+            # The engine's persisted cause (cycle04) is shown beside the
+            # finding; it never settles it: a passing check is not acceptance.
+            unshown.append(f"open finding {finding.get('id')}: {str(finding.get('message'))[:120]}"
+                           + (f" (not settled: {str(unsettled.get('why'))[:300]})" if unsettled.get("why") else ""))
     designs = record.get("design_checks") or []
     for design in designs:
         task = design.get("task")
