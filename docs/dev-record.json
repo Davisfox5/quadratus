@@ -2966,6 +2966,35 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-cycle02-reachable-evidence",
+      "purpose": "Cycle02 (PR73 6705254133): reachable NOT RUN settlement, stale bindings at once, DONE before the audit, no pointless cap goal question, interface guidance",
+      "base": "a4f8cb10be6c5aaa1eac73277392cd88580af7bc",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/completion_decision.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "quadratus/scope.py",
+        "tools/truth_check.py",
+        "tests/lifecycle/test_reachable_evidence.py",
+        "tests/test_evidence_lifecycle_units.py",
+        "CLAUDE.md",
+        "docs/workflow-map.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-11-07T10:47:22Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "7a141e35d0bd9e943f583bdef805a565f1f78ca3",
+        "at": "2026-11-07T11:07:01Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
