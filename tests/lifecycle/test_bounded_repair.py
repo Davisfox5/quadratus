@@ -86,7 +86,7 @@ def test_a_storage_failure_is_a_json_error_and_changes_nothing():
 
 def _run(tmp_path, monkeypatch, *, source, failures, fixed_source, fixed_failures, comparison=None,
          check=VERBOSE, extra=None, settings=None, fixed_extra=None, plan=None, plans=None, later_lead=None,
-         recheck=None, max_tasks=1, revision=None):
+         recheck=None, max_tasks=1, revision=None, collaborator=None):
     def lead(call, replay):
         if later_lead is not None and call.task != "t1":
             return later_lead(call, replay)
@@ -105,8 +105,8 @@ def _run(tmp_path, monkeypatch, *, source, failures, fixed_source, fixed_failure
         return sequence[n - 1] if n <= len(sequence) else "DONE"
     script = Script(orchestrator=orchestrator, lead=lead,
                     # Without a requirements ledger a clean review is exactly NO FINDINGS.
-                    collaborator=lambda c, r: (f"NO FINDINGS\nR1: MET - {CASE}" if "REQUIREMENTS:" in sequence[0]
-                                               else "NO FINDINGS"),
+                    collaborator=collaborator or (lambda c, r: (f"NO FINDINGS\nR1: MET - {CASE}"
+                                                                if "REQUIREMENTS:" in sequence[0] else "NO FINDINGS")),
                     auditor=judging_scenarios(judging(lambda c, r: f"R1: MET - {CASE}"), PROOF, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE",
                        "revision": revision or (lambda c, r: "Nothing to change.\nCHANGED: []"),
@@ -608,3 +608,40 @@ def test_root_the_comparing_reviewer_may_retract_its_own_finding_on_unchanged_by
     from tools.truth_check import _generated_test_problems
     assert _test_repair_settled(entry, result["review_findings"]) and not _generated_test_problems(result)
     assert replay.result.completed, replay.result.error
+
+
+@pytest.mark.requirements_ledger
+def test_cycle01_a_weakened_repair_inside_a_resolving_task_is_held_never_the_unresolved_stop(tmp_path, monkeypatch):
+    """Cycle01 (PR73 6702597850): t2 RESOLVES t1's open finding, its gate
+    repair weakens the generated test, and the comparing reviewer keeps that
+    open after the correction. t2 closed with a finding of its own, so its
+    RESOLVES was never rechecked: both stay held as pending work, the
+    planner has its turn, nothing completes over them, and the stop is
+    never FindingsUnresolved. Without the ledger the first open finding
+    already stops the run FindingsOpen at t1's close, so this route is the
+    ledger's."""
+    code = "BLOCKING: remove does not report a missing id | basis: R1 | impact: correctness"
+    resolving = ("KIND: backend simple\nSCOPE: "
+                 + json.dumps({"permitted_paths": ["store.py", "tests/"], "intended_result": "missing ids reported",
+                               "acceptance": ["a missing id is an error"], "max_lines": 260, "proofs": [PROOF]})
+                 + "\nReport a missing id from remove.\nCOVERS: R1\nRESOLVES: RFT1-1")
+
+    def later(call, replay):
+        H.write(call, {FAILURES: BROKEN})
+        return f"Reworked the storage case.\nPROVES: P1 - {CASE}\nCHANGED: " + json.dumps([FAILURES])
+
+    def review(call, replay):
+        return (code if call.task == "t1" else "NO FINDINGS") + f"\nR1: MET - {CASE}"
+    replay = _run(tmp_path, monkeypatch, source=SOUND, failures=CORRECTED, fixed_source=SOUND,
+                  fixed_failures=WEAKENED, comparison=lambda c, r: WEAKENS, recheck=STILL_WEAK,
+                  plans=[PLAN, resolving], later_lead=later, max_tasks=3, collaborator=review)
+    result = H.result_json(replay)
+    (entry,) = result["generated_test_repairs"]
+    assert entry["task"] == "t2" and entry["verdict"] == "weakened" and not entry.get("resolved_by")
+    (row,) = [r for r in result["review_resolutions"] if r["task"] == "t2"]
+    assert row["outcomes"] == {"RFT1-1": "not_attempted"} and "closed with open findings" in row["refused"]
+    assert len(replay.of("orchestrator")) >= 3, "the planner had its turn after t2"
+    assert not (replay.result.error or "").startswith("FindingsUnresolved"), replay.result.error
+    open_ids = {f["fid"] for f in result["review_findings"] if not f.get("closed")}
+    assert {"RFT1-1", entry["finding_id"]} <= open_ids
+    assert not replay.result.completed

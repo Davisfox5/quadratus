@@ -2945,7 +2945,18 @@ Key design decisions already settled:
   reviewer who raised it re-checks the corrected scenario. `BLOCKING:
   EVIDENCE P<n> - <what is not shown>` goes to the harness (an observation
   if none exists on this source) and back to the same reviewer; in a child
-  it is held for the post-merge recheck. A round whose every blocking line
+  it is held for the post-merge recheck. When the scenario binds no case
+  (no PROVES line, or an invalid one) no run can show it, so since cycle01
+  (bounded-recovery-01 t3) it goes first to one declaration-only call to
+  the task's own lead (`proof-binding`, a declaration role: source copy,
+  no write grant, `DECLARATION_MAX_TURNS`), which may only state PROVES
+  lines for the named scenarios; any other line is dropped and recorded.
+  The binding settles against checks already recorded on that exact source
+  (the exact case executed and passed, unskipped; no suite rerun), the
+  same reviewer rechecks it, and a reviewer's own PROVES line binds
+  nothing. A second request for the same scenario on an unchanged source
+  is not made: the finding takes the harness route. A child declares and
+  still holds it for the post-merge recheck. A round whose every blocking line
   was routed makes no editing call and the planner stage is costed in the
   fix-cycle admission. A kept, unanswered or stray SCENARIO finding, and
   every UNRESOLVED verdict, takes the ordinary editor round: the plan
@@ -3052,10 +3063,23 @@ Key design decisions already settled:
   findings (`inherited_by`, the lead's handoff block names them) and the
   same recheck follows its clean close without naming them. The resolving
   task's lead, another reviewer and the harness close nothing; a closed
-  finding makes no requirement met. An explicit RESOLVES kept open is the
-  FindingsUnresolved stop as for an audit finding; an inherited finding
-  kept open stays held debt. A reviewer that is unavailable cannot be
-  named. The rechecks are costed on the route (`resolution recheck by
+  finding makes no requirement met. An explicit RESOLVES its owner
+  rechecked and did not accept is the FindingsUnresolved stop as for an
+  audit finding; an inherited finding kept open stays held debt. Since
+  cycle01 (PR73 6702597850) a recheck that was never asked (the task
+  closed with findings of its own, its gate failed, its ledger changed),
+  an unavailable owner, or an owed (capped, refused, verdict-less) recheck
+  is pending work held like other review debt, never an adverse verdict:
+  each target's outcome (`closed`, `adverse`, `owed`, `unavailable`,
+  `not_attempted`) is on `review_resolutions[].outcomes` and the finding's
+  `resolution_attempts`, the task's settlement edge stays unsatisfied,
+  and it is satisfied by fact once an owner's later recheck closes every
+  finding it named (`settled_later_by`). No count bounds this: task slots,
+  calls, tokens and time do, RunStalled catches the same task twice, and
+  the same finding left again without its owner's verdict on an unchanged
+  source is no progress and stops FindingsUnresolved. `truth_check` names
+  each unestablished RESOLVES by its outcome. A reviewer that is
+  unavailable cannot be named. The rechecks are costed on the route (`resolution recheck by
   <peer>`), recorded in `review_resolutions` (result.json, checkpoint).
 - **Deferred child evidence is declared, never discovered** (same batch).
   A parallel child measures no execution, so its reviewer was told every

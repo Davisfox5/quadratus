@@ -986,6 +986,30 @@ def _inspection_problems(record: dict, project=None) -> list:
     return out
 
 
+def _resolution_problems(record: dict) -> list:
+    """RESOLVES settlements the saved record shows were not established
+    (cycle01, PR73 6702597850), each named by what happened, so a recheck
+    never asked is never read as the owner's adverse verdict and neither is
+    read as settled: ``adverse`` (the owner rechecked and did not accept),
+    ``owed`` (capped, refused or no verdict), ``unavailable`` and
+    ``not_attempted``. A row a later owner settlement established
+    (``settled_later_by``) with every named finding closed is not listed."""
+    out = []
+    closed = {f.get("fid") for f in record.get("review_findings") or [] if isinstance(f, dict) and f.get("closed")}
+    for row in record.get("review_resolutions") or []:
+        if not isinstance(row, dict):
+            out.append("a review resolution record is not an object")
+            continue
+        outcomes = row.get("outcomes") if isinstance(row.get("outcomes"), dict) else {}
+        for fid in row.get("named") or []:
+            if fid in closed:
+                continue
+            what = str(outcomes.get(fid) or "not recorded")
+            out.append(f"task {row.get('task')}: RESOLVES {fid} not established ({what}"
+                       + (f"; {str(row.get('refused'))[:120]}" if row.get("refused") else "") + ")")
+    return out
+
+
 def _generated_test_problems(record: dict) -> list:
     """Generated tests a gate repair changed or removed (the engine's
     ``generated_test_repairs``): shown only by the task's original reviewer
@@ -1135,6 +1159,7 @@ def judge(run_dir, project=None) -> dict:
                            f"{str(entry.get('item'))[:120]}")
     unshown.extend(_inspection_problems(record, project))
     unshown.extend(_generated_test_problems(record))
+    unshown.extend(_resolution_problems(record))
     for repair in record.get("test_repairs") or []:
         # Kept case names and executed cases do not show a repaired test's
         # assertions were not weakened; only an independent review can.

@@ -59,7 +59,7 @@ _IMMEDIATE = frozenset({"data-loss", "integrity", "security", "irreversible"})
 _PLANNING_ROLES = frozenset({"orchestrator", "decide"})
 _JUDGING_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor"})
 _EDITING_ROLES = frozenset({"lead", "revision", "gate-fix", "security-fix", "design-fix"})
-_DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply"})
+_DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply", "proof-binding"})
 
 
 @dataclass(frozen=True)
