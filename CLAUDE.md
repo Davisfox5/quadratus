@@ -3031,9 +3031,16 @@ Key design decisions already settled:
     number (`seq`), and a case is declarable only from the task's latest
     run. A case claim lasts for its failure episode
     (`_case_declaration_current`): every later run must still show the case
-    failing with the same exception type. A run that passes it, or a failure
-    of another type, ends the claim, so a gate fix for the new failure is
-    bought. A source change alone does not end it: in-scope edits beside a
+    failing with the same failure identity, the exception type plus the
+    crash site and a message digest that the pytest and unittest producers
+    now record per failure (`site`: the innermost frame that is not
+    unittest's or pytest's own, project-relative, or `outside:<line>`;
+    `message_sha`: a digest of the message's first line, never its text).
+    A run that passes it, or any other failure (root review of 8bab1f4: a
+    new unrelated AssertionError in the same permitted test was read as the
+    production one), ends the claim, so a gate fix for the new failure is
+    bought. A failure with no recorded identity (an older report, the node
+    producer) cannot be shown to continue and never covers a gate. A source change alone does not end it: in-scope edits beside a
     production blocker keep the route. A reviewer's typed restatement of a
     scope-routed finding lapses the route (`route_history` keeps it).
   - *Effect.* An accepted finding is routed `scope` and leaves the editor's

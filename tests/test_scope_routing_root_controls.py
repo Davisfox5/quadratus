@@ -1,4 +1,4 @@
-# ruff: noqa: E702 -- root review of b9d136e, its control file kept verbatim
+# ruff: noqa: E702, I001 -- root reviews of b9d136e and 8bab1f4: control files kept verbatim
 """Root controls: malformed input and superseded failure identity, no providers."""
 from copy import deepcopy
 
@@ -59,3 +59,20 @@ def test_routing_keeps_open_owner_debt_and_does_not_expand_grant(tmp_path):
     assert not s.review_findings[0]['closed']
     assert s._active_spec.scope == original
     assert not s._active_spec.scope.permits('app.py')
+
+
+# Root review of 8bab1f4 (PR73 6714294977), verbatim.
+def test_new_assertion_in_allowed_test_gets_gate_repair(tmp_path, monkeypatch):
+    from tests.lifecycle.test_scope_routing import H, README, CASE, _at, _script, _docs_fixed, FILES, _of
+    def revision(call, replay):
+        H.write(call, {'README.md': README, 'tests/test_app.py':
+                      'from app import add\n\ndef test_add():\n    assert False, "new unrelated in-scope assertion"\n    assert add(1, 2) == 3\n'})
+        return ('Documented add and touched the test.\nOUTSIDE SCOPE: RFT1-1 - app.py\n'
+                f'OUTSIDE SCOPE: {CASE} - app.py\nCHANGED: ["README.md", "tests/test_app.py"]')
+    replay = H.run(_at(tmp_path, 'newassert'), monkeypatch,
+                   _script(t1_recheck=_docs_fixed, revision=revision), files=FILES,
+                   max_tasks=3, record_complete=False)
+    record = H.result_json(replay)
+    assert not record['scope_gate_skips'], 'different AssertionError wrongly treated as same production blocker'
+    assert len(_of(replay, 'gate-fix', 't1')) == 1
+    assert 'new unrelated in-scope assertion' in _of(replay, 'gate-fix', 't1')[0].prompt

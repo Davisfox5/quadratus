@@ -11,6 +11,10 @@ from quadratus.scope import TaskScope
 from quadratus.session import _MAX_SCOPE_LINES, _MAX_SCOPE_PATHS, Session, SessionConfig, TaskSpec
 
 CASE = "tests/test_app.py::test_add"
+#: The failure identity the producers record (cycle04 R2): crash site and
+#: message digest, as a real pytest or unittest report carries them.
+SITE = "tests/test_app.py:5"
+MESSAGE = "5e3c1f0a9b7d2c41"
 
 
 def _session(tmp_path, *, permitted=("README.md", "tests/"), forbidden=(), review_only=False, scope=True,
@@ -27,7 +31,8 @@ def _session(tmp_path, *, permitted=("README.md", "tests/"), forbidden=(), revie
                                                             review_only=review_only) if scope else None))
     session._active_spec = spec
     report = dict(state="parsed", failures=[dict(nodeid=n, when="call", exc_type="builtins.AssertionError",
-                                                 assertion=True, body=True) for n in failures],
+                                                 assertion=True, body=True, site=SITE, message_sha=MESSAGE)
+                                            for n in failures],
                   counts=dict(failed=len(failures), errors=0))
     session._outcome = SimpleNamespace(task_id=task, checks=[dict(passed=False, attempt=1, source="s1",
                                                                   receipts=[dict(id="check", status="failed",
@@ -140,7 +145,8 @@ def test_declarations_are_bounded_per_reply_and_per_id(tmp_path):
 
 
 def _result(failures, *, state="parsed", status="failed", errors=0, truncated=False, when="call"):
-    report = dict(state=state, failures=[dict(nodeid=n, when=when, exc_type="E", assertion=False) for n in failures],
+    report = dict(state=state, failures=[dict(nodeid=n, when=when, exc_type="E", assertion=False, site=SITE,
+                                              message_sha=MESSAGE) for n in failures],
                   counts=dict(failed=len(failures), errors=errors), truncated=truncated, collect_errors=0)
     return SimpleNamespace(receipts=[SimpleNamespace(id="check", status=status, report=report)], report=None)
 
@@ -196,8 +202,9 @@ def test_a_crash_while_reading_a_declaration_is_recorded_and_the_reply_still_ret
     assert "could not be read: ZeroDivisionError" in session.scope_declarations[-1]["why"]
 
 
-def _attempt(passed, failures=(), kind="builtins.AssertionError", attempt=2, seq=None):
-    report = dict(state="parsed", failures=[dict(nodeid=n, when="call", exc_type=kind, assertion=True, body=True)
+def _attempt(passed, failures=(), kind="builtins.AssertionError", attempt=2, seq=None, site=SITE, message=MESSAGE):
+    report = dict(state="parsed", failures=[dict(nodeid=n, when="call", exc_type=kind, assertion=True, body=True,
+                                                 site=site, message_sha=message)
                                             for n in failures], counts=dict(failed=len(failures), errors=0))
     run = dict(passed=passed, attempt=attempt, source="s", receipts=[dict(id="check", status="passed" if passed else
                                                                       "failed", report=report)])
@@ -246,3 +253,52 @@ def test_a_reviewer_restating_a_scope_routed_finding_lapses_the_route(tmp_path):
     assert record["route"] != "scope" and record["scope_lapsed"]
     assert record["route_history"][-1]["lapsed"] == "restated by its reviewer"
     assert "RFT1-1" not in session._routed_ids(session._active_spec) or record.get("route")
+
+
+@pytest.mark.parametrize("change", ["site", "message", "both"])
+def test_another_failure_of_the_same_type_in_the_same_case_ends_the_claim(tmp_path, change):
+    """Root review of 8bab1f4: a new unrelated AssertionError in the same
+    permitted test was read as the old production one."""
+    session, _ = _session(tmp_path)
+    _declare(session, f"OUTSIDE SCOPE: {CASE} - app.py")
+    site = "tests/test_app.py:4" if change in ("site", "both") else SITE
+    message = "0000000000000000" if change in ("message", "both") else MESSAGE
+    session._outcome.checks.append(_attempt(False, [CASE], site=site, message=message, attempt=3))
+    assert session._scope_covers(session._active_spec, _result([CASE])) is None
+
+
+def test_a_failure_with_no_recorded_identity_never_covers_a_gate(tmp_path):
+    session, _ = _session(tmp_path)
+    for f in session._outcome.checks[0]["receipts"][0]["report"]["failures"]:
+        f.pop("site"), f.pop("message_sha")
+    (decl,) = _declare(session, f"OUTSIDE SCOPE: {CASE} - app.py")
+    assert decl["status"] == "routed" and decl["identity_unknown"] is True
+    assert session._scope_covers(session._active_spec, _result([CASE])) is None, "unknown is not the same"
+
+
+def test_the_real_producers_record_a_site_and_a_message_digest(tmp_path):
+    import sys
+    import textwrap
+
+    from quadratus.integration import GateCommand, GateSuite
+    root = tmp_path / "p"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_two.py").write_text(textwrap.dedent("""
+        import unittest
+
+        class T(unittest.TestCase):
+            def test_a(self):
+                self.assertEqual(1, 2)
+
+            def test_b(self):
+                assert False, "another"
+    """))
+    token = "--quadratus-report={report}"
+    result = GateSuite([GateCommand("u", argv=(sys.executable, "-m", "unittest", "discover", "-s", "tests", token)),
+                        GateCommand("p", argv=(sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                                               "tests", token))], cwd=root).run()
+    for receipt in result.receipts:
+        failures = {f["nodeid"].rsplit(".", 1)[-1].rsplit("::", 1)[-1]: f for f in receipt.report["failures"]}
+        assert failures["test_a"]["site"] == "tests/test_two.py:6", (receipt.id, failures["test_a"])
+        assert failures["test_b"]["site"] == "tests/test_two.py:9", (receipt.id, failures["test_b"])
+        assert failures["test_a"]["message_sha"] and failures["test_a"]["message_sha"] != failures["test_b"]["message_sha"]

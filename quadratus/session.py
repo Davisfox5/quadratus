@@ -14041,11 +14041,13 @@ class Session:
         return runs
 
     @staticmethod
-    def _case_state(run: dict, case: str) -> Tuple[str, Optional[str]]:
-        """Whether ``case`` failed in ``run`` (with its exception type),
-        passed, or is unknown: a passing run passed it; a failed run whose
-        every failed command has a parsed report failed it if a record names
-        it and passed it otherwise; anything else is unknown."""
+    def _case_state(run: dict, case: str) -> Tuple[str, Optional[tuple]]:
+        """Whether ``case`` failed in ``run`` (with its failure identity:
+        exception type, crash site and message digest, as the harness's
+        producer recorded them), passed, or is unknown: a passing run passed
+        it; a failed run whose every failed command has a parsed report
+        failed it if a record names it and passed it otherwise; anything
+        else is unknown."""
         if run.get("passed"):
             return "passed", None
         receipts = [r for r in run.get("receipts") or [] if r.get("status") not in ("passed", "skipped")]
@@ -14055,7 +14057,7 @@ class Session:
         for rep in reports:
             for f in rep.get("failures") or []:
                 if isinstance(f, dict) and str(f.get("nodeid")) == case:
-                    return "failed", str(f.get("exc_type") or "")
+                    return "failed", (str(f.get("exc_type") or ""), f.get("site"), f.get("message_sha"))
         return "passed", None
 
     def _task_failed_cases(self, task_id: str) -> Tuple[set, dict]:
@@ -14076,17 +14078,22 @@ class Session:
         for report in ([r.get("report") for r in receipts] if receipts else [run.get("report")]):
             if isinstance(report, dict) and report.get("state") == "parsed":
                 cases |= {str(f.get("nodeid")) for f in report.get("failures") or [] if isinstance(f, dict)}
-        anchor["exc_types"] = {c: self._case_state(run, c)[1] for c in cases}
+        anchor["identities"] = {c: list(self._case_state(run, c)[1] or ()) for c in cases}
         return cases, anchor
 
     def _case_declaration_current(self, decl: dict) -> bool:
         """Whether a case declaration still describes the same failure
-        episode (root review of b9d136e, R2): every run of its task after the
-        one it was made against still shows that case failing with the same
-        exception type. A run that passed it, or a failure of another type,
-        ends the episode and the claim with it. An unknown run (no parsed
-        report) says nothing either way. Source changes alone do not end it:
-        in-scope edits beside a production blocker keep the claim."""
+        episode (root reviews of b9d136e, R2, and of 8bab1f4): every run of
+        its task after the one it was made against still shows that case
+        failing with the same failure identity, the exception type, the
+        crash site (file and line) and the message digest the harness's
+        producer recorded. A run that passed it, or any other failure of it
+        (another assertion in the same test is another failure), ends the
+        episode and the claim with it. A claim whose failure carried no site
+        or message (an older or a node report) cannot be shown to continue
+        and does not hold. An unknown run (no parsed report) says nothing
+        either way. Source changes alone do not end it: in-scope edits
+        beside a production blocker that leave the same failure keep it."""
         anchor = decl.get("anchor") or {}
         position = anchor.get("position")
         if not isinstance(position, int):
@@ -14094,10 +14101,12 @@ class Session:
         runs = self._task_runs(decl.get("task"))
         if position >= len(runs):
             return False
-        expected = (anchor.get("exc_types") or {}).get(decl.get("id"))
+        expected = tuple((anchor.get("identities") or {}).get(decl.get("id")) or ())
+        if len(expected) != 3 or not expected[1] or not expected[2]:
+            return False
         for _, run in runs[position + 1:]:
-            state, kind = self._case_state(run, decl.get("id"))
-            if state == "passed" or (state == "failed" and expected is not None and kind != expected):
+            state, identity = self._case_state(run, decl.get("id"))
+            if state == "passed" or (state == "failed" and tuple(identity or ()) != expected):
                 return False
         return True
 
@@ -14151,7 +14160,12 @@ class Session:
                 elif record.get("closed") or record.get("kind") == "unreviewed":
                     entry.update(status="rejected", why=f"{ident} is not an open blocking finding")
             elif ident in failed:
-                entry.update(kind="case", anchor=dict(anchor, exc_types={ident: (anchor.get("exc_types") or {}).get(ident)}))
+                identity = (anchor.get("identities") or {}).get(ident)
+                entry.update(kind="case", anchor=dict(anchor, identities={ident: identity}))
+                if not (identity and len(identity) == 3 and identity[1] and identity[2]):
+                    # Recorded, but it can never cover a gate: nothing shows
+                    # which failure it names (no site or message).
+                    entry["identity_unknown"] = True
             else:
                 entry.update(kind="unknown", status="rejected",
                              why=f"{ident} is neither an open finding of {task_id} nor a failed case of its latest "

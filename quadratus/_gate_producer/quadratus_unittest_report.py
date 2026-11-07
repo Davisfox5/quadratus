@@ -80,6 +80,38 @@ def _from_body(test, err):
     return False
 
 
+def _failure_identity(err):
+    """Where and how a failure was raised: the innermost traceback frame
+    that is not unittest's own (frames whose globals mark ``__unittest``,
+    the frames unittest hides itself) as ``<path relative to the working
+    directory>:<line>`` (``outside:<line>`` for a file outside it), and a
+    digest of the first line of ``<type>: <message>``. (None, None) when it
+    cannot be read; the message is read through ``str``, as unittest's own
+    report reads it, and a failure to read it leaves it out."""
+    try:
+        if not err or err[2] is None:
+            return None, None
+        tb, last = err[2], None
+        while tb is not None:
+            if "__unittest" not in tb.tb_frame.f_globals:
+                last = tb
+            tb = tb.tb_next
+        if last is None:
+            return None, None
+        path = last.tb_frame.f_code.co_filename
+        relative = os.path.relpath(os.path.realpath(path), os.path.realpath(os.getcwd()))
+        place = "outside" if relative.startswith(os.pardir) or os.path.isabs(relative) else relative.replace(os.sep, "/")
+        try:
+            text = (str(err[1]).splitlines() or [""])[0][:200]
+        except Exception:  # noqa: BLE001 -- an unreadable message is left out
+            text = ""
+        message = f"{_type_name(err[0])}: {text}"
+        return (f"{place}:{last.tb_lineno}"[:300],
+                hashlib.sha256(message.encode("utf-8", "replace")).hexdigest()[:16])
+    except Exception:  # noqa: BLE001 -- an identity that cannot be read is none
+        return None, None
+
+
 def _type_name(kind):
     return None if kind is None else f"{kind.__module__}.{kind.__qualname__}"
 
@@ -248,12 +280,13 @@ class _Recorder:
     def _state(self, test):
         return self.tests.setdefault(id(test), dict(test=test, errors=[], unexpected=False, skipped=False))
 
-    def _fail(self, nodeid, when, exc_type, assertion, body):
+    def _fail(self, nodeid, when, exc_type, assertion, body, err=None):
         if len(self.failures) >= MAX_FAILURES:
             self.truncated = True
             return
+        site, message = _failure_identity(err)
         self.failures.append(dict(nodeid=nodeid[:300], when=when, exc_type=exc_type,
-                                  assertion=assertion, body=body))
+                                  assertion=assertion, body=body, site=site, message_sha=message))
 
     def error(self, test, err):
         if _is_failed_import(test):
@@ -264,7 +297,7 @@ class _Recorder:
             description = str(test)
             when = "teardown" if description.startswith("tearDown") else "setup"
             self.counts["errors"] += 1
-            self._fail(description, when, _type_name(err[0]), False, False)
+            self._fail(description, when, _type_name(err[0]), False, False, err)
 
     def subtest(self, test, err):
         if err is None:
@@ -292,8 +325,9 @@ class _Recorder:
             assertion = (not state["unexpected"] and all(k is AssertionError and body for k, body in causes))
             other = next((k for k, _ in causes if k is not AssertionError), None)
             first = causes[0][0] if causes else None
+            cause = next((e for e in state["errors"] if e[0] is other), state["errors"][0] if state["errors"] else None)
             self._fail(test.id(), "call", _type_name(other or first), assertion,
-                       bool(causes) and all(body for _, body in causes))
+                       bool(causes) and all(body for _, body in causes), cause)
         elif state["skipped"]:
             self.counts["skipped"] += 1
         else:

@@ -369,7 +369,13 @@ def read_report(path, expected) -> dict:
     return dict(state="parsed", exitstatus=data["exitstatus"], collected=data["collected"],
                 collect_errors=data["collect_errors"], counts={k: data["counts"][k] for k in _COUNTS},
                 failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
-                               assertion=f["assertion"], body=f.get("body"))
+                               assertion=f["assertion"], body=f.get("body"),
+                               # The failure's own identity (cycle04 R2): its
+                               # crash site and a message digest, when the
+                               # producer recorded them; anything else is none.
+                               site=f["site"][:300] if isinstance(f.get("site"), str) else None,
+                               message_sha=(f["message_sha"][:64] if isinstance(f.get("message_sha"), str)
+                                            else None))
                           for f in data["failures"]],
                 truncated=data["truncated"],
                 **({"passed_cases": list(data["passed_cases"]), "passed_truncated": data["passed_truncated"]}

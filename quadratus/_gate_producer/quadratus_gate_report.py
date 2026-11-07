@@ -183,6 +183,39 @@ def _class_members(kind):
         return None
 
 
+def _failure_identity(report, excinfo=None):
+    """Where and how a failed phase failed: the innermost traceback frame
+    that is neither unittest's own (frames whose globals mark
+    ``__unittest``) nor pytest's or pluggy's machinery, as ``<path relative
+    to the working directory>:<line>`` (``outside:<line>`` for a file
+    outside it, so no outside path is named), and a digest of the first line
+    of pytest's own crash message (``longrepr.reprcrash``, already rendered
+    by pytest). Facts the run recorded, never prose; (None, None) when there
+    is no failure to read."""
+    try:
+        if not report.failed:
+            return None, None
+        crash = getattr(getattr(report, "longrepr", None), "reprcrash", None)
+        message = (str(getattr(crash, "message", "") or "").splitlines() or [""])[0][:200]
+        path, line = (str(crash.path), int(crash.lineno)) if crash is not None else (None, None)
+        tb, chosen = getattr(excinfo, "tb", None), None
+        while tb is not None:
+            name = tb.tb_frame.f_code.co_filename
+            internal = any(part in name.replace(os.sep, "/") for part in ("/_pytest/", "/pluggy/"))
+            if "__unittest" not in tb.tb_frame.f_globals and not internal:
+                chosen = tb
+            tb = tb.tb_next
+        if chosen is not None:
+            path, line = chosen.tb_frame.f_code.co_filename, chosen.tb_lineno
+        if path is None:
+            return None, None
+        relative = os.path.relpath(os.path.realpath(path), os.path.realpath(os.getcwd()))
+        place = "outside" if relative.startswith(os.pardir) or os.path.isabs(relative) else relative.replace(os.sep, "/")
+        return f"{place}:{line}"[:300], hashlib.sha256(message.encode("utf-8", "replace")).hexdigest()[:16]
+    except Exception:  # noqa: BLE001 -- an identity that cannot be read is none
+        return None, None
+
+
 class _Recorder:
     def __init__(self, path):
         self.path = path
@@ -232,6 +265,7 @@ class _Recorder:
     def pytest_runtest_makereport(self, item, call):
         outcome = yield
         report = outcome.get_result()
+        report.quadratus_site, report.quadratus_message = _failure_identity(report, call.excinfo)
         report.quadratus_exc = _type_name(call.excinfo)
         report.quadratus_body = call.when == "call" and _from_body(item, call.excinfo)
         # Identity, not a name: pytest's own outcome exceptions report their
@@ -284,10 +318,13 @@ class _Recorder:
         causes = causes or [report]
         other = next((getattr(c, "quadratus_exc", None) for c in causes
                       if getattr(c, "quadratus_assertion", False) is not True), None)
+        first = next((c for c in causes if getattr(c, "quadratus_assertion", False) is not True), causes[0])
         self.failures.append(dict(nodeid=report.nodeid[:300], when=report.when,
                                   exc_type=other or getattr(causes[0], "quadratus_exc", None),
                                   assertion=all(getattr(c, "quadratus_assertion", False) is True for c in causes),
-                                  body=all(getattr(c, "quadratus_body", False) is True for c in causes)))
+                                  body=all(getattr(c, "quadratus_body", False) is True for c in causes),
+                                  site=getattr(first, "quadratus_site", None),
+                                  message_sha=getattr(first, "quadratus_message", None)))
 
     def pytest_sessionfinish(self, session, exitstatus):
         with open(__file__, "rb") as source:
