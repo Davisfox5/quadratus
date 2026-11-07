@@ -448,7 +448,8 @@ def _restated_not_run_cleared(entry, checks, record) -> bool:
     validated from the saved record alone: the last restatement names exactly
     the entry's cases and was written by the reporting task or one that took
     the item over; an independent seat (not the restatement's author) judged
-    exactly those cases SUFFICIENT; and a later passing check on the final
+    exactly those cases SUFFICIENT on the final source and the requirement
+    revisions the item's typed row binds; and a later passing check on the final
     source, under the entry's own gate and environment, required and passed
     from the project root with no filter and no skip, shows every case
     passed. Anything missing or mismatched is not cleared."""
@@ -471,6 +472,23 @@ def _restated_not_run_cleared(entry, checks, record) -> bool:
             and list(judged.get("cases") or []) == cases and isinstance(judged.get("by"), str)
             and judged.get("by") and judged.get("by") != last.get("author")):
         return False
+    # The judgment is of the final source and the requirement revisions the
+    # item's typed row binds; a judgment of an earlier source or revision is
+    # stale, whatever passed since (root review of 7a141e3, item 1).
+    if not (judged.get("source") and judged.get("source") == record.get("source_fingerprint")):
+        return False
+    rows = _typed_not_run_rows(entry, record)
+    if rows:
+        revisions = judged.get("revisions") if isinstance(judged.get("revisions"), dict) else None
+        if revisions is None:
+            return False
+        for row in rows:
+            bound = {}
+            for pair in row.get("requirements") or []:
+                if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                    bound[str(pair[0])] = pair[1]
+            if any(str(rid) in bound and bound[str(rid)] != rev for rid, rev in revisions.items()):
+                return False
     gate, environment = entry.get("gate"), entry.get("environment")
     start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
     if not isinstance(gate, str) or not isinstance(environment, str) or start is None:

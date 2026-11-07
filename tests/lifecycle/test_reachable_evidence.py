@@ -74,7 +74,8 @@ def _auditor(verdict="SUFFICIENT test_add drives add through the path the item n
     return auditor
 
 
-REVIEW_JUDGE = re.compile(r"^- (O\d+) \(reported by t\d+\): NOT RUN: .*; restated by this task's lead as ", re.MULTILINE)
+REVIEW_JUDGE = re.compile(r"^- (O\d+) \(reported by t\d+\): NOT RUN: .*; restated by (?:this task's|t\d+'s) lead as ",
+                          re.MULTILINE)
 
 
 def _judging(base, verdict="SUFFICIENT test_add drives add through the path the item named and asserts its result"):
@@ -165,6 +166,8 @@ def test_a_restatement_by_another_task_or_judged_by_its_author_counts_for_nothin
 
     from tests.lifecycle.test_proof_binding import _session
     session = _session(tmp_path)
+    session.project = tmp_path
+    session._source_fingerprint = lambda: "S"
     entry = dict(task="t1", oid="O2", item="app.py", why="", cases=[], binding=dict(kind="paths"),
                  requirements=["R1"], after_check=0)
     session.unexecuted_acceptance = [entry]
@@ -179,6 +182,9 @@ def test_a_restatement_by_another_task_or_judged_by_its_author_counts_for_nothin
     assert entry.get("restated_judgment") is None, "the restatement's author cannot judge it"
     session._judge_restated("openai:sol", f"O2: SUFFICIENT {CASE} exercises it")
     assert session._restated_judged(entry)
+    session._source_fingerprint = lambda: "T"
+    assert not session._restated_judged(entry), "a judgment of another source is stale"
+    session._source_fingerprint = lambda: "S"
     entry["cases"] = ["tests/test_app.py::test_other"]
     assert not session._restated_judged(entry), "a judgment of other cases does not carry over"
 
@@ -421,3 +427,198 @@ def test_the_interface_and_single_outcome_rules_are_stated_where_reviewers_and_l
     assert "responses a framework or server sends by default" in S._ERROR_BOUNDARY_LENS
     assert "accepts more than one outcome where the goal names one proves neither" in TEST_SUBSTANCE_RULE
     assert "decided first" in TEST_SUBSTANCE_RULE
+
+
+# -- 7. corrections from root's review of 7a141e3 (PR73 6706319067) --------------------------------
+
+def _two_task(tmp_path, monkeypatch, name, *, second_lead, second_review=None, max_tasks=3):
+    """t1 restates its production-path item and its recheck reviewer judges
+    it SUFFICIENT; t2 then changes the tree."""
+    seen = Seen()
+    plan2 = ("KIND: backend simple\nSCOPE: " + __import__("json").dumps(dict(
+        permitted_paths=["README.md", "tests/test_app.py"], intended_result="docs and tests touched",
+        acceptance=["README names add"], max_lines=40,
+        proofs=_proofs("R1")))
+        + "\nTouch the docs and tests.\nCOVERS: R1")
+    replies = iter([PLAN1, plan2])
+
+    def orchestrator(call, replay):
+        return next(replies, "DONE")
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return _lead(tests=SKIP_TESTS.replace("@pytest.mark.skip(reason='not yet')\n", ""))(call, replay)
+        return second_lead(call, replay)
+
+    def review(call, replay):
+        if call.task == "t1":
+            return CODE + MET
+        return (second_review or (lambda c, r: "NO FINDINGS" + MET))(call, replay)
+    script = _script(seen, orchestrator=orchestrator, lead=lead, collaborator=review, revision=_restating(NEGATIVE),
+                     recheck=_judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED handled")),
+                     auditor=judging_scenarios(lambda c, r: f"R1: MET - {CASE}", PROOF_R1, basis=SHOWN))
+    return H.run(_at(tmp_path, name), monkeypatch, script, files=FILES, max_tasks=max_tasks, record_complete=False)
+
+
+@pytest.mark.requirements_ledger
+def test_root_a_judgment_of_cases_a_later_task_changed_does_not_clear_the_item(tmp_path, monkeypatch):
+    """Root's item 1: t2 rewrites the judged case to assert nothing and the
+    run passes again. t1's judgment was of another source: neither reader
+    clears the item."""
+    weakened = ("from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\n"
+                "def test_negative():\n    assert True\n")
+
+    def second(call, replay):
+        H.write(call, {"tests/test_app.py": weakened, "README.md": "# app\n"})
+        return f'Touched.\nPROVES: P1 - {CASE}\nCHANGED: ["README.md", "tests/test_app.py"]'
+    replay = _two_task(tmp_path, monkeypatch, "stale-judgment", second_lead=second)
+    record = H.result_json(replay)
+    entry = _item(replay)
+    assert entry["restated_judgment"]["verdict"] == "sufficient"
+    assert entry["restated_judgment"]["source"] != record["source_fingerprint"], "judged on t1's source"
+    from tools.truth_check import _not_run_cleared
+    assert not _not_run_cleared(entry, record["checks"], record)
+    assert not replay.result.completed
+
+
+@pytest.mark.requirements_ledger
+def test_root_a_stale_judgment_is_judged_afresh_by_a_later_reviewer_with_no_rerun(tmp_path, monkeypatch):
+    """The stale judgment is reachable: t2's reviewer is handed the item and
+    judges it on the current source, and it clears."""
+    from quadratus.session import Session
+    # One lead seat for both tasks, so t2's reviewer is independent of the
+    # restatement's author (a reviewer that is the author is refused).
+    monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "openai:sol")
+
+    def second(call, replay):
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return f'Documented.\nPROVES: P1 - {CASE}\nCHANGED: ["README.md"]'
+    replay = _two_task(tmp_path, monkeypatch, "rejudged", second_lead=second,
+                       second_review=_judging(lambda c, r: "NO FINDINGS" + MET))
+    record = H.result_json(replay)
+    entry = _item(replay)
+    assert len(entry["judgment_history"]) == 2 and entry["restated_judgment"]["source"] == record["source_fingerprint"]
+    from tools.truth_check import _not_run_cleared
+    assert _not_run_cleared(entry, record["checks"], record)
+    assert replay.result.completed, replay.result.error
+
+
+def test_root_a_malformed_runs_line_for_an_item_applies_none_of_its_lines(tmp_path):
+    from types import SimpleNamespace
+
+    from tests.lifecycle.test_proof_binding import _session
+    session = _session(tmp_path, project=tmp_path)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("def test_add():\n    assert True\n\n\ndef test_negative():\n"
+                                                    "    assert True\n")
+
+    def items():
+        return [dict(task="t1", oid=o, item=f"{o.lower()}.py", why="", cases=[], binding=dict(kind="paths"),
+                     requirements=["R1"], after_check=0) for o in ("O2", "O3")]
+    session._active_spec = SimpleNamespace(task_id="t1")
+    session.unexecuted_acceptance = items()
+    session._record_runs("openai:sol", "lead", f"RUNS: O2 - {CASE}\nRUNS: O2 - malformed extra words")
+    assert not any(e.get("restatements") for e in session.unexecuted_acceptance), "no subset is chosen"
+    session.unexecuted_acceptance = items()
+    session._record_runs("openai:sol", "lead", f"RUNS: O2 - {CASE}\nRUNS: O3 - {NEGATIVE}\nRUNS: no item here")
+    assert not any(e.get("restatements") for e in session.unexecuted_acceptance), "an unattributable line voids all"
+    session.unexecuted_acceptance = items()
+    session._record_runs("openai:sol", "lead", f"RUNS: O2 - {CASE}\nRUNS: O3 - malformed extra words")
+    by = {e["oid"]: e for e in session.unexecuted_acceptance}
+    assert by["O2"]["restatements"][-1]["cases"] == [CASE] and not by["O3"].get("restatements")
+    dup = items()
+    dup[1]["oid"] = "O2"
+    session.unexecuted_acceptance = dup
+    session._record_runs("openai:sol", "lead", f"RUNS: O2 - {CASE}")
+    assert not any(e.get("restatements") for e in dup), "an id two items hold names neither"
+
+
+def test_root_the_continuation_quote_includes_the_planner_call_that_names_the_task(tmp_path, monkeypatch):
+    """Root's item 4, on completion-cycle01's measured state: 35 calls and
+    4,840,097 tokens of 60 / 6,000,000, a 200k reserve, a 500k editing
+    exposure, the audit and goal question held, the last planning call
+    266,113. The old quote (lead plus review) said feasible."""
+    from tests.lifecycle.test_proof_binding import _session
+    session = _session(tmp_path)
+
+    class Budget:
+        def snapshot(self):
+            return dict(limits=dict(max_calls=60, max_reported_tokens=6_000_000, reserve_tokens_per_call=200_000,
+                                    wall_seconds=5400), reserved_attempts=35, reported_tokens=4_840_097,
+                        elapsed_seconds=2000.0, finish_protection=dict(pending=["audit", "goal"],
+                                                                       editing_exposure=500_000,
+                                                                       held_wall_seconds=300))
+    monkeypatch.setattr(session, "_budget", lambda: Budget())
+    monkeypatch.setattr(session, "_last_planning_tokens", lambda: 266_113)
+    monkeypatch.setattr(session, "_writes", lambda: True)
+    session._max_tasks, session._slots_used = 8, 6
+    editing = session._continuation_admission(True)
+    assert not editing["feasible"] and editing["stages"][0] == "planning call that names the task"
+    assert "next planning call" in editing["stages"], "a slot is still left after it: its planning call is owed"
+    declaration = session._continuation_admission(False)
+    assert not declaration["feasible"], "266,113 + 200,000 + 200,000 + 266,113 exceeds 759,903"
+    session._slots_used = 7
+    last = session._continuation_admission(False)
+    assert last["feasible"] and last["route"] == "declaration" and "next planning call" not in last["stages"]
+    assert not session._continuation_admission(True)["feasible"]
+
+
+@pytest.mark.requirements_ledger
+def test_root_items_from_two_parallel_children_keep_distinct_ids_and_a_takeover_restates_only_its_own(tmp_path,
+                                                                                                       monkeypatch):
+    """Root's item 2: both children numbered their item O2. After the merge
+    each entry carries its typed row's parent id (the child's kept beside
+    it); a later task takes over one by that id, and its RUNS line for the
+    other item is refused."""
+    import json as _json
+
+    from tests.lifecycle.test_lifecycle_matrix import Script
+    requirements = "REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: README documents add\n"
+
+    def block(path, covers, proofs):
+        scope = dict(permitted_paths=[path], intended_result=f"{path} written", acceptance=[f"{path} meets the task"],
+                     max_lines=20, proofs=proofs)
+        return f"KIND: backend simple\nSCOPE: {_json.dumps(scope)}\nWrite {path}.\nCOVERS: {covers}"
+    batch = (requirements + "PARALLEL\n" + block("app.py", "R1", _proofs("R1")) + "\n---\n"
+             + block("README.md", "R2", _proofs("R2", location="README.md", evidence="reading")))
+    taken = {}
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        if n == 1:
+            return batch
+        if n == 2:
+            ids = dict(re.findall(r"^- (O\d+) \((t\d); R\d\): (?:app|cli)\.py", call.prompt, re.MULTILINE))
+            taken.update(app=next(o for o, t in ids.items() if t == "t1"),
+                         cli=next(o for o, t in ids.items() if t == "t2"))
+            return ("KIND: backend simple\nSCOPE: " + _json.dumps(_scope(proofs=_proofs("R1")))
+                    + f"\nCover add's socket path.\nCOVERS: R1\nDISCHARGES: {taken['app']}")
+        return "DONE"
+
+    def lead(call, replay):
+        if call.task == "t2":
+            H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+            return 'Documented add.\nNOT RUN: cli.py - the command line is outside my allowed paths\nCHANGED: ["README.md"]'
+        H.write(call, {"app.py": FIXED})
+        if call.task == "t1":
+            return f'Implemented add.\nPROVES: P1 - {CASE}\n{PRODUCTION}\nCHANGED: ["app.py"]'
+        return (f"Covered.\nPROVES: P1 - {CASE}\nRUNS: {taken['app']} - {CASE}\nRUNS: {taken['cli']} - {CASE}\n"
+                'CHANGED: ["app.py"]')
+
+    def collaborator(call, replay):
+        return "NO FINDINGS\nR2: MET - README.md" if call.task == "t2" else "NO FINDINGS" + MET
+    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+                    auditor=judging_scenarios(lambda c, r: f"R1: MET - {CASE}\nR2: MET - README.md", PROOF_R1,
+                                              basis=SHOWN),
+                    **{"requirements-review": lambda c, r: "COMPLETE"})
+    replay = H.run(_at(tmp_path, "parallel-ids"), monkeypatch, script, files=FILES, max_tasks=4, record_complete=False)
+    record = H.result_json(replay)
+    entries = {e["item"]: e for e in record["unexecuted_acceptance"] if e["item"] in ("app.py", "cli.py")}
+    app, cli = entries["app.py"], entries["cli.py"]
+    assert app["child_oid"] == cli["child_oid"], "the children numbered their items alike"
+    assert app["oid"] != cli["oid"]
+    rows = {o["oid"]: o for o in record["evidence_obligations"] if o["kind"] == "not_run"}
+    assert rows[app["oid"]]["task"] == "t1" and rows[cli["oid"]]["task"] == "t2", "each id names its own row"
+    assert [t["task"] for t in app["taken_over_by"]] == ["t3"] and app["restatements"][-1]["task"] == "t3"
+    assert not cli.get("restatements") and not cli.get("taken_over_by")
+    assert any(f"{cli['oid']}: not a NOT RUN item this task" in p["problem"] for p in record["proof_binding_problems"])

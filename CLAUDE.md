@@ -2908,7 +2908,16 @@ Key design decisions already settled:
     `<O-id>: SUFFICIENT <why>` line on exactly those cases, by the
     restating task's reviewer (review or recheck) or the audit, never by
     the restatement's author (`_restated_judged`, the same rule in
-    `truth_check._restated_not_run_cleared`). The ask is folded into the
+    `truth_check._restated_not_run_cleared`). The judgment is of the
+    current source and the item's requirement revisions: one made before a
+    later edit (root review of 7a141e3: t2 rewrote the judged case to
+    `assert True` and both readers still cleared it) is stale, and any
+    later independent reviewer or the audit may judge it afresh on the
+    current receipts, with no rerun. A RUNS declaration with a malformed
+    line for an item applies none of that item's lines, and one naming no
+    item applies none of the reply's; an id two items hold names neither.
+    A parallel child's items take their typed rows' parent ids at the merge
+    (`child_oid` kept), so two children's O2 stay two items. The ask is folded into the
     revision prompt and the cycle01 declaration call; no call is added for
     it. The route text never promises that a repair run clears it.
     Misassociation dispositions are not implemented: the item stays held
@@ -2925,9 +2934,14 @@ Key design decisions already settled:
     met (`_deterministic_blockers`: standing NOT RUN items; rows stale,
     without a runner or failed; a bound row merely not executed is left to
     the audit) are sent back once per blocker set and source, with their
-    routes, when a slot is left and the least route (one editing call and
-    one review) is admitted (`_continuation_admission`); `done_gates`
-    records it. A repeated DONE, or no admissible continuation, gets the
+    routes, when a slot is left and the continuation's actual route is
+    admitted (`_continuation_admission`): the planning call that names it
+    (sized like `_planning_stages`), the lead call (editing only when a
+    blocker needs a code or test change, else a declaration or
+    verification call at the reserve), one review, and the planning call
+    after it where a slot would still be left (root review of 7a141e3: the
+    first quote left out the planner and admitted a route that could not
+    be paid); `done_gates` records it with the stages. A repeated DONE, or no admissible continuation, gets the
     audit as before.
   - *The cap's goal question* is not asked when an audit already judged
     the current source and such blockers remain (`goal_question_skipped`,

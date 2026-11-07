@@ -9747,13 +9747,16 @@ class Session:
                 self.inspection_gaps.extend(dict(g) for g in getattr(child, "inspection_gaps", []) or [])
                 self.generated_test_repairs.extend(dict(g) for g in getattr(child, "generated_test_repairs", []) or [])
                 self.rejected_responses.extend(dict(g) for g in getattr(child, "rejected_responses", []) or [])
+                merged_entries = []
                 for entry in child.unexecuted_acceptance:
                     # Re-based whole: the binding (scenario, cases) the child
                     # recorded survives; only the parent's own gate and
                     # environment can discharge it now.
-                    self.unexecuted_acceptance.append(dict(
+                    merged_entries.append(dict(
                         entry, after_check=len(self.checks), discharged_at=None,
                         gate=_gate_identity(self.config.integration_gate), environment=self._environment_id()))
+                    self.unexecuted_acceptance.append(merged_entries[-1])
+                renumbered: Dict[str, str] = {}
                 # The child's typed records come back whole: its findings by
                 # id (unique per task), its obligations (re-based like its
                 # execution facts: only a parent check discharges them), its
@@ -9781,6 +9784,7 @@ class Session:
                                               or (bound and self.config.integration_gate is not None)))
                               or (obligation.get("kind") != "not_run" and self.config.integration_gate is not None)
                               else None)
+                    renumbered[str(obligation.get("oid"))] = f"O{len(self.evidence_obligations) + 1}"
                     self.evidence_obligations.append(dict(
                         obligation, oid=f"O{len(self.evidence_obligations) + 1}", runner=runner,
                         purpose=delivery.purpose_of(obligation),
@@ -9791,6 +9795,15 @@ class Session:
                         deferred=None,
                         entry=dict(obligation.get("entry") or {}, after_check=len(self.checks),
                                    after_observed=len(self.review_checks))))
+                # The child's ids are its own: each merged NOT RUN entry takes
+                # its typed row's parent id, the child's kept beside it, so a
+                # RUNS, DISCHARGES or judgment line names one item (root review
+                # of 7a141e3, item 2: two children's items both read O2).
+                for entry in merged_entries:
+                    child_oid = entry.get("oid")
+                    if child_oid:
+                        entry["child_oid"] = child_oid
+                        entry["oid"] = renumbered.get(str(child_oid))
                 self.plan_admissions.extend(child.plan_admissions)
                 self.proof_binding_problems.extend(child.proof_binding_problems)
                 self.operations.extend(child.operations)
@@ -10690,11 +10703,12 @@ class Session:
             # a 307k audit and 266k of planning on blockers the harness
             # already held, then could not pay the repair).
             blocked = self._deterministic_blockers()
+            needs_editing = bool(getattr(self, "_blockers_need_editing", True))
             source = self._source_fingerprint() if self.project else None
             again = any(not g.get("audit_asked") and g.get("source") == source
                         and sorted(g.get("blocked") or {}) == sorted(blocked) for g in self.done_gates)
             if blocked:
-                continuation = self._continuation_admission()
+                continuation = self._continuation_admission(needs_editing)
                 if continuation["feasible"] and not again:
                     routes = {r: self._evidence_route(r, why) for r, why in blocked.items()}
                     for rid, route in routes.items():
@@ -13631,20 +13645,42 @@ class Session:
         lines = list(_RUNS_ANY.finditer(reply or ""))
         if not lines:
             return
-        by_oid = {e.get("oid"): e for e in self.unexecuted_acceptance if e.get("oid")}
+        # An id held by two items identifies neither: nothing is applied to
+        # it (root review of 7a141e3, item 2).
+        from collections import Counter
+        counts = Counter(e.get("oid") for e in self.unexecuted_acceptance if e.get("oid"))
+        by_oid = {e["oid"]: e for e in self.unexecuted_acceptance if e.get("oid") and counts[e["oid"]] == 1}
         wanted: Dict[str, List[str]] = {}
         problems = []
+        poisoned: set = set()
+        whole_invalid = False
         for match in lines:
             body = _RUNS_BODY.fullmatch(match.group(1))
             if body is None:
+                # A malformed line that names an item invalidates that item's
+                # declaration whole; one that names none invalidates the
+                # reply's (root review of 7a141e3, item 3: a valid line beside
+                # a malformed one for the same item was applied as its whole
+                # binding).
+                named = re.match(r"\s*(O\d+)\b", match.group(1))
+                if named:
+                    poisoned.add(named.group(1))
+                else:
+                    whole_invalid = True
                 problems.append(f"'{match.group(1).strip()[:80]}' is not 'O<n> - file::[Class::]test_case'")
                 continue
             oid, case = body.group(1), body.group(2).strip("`")
             entry = by_oid.get(oid)
             if entry is None or not self._not_run_owned(entry, task):
-                problems.append(f"{oid}: not a NOT RUN item this task reported or took over")
+                problems.append(f"{oid}: not a NOT RUN item this task reported or took over, or its id is ambiguous")
                 continue
             wanted.setdefault(oid, []).append(case)
+        if whole_invalid:
+            problems.append("a malformed RUNS line names no item, so no RUNS line of this reply is read")
+            wanted = {}
+        for oid in sorted(poisoned & set(wanted)):
+            problems.append(f"{oid}: a malformed RUNS line names it, so none of its lines is read")
+            wanted.pop(oid)
         for oid, cases in wanted.items():
             entry = by_oid[oid]
             cited = [_CASE_CITATION.fullmatch(c) for c in cases]
@@ -13680,14 +13716,42 @@ class Session:
         if wanted:
             self._refresh_obligations()
 
-    @staticmethod
-    def _restated_judged(entry: dict) -> bool:
-        """A restated item's independent judgment: SUFFICIENT, on exactly its
-        current cases, by a seat that did not write the restatement."""
+    def _restated_revisions(self, entry: dict) -> Dict[str, int]:
+        """The current revisions of the requirements a NOT RUN item holds."""
+        revisions = self._requirement_revisions()
+        return {rid: int(revisions.get(rid, 1)) for rid in sorted(entry.get("requirements") or [])}
+
+    def _restated_judged(self, entry: dict) -> bool:
+        """A restated item's independent judgment as it stands now:
+        SUFFICIENT, on exactly its current cases, by a seat that did not write
+        the restatement, made on the current source and under the current
+        revisions of the requirements the item holds. A judgment of another
+        source (a later edit may have changed what the cases assert: root
+        review of 7a141e3, item 1) or revision is stale: the item awaits a
+        fresh independent judgment, which any later reviewer or the audit
+        may give on the current receipts (``_restated_awaiting``)."""
         judged = entry.get("restated_judgment") or {}
         last = (entry.get("restatements") or [{}])[-1]
-        return (judged.get("verdict") == "sufficient" and list(judged.get("cases") or []) == list(entry.get("cases") or [])
-                and judged.get("by") and judged.get("by") != last.get("author"))
+        current = self._source_fingerprint() if self.project else None
+        return bool(judged.get("verdict") == "sufficient"
+                    and list(judged.get("cases") or []) == list(entry.get("cases") or [])
+                    and judged.get("by") and judged.get("by") != last.get("author")
+                    and current and judged.get("source") == current
+                    and dict(judged.get("revisions") or {}) == self._restated_revisions(entry))
+
+    def _restated_awaiting(self, task: Optional[str]) -> List[dict]:
+        """Restated items a reviewer of ``task`` may judge: those this task's
+        lead restated and that are not judged as they stand, and any other
+        restated item whose judgment is stale or missing (cycle02 correction:
+        a stale judgment is reachable, never a permanent hold)."""
+        out = []
+        for e in self.unexecuted_acceptance:
+            if not (e.get("restatements") and e.get("oid")) or self._restated_judged(e):
+                continue
+            mine = (e["restatements"][-1] or {}).get("task") == task
+            if mine or e.get("restated_judgment") or self._discharge_record(e) is not None:
+                out.append(e)
+        return out
 
     def _judge_restated(self, auditor: str, reply: str, task: Optional[str] = None) -> None:
         """An independent seat's own '<O-id>: SUFFICIENT|INSUFFICIENT <why>'
@@ -13696,8 +13760,10 @@ class Session:
         (``task``: its review or recheck) or the audit; recorded on the item
         with the cases judged and the source. A line on an item not restated,
         or by the restatement's author, judges nothing."""
-        restated = [e for e in self.unexecuted_acceptance if e.get("restatements") and e.get("oid")
-                    and (task is None or (e["restatements"][-1] or {}).get("task") == task)]
+        restated = ([e for e in self.unexecuted_acceptance if e.get("restatements") and e.get("oid")]
+                    if task is None else self._restated_awaiting(task))
+        ids = [e["oid"] for e in restated]
+        restated = [e for e in restated if ids.count(e["oid"]) == 1]
         if not restated:
             return
         explicit, conflicts = judgment.sufficiency_reading(reply or "", [e["oid"] for e in restated])
@@ -13709,20 +13775,27 @@ class Session:
                 continue
             entry["restated_judgment"] = dict(by=auditor, verdict=verdict, why=str(why)[:300],
                                               cases=list(entry.get("cases") or []),
-                                              source=self._source_fingerprint() if self.project else None)
+                                              source=self._source_fingerprint() if self.project else None,
+                                              revisions=self._restated_revisions(entry))
+            entry.setdefault("judgment_history", []).append(dict(entry["restated_judgment"]))
 
     def _restated_review_block(self, spec) -> str:
         """For the restating task's reviewer: each NOT RUN item this task's
         lead restated as cases, and the one line that judges it."""
         task = getattr(spec, "task_id", None)
-        items = [e for e in self.unexecuted_acceptance if e.get("restatements") and e.get("oid")
-                 and (e["restatements"][-1] or {}).get("task") == task and not self._restated_judged(e)]
+        items = [e for e in self._restated_awaiting(task) if e.get("restatements")]
         if not items:
             return ""
-        lines = [f"- {e['oid']} (reported by {e['task']}): NOT RUN: {_display_item(e['item'])[:300]}"
-                 + (f" - {e['why'][:160]}" if e.get("why") else "")
-                 + f"; restated by this task's lead as {', '.join(e.get('cases') or [])}" for e in items]
-        return ("\n\n## NOT RUN items this task's lead restated as cases\n" + "\n".join(lines)
+        lines = []
+        for e in items:
+            last = e["restatements"][-1] or {}
+            lines.append(f"- {e['oid']} (reported by {e['task']}): NOT RUN: {_display_item(e['item'])[:300]}"
+                         + (f" - {e['why'][:160]}" if e.get("why") else "")
+                         + (f"; restated by this task's lead as {', '.join(e.get('cases') or [])}"
+                            if last.get("task") == task else
+                            f"; restated by {last.get('task')}'s lead as {', '.join(e.get('cases') or [])}; its "
+                            "earlier judgment no longer holds for the source as it is now"))
+        return ("\n\n## NOT RUN items restated as cases that need your judgment\n" + "\n".join(lines)
                 + "\nFor each, add one line '<O-id>: SUFFICIENT <how these cases exercise the whole reported "
                 "behaviour>' or '<O-id>: INSUFFICIENT <what they leave unexercised>'. Judge the cases against "
                 "everything the item reported, not whether they pass: the harness settles execution itself. These "
@@ -14465,9 +14538,17 @@ class Session:
         standing = [e for e in self._standing_not_run()
                     if not (e.get("restatements") and self._discharge_record(e) is not None)]
         out: Dict[str, str] = {}
+        # Whether settling them needs a code or test change: an item no check
+        # can run, or a stale or unbound row, is settled by a declaration
+        # (RUNS, DISCHARGES, an exact redeclaration) when its cases exist; a
+        # bound item not shown passing, or a failed execution, needs an edit.
+        self._blockers_need_editing = False
         for rid in self.memory.ledger.requirements:
             parts = []
             held = [e for e in standing if rid in (e.get("requirements") or ())]
+            if any(e.get("cases") or (e.get("executable") if "executable" in e else self._not_run_executable(e))
+                   for e in held):
+                self._blockers_need_editing = True
             if held:
                 parts.append("NOT RUN: " + "; ".join(f"{e['task']}: {_display_item(e['item'])[:100]}" for e in held))
             # Only rows no audit, challenge or cap step can settle: a stale
@@ -14480,6 +14561,8 @@ class Session:
                      and o.get("kind") != "not_run"
                      and (str(o.get("binding") or "").startswith("stale") or o.get("runner") is None
                           or o.get("execution") == "failed")]
+            if any(o.get("execution") == "failed" for o in unmet):
+                self._blockers_need_editing = True
             if unmet:
                 parts.append("not executed: " + "; ".join(
                     f"{o['oid']} ({'no runner' if o.get('runner') is None else o.get('execution')}"
@@ -14488,13 +14571,20 @@ class Session:
                 out[rid] = "; ".join(parts)[:400]
         return out
 
-    def _continuation_admission(self) -> dict:
-        """Whether one more task is authorized and payable now: a slot is
+    def _continuation_admission(self, needs_editing: bool = True) -> dict:
+        """Whether one more task is authorized and payable now, quoted as
+        the route it actually takes (root review of 7a141e3, item 4: the
+        quote left out the planner call that names the task): a slot is
         left, no route was forfeited and no terminal route committed, and
-        the least route a task can take (one editing call and one review,
-        in the budget's own exposure classes) is admitted against what is
-        left after the held finish (``_admit_plan``). With no budget, the
-        slot decides."""
+        ``_admit_plan`` admits, against what is left after the held finish,
+        the planning call that names the task (``_planning_stages`` sizing:
+        the larger of the reserve and the last planning call), the task's
+        lead call (editing when a blocker needs a code or test change,
+        else a declaration or verification call at the reserve), one review,
+        and the planning call after it where a slot would still be left.
+        Known rechecks and the design review follow findings or a design
+        scope the quote cannot know; they are admitted on the route itself
+        when they arise. With no budget, the slot decides."""
         used = int(getattr(self, "_slots_used", 0) or 0)
         total = getattr(self, "_max_tasks", None)
         if total is not None and used >= total:
@@ -14503,11 +14593,23 @@ class Session:
             return dict(feasible=False, detail="the remaining slots were forfeited or relinquished", kind="forfeit")
         if self._budget() is None:
             return dict(feasible=True, detail=f"{(total or 0) - used} slot(s) left", kind="slots")
-        writes = bool(self._writes())
-        verdict = self._admit_plan("done-continuation", [
-            delivery.PlanStage("continuation lead", "editing" if writes else "reserve", editing=writes),
-            delivery.PlanStage("continuation review", "reserve")], scope="done-continuation")
-        return dict(feasible=bool(verdict.feasible), detail=verdict.detail, kind="budget")
+        snap = self._budget().snapshot()
+        reserve = int((snap.get("limits") or {}).get("reserve_tokens_per_call") or 0)
+        naming = delivery.PlanStage("planning call that names the task", "reserve",
+                                    tokens=max(reserve, self._last_planning_tokens() or 0) if reserve else None)
+        editing = bool(needs_editing and self._writes())
+        rows = [naming,
+                delivery.PlanStage("continuation lead" + ("" if editing else " (declaration or verification)"),
+                                   "editing" if editing else "reserve", editing=editing),
+                delivery.PlanStage("continuation review", "reserve")]
+        # The planning call after the continuation, where a slot would still
+        # be left then (the existing sizing rule, one slot ahead).
+        if total and used + 1 < int(total):
+            rows.append(delivery.PlanStage("next planning call", "reserve",
+                                           tokens=max(reserve, self._last_planning_tokens() or 0) if reserve else None))
+        verdict = self._admit_plan("done-continuation", rows, scope="done-continuation")
+        return dict(feasible=bool(verdict.feasible), detail=verdict.detail, kind="budget",
+                    route="editing" if editing else "declaration", stages=[r.name for r in rows])
 
     def _known_incomplete(self) -> str:
         """Why completion is already impossible on the current source with
