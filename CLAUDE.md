@@ -2891,6 +2891,51 @@ Key design decisions already settled:
   fixture (run passes 1, nothing attested, both consumers hold), both
   metaclass fixtures under both runners (run passes, class held), the
   parity measurement, and the attribute-kind table at the producer level.
+- **Every held NOT RUN item has a real route, a removed bound case is
+  stale at once, and DONE meets the record before the audit** (cycle02,
+  PR73 6705254133, after completion-cycle01: every grader passed, O15
+  named production modules no check can run, O24 stayed bound to a case
+  t5 removed, and a 307k audit plus 266k of planning used the room the
+  repair needed).
+  - *Unexecutable NOT RUN.* An item is marked `executable` when recorded
+    (cases bound, or only test files named). One that is not is restated
+    only by its own task's lead, or a task naming `DISCHARGES: O<n>` (the
+    takeover is kept on the item as `taken_over_by`; refused in a parallel
+    batch), writing `RUNS: O<n> - file::[Class::]test_case` lines for cases
+    defined now. The restatement is kept with its author and what it
+    replaced; the item clears only from a complete passing run on the
+    current source, gate and environment AND an independent
+    `<O-id>: SUFFICIENT <why>` line on exactly those cases, by the
+    restating task's reviewer (review or recheck) or the audit, never by
+    the restatement's author (`_restated_judged`, the same rule in
+    `truth_check._restated_not_run_cleared`). The ask is folded into the
+    revision prompt and the cycle01 declaration call; no call is added for
+    it. The route text never promises that a repair run clears it.
+    Misassociation dispositions are not implemented: the item stays held
+    and the takeover route applies.
+  - *Stale bindings.* `_mark_stale_bindings` marks a row stale only for a
+    case the record once showed executed for it (`discharged_cases`),
+    when the latest check on the current source passed with a complete
+    case-recorded run that lacks it and the source no longer defines it;
+    anything less is unknown. Execution and any judgment of the old
+    binding are dropped, never moved; the row keeps its history. The
+    planner is told the existing exact-redeclaration (supersession) route,
+    and a verification-only task may take it.
+  - *DONE.* Before an audit, the requirements the record already holds not
+    met (`_deterministic_blockers`: standing NOT RUN items; rows stale,
+    without a runner or failed; a bound row merely not executed is left to
+    the audit) are sent back once per blocker set and source, with their
+    routes, when a slot is left and the least route (one editing call and
+    one review) is admitted (`_continuation_admission`); `done_gates`
+    records it. A repeated DONE, or no admissible continuation, gets the
+    audit as before.
+  - *The cap's goal question* is not asked when an audit already judged
+    the current source and such blockers remain (`goal_question_skipped`,
+    with the reason, slots and budget); the stop says so and names the
+    cap or the forfeit as before.
+  - *Guidance.* A framework's or server's default responses are held to
+    the interface contract, and an assertion accepting more than one
+    outcome where the goal names one proves neither. Effect unmeasured.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

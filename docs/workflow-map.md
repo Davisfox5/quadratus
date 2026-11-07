@@ -290,6 +290,7 @@ review.
 | J12 | Audit finds overflow, becomes debt `F<n>` | debt recorded | same, typed | P1 |
 | J13 | Repair resolves `F<n>` with verified, approved renders | resolved | same, typed | P1 |
 | J14 | Repair fails to resolve | FindingsUnresolved | FindingsUnresolved on the owner's adverse recheck, or the same finding left without a verdict again in an unchanged decision state; a recheck never asked is held pending work for the planner (cycle01, PR73 6702597850) | P1 |
+| J39 | Held NOT RUN item no check can run; a bound case removed later; DONE over held requirements | permanent hold; stale row until the audit; audit bought first | RUNS restatement or DISCHARGES takeover judged by an independent seat; stale at the first check that shows it, redeclaration route named; DONE sent back before the audit once while a continuation is admissible; no cap goal question after a current-source audit with blockers no step can settle (cycle02, PR73 6705254133) | P3 |
 | J15 | Scope path breach | PartialWorkStopped | `failed`, preserved, the run continues; two in a row trip the breaker. Size past the estimate is telemetry, not a stop (2026-10-20) | P1, revised 2026-09-28 and 2026-10-20 |
 | J16 | Dependency tree changed or unavailable | DependencyTreeChanged | `integrity`, above cap and product | P1 |
 | J17 | Provider refusal (lead, fix, close-out) | stop or harness record | `refusal`, never rerouted | P1 |

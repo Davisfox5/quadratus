@@ -798,6 +798,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # RESOLVES and CONTINUES settlements of review findings: who was asked
         # and what each recheck closed (session._settle_review_findings).
         'review_resolutions': list(getattr(session, 'review_resolutions', []) or []) if session else [],
+        # DONEs whose requirements the record already held not met before an
+        # audit, and the cap's goal question when it was not asked because the
+        # record made completion impossible (cycle02).
+        'done_gates': list(getattr(session, 'done_gates', []) or []) if session else [],
+        'goal_question_skipped': getattr(session, 'goal_question_skipped', None) if session else None,
         # Acceptance rows a parallel child could not execute, declared by the
         # harness and rechecked by the same reviewer after the merge gate.
         'deferred_evidence': list(getattr(session, 'deferred_evidence', []) or []) if session else [],

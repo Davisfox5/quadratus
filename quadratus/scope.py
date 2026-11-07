@@ -434,7 +434,9 @@ TEST_SUBSTANCE_RULE = (
     "nothing it does not: a 'standard library only' requirement permits every standard-library "
     "import (json, sqlite3, http.server, threading and the rest) and forbids third-party packages, "
     "so a test never forbids imports, files or constructs that the goal's later work may validly "
-    "use. A test that would fail valid future work on this goal is a defect in the test."
+    "use. A test that would fail valid future work on this goal is a defect in the test. An assertion "
+    "that accepts more than one outcome where the goal names one proves neither; where the goal is "
+    "ambiguous, the reading is decided first and the test asserts that one."
 )
 
 

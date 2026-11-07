@@ -443,6 +443,50 @@ def _bound_not_run_cleared(entry, checks, record) -> bool:
     return False
 
 
+def _restated_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item its owning lead restated as exact cases (cycle02),
+    validated from the saved record alone: the last restatement names exactly
+    the entry's cases and was written by the reporting task or one that took
+    the item over; an independent seat (not the restatement's author) judged
+    exactly those cases SUFFICIENT; and a later passing check on the final
+    source, under the entry's own gate and environment, required and passed
+    from the project root with no filter and no skip, shows every case
+    passed. Anything missing or mismatched is not cleared."""
+    restatements = entry.get("restatements")
+    cases = entry.get("cases")
+    binding = entry.get("binding")
+    if not isinstance(restatements, list) or not restatements or not isinstance(restatements[-1], dict):
+        return False
+    last = restatements[-1]
+    if not isinstance(cases, list) or not cases or not all(isinstance(c, str) and _CASE_ID.match(c) for c in cases):
+        return False
+    if list(last.get("cases") or []) != cases or not isinstance(binding, dict) or binding.get("kind") != "case" \
+            or list(binding.get("cases") or []) != cases:
+        return False
+    owners = {entry.get("task")} | {t.get("task") for t in entry.get("taken_over_by") or [] if isinstance(t, dict)}
+    if last.get("task") not in owners or not isinstance(last.get("author"), str) or not last.get("author"):
+        return False
+    judged = entry.get("restated_judgment")
+    if not (isinstance(judged, dict) and judged.get("verdict") == "sufficient"
+            and list(judged.get("cases") or []) == cases and isinstance(judged.get("by"), str)
+            and judged.get("by") and judged.get("by") != last.get("author")):
+        return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if not isinstance(gate, str) or not isinstance(environment, str) or start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
+            continue
+        for row in _rows(check):
+            if _row_ok(row) and set(cases) <= _row_passed_cases(row):
+                return True
+    return False
+
+
 def _historical_paths_cleared(entry, checks, record) -> bool:
     """A path-only record written before bindings existed (no ``binding``
     key): the older reading, a later passing check whose executed case
@@ -689,6 +733,9 @@ def _not_run_cleared(entry, checks, record=None) -> bool:
         if record is None:
             return False
         binding = entry.get("binding")
+        if entry.get("restatements") is not None:
+            # A restated item (cycle02) is cleared only by its own route.
+            return _restated_not_run_cleared(entry, checks, record)
         if isinstance(binding, dict) and binding.get("kind") == "command":
             # The engine's command binding is validated whole by its own
             # route; the item's text alone never decides it.

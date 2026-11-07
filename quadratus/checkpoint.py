@@ -63,6 +63,7 @@ _CARRIED = (
     "scenario_corrections", "evidence_routes", "_scenario_corrected", "model_resolution", "close_decisions", "review_resolutions",
     "deferred_evidence", "prompt_measurements", "finish_routing", "slot_ledger", "capped_handoffs",
     "finish_renewals", "task_admissions", "recoveries", "generated_test_repairs", "rejected_responses",
+    "done_gates", "goal_question_skipped",
 )
 #: Carried state added by the A+B batch (2026-10-18): absent from earlier
 #: checkpoints, which are still readable and resumable with these empty.
@@ -73,7 +74,7 @@ _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admis
                           "review_resolutions", "deferred_evidence", "prompt_measurements",
                           "finish_routing", "slot_ledger", "capped_handoffs", "finish_renewals",
                           "task_admissions", "recoveries", "inspection_gaps", "generated_test_repairs",
-                          "rejected_responses"})
+                          "rejected_responses", "done_gates", "goal_question_skipped"})
 #: Carried state the engine no longer holds, with what a non-empty value
 #: means. A checkpoint written before 2026-10-20 may carry size-trim
 #: records whose independent preservation judgment was still pending; the
@@ -265,7 +266,7 @@ def restore_state(session, state: dict) -> None:
             # A checkpoint written before these records existed carries
             # none: the records start empty, which is what that run held.
             setattr(session, name, {"_requirement_revision_record": {}, "_route_forfeit": None,
-                                    "_terminal_route": None}.get(name, []))
+                                    "_terminal_route": None, "goal_question_skipped": None}.get(name, []))
             continue
         setattr(session, name, state[name])
     session._carried_baselines = dict(_original_tests=state["_original_tests"],

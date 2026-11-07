@@ -158,6 +158,9 @@ class CompletionInputs:
     max_reopens: int = 3
     #: Answers to steps already made. None: not asked.
     goal_confirmed: Optional[bool] = None
+    #: At the cap: why the record on the current source already makes
+    #: completion impossible, so the goal question is not asked (cycle02).
+    known_incomplete: str = ""
     requirements_satisfied: Optional[bool] = None
     #: The refusal text the requirements check left (``_done_refusal``).
     done_refusal: str = ""
@@ -359,6 +362,13 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
     if debt.partial:
         if inputs.goal_confirmed is not None:
             raise ValueError("capped or unmerged work at the cap forbids the goal question")
+    elif inputs.goal_confirmed is None and inputs.known_incomplete:
+        return _classed(Decision(INCOMPLETE, site, debt, done_accepted=False, partial_mismatches=mismatches,
+                                 stop=Stop("unverified", (
+                                     f"RequirementsUnmet: {_reached(inputs)}, and the record on the current "
+                                     f"source already holds requirements not met ({inputs.known_incomplete[:400]}); "
+                                     "the goal question was not asked because no answer could complete the run. "
+                                     "Work preserved."))))
     elif inputs.goal_confirmed is None:
         return Decision(STEP, site, debt, step=CONFIRM_GOAL, partial_mismatches=mismatches)
     else:

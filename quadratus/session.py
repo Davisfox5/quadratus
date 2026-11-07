@@ -2286,7 +2286,9 @@ _ERROR_BOUNDARY_LENS = (
     "parser, a subprocess, the network); and check where each failure is caught, so that what the caller "
     "sees is the boundary the requirement names (an exit status, a response status, a message), never a "
     "traceback or a crash. Construction, parsing and checks that run before or outside the handler are "
-    "part of that boundary. A failure the task inherits from code it did not write but that its own path "
+    "part of that boundary, and so are the responses a framework or server sends by default (an unsupported "
+    "method, a malformed request line, a refused size): they are the interface's responses too. A failure the "
+    "task inherits from code it did not write but that its own path "
     "reaches, or that the requirement it covers names, is a finding against this task: the delivery is "
     "held to what the goal requires on the current source, not to what the source did before. Framing is "
     "input too: a body shorter or longer than its declared length, a stream or file that ends early, a "
@@ -2364,7 +2366,9 @@ _CONTRACT_BOUNDARY_RULE = (
     "is not a JSON refusal where the goal requires one); a request the code refuses or cannot read whole leaves "
     "no change behind, shown by reading the state after the refusal, not the error path; and documentation "
     "describes the goal's contract and never narrows it (an exception the goal does not grant is a defect, not "
-    "a clarification). Where the goal is silent, or two of its rules collide on one input, name the ambiguity "
+    "a clarification). A framework's or server's own default responses (an unsupported method, a malformed "
+    "request line or header, a limit the server enforces) are responses of the goal's interface and are held to "
+    "its contract. Where the goal is silent, or two of its rules collide on one input, name the ambiguity "
     "for a decision instead of calling either reading a defect.")
 
 #: What a test cannot do in a reassessment, whoever wrote it.
@@ -2441,6 +2445,12 @@ def _read_covers(spec):
 
 
 _RESOLVES = re.compile(r"^\s*RESOLVES:(.*)$", re.MULTILINE)
+#: A planned task taking over standing NOT RUN items (cycle02).
+_DISCHARGES = re.compile(r"^\s*DISCHARGES:(.*)$", re.MULTILINE)
+#: An owning lead's restatement of a NOT RUN item as one exact case
+#: (cycle02): 'RUNS: O<n> - file::[Class::]test_case'.
+_RUNS_ANY = re.compile(r"^\s*RUNS:(.*)$", re.MULTILINE)
+_RUNS_BODY = re.compile(r"\s*(O\d+)\s*-\s*(\S+)\s*")
 #: A reviewer's reading of one deferred row at the post-merge recheck.
 _DEFERRED_ROW_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(P[0-9]+)[ \t]*:[ \t]*(SHOWN|NOT[ \t]+SHOWN)\b[ \t]*"
                                 r"(?:-|\u2013|\u2014|:|,)?[ \t]*(.*?)[ \t]*$", re.IGNORECASE | re.MULTILINE)
@@ -2454,6 +2464,16 @@ def _snapshot_files(snapshot) -> Dict[str, str]:
     files.update({f"{folder}/{view}/page.png": digest for view, digest in evidence["screenshots"].items()})
     files.update({f"{folder}/{view}/evidence.json": digest for view, digest in (evidence.get("records") or {}).items()})
     return files
+
+
+def _read_discharges(spec):
+    """Split a ``DISCHARGES: O3, O7`` line off a task, as ``_read_resolves``."""
+    match = _DISCHARGES.search(spec.description or "")
+    if not match:
+        return None, spec
+    tokens = [t for t in re.split(r"[\s,]+", match.group(1).strip()) if t]
+    description = _DISCHARGES.sub("", spec.description).strip()
+    return tokens, replace(spec, description=description or spec.description)
 
 
 def _read_resolves(spec):
@@ -3070,7 +3090,7 @@ def _clean_goal_review(text: str, rids) -> bool:
     verdicts = _requirement_verdicts(text)
     if not rids or any(verdicts.get(rid) is not True for rid in rids):
         return False
-    return all(_REQUIREMENT_VERDICT.match(line) or _INSPECTION_VERDICT.match(line)
+    return all(_REQUIREMENT_VERDICT.match(line) or _INSPECTION_VERDICT.match(line) or _ROW_LINE.match(line)
                or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE for line in lines[1:])
 
 
@@ -3284,6 +3304,13 @@ class Session:
         #: (challengeable; a confirmed defect is a repair task's or an
         #: honest incomplete). Evidence lifecycle batch, 2026-10-29.
         self.finish_routing: List[dict] = []
+        #: Each DONE whose requirements the record already held not met
+        #: before an audit: what held them, whether a continuation was
+        #: admissible, and whether the audit was asked (cycle02).
+        self.done_gates: List[dict] = []
+        #: The cap's goal question, when it was not asked because the
+        #: record on the current source already made completion impossible.
+        self.goal_question_skipped: Optional[dict] = None
         #: Non-blocking task-review observations that name a covered
         #: requirement, with the source they were written about: carried to
         #: the final audit, never as verdicts (Session._record_review_notes).
@@ -3767,6 +3794,15 @@ class Session:
         bracketed by the dependency identity: checked before any vendor call
         and after it returns. A failed call is re-checked without masking
         its own outcome."""
+        reply = self._invoke_model_watched(key, prompt, allow_writes=allow_writes)
+        context = invocation_context.get() or {}
+        if context.get("role") in ("collaborator", "recheck") and context.get("origin", "seat") != "worker":
+            # The restating task's reviewer judges its restated NOT RUN items
+            # (cycle02): its own lines, never the lead's.
+            self._judge_restated(key, reply if isinstance(reply, str) else "", task=context.get("task"))
+        return reply
+
+    def _invoke_model_watched(self, key, prompt, *, allow_writes=False):
         watch = self.dependency_watch
         if watch is None or not (allow_writes and self._writes()):
             return self._invoke_model_call(key, prompt, allow_writes=allow_writes)
@@ -3992,6 +4028,7 @@ class Session:
             # the cases the same reply declares for it.
             self._record_proves(key, role, reply)
             self._record_not_run(key, role, reply)
+            self._record_runs(key, role, reply)
             return reply
         except TurnLimitReached as exc:
             if capped is None:
@@ -8129,6 +8166,19 @@ class Session:
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
                 previous_description = None
                 continue
+            dlines = len(_DISCHARGES.findall(spec.description or ""))
+            discharges, spec = _read_discharges(spec)
+            problem = (self._discharges_problem(discharges) if dlines <= 1 else
+                       "DISCHARGES appears on more than one line; name every item on one line.")
+            if problem:
+                self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming tasks with an invalid DISCHARGES: {problem}")
+                self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
+                previous_description = None
+                continue
             problem = "" if hypothesis else self._unchanged_continuation(spec, continues)
             if problem:
                 # Before any lead call (step 2): an unfinished attempt re-sent
@@ -8197,6 +8247,7 @@ class Session:
                 previous_description = None
                 continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
+            self._take_over_not_run(spec, discharges or [])
             self._resolution_candidate = None
             decision = self._recovery_decision(spec, continues, resolves)
             if self.config.survey is not None:
@@ -8616,6 +8667,11 @@ class Session:
             return open_work[0]
         if self._standing_not_run():
             return "a task reported acceptance it did not run"
+        if any(o.get("kind") == "acceptance" and (o.get("modality") or "test") == "test" and not o.get("superseded_by")
+               and o.get("execution") != "ran" for o in self.evidence_obligations):
+            # A stale or unbound scenario is settled by a task that declares
+            # it again exactly and binds the current case (cycle02).
+            return "an acceptance scenario is not shown executed on the current source"
         if self._open_inspections():
             return "a reading an editing call reported it could not make is not attested by a completed review"
         if self._unnamed_standing():
@@ -8755,9 +8811,25 @@ class Session:
                 raise RuntimeError(f"completion step {decision.step} requested twice")
             made.add(decision.step)
             if decision.step == CONFIRM_GOAL:
+                known = self._known_incomplete() if site == CAP and self._cap_goal is None else ""
                 if site == CAP and self._cap_goal is not None:
                     # A job resumed at the cap: its goal answer is on record.
                     answers["goal_confirmed"] = self._cap_goal
+                elif known:
+                    # No continuation is left at the cap and the record on the
+                    # current source already makes completion impossible: the
+                    # goal question could not change the outcome, so it is not
+                    # asked (cycle02; completion-cycle01 spent 168,783 tokens
+                    # on it). The reason and the budget are kept.
+                    budget = self._budget()
+                    self.goal_question_skipped = dict(
+                        reason=known, source=self._source_fingerprint() if self.project else None,
+                        route_forfeit=dict(self._route_forfeit) if self._route_forfeit else None,
+                        slots_used=int(getattr(self, "_slots_used", 0) or 0), max_tasks=max_tasks,
+                        budget=(budget.snapshot() if budget is not None else None))
+                    self._note("the cap's goal question was not asked: the record already makes completion "
+                               "impossible on this source")
+                    answers["known_incomplete"] = known
                 else:
                     answers["goal_confirmed"] = bool(self._confirm_goal_met())
                     if site == CAP:
@@ -9531,6 +9603,10 @@ class Session:
                 # Findings are resolved by one serial task with its own
                 # verified renders; a forked child has no ledger to close them.
                 problem = "RESOLVES is not supported in a parallel batch; name that task alone."
+            elif _read_discharges(spec)[0] is not None:
+                # A takeover is judged by the serial audit with its own run;
+                # a forked child measures no execution (cycle02).
+                problem = "DISCHARGES is not supported in a parallel batch; name that task alone."
             elif self.config.capture_profile is not None and is_design_task(spec):
                 problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
             else:
@@ -10605,6 +10681,40 @@ class Session:
                 "why one cannot be done.")
             self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
             return False
+        if not final and self._explicit_tasks is None:
+            # Before an audit is bought: requirements the record already
+            # holds not met on this source, by the same facts that would
+            # lower the audit's MET afterwards, go back to the planner with
+            # their real routes while an authorized continuation is
+            # affordable (cycle02, PR73 6705254133: completion-cycle01 spent
+            # a 307k audit and 266k of planning on blockers the harness
+            # already held, then could not pay the repair).
+            blocked = self._deterministic_blockers()
+            source = self._source_fingerprint() if self.project else None
+            again = any(not g.get("audit_asked") and g.get("source") == source
+                        and sorted(g.get("blocked") or {}) == sorted(blocked) for g in self.done_gates)
+            if blocked:
+                continuation = self._continuation_admission()
+                if continuation["feasible"] and not again:
+                    routes = {r: self._evidence_route(r, why) for r, why in blocked.items()}
+                    for rid, route in routes.items():
+                        self.finish_routing.append(dict(requirement=rid, site="done refused before audit",
+                                                        why=blocked[rid][:300], **route))
+                    self._done_refusal = (
+                        "\n\n--- DONE SENT BACK ---\nNo audit was asked: the harness's record on the current "
+                        "source already holds these requirements not met, whatever an audit would say:\n"
+                        + "\n".join(f"- {r}: {why[:300]}\n  route: {routes[r]['route']}" for r, why in blocked.items())
+                        + f"\nA continuation is admissible now ({continuation['detail'][:200]}). Name a task "
+                        "that takes one of these routes, or reply DONE again to have the independent audit "
+                        "judge the rest.")
+                    self.done_gates.append(dict(site="done", blocked=dict(blocked), continuation=continuation,
+                                                audit_asked=False, source=source))
+                    self._note(f"DONE sent back before any audit: {', '.join(blocked)} held by the record")
+                    return False
+                self.done_gates.append(dict(site="done", blocked=dict(blocked), continuation=continuation,
+                                            audit_asked=True, source=source,
+                                            why=("DONE repeated over the same held requirements on this source"
+                                                 if again else "no continuation is admissible")))
         if self._explicit_tasks is not None:
             self._note("requirements no listed task claimed, left unjudged: "
                        + ", ".join(self.explicit["requirements_unclaimed"]))
@@ -10988,6 +11098,7 @@ class Session:
                 if record["fid"] in reading.dispositions and record.get("closed"):
                     self._close_review_finding_by_id(record["fid"], f"{record['state']} by the final audit")
         original = dict(found)
+        self._judge_restated(auditor, reply or "")
         lowered = self._lower_unexecuted(found)
         lowered += self._lower_unexercised_errors(found, audited, original=original, lowered=lowered)
         # Sufficiency is implied from the auditor's own lines (``original``),
@@ -11667,14 +11778,34 @@ class Session:
                   "and never a test run")[:500])
         standing = [e for e in self._standing_not_run() if rid in (e.get("requirements") or ())]
         if standing:
-            bound = [c for e in standing for c in (e.get("cases") or ())]
-            held = [e for e in standing if not e.get("cases")]
-            route = ("execution debt: " + (f"discharged only by the harness's gate executing {', '.join(sorted(set(bound)))} "
-                                           "whole" if bound else "")
-                     + ("; " if bound and held else "")
-                     + (f"{len(held)} NOT RUN item(s) bound to no case ({'; '.join((e.get('binding') or {}).get('problem', '') or e['item'][:60] for e in held)[:200]}), held as written" if held else "")
-                     + "; or a repair task that runs it; never a challenge")
-            return dict(kind="execution debt", challengeable=False, route=route[:500])
+            # Each item's own route, truthfully: a route that cannot clear it
+            # is never offered (cycle02; completion-cycle01 was told a repair
+            # task would run O15, which named production modules).
+            parts = []
+            for e in standing:
+                oid = e.get("oid") or "the item"
+                cases = ", ".join(e.get("cases") or [])
+                executable = e.get("executable") if "executable" in e else self._not_run_executable(e)
+                if e.get("restatements") and self._discharge_record(e) is not None:
+                    parts.append(f"{oid}: restated as {cases} and executed on this source; it awaits the audit's own "
+                                 f"'{oid}: SUFFICIENT|INSUFFICIENT <why>' judgment of the whole reported behaviour")
+                elif e.get("cases"):
+                    parts.append(f"{oid}: discharged only by the harness's gate executing {cases} whole on the "
+                                 "current source, gate and environment"
+                                 + (" (restated; then judged by the audit)" if e.get("restatements") else ""))
+                elif executable:
+                    parts.append(f"{oid}: discharged only by a complete run naming "
+                                 f"{', '.join(_item_paths(str(e.get('item') or '')))} whole")
+                else:
+                    parts.append(f"{oid}: names nothing a check can run "
+                                 f"({(e.get('binding') or {}).get('problem') or _display_item(e['item'])[:80]}); a repair "
+                                 f"task that runs checks never clears it. Route: its own task's lead restates it with "
+                                 f"'RUNS: {oid} - file::[Class::]test_case' lines, or a later task naming "
+                                 f"'DISCHARGES: {oid}' has its lead write them once the cases exist; the harness settles "
+                                 "them from a complete passing run on the current source and the audit judges whether "
+                                 "they exercise the whole reported behaviour")
+            route = "execution debt: " + "; ".join(parts) + "; never a challenge"
+            return dict(kind="execution debt", challengeable=False, route=route[:900])
         typed_debt = [o for o in self.evidence_obligations
                       if any(r[0] == rid for r in o.get("requirements") or ()) and not o.get("superseded_by")
                       and delivery.purpose_of(o) != "acceptance"
@@ -11694,6 +11825,24 @@ class Session:
         unrun = [o for o in self.evidence_obligations
                  if any(r[0] == rid for r in o.get("requirements") or ()) and o.get("modality") == "test"
                  and not o.get("superseded_by") and o.get("execution") != "ran"]
+        stale = [o for o in unrun if str(o.get("binding") or "").startswith("stale")
+                 or (o.get("execution") == "invalid" and o.get("cases"))]
+        if stale:
+            # The existing exact-redeclaration route, named (cycle02;
+            # completion-cycle01 O24 was bound to a case a later task removed):
+            # a task declaring the same scenario exactly supersedes the row,
+            # binds the current case and is judged afresh.
+            def told(o):
+                scenario = dict(o.get("scenario") or ())
+                return (f"{o['oid']} ({o.get('task')} {scenario.get('proof_id') or ''}: operation "
+                        f"{scenario.get('operation') or o.get('behavior')!r}; state {scenario.get('state')!r}; "
+                        f"expect {scenario.get('expect')!r}; {o.get('binding') or o.get('reason') or 'not executed'})")
+            return dict(kind="stale binding", challengeable=False, route=(
+                "stale binding: " + "; ".join(told(o) for o in stale)
+                + ". Route: a task that declares the same scenario exactly (the same operation, state, expect, "
+                  "requirements and evidence kind; no edits are needed when the cases exist) supersedes the row; its "
+                  "lead binds the current case with PROVES and its reviewer and the audit judge it afresh. The earlier "
+                  "verdict never transfers; never a challenge")[:900])
         prerequisites = [o for o in unrun if o.get("runner") is None]
         if prerequisites:
             return dict(kind="prerequisite", challengeable=False,
@@ -12341,6 +12490,13 @@ class Session:
                 self.unexecuted_acceptance.append(entry)
                 self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
                 self._register_obligation(entry, kind="not_run")
+                last = self.evidence_obligations[-1] if self.evidence_obligations else {}
+                if last.get("kind") == "not_run" and (last.get("entry") or {}).get("item") == entry["item"]:
+                    entry["oid"] = last["oid"]
+                # Whether any check can ever run what it names, decided when
+                # it is recorded, so no route promises a run that cannot
+                # discharge it (cycle02, completion-cycle01 O15).
+                entry["executable"] = self._not_run_executable(entry)
 
     def _associate_not_run(self, entry: dict, declared=()) -> None:
         """Which of the task's covered requirements a NOT RUN item holds
@@ -13110,7 +13266,13 @@ class Session:
                          + (f" (holds {', '.join(entry['requirements'])}"
                             + (f"; {entry['association']}" if entry.get("association") else "") + ")"
                             if entry["requirements"] else "")
-                         + (f" [bound to {', '.join(binding['cases'])}: discharged only by the harness's gate "
+                         + (f" [restated by {entry['restatements'][-1].get('task')} ({entry['restatements'][-1].get('author')}) "
+                            f"as {', '.join(binding.get('cases') or [])}; executed and passed on the current source: judge it "
+                            f"only by your own line '{entry.get('oid')}: SUFFICIENT <how these cases exercise the whole "
+                            f"reported behaviour>' or '{entry.get('oid')}: INSUFFICIENT <what they leave unexercised>'; "
+                            "unjudged it stays held]"
+                            if entry.get("restatements") and self._discharge_record(entry) is not None else
+                            f" [bound to {', '.join(binding['cases'])}: discharged only by the harness's gate "
                             "executing it whole]" if binding.get("cases") else
                             f" [not bound to any case: {binding['problem']}]" if binding.get("problem") else ""))
         return ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
@@ -13423,11 +13585,219 @@ class Session:
         return dict(environment=check.get("environment"),
                     requirements=[[rid, revisions.get(rid)] for rid, _ in record["requirements"]])
 
+    def _not_run_executable(self, entry: dict) -> bool:
+        """Whether a check can ever discharge the item as written: bound to
+        cases (a scenario, case, class or command claim), or naming only test
+        files a run can take whole. An item naming production files, or
+        nothing a run takes, is not: running a repair task never clears it
+        (cycle02, completion-cycle01 O15 named tickets/api.py)."""
+        binding = entry.get("binding") or {}
+        if entry.get("cases"):
+            return True
+        if binding.get("kind") == "paths":
+            paths = _item_paths(str(entry.get("item") or ""))
+            return bool(paths) and all(is_test_path(p) for p in paths)
+        return False
+
+    def _not_run_owned(self, entry: dict, task: str) -> bool:
+        """Whether ``task``'s lead may restate the item: the task that
+        reported it, or one that took it over by DISCHARGES."""
+        return entry.get("task") == task or any(t.get("task") == task for t in entry.get("taken_over_by") or ())
+
+    def _owned_unexecutable(self, task: str) -> List[dict]:
+        """Standing NOT RUN items ``task`` reported or took over that name
+        nothing a check can run and are not restated yet."""
+        return [e for e in self._standing_not_run() if e.get("oid") and self._not_run_owned(e, task)
+                and not e.get("restatements")
+                and not (e.get("executable") if "executable" in e else self._not_run_executable(e))]
+
+    def _record_runs(self, key, role, reply) -> None:
+        """An owning lead's restatement of standing NOT RUN items as exact
+        cases (cycle02): one 'RUNS: O<n> - file::[Class::]test_case' line per
+        case, read from an editing reply or the declaration call of the task
+        that reported the item or took it over. Every case must be defined
+        now in a test file (``_resolve_case_ids``); any problem with an
+        item's lines leaves that item exactly as it was. The original item,
+        reason, task and requirements never change: the restatement is kept
+        with its author, the cases it replaced and the source, and the item
+        is then discharged only by a later-or-recorded complete run on the
+        current source whose case record shows every case passed AND an
+        independent judgment that the cases exercise the whole reported
+        behaviour (``_restated_judged``). A line about another task's item,
+        an unknown or settled id, or prose binds nothing."""
+        if role not in _EDITING_ROLES + ("proof-binding",):
+            return
+        task = getattr(self._active_spec, "task_id", "run")
+        lines = list(_RUNS_ANY.finditer(reply or ""))
+        if not lines:
+            return
+        by_oid = {e.get("oid"): e for e in self.unexecuted_acceptance if e.get("oid")}
+        wanted: Dict[str, List[str]] = {}
+        problems = []
+        for match in lines:
+            body = _RUNS_BODY.fullmatch(match.group(1))
+            if body is None:
+                problems.append(f"'{match.group(1).strip()[:80]}' is not 'O<n> - file::[Class::]test_case'")
+                continue
+            oid, case = body.group(1), body.group(2).strip("`")
+            entry = by_oid.get(oid)
+            if entry is None or not self._not_run_owned(entry, task):
+                problems.append(f"{oid}: not a NOT RUN item this task reported or took over")
+                continue
+            wanted.setdefault(oid, []).append(case)
+        for oid, cases in wanted.items():
+            entry = by_oid[oid]
+            cited = [_CASE_CITATION.fullmatch(c) for c in cases]
+            if any(c is None or not is_test_path(c.group(1)) for c in cited):
+                problems.append(f"{oid}: each RUNS line names one exact test case")
+                continue
+            if len(set(cases)) != len(cases):
+                problems.append(f"{oid}: the same case is declared twice")
+                continue
+            resolved, why = self._resolve_case_ids(cases)
+            if why:
+                problems.append(f"{oid}: {why}")
+                continue
+            entry.setdefault("restatements", []).append(dict(
+                task=task, role=role, author=key, cases=list(resolved), after_check=len(self.checks),
+                source=self._source_fingerprint() if self.project else None,
+                previous=dict(binding=entry.get("binding"), cases=list(entry.get("cases") or []))))
+            entry["binding"] = dict(kind="case", cases=list(resolved), restated_by=task)
+            entry["cases"] = list(resolved)
+            entry["restated_judgment"] = None
+            for row in self.evidence_obligations:
+                if row.get("oid") == oid:
+                    row.setdefault("binding_history", []).append(dict(role=role, author=key, cases=list(resolved),
+                                                                      after_check=len(self.checks), restated=True))
+                    row.update(cases=list(resolved), runner="gate" if self._current_gate() is not None else None,
+                               execution="missing", receipts=[], source_digest=None, restated=True)
+            self._note(f"task {task}: {oid} restated by {key} as {', '.join(resolved)}; an independent judgment "
+                       "that these cases exercise the reported behaviour is still needed")
+        if problems:
+            self.proof_binding_problems.extend(dict(task=task, role=role, author=key, problem=f"RUNS: {p}")
+                                               for p in problems)
+            self._note(f"task {task}: RUNS lines not read: {'; '.join(problems)[:200]}")
+        if wanted:
+            self._refresh_obligations()
+
+    @staticmethod
+    def _restated_judged(entry: dict) -> bool:
+        """A restated item's independent judgment: SUFFICIENT, on exactly its
+        current cases, by a seat that did not write the restatement."""
+        judged = entry.get("restated_judgment") or {}
+        last = (entry.get("restatements") or [{}])[-1]
+        return (judged.get("verdict") == "sufficient" and list(judged.get("cases") or []) == list(entry.get("cases") or [])
+                and judged.get("by") and judged.get("by") != last.get("author"))
+
+    def _judge_restated(self, auditor: str, reply: str, task: Optional[str] = None) -> None:
+        """An independent seat's own '<O-id>: SUFFICIENT|INSUFFICIENT <why>'
+        line on a restated NOT RUN item (cycle02): whether the restated cases
+        exercise the whole reported behaviour. The restating task's reviewer
+        (``task``: its review or recheck) or the audit; recorded on the item
+        with the cases judged and the source. A line on an item not restated,
+        or by the restatement's author, judges nothing."""
+        restated = [e for e in self.unexecuted_acceptance if e.get("restatements") and e.get("oid")
+                    and (task is None or (e["restatements"][-1] or {}).get("task") == task)]
+        if not restated:
+            return
+        explicit, conflicts = judgment.sufficiency_reading(reply or "", [e["oid"] for e in restated])
+        for entry in restated:
+            verdict, why = explicit.get(entry["oid"], (None, ""))
+            if entry["oid"] in conflicts or verdict is None:
+                continue
+            if auditor == (entry["restatements"][-1] or {}).get("author"):
+                continue
+            entry["restated_judgment"] = dict(by=auditor, verdict=verdict, why=str(why)[:300],
+                                              cases=list(entry.get("cases") or []),
+                                              source=self._source_fingerprint() if self.project else None)
+
+    def _restated_review_block(self, spec) -> str:
+        """For the restating task's reviewer: each NOT RUN item this task's
+        lead restated as cases, and the one line that judges it."""
+        task = getattr(spec, "task_id", None)
+        items = [e for e in self.unexecuted_acceptance if e.get("restatements") and e.get("oid")
+                 and (e["restatements"][-1] or {}).get("task") == task and not self._restated_judged(e)]
+        if not items:
+            return ""
+        lines = [f"- {e['oid']} (reported by {e['task']}): NOT RUN: {_display_item(e['item'])[:300]}"
+                 + (f" - {e['why'][:160]}" if e.get("why") else "")
+                 + f"; restated by this task's lead as {', '.join(e.get('cases') or [])}" for e in items]
+        return ("\n\n## NOT RUN items this task's lead restated as cases\n" + "\n".join(lines)
+                + "\nFor each, add one line '<O-id>: SUFFICIENT <how these cases exercise the whole reported "
+                "behaviour>' or '<O-id>: INSUFFICIENT <what they leave unexercised>'. Judge the cases against "
+                "everything the item reported, not whether they pass: the harness settles execution itself. These "
+                "lines do not change your verdict form; without a SUFFICIENT line the item stays held.")
+
+    def _row_route_note(self, row: dict) -> str:
+        """The real route for a row no run can settle as it stands, stated
+        where the planner reads the rows (cycle02): a NOT RUN item naming
+        nothing a check can run, and an acceptance row whose bound case is
+        stale."""
+        if row.get("kind") == "not_run":
+            entry = next((e for e in self.unexecuted_acceptance if e.get("oid") == row.get("oid")), None)
+            if entry is None or entry.get("restatements") or self._discharging_check(entry) is not None:
+                return ""
+            if not (entry.get("executable") if "executable" in entry else self._not_run_executable(entry)):
+                return (f"; names nothing a check can run: no repair run clears it; route: 'RUNS: {row['oid']} - "
+                        f"file::[Class::]test_case' lines from its own task's lead, or a task naming 'DISCHARGES: "
+                        f"{row['oid']}' whose lead writes them, judged by an independent seat")
+            return ""
+        if row.get("kind") == "acceptance" and str(row.get("binding") or "").startswith("stale"):
+            return ("; route: a task that declares this scenario again exactly (same operation, state, expect, "
+                    "requirements and evidence kind) supersedes the row and binds the current case; the old "
+                    "verdict never transfers")
+        return ""
+
+    def _discharges_problem(self, tokens) -> str:
+        """Why a DISCHARGES line cannot be taken, or "" (also for no line).
+        Each id must be a standing NOT RUN item (cycle02)."""
+        if tokens is None:
+            return ""
+        if not tokens:
+            return "DISCHARGES names no item; name the standing NOT RUN items by id (O<n>)."
+        standing = {e.get("oid") for e in self._standing_not_run() if e.get("oid")}
+        unknown = [t for t in tokens if t not in standing]
+        if unknown:
+            return (f"DISCHARGES names {', '.join(unknown)}, which are not standing NOT RUN items"
+                    + (f" (standing: {', '.join(sorted(standing))})" if standing else " (none is standing)") + ".")
+        return ""
+
+    def _take_over_not_run(self, spec, oids) -> None:
+        """Record that ``spec`` takes over these NOT RUN items: kept on the
+        item beside its original task, reason and requirements, never in
+        place of them."""
+        for entry in self.unexecuted_acceptance:
+            if entry.get("oid") in oids:
+                entry.setdefault("taken_over_by", []).append(dict(task=spec.task_id, after_check=len(self.checks)))
+                self._note(f"{spec.task_id} takes over {entry['oid']} ({entry['task']}'s NOT RUN item)")
+
+    def _discharges_block(self, spec) -> str:
+        """For the lead of a task that took over NOT RUN items: each item as
+        reported, and the one way to restate it."""
+        task = getattr(spec, "task_id", None)
+        items = [e for e in self.unexecuted_acceptance
+                 if any(t.get("task") == task for t in e.get("taken_over_by") or ())]
+        if not items:
+            return ""
+        lines = [f"- {e['oid']} (reported by {e['task']}, holds {', '.join(e.get('requirements') or [])}): "
+                 f"NOT RUN: {_display_item(e['item'])[:400]}" + (f" - {e['why'][:200]}" if e.get("why") else "")
+                 for e in items]
+        return ("## NOT RUN items this task takes over\n" + "\n".join(lines)
+                + "\nFor each, once the cases that exercise the whole reported behaviour exist in the project's "
+                "tests, write one line 'RUNS: O<n> - file::[Class::]test_case' per case in your reply. The harness "
+                "settles them only from a complete passing run on the current source, and the independent audit "
+                "judges whether the cases exercise everything the item reported; a case chosen because it "
+                "passes, or that exercises only part of it, leaves the item held.")
+
     def _discharging_check(self, entry: dict) -> Optional[int]:
         """The index of the first later check that discharges a NOT RUN or
         skip record (the rule _standing_not_run applies), or None: the
         index of ``_discharge_record``."""
         record = self._discharge_record(entry)
+        if record is not None and entry.get("restatements") and not self._restated_judged(entry):
+            # Executed is not shown meaningful: a restated item stands until
+            # an independent seat judges the cases sufficient (cycle02).
+            return None
         return None if record is None else record["index"]
 
     def _discharge_record(self, entry: dict) -> Optional[dict]:
@@ -13556,6 +13926,7 @@ class Session:
         self._mark_not_run_display()
         if not self.evidence_obligations:
             return
+        self._mark_stale_bindings()
         current_source = self._source_fingerprint() if self.project else None
         revisions = self._requirement_revisions()
         refreshed = []
@@ -13616,6 +13987,61 @@ class Session:
                     record = dict(record, discharged_cases=list(obligation.cases))
             refreshed.append(dict(record, **obligation.to_dict()))
         self.evidence_obligations = refreshed
+
+    def _mark_stale_bindings(self) -> None:
+        """A bound case that a later edit removed or renamed, detected at the
+        first check that shows it (cycle02; completion-cycle01 O24 stayed
+        bound to a case t5 removed until the audit lowered R11). Only a case
+        the record once showed executed for this row (``discharged_cases``)
+        can go stale, and only when both readings agree: the latest check, on the current source,
+        passed with a complete run whose own case record lacks the case, and
+        the source no longer defines it where the binding says. A collection
+        gap, a run without case identity, a failed or filtered check, or a
+        dynamic case the run still reports is unknown and changes nothing.
+        The row keeps its cases and its history; its execution and any
+        sufficiency judgment of the old binding are dropped, never moved."""
+        if not self.project or not self.checks:
+            return
+        mark = len(self.checks)
+        if getattr(self, "_stale_checked_at", None) == mark:
+            return
+        self._stale_checked_at = mark
+        check = self.checks[-1]
+        current = self._source_fingerprint()
+        if not current or check.get("source") != current or not check.get("passed"):
+            return
+        runs = [r for r in _check_runs(check, self.project) if _complete_run(r) and r.get("report_cases")]
+        if not runs:
+            return
+        seen = set().union(*(_run_passed_cases(r) for r in runs))
+        for row in self.evidence_obligations:
+            if (row.get("kind") != "acceptance" or (row.get("modality") or "test") != "test"
+                    or row.get("binding") != "bound" or not row.get("cases") or row.get("superseded_by")):
+                continue
+            shown = {str(c) for c in (row.get("discharged_cases") or [])}
+            missing = []
+            for case in row["cases"]:
+                base = str(case).split("[", 1)[0]
+                if case in seen or base in seen:
+                    continue
+                if str(case) not in shown:
+                    # Never shown executed: a binding to a case that never
+                    # existed is refused as it always was, not "removed".
+                    continue
+                _resolved, why = self._resolve_case_ids([base])
+                if why and "is not defined where it says" in why:
+                    missing.append(str(case))
+            if not missing:
+                continue
+            task = getattr(self._active_spec, "task_id", None) or "a later task"
+            row.setdefault("binding_history", []).append(dict(stale=missing, cases=list(row["cases"]),
+                                                              after_check=mark - 1, by_task=task))
+            row.update(binding=f"stale: {', '.join(missing)} no longer defined or run after {task}",
+                       execution="missing", sufficiency="unjudged", judged_by="", judged_binding="", receipts=[],
+                       source_digest=None, discharged_cases=None,
+                       reason=f"stale binding: {', '.join(missing)} removed or renamed")
+            self._note(f"{row['oid']} ({row.get('task')}): bound case(s) {', '.join(missing)} no longer exist on the "
+                       f"source after {task}; the binding is stale and its earlier judgment dropped")
 
     def _design_review_drift(self, record: dict) -> str:
         """Why a delivered design review no longer describes what is on
@@ -14017,6 +14443,90 @@ class Session:
                                       "only by an explicit O-line from the audit",
                               modality="legacy", executable_claim=False, legacy=True, runner=None)
                 self._sync_obligation(record)
+
+    def _deterministic_blockers(self) -> Dict[str, str]:
+        """Requirements the record already holds not met on the current
+        source, by facts ``_lower_unexecuted`` applies to an audit's MET
+        afterwards and that no audit, final challenge or cap step can
+        change: a standing NOT RUN item that holds it, or an acceptance
+        obligation of it whose binding is stale, that has no authorized
+        runner, or whose execution failed (reading and legacy rows, and a
+        bound row merely not executed yet, are the audit's to settle).
+        Empty when the state is not known: no ledger, no project, or no
+        check on the current source (cycle02)."""
+        if not self.config.requirements_ledger or not self.project or not self.checks:
+            return {}
+        current = self._source_fingerprint()
+        if not current or self.checks[-1].get("source") != current:
+            return {}
+        self._refresh_obligations()
+        # A restated item already executed on this source awaits only the
+        # audit's judgment: evidence that can still be settled, not a blocker.
+        standing = [e for e in self._standing_not_run()
+                    if not (e.get("restatements") and self._discharge_record(e) is not None)]
+        out: Dict[str, str] = {}
+        for rid in self.memory.ledger.requirements:
+            parts = []
+            held = [e for e in standing if rid in (e.get("requirements") or ())]
+            if held:
+                parts.append("NOT RUN: " + "; ".join(f"{e['task']}: {_display_item(e['item'])[:100]}" for e in held))
+            # Only rows no audit, challenge or cap step can settle: a stale
+            # binding, no authorized runner, or a failed execution. A bound
+            # row merely not executed yet is left to the audit and the final
+            # challenge, which may run it.
+            unmet = [o for o in self.evidence_obligations
+                     if any(r[0] == rid for r in o.get("requirements") or ()) and o.get("execution") != "ran"
+                     and o.get("modality") not in ("reading", "legacy") and not o.get("superseded_by")
+                     and o.get("kind") != "not_run"
+                     and (str(o.get("binding") or "").startswith("stale") or o.get("runner") is None
+                          or o.get("execution") == "failed")]
+            if unmet:
+                parts.append("not executed: " + "; ".join(
+                    f"{o['oid']} ({'no runner' if o.get('runner') is None else o.get('execution')}"
+                    + (f": {o['reason']}" if o.get("reason") else "") + ")" for o in unmet))
+            if parts:
+                out[rid] = "; ".join(parts)[:400]
+        return out
+
+    def _continuation_admission(self) -> dict:
+        """Whether one more task is authorized and payable now: a slot is
+        left, no route was forfeited and no terminal route committed, and
+        the least route a task can take (one editing call and one review,
+        in the budget's own exposure classes) is admitted against what is
+        left after the held finish (``_admit_plan``). With no budget, the
+        slot decides."""
+        used = int(getattr(self, "_slots_used", 0) or 0)
+        total = getattr(self, "_max_tasks", None)
+        if total is not None and used >= total:
+            return dict(feasible=False, detail=f"no task slot is left ({used} of {total} used)", kind="slots")
+        if self._route_forfeit is not None or self._terminal_committed():
+            return dict(feasible=False, detail="the remaining slots were forfeited or relinquished", kind="forfeit")
+        if self._budget() is None:
+            return dict(feasible=True, detail=f"{(total or 0) - used} slot(s) left", kind="slots")
+        writes = bool(self._writes())
+        verdict = self._admit_plan("done-continuation", [
+            delivery.PlanStage("continuation lead", "editing" if writes else "reserve", editing=writes),
+            delivery.PlanStage("continuation review", "reserve")], scope="done-continuation")
+        return dict(feasible=bool(verdict.feasible), detail=verdict.detail, kind="budget")
+
+    def _known_incomplete(self) -> str:
+        """Why completion is already impossible on the current source with
+        no continuation left, or "": an audit already judged exactly this
+        source, and deterministic blockers hold that nothing at the cap can
+        settle (``_deterministic_blockers``). Unknown state, an audit of
+        another source and evidence that can still be settled never count
+        (cycle02)."""
+        if not self.requirement_audits or not self.project:
+            return ""
+        current = self._source_fingerprint()
+        if not current or self.requirement_audits[-1].get("source") != current:
+            # The final audit has not judged this source: it still adds
+            # evidence, so the cap asks as before.
+            return ""
+        blocked = self._deterministic_blockers()
+        if not blocked:
+            return ""
+        return "; ".join(f"{r}: {why[:200]}" for r, why in blocked.items())[:600]
 
     def _lower_unexecuted(self, found: dict) -> List[dict]:
         """Turn a MET into NOT MET where the record shows its acceptance did
@@ -15791,6 +16301,7 @@ class Session:
                             if delivery.purpose_of(o) == "execution" else
                             "purpose unknown (mixed record): held, never credited"
                             if delivery.purpose_of(o) == "unknown" else f"sufficiency {o['sufficiency']}")
+                         + self._row_route_note(o)
                          for o in self.evidence_obligations)
         notes.extend(self._admission_notes())
         waiting = [d for d in self.deferred_evidence if not d.get("rechecked") or str(d["rechecked"]).startswith(("kept", "not"))]
@@ -17381,6 +17892,9 @@ class Session:
             inherited = self._inherited_findings_block(spec)
             if inherited:
                 blocks.append(inherited)
+        taken = self._discharges_block(spec)
+        if taken:
+            blocks.append(taken)
         if spec.scope is not None:
             paths.extend(p for p in spec.scope.permitted_paths if spec.scope.permits(p))
         included, refused = context_pack(self.project, paths, exclude=self.config.project_excludes,
@@ -17633,6 +18147,7 @@ class Session:
             + self._changed_originals_note()
             + self._goal_authority(peer)
             + self._proof_rows(spec)
+            + self._restated_review_block(spec)
             + (self._scope_size_note(spec, audience="reviewer") if self._writes() else "")
             + self._sibling_note()
             + self._inspection_note(spec, peer, "review")
@@ -18190,9 +18705,17 @@ class Session:
         task = getattr(spec, "task_id", None)
         if task is None:
             return ""
+        unrunnable = self._owned_unexecutable(task)
+        runs = ("\n\n## NOT RUN items no check can run as written\n" + "\n".join(
+            f"- {e['oid']}: NOT RUN: {_display_item(e['item'])[:300]}" for e in unrunnable)
+            + "\nWhere cases that exercise the whole reported behaviour exist in the project's tests, restate "
+            "each item with one line 'RUNS: O<n> - file::[Class::]test_case' per case. The harness settles them "
+            "only from a complete passing run on the current source, and the independent audit judges whether "
+            "they exercise everything the item reported. Without such lines the item stays held as written."
+            if unrunnable else "")
         rows = [r for r in self.evidence_obligations if r.get("task") == task and r.get("kind") == "acceptance"]
         if not rows:
-            return ""
+            return runs
         faults = [f"- {r.get('proof_id') or r['oid']}: {r['binding'][len('invalid declaration: '):][:200]}"
                   for r in rows if str(r.get("binding", "")).startswith("invalid declaration")]
         text = "\n\n## Proof binding\n" + PROVES_RULE + " " + TEST_SUBSTANCE_RULE
@@ -18202,7 +18725,7 @@ class Session:
                      + "\nA declaration fault alone is corrected by the corrected PROVES line(s) in this reply, one "
                      "exact case per line; it calls for no code or test rewrite. Findings about the code or the "
                      "cases themselves still need the fix they ask for.")
-        return text
+        return text + runs
 
     def _revision_delivery(self) -> str:
         """How the lead should return a revision, given its actual grant.
@@ -18400,7 +18923,7 @@ class Session:
 
     def _recheck_instructions(self, ids: List[str], *, spec=None) -> str:
         spec = spec if spec is not None else getattr(self, "_active_spec", None)
-        return (self._proof_rows(spec) + "\n\n" if spec is not None else "") + (
+        return (self._proof_rows(spec) + self._restated_review_block(spec) + "\n\n" if spec is not None else "") + (
                 "Check only your BLOCKING findings against the revision, one line per finding and nothing "
                 "else about them: '<id>: RESOLVED <how the revision addresses it>', '<id>: UNRESOLVED "
                 "<what specifically remains>', or '<id>: INVALIDATED <the test, file, receipt or "
@@ -18854,10 +19377,15 @@ class Session:
                                  f"{told.get('state') or ''} | expect: {told.get('expect') or ''} (binding now: "
                                  f"{row.get('binding') or 'none declared'})")
             claims = "".join(f"- {r['fid']} ({r['author']}): {str(r.get('claim') or '')[:400]}\n" for r in records)
+            unrunnable = self._owned_unexecutable(spec.task_id)
+            runs_ask = ("\nThese NOT RUN items of your task name nothing a check can run:\n" + "".join(
+                f"- {e['oid']}: {_display_item(e['item'])[:300]}\n" for e in unrunnable)
+                + "Where cases that exercise the whole reported behaviour exist, add one line "
+                "'RUNS: O<n> - file::[Class::]test_case' per case for each.\n" if unrunnable else "")
             prompt = (
                 f"Task: {spec.description}\n\nThese proof scenarios of your task bind no test case, so no run "
                 "can show them executed:\n" + "\n".join(lines) + "\n\nThe review findings that named them:\n"
-                + claims + "\n" + PROVES_RULE + " " + TEST_SUBSTANCE_RULE + "\nReply with one line "
+                + claims + runs_ask + "\n" + PROVES_RULE + " " + TEST_SUBSTANCE_RULE + "\nReply with one line "
                 "'PROVES: P<n> - file::[Class::]test_case' per case that proves each scenario above, naming cases "
                 "that exist in the project's test files as they stand now, and nothing else. Only lines for the "
                 f"scenarios above ({', '.join(pids)}) are read. Do not change files: this call declares where "
@@ -18888,6 +19416,7 @@ class Session:
                              problem=f"not a requested scenario's line, not read: {line}") for line in dropped)
                 if kept:
                     self._record_proves(lead, "proof-binding", "\n".join(kept))
+                self._record_runs(lead, "proof-binding", reply or "")
                 outcome = ("declared" if kept else "no PROVES line for a requested scenario")
         self._refresh_obligations()
         after = {r["oid"]: r for r in self.evidence_obligations}

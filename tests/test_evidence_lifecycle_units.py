@@ -448,7 +448,10 @@ def test_the_finish_routes_execution_debt_prerequisites_failures_and_findings_ap
     routes = {rid: session._evidence_route(rid, "x") for rid in ("R1", "R2", "R3", "R4", "R5")}
     assert routes["R1"]["kind"] == "execution debt" and not routes["R1"]["challengeable"]
     assert f"discharged only by the harness's gate executing {CASE} whole" in routes["R1"]["route"]
-    assert "1 NOT RUN item(s) bound to no case" in routes["R1"]["route"] and "never a challenge" in routes["R1"]["route"]
+    # Cycle02 (PR73 6705254133): an item no check can run is told its real
+    # route; no repair run is promised for it.
+    assert "names nothing a check can run" in routes["R1"]["route"] and "never a challenge" in routes["R1"]["route"]
+    assert "never clears it" in routes["R1"]["route"] and "DISCHARGES:" in routes["R1"]["route"]
     assert routes["R2"]["kind"] == "prerequisite" and "O2 has no authorized runner" in routes["R2"]["route"]
     assert routes["R3"]["kind"] == "failed execution" and "O3 failed (1 failed)" in routes["R3"]["route"]
     assert routes["R4"] == dict(kind="finding", challengeable=True, route=routes["R4"]["route"])
