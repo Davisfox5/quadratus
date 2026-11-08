@@ -611,6 +611,21 @@ class SessionConfig:
     repair_tests: tuple = ()
 
 
+
+#: A requirement whose whole claim is that a named test command passes
+#: (cycle05 trial: R24/R28 "runs under python -m unittest") needs no proof
+#: scenario: the harness's exact receipt of that command on the delivered
+#: source is cited for it (``_command_receipt_citation``) and the audit judges
+#: it. t5 and t6 instead built a test that ran the whole suite inside itself,
+#: which collected itself and timed out. ``_proof_problem`` reads the same
+#: rule (``_test_command_requirement``).
+_TEST_COMMAND_RULE = (
+    "A requirement whose whole claim is that a named test command passes (python -m unittest, "
+    "pytest, npm test, make test) needs no scenario: the harness's own complete passing run of "
+    "exactly that command on the delivered source is cited for it and the independent audit judges "
+    "it, and it stays not met when the configured checks do not run that command. Never write a "
+    "test that runs the test suite or that command.")
+
 _SCOPE_REQUEST = (
     'After KIND, include exactly one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
     '"intended_result": "one concrete result", "acceptance": ["verifiable condition"], '
@@ -630,7 +645,9 @@ _SCOPE_REQUEST = (
     'nothing, and the reviewers judge whether the size was necessary. '
     'Size the implementation and its executed proof together: every requirement the '
     'task COVERS is delivered in this task only with the executed tests that prove it '
-    '(for an error or refusal requirement, a passing case per rejecting path), so '
+    '(for an error or refusal requirement, a passing case per rejecting path; a requirement '
+    'whose claim is that a named test command passes is shown by the harness\'s own run of '
+    'that command instead), so '
     'estimate implementation lines, proof lines (the named cases: usually the larger '
     'half) and the fixed setup a new test file pays before its first case (imports, '
     'fixtures, stubs or fakes for what the environment lacks) separately, and set '
@@ -651,7 +668,7 @@ _SCOPE_REQUEST = (
     'that runs and passes, which the lead binds in its delivery, and is unproved until then. '
     'Only a documentation claim may declare "evidence": "reading" (its location a documentation '
     'file, never for an error or refusal requirement): it is judged by the audit reading and '
-    'citing that file and never by a check. Nothing is exempt by its location or wording: a '
+    'citing that file and never by a check. ' + _TEST_COMMAND_RULE + ' Nothing else is exempt by its location or wording: a '
     'scenario without that declaration is an executable claim wherever it points. The harness '
     'checks the mapping, not its completeness, and the independent review judges that. Size the proof '
     'estimate from this list and from any measured sizing notes in the codebase map. '
@@ -2394,7 +2411,9 @@ _ERROR_BOUNDARY_LENS = (
     "Cover the whole error boundary of the work, not only its happy path. For every entry point the "
     "task adds or changes (a command, a request handler, a function the goal names), check what happens "
     "on malformed, missing, empty, out-of-range or oversized input, on a value at the edge of its type's "
-    "range, on a missing or unreadable resource, and on a failure of anything the code calls (storage, a "
+    "range, on a value one layer accepts and a later one cannot represent (an integer wider than a storage "
+    "column or a database binding, a number that overflows, text longer than a field holds), on a missing "
+    "or unreadable resource, and on a failure of anything the code calls (storage, a "
     "parser, a subprocess, the network); and check where each failure is caught, so that what the caller "
     "sees is the boundary the requirement names (an exit status, a response status, a message), never a "
     "traceback or a crash. Construction, parsing and checks that run before or outside the handler are "
@@ -2462,6 +2481,16 @@ _AUTHORITY_ORDER = (
     "meet is NOT MET however minor it seems; never mark a requirement MET beside a note that one of its "
     "conditions is not met. Behaviour the goal does not address, and old behaviour outside the work it "
     "asks for, is judged on its own merits as before.")
+
+#: cycle05 trial audit: a requirement's prose asked every response for a
+#: JSON body and the auditor counted HEAD's empty body against it, while
+#: HTTP itself forbids one. Generic: the protocol's own semantics bind the
+#: reading of a requirement's words.
+_PROTOCOL_RULE = (
+    "Read every requirement under the semantics of the protocol it names: a condition the protocol "
+    "itself rules out for a case does not apply to that case. For example an HTTP HEAD response carries "
+    "the status and headers of the matching GET and no body, so a requirement that responses carry a "
+    "JSON body is met for HEAD by those headers; never ask for what the protocol forbids.")
 
 #: One compact reading of the original contract that every seat gets
 #: (quality/completion batch, 2026-10-31; P12: json.loads accepted NaN and
@@ -3036,6 +3065,11 @@ _REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+M
 _ERROR_CLAUSE = re.compile(
     r"\b(?:raises?|raised|raising|rejects?|rejected|rejecting|rejection|refus(?:e|es|ed|ing|al)|invalid|"
     r"malformed|non-?zero|exceptions?|denied|forbidden|conflicts?|not found|(?:HTTP|status)\s*[45]\d\d|"
+    # A returned client or server status by its number alone, and the usual
+    # words for an absent resource (cycle05 trial: an unknown-ID 404
+    # requirement never reached the 2**63 boundary candidate).
+    r"(?:returns?|responds?(?:\s+with)?|answers?(?:\s+with)?)\s+(?:an?\s+|with\s+)?(?:HTTP\s*)?[45]\d\d|"
+    r"nonexistent|non-existent|(?:does|do)\s+not\s+exist|"
     r"errors?\s+(?:response|member|message|code|status|object|output)s?|(?:an|the|JSON)\s+error)\b",
     re.IGNORECASE)
 
@@ -10793,12 +10827,16 @@ class Session:
         if (not self.config.requirements_ledger or not self.memory.ledger.requirements or self._explicit_tasks is not None
                 or not self.project or not self.config.allow_writes or scope is None or scope.review_only or not covers):
             return ""
+        if scope.proofs is None and all(self._test_command_requirement(r) for r in covers):
+            # Every covered requirement is a test command's pass: the
+            # harness's receipt is its evidence (_TEST_COMMAND_RULE).
+            return ""
         if scope.proofs is None:
             return ('The task declares no proof scenarios: add "proofs": [{"id": "P1", "requirements": ["R<n>"], '
                     '"operation": ..., "state": ..., "expect": ..., "location": ...}, ...] to SCOPE, mapping every '
                     f"requirement in COVERS ({', '.join(covers)}).")
         named = {r for p in scope.proofs for r in p["requirements"]}
-        missing = [r for r in covers if r not in named]
+        missing = [r for r in covers if r not in named and not self._test_command_requirement(r)]
         extra = sorted(r for r in named if r not in covers)
         if missing:
             return f"COVERS names {', '.join(missing)} but no proof scenario shows {'it' if len(missing) == 1 else 'them'}."
@@ -11082,6 +11120,12 @@ class Session:
                                             audit_asked=True, source=source, declaration=declaration,
                                             why=("DONE repeated over the same held requirements on this source"
                                                  if again else "no continuation is admissible")))
+        if final and self._explicit_tasks is None:
+            # The cap's final check reaches the same declaration route DONE
+            # does (cycle05 trial t7: an admission refusal at the cap went to
+            # the goal question and the final audit, and declaration-only
+            # debt was never offered to its owners).
+            self._declare_at_cap()
         if self._explicit_tasks is not None:
             self._note("requirements no listed task claimed, left unjudged: "
                        + ", ".join(self.explicit["requirements_unclaimed"]))
@@ -11145,6 +11189,21 @@ class Session:
         except ValueError:
             return None
         return argv or None
+
+    def _test_command_requirement(self, rid: str) -> bool:
+        """Whether a requirement's claim is that a named test command passes
+        (``_TEST_COMMAND_RULE``): the command its text names
+        (``_command_requirement``) is a test runner, python's unittest or
+        pytest, ``npm test`` or ``make test``. A requirement naming any other
+        command (a server, a CLI under test) is a behaviour and needs its
+        scenario."""
+        argv = self._command_requirement(rid) or []
+        if not argv:
+            return False
+        head = os.path.basename(argv[0])
+        if head == "pytest" or "pytest" in argv[1:3] or "unittest" in argv[1:3]:
+            return True
+        return head in ("npm", "make") and len(argv) > 1 and argv[1] == "test"
 
     @staticmethod
     def _command_key(argv) -> Tuple[str, ...]:
@@ -11371,7 +11430,7 @@ class Session:
             "states a condition the goal, a decision and a ruling do not, judge the goal's own "
             "condition and say so on the line ('wording stricter than the goal: <condition>'); a "
             "condition the goal does state is never relaxed this way. " + _AUTHORITY_ORDER + " "
-            + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE + " "
+            + _PROTOCOL_RULE + " " + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE + " "
             + "For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
@@ -16038,9 +16097,37 @@ class Session:
             # evidence, so the cap asks as before.
             return ""
         blocked = self._deterministic_blockers()
+        if blocked and self._explicit_tasks is None:
+            # Declaration-only debt is offered to its owners before the cap
+            # decides nothing could settle it (cycle05 trial t7).
+            self._declare_at_cap()
+            blocked = self._deterministic_blockers()
         if not blocked:
             return ""
         return "; ".join(f"{r}: {why[:200]}" for r, why in blocked.items())[:600]
+
+    def _declare_at_cap(self) -> None:
+        """The DONE declaration route at the task cap: the same plan, the
+        same one call per owner and decision, the same reserve pricing
+        against what is left after the held finish, no task slot. Kept on
+        ``done_gates`` with site ``cap`` when a call was made, or once per
+        source and reason when none could be."""
+        blocked = self._deterministic_blockers()
+        if not blocked:
+            return
+        declared, why = self._done_declarations(blocked)
+        source = self._source_fingerprint() if self.project else None
+        if declared is None:
+            if any(g.get("site") == "cap" and g.get("source") == source and g.get("declaration") == why
+                   for g in self.done_gates):
+                return
+            self.done_gates.append(dict(site="cap", blocked=dict(blocked), audit_asked=True, source=source,
+                                        declaration=why))
+            return
+        held = self._deterministic_blockers()
+        self.done_gates.append(dict(site="cap", blocked=dict(blocked), still_held=dict(held), audit_asked=True,
+                                    source=self._source_fingerprint() if self.project else None,
+                                    declaration=f"asked {', '.join(declared)}; still held: {', '.join(held) or 'none'}"))
 
     def _lower_unexecuted(self, found: dict) -> List[dict]:
         """Turn a MET into NOT MET where the record shows its acceptance did
@@ -19579,6 +19666,8 @@ class Session:
             parts.append(_AUTHORITY_ORDER + " " + _CONTRACT_BOUNDARY_RULE)
         if self._writes() and spec.scope and spec.scope.proofs:
             parts.append(TEST_SUBSTANCE_RULE)
+        if any(self._test_command_requirement(r) for r in getattr(self, "_current_covers", []) or []):
+            parts.append(_TEST_COMMAND_RULE)
         parts.append(worker_menu())
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
@@ -19919,13 +20008,14 @@ class Session:
                   "finding even when the task text omits it. It grants nothing: the task's permitted "
                   "paths, edits and commands bind as before, and a finding that needs a change outside "
                   "them stays open as a finding, never a reason to edit there. " + _AUTHORITY_ORDER + " "
-                + _CONTRACT_BOUNDARY_RULE
+                + _PROTOCOL_RULE + " " + _CONTRACT_BOUNDARY_RULE
                 + ("\n\nFor each covered requirement give one line 'R<n>: MET - <file>:<line>' naming "
                    "where the source meets every condition of it, including what it says must happen "
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
                    "finding. A review that leaves a covered requirement without such a line is recorded "
                    "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
                    "only by those lines. " + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE if covered else "")
+                + (" " + _TEST_COMMAND_RULE if any(self._test_command_requirement(r) for r, _ in covered) else "")
                 + (" " + _PROBE_RULE if covered and self._probe_applies(peer) else ""))
 
     def _probe_applies(self, key: str) -> bool:
@@ -20696,7 +20786,39 @@ class Session:
                 lines.append(f"- {record['fid']}: the planner's answer was: {route[len('scenario:'):].strip()}"
                              + (f" ({why[:300]})" if why else "") + ". The proof rows above show the scenario as it "
                              "now stands; judge the declared text, not the code, for this finding.")
+        lines += self._declaration_facts(records)
         return ("Harness routing facts for your findings:\n" + "\n".join(lines) + "\n\n") if lines else ""
+
+    def _declaration_facts(self, records: List[dict]) -> List[str]:
+        """For the recheck of a finding the harness routed to the lead's
+        binding declaration: what the lead declared after the revised work
+        the reviewer is shown, with its provenance, and what the harness's
+        own run on this exact source then showed (cycle05 trial t6: the
+        recheck saw only the revision, read P1's PROVES as absent and asked
+        for its truthful NOT RUN to be deleted). Facts only: the finding is
+        the reviewer's, nothing here resolves it, and a declaration on
+        another source is not shown."""
+        current = self._source_fingerprint() if self.project else None
+        out = []
+        for record in records:
+            for route in self.evidence_routes:
+                if (route.get("finding") != record["fid"] or not str(route.get("action", "")).startswith(
+                        "binding requested") or not route.get("declared") or route.get("source") != current):
+                    continue
+                ran = [f"execution {e}" + (f" (receipt {', '.join(rs)})" if rs else "")
+                       for e, rs in zip(route.get("execution_after") or [], route.get("receipts_after") or [], strict=False)]
+                out.append(
+                    f"- {record['fid']}: after the revised work below, the task's lead {route.get('author')} declared in "
+                    f"a read-only declaration call on this exact source"
+                    + (f" (artifact {route['declaration_artifact']})" if route.get("declaration_artifact") else "")
+                    + ": " + "; ".join(f"'{line}'" for line in route["declared"])
+                    + f". The harness then settled {route.get('proof_id')} against its own runs on this source: "
+                    + ("; ".join(ran) or "no execution recorded")
+                    + ". This declaration is the lead's current binding for that scenario; where the revised work "
+                    "says otherwise about it, the declaration is the later account. A NOT RUN or failure the revised "
+                    "work reports is the lead's own working copy, not the harness's approved execution shown here. "
+                    "Judge whether the declared case proves the scenario; your finding stays yours to settle.")
+        return out
 
     def _read_restatement(self, spec, record: dict, why: str) -> None:
         """A recheck's UNRESOLVED text that is a complete typed claim is the
@@ -20938,6 +21060,7 @@ class Session:
         source = self._source_fingerprint() if self.project else None
         before = {r["oid"]: (r.get("binding"), r.get("execution")) for r in self.evidence_obligations}
         outcome, reply = "", ""
+        declaration_artifact, kept = None, []
         if not lead:
             outcome = "not requested: no lead seat is known for this task"
         else:
@@ -20974,7 +21097,8 @@ class Session:
                 outcome = "not requested: refused to keep the finish"
             else:
                 task.record("assistant", f"[{lead}] {reply}")
-                task.keep(reply, kind="proof-binding", author=lead)
+                ref = task.keep(reply, kind="proof-binding", author=lead)
+                declaration_artifact = getattr(ref, "id", None)
                 kept, dropped = [], []
                 for match in _PROVES_ANY.finditer(reply or ""):
                     named = _PROVES_PID.match(match.group(1))
@@ -21003,7 +21127,9 @@ class Session:
                 cases=[c for r in rows for c in (after.get(r["oid"], {}).get("cases") or [])],
                 execution_before=[before.get(r["oid"], (None, None))[1] for r in rows],
                 execution_after=[after[r["oid"]].get("execution") for r in rows if r["oid"] in after],
-                source=source))
+                receipts_after=[list(after[r["oid"]].get("receipts") or []) for r in rows if r["oid"] in after],
+                declared=[line for line in kept if (m := _PROVES_PID.match(line.split(":", 1)[1])) and m.group(1) == pid],
+                declaration_artifact=declaration_artifact, source=source))
             self._note(f"task {spec.task_id}: {record['fid']} ({pid} binds no case) went to {lead}'s binding "
                        f"declaration: {outcome}; {record['author']} rechecks it")
 

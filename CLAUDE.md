@@ -3122,6 +3122,32 @@ Key design decisions already settled:
     allowance, a refusal or a provider failure leaves the omission as it was;
     nothing is inferred from a requirement's MET. The audit record keeps
     `reply_artifact`, `required`, `omitted` and `completion`.
+  - *Trial corrections* (root's assessment of 20261108T050923Z-c63988ae,
+    PR73 6718066718).
+    - A recheck after a binding declaration is told, as a routing fact
+      (`_declaration_facts`), what the lead declared after the revised work,
+      the declaration artifact, the source, and the harness's execution
+      with its receipt on that source. It says that a NOT RUN in the revised
+      work is the lead's own copy, and that the finding stays the reviewer's.
+      The t6 recheck saw only the revision and asked for a truthful NOT RUN
+      to be deleted.
+    - A requirement whose whole claim is that a named test command passes
+      (`_test_command_requirement`: unittest, pytest, `npm test`,
+      `make test`) needs no proof scenario (`_TEST_COMMAND_RULE`, stated to
+      the planner, and to the lead and reviewers that cover one). The
+      harness's exact receipt is cited and the audit judges it. It stays NOT
+      MET when no configured check runs the command. t5/t6 built a test that
+      ran the suite inside itself.
+    - The task cap reaches the declaration route (`_declare_at_cap`) before
+      it skips the goal question as known incomplete, and before the final
+      audit. It uses the same plan, decision accounting and pricing, with no
+      slot. Records go on `done_gates` with site `cap`.
+    - `_ERROR_CLAUSE` reads a returned 4xx/5xx status and "does not exist"
+      as error language, so an unknown-ID 404 requirement reaches the 2**63
+      boundary candidate. The review lens names a value one layer accepts
+      and a later one cannot represent. `_PROTOCOL_RULE` (audit and review)
+      reads requirements under the named protocol's semantics, for example
+      no body on HEAD.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
