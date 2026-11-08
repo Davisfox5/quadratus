@@ -99,7 +99,8 @@ def test_an_audit_not_met_requirement_in_resolves_is_the_covers_route_and_is_rec
     assert covers == ["R17"] and resolves is None, spec.description
     assert session._resolves_problem(resolves, covers, spec) == ""
     (note,) = session.resolves_normalized
-    assert note == dict(task="t7", written="R17 (audit)", moved_to_covers=["R17"], annotations=["(audit)"], kept=[])
+    assert note == dict(task="t7", written="R17 (audit)", moved_to_covers=["R17"], annotations=["(audit)"], kept=[],
+                        closed_dropped=[])
     # An existing COVERS keeps its ids and gains the moved one once.
     spec = session._normalize_resolves(_spec("Fix it.\nCOVERS: R1, R17\nRESOLVES: R17, R17 (audit)"))
     assert _read_covers(spec)[0] == ["R1", "R17"] and _read_resolves(spec)[0] is None

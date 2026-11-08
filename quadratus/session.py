@@ -623,8 +623,10 @@ _TEST_COMMAND_RULE = (
     "A requirement whose whole claim is that a named test command passes (python -m unittest, "
     "pytest, npm test, make test) needs no scenario: the harness's own complete passing run of "
     "exactly that command on the delivered source is cited for it and the independent audit judges "
-    "it, and it stays not met when the configured checks do not run that command. Never write a "
-    "test that runs the test suite or that command.")
+    "it, and it stays not met when the configured checks do not run that command. A clause naming "
+    "which tests that run includes ('including every test in tests/test_x.py and the new tests') "
+    "is part of the same claim, shown by that receipt's own executed cases from those files; it "
+    "needs no scenario either. Never write a test that runs the test suite or that command.")
 
 _SCOPE_REQUEST = (
     'After KIND, include exactly one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
@@ -2275,6 +2277,66 @@ _RUNNER_VALUED = {
     "pytest": frozenset({"-k", "-m", "-p", "-c", "-o", "--rootdir", "--maxfail", "--deselect", "--ignore",
                          "--confcutdir", "--basetemp"}),
 }
+
+
+#: A clause that says which tests a command's run includes (cycle10 run
+#: 20261108T163004Z R1: "... passes on the delivered source, including every
+#: test in tests/test_existing.py and new feature tests"). Read by grammar,
+#: never by a vocabulary of accepted words (``_population_clause``).
+_POPULATION_INTRO = re.compile(r"[,;]?\s*\b(?:including|covering)\b", re.IGNORECASE)
+#: The head nouns of a test population: the item names tests, never a behaviour.
+_POPULATION_HEADS = frozenset({"test", "tests", "case", "cases", "suite", "suites", "file", "files", "module",
+                               "modules"})
+_POPULATION_LOCATIVES = frozenset({"in", "from", "under"})
+#: The one reading of a population's age: tests the run itself added.
+_POPULATION_ADDED = frozenset({"new", "added"})
+
+
+def _population_path(token: str) -> bool:
+    return "/" in token or bool(re.search(r"\.[A-Za-z]\w*$", token))
+
+
+def _population_clause(text: str) -> Tuple[str, Optional[List[dict]]]:
+    """Split a test-command requirement's text after the command into the
+    run-and-pass part and its population clause: ``(before, items)``, items
+    None when there is no clause and [] when one is there but does not
+    parse. Each item is a noun phrase whose last word before an optional
+    ``in|from|under <path>`` is a test noun (test, case, suite, file,
+    module) with at most four words before it, or a bare test path; the
+    item is ``{paths, added, text}``. "tests for malformed JSON", "tests
+    that check refunds" and anything else after the head make the clause
+    a behaviour, which keeps its scenario. ``added`` is true when the
+    phrase says the tests are new or added: the run's own test files."""
+    match = _POPULATION_INTRO.search(text)
+    if match is None:
+        return text, None
+    before, clause = text[:match.start()], text[match.end():]
+    clause = clause.strip().rstrip(".;:!")
+    if not clause:
+        return before, []
+    parts = [p.strip() for p in re.split(r",|\band\b", clause) if p.strip()]
+    items = []
+    for part in parts:
+        tokens = [t.strip("`'\"()") for t in part.split()]
+        tokens = [t.rstrip(",.;:") for t in tokens if t]
+        paths = [t for t in tokens if _population_path(t)]
+        if tokens and all(_population_path(t) for t in tokens):
+            items.append(dict(paths=paths, added=False, text=part))
+            continue
+        heads = [i for i, t in enumerate(tokens) if t.lower() in _POPULATION_HEADS]
+        if not heads:
+            return before, []
+        head = heads[-1]
+        tail = tokens[head + 1:]
+        if tail and not (tail[0].lower() in _POPULATION_LOCATIVES and len(tail) > 1
+                         and all(_population_path(t) for t in tail[1:])):
+            return before, []
+        modifiers = tokens[:head]
+        if len(modifiers) > 4 or any(not re.fullmatch(r"[A-Za-z][\w-]*", m) for m in modifiers):
+            return before, []
+        items.append(dict(paths=[t for t in tail[1:]], added=any(m.lower() in _POPULATION_ADDED for m in modifiers),
+                          text=part))
+    return before, items
 
 
 def _command_words(words) -> List[str]:
@@ -10177,6 +10239,7 @@ class Session:
         parsed = []
         for spec in specs:
             continues, spec = _read_continues(spec)
+            spec = self._normalize_resolves(spec)
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers) or self._proof_problem(spec, covers)
             if continues is not None:
@@ -11326,11 +11389,23 @@ class Session:
         uncovered = [r for r in ledger.requirements
                      if r in claimed and not status.get(r, "").startswith(("covered", "met"))]
         if uncovered:
+            # A pure test-command claim needs no scenario, only the harness's
+            # receipt: say exactly what that receipt lacks, so the repair is
+            # the missing run or tests, not a task re-covering the claim
+            # (cycle10: R1's population clause).
+            receipts = []
+            for rid in uncovered:
+                if self._test_command_requirement(rid) and not status.get(rid, "").startswith("NOT MET"):
+                    _receipt, why = self._command_receipt_citation(rid)
+                    if why:
+                        receipts.append(f"- {rid}: {why[:300]}")
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nThese requirements are not covered by any finished "
                 f"task: {', '.join(uncovered)} (never covered, or found not met by the audit and not "
                 "covered again since). Name a task for them (with COVERS), or explain in the task "
-                "why one cannot be done.")
+                "why one cannot be done."
+                + ("\nTest-command requirements need no scenario; the harness's receipt of the named command "
+                   "covers them once it shows what is missing below:\n" + "\n".join(receipts) if receipts else ""))
             self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
             return False
         if not final and self._explicit_tasks is None:
@@ -11518,8 +11593,67 @@ class Session:
             if text.count(phrase) != 1:
                 return False
             rest = text.replace(phrase, " ")
+        rest, population = _population_clause(rest)
+        if population is not None and not population:
+            return False
         words = re.findall(r"[a-z0-9']+", rest.lower())
         return bool(words) and all(w.removesuffix("'s") in _PASS_ONLY_WORDS for w in words)
+
+    def _command_population(self, rid: str) -> Optional[List[dict]]:
+        """The test population a pure test-command requirement says its run
+        includes (``_population_clause``), or None when it names none."""
+        text = str(self.memory.ledger.requirements.get(rid) or "")
+        ticked = re.findall(r"`([^`\n]+)`", text)
+        argv = self._command_requirement(rid) or []
+        rest = text.replace(f"`{ticked[0]}`", " ") if ticked else text.replace(" ".join(argv), " ")
+        return _population_clause(rest)[1] or None
+
+    def _population_problem(self, rid: str, run: dict) -> str:
+        """Why one receipt's run does not show the population ``rid`` names,
+        or "" (cycle10). The run's own executed case identities decide
+        (``_run_passed_cases``: the harness's report, pytest node ids, the
+        unittest producer's file ids), never the command line: a named path
+        must exist and show a passed case; the new tests are the test files
+        the run added since run start, at least one, each with a passed
+        case; any other phrase is read as every test file in the project,
+        the superset that includes it. A run with no case identity shows no
+        population."""
+        population = self._command_population(rid)
+        if not population:
+            return ""
+        from .integration import _test_family
+        from .project import Project
+        files = {name.partition("::")[0] for name in _run_passed_cases(run)}
+        if not files:
+            return "its run names no executed case files, so the tests it included are not shown"
+        try:
+            current = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- unknown is not shown
+            return "the current source could not be read to find the named tests"
+        tests = sorted(n for n in current if _test_family(n))
+        added = sorted(n for n in tests if self._original_tests is not None and n not in self._original_tests)
+        missing = []
+        for item in population:
+            if item["paths"]:
+                for path in item["paths"]:
+                    path = path[2:] if path.startswith("./") else path.rstrip("/")
+                    named = [t for t in tests if t == path or t.startswith(path + "/")]
+                    if not named:
+                        missing.append(f"{path} is not a test file on the current source")
+                    missing += [f"no executed case from {t}" for t in named if t not in files]
+            elif item["added"]:
+                if self._original_tests is None:
+                    missing.append(f"which tests are new is unknown ({item['text'][:60]})")
+                elif not added:
+                    missing.append(f"the run added no test file ({item['text'][:60]})")
+                missing += [f"no executed case from {t} (added by the run)" for t in added if t not in files]
+            else:
+                missing += [f"no executed case from {t}" for t in tests if t not in files]
+        missing = list(dict.fromkeys(missing))
+        if not missing:
+            return ""
+        return "it does not show the tests the requirement names: " + "; ".join(missing[:6]) + (
+            f" and {len(missing) - 6} more" if len(missing) > 6 else "")
 
     def _test_command_extra_words(self, rid: str) -> List[str]:
         """For a requirement that names exactly one runner-shaped command but
@@ -11532,6 +11666,9 @@ class Session:
         if not argv or not _test_runner_shape(argv) or len(ticked) > 1 or self._test_command_requirement(rid):
             return []
         rest = text.replace(f"`{ticked[0]}`", " ") if ticked else text.replace(" ".join(argv), " ")
+        before, population = _population_clause(rest)
+        if population:
+            rest = before
         return list(dict.fromkeys(w for w in re.findall(r"[a-z0-9']+", rest.lower())
                                   if w.removesuffix("'s") not in _PASS_ONLY_WORDS))
 
@@ -11629,6 +11766,10 @@ class Session:
                     reasons.append("it ran from another directory, not the project root")
                 if not (run["tests"] or 0) > 0:
                     reasons.append("it executed no cases")
+                elif self._test_command_requirement(rid):
+                    population = self._population_problem(rid, run)
+                    if population:
+                        reasons.append(population)
                 if run["skipped"] is None:
                     reasons.append("its skips are unknown")
                 elif run["skipped"] > 0:
@@ -18579,12 +18720,19 @@ class Session:
                     and str(ledger.requirement_status.get(token) or "").startswith("NOT MET")
                     and not self._open_findings_for(token) and token not in moved):
                 moved.append(token)
-        if not moved and not dropped:
+        # A finding the registry holds closed is no longer resolvable: the
+        # id is dropped and recorded, and the task stands or falls on its
+        # COVERS and ordinary admission. Nothing reopens it (cycle10: the
+        # planner was shown a frozen close-out listing RFT4-14 unresolved).
+        closed_reviews = {r["fid"] for r in self.review_findings if r.get("closed")}
+        closed_audit = {f["id"] for f in self.findings if f.get("status") not in (None, "open")}
+        closed = [t for t in dict.fromkeys(tokens) if t in closed_reviews or t in closed_audit]
+        if not moved and not dropped and not closed:
             return spec
-        kept = [t for t in tokens if t not in moved]
+        kept = [t for t in tokens if t not in moved and t not in closed]
         # A line left with no id is kept empty, so it is refused as naming
         # none; one whose ids all moved is gone.
-        line = ("RESOLVES: " + ", ".join(kept)) if kept else ("" if moved else "RESOLVES:")
+        line = ("RESOLVES: " + ", ".join(kept)) if kept else ("" if moved or closed else "RESOLVES:")
         body = text[:match.start()] + line + text[match.end():]
         if moved:
             cover = _COVERS.search(body)
@@ -18595,9 +18743,12 @@ class Session:
             else:
                 body = body.rstrip() + "\nCOVERS: " + ", ".join(moved)
         self.resolves_normalized.append(dict(task=spec.task_id, written=raw.strip()[:300], moved_to_covers=moved,
-                                             annotations=[d[:80] for d in dropped], kept=kept))
+                                             annotations=[d[:80] for d in dropped], kept=kept,
+                                             closed_dropped=closed))
         self._note(f"{spec.task_id}: RESOLVES read by typed ids"
                    + (f"; {', '.join(moved)} (held NOT MET by the audit) moved to COVERS" if moved else "")
+                   + (f"; {', '.join(closed)} already closed on the registry, dropped (not reopened)"
+                      if closed else "")
                    + (f"; annotation(s) {', '.join(dropped)} dropped" if dropped else ""))
         return replace(spec, description=body.strip())
 
@@ -18697,6 +18848,36 @@ class Session:
                 "paths the repair needs, or name the task again as written to proceed (sent back once).")
 
     def _findings_prompt(self) -> str:
+        return self._open_findings_prompt() + self._closed_findings_note()
+
+    def _closed_findings_note(self) -> str:
+        """The findings the registry holds closed now, by id, with their
+        judge (cycle10 run 20261108T163004Z: t4's close-out, frozen in the
+        append-only ledger, listed RFT4-14 as unresolved; the post-merge
+        recheck closed it; the planner prompt carried only the close-out,
+        and two tasks naming it were refused as already resolved until the
+        correction allowance stopped the run). The ledger stays as written:
+        this block is the current disposition, and says so."""
+        if not (self.config.requirements_ledger and self.memory.ledger.requirements):
+            return ""
+        closed = [f"{r['fid']}: {str(r.get('state') or 'closed').upper()} by "
+                  f"{((r.get('history') or [{}])[-1] or {}).get('author') or 'unknown'}"
+                  for r in self.review_findings if r.get("closed")]
+        closed += [f"{f['id']}: resolved by {f.get('resolved_by') or 'unknown'}" for f in self.findings
+                   if f.get("status") not in (None, "open")]
+        if not closed:
+            return ""
+        shown = closed[-20:]
+        return ("\n\n--- FINDINGS CLOSED NOW (the registry, current) ---\n"
+                "These findings are closed on the registry as of this prompt. A close-out or ledger entry "
+                "above that lists one of them as unresolved or open is history from when that task closed. "
+                "RESOLVES names only open findings; a task still needed for a closed finding's area is "
+                "ordinary work under COVERS, and a RESOLVES naming a closed id has that id dropped and is "
+                "recorded, never reopened.\n"
+                + ("" if len(closed) <= 20 else f"({len(closed) - 20} earlier closed ids not shown.)\n")
+                + "\n".join(f"- {line}" for line in shown))
+
+    def _open_findings_prompt(self) -> str:
         opened = [f for f in self.findings if f["status"] == "open"]
         # Review ids are named only where RESOLVES can take them (the
         # requirements ledger on) and their claims are shown (the
@@ -20951,8 +21132,32 @@ class Session:
 
     def _finding_lines(self, records: List[dict]) -> str:
         """Each finding by id, in the reviewer's own words (the whole line as
-        written, basis and impact segments included)."""
-        return "\n".join(f"- {r['fid']}: {r.get('text') or r['claim']}" for r in records)
+        written, basis and impact segments included), and, where its author's
+        latest judgment kept it open with a reason, that reason as written:
+        the question still standing (cycle10 run 20261108T163004Z: RFT4-14's
+        penultimate recheck said the CLI test did not isolate transitive
+        conflicts and asked for indirect-only cases; the post-merge recheck
+        was shown only the original claim about missing scenarios and closed
+        it on a generic citation). Which answer suffices stays the
+        reviewer's; the harness only keeps the question in front of it."""
+        lines, standing = [], False
+        current = self._source_fingerprint() if self.project else None
+        for r in records:
+            lines.append(f"- {r['fid']}: {r.get('text') or r['claim']}")
+            latest = next((h for h in reversed(r.get("history") or ()) if h.get("state") != "unjudged"), None)
+            if (latest and latest.get("state") == delivery.UNRESOLVED and latest.get("author") == r.get("author")
+                    and str(latest.get("why") or "").strip()):
+                digest = str(latest.get("source_digest") or "")
+                where = ("on this same source" if current and digest == current else
+                         "on an earlier source" if digest else "on an unrecorded source")
+                lines.append(f"  your latest judgment ({latest.get('role')}, {where}) kept it open: "
+                             f"{str(latest['why']).strip()[:1200]}")
+                standing = True
+        if standing:
+            lines.append("Where your latest judgment kept a finding open with a reason, that reason is the question "
+                         "still standing: a RESOLVED line answers it, naming the executed case or file that now shows "
+                         "what you said was missing; otherwise the finding stays UNRESOLVED.")
+        return "\n".join(lines)
 
     def _apply_review_reading(self, spec, peer: str, role: str, reading, binding_before: dict, *,
                               call: str = "") -> List[dict]:

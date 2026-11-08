@@ -3302,6 +3302,46 @@ Key design decisions already settled:
     refused DONE first and `done_declarations` stayed empty. The plan's own
     rules decide as before: a mixed set with editing debt asks nobody, and
     nothing is met without the audit.
+- **The planner sees the registry as it is now, a recheck sees the question
+  still standing, and a population clause is part of a command claim**
+  (cycle10 run 20261108T163004Z, PR73 6724518561).
+  - *Current dispositions* (`_closed_findings_note`). t4's close-out, frozen
+    in the append-only ledger, listed RFT4-14 as unresolved. The post-merge
+    recheck then closed it, but the planner prompt still carried only the
+    close-out. t5 and t6 named the id in RESOLVES, were refused as "already
+    resolved", and the shared correction allowance stopped the run with
+    three slots left.
+    - The ledger stays as written. The findings section now ends with the
+      findings the registry holds closed, with their judge, labelled as
+      current, with the close-outs above labelled as history.
+    - `_normalize_resolves` drops a closed id (review or audit) from
+      RESOLVES and records it (`closed_dropped`). The task then stands on
+      its COVERS and ordinary admission; nothing reopens and nothing is
+      judged.
+    - An unknown id is never dropped. The same reading runs in a parallel
+      batch.
+  - *The question still standing* (`_finding_lines`). RFT4-14's author kept
+    it open at its penultimate recheck with a concrete counterexample (no
+    indirect-only case). The post-merge recheck packet showed only the
+    original claim, and it closed on a generic citation.
+    - Every recheck packet (in-task, settlement, post-merge) now carries the
+      author's latest UNRESOLVED reason, with whether it was made on this
+      source or an earlier one, and says a RESOLVED answers it.
+    - What answers it stays the reviewer's. The history keeps both
+      judgments, and an adverse verdict binds as before.
+  - *Population clauses* (`_population_clause`, `_population_problem`). An
+    "including …" clause after a test-command claim is read by grammar.
+    - Its items are noun phrases headed by a test noun (test, case, suite,
+      file, module), optionally "in <path>", or bare test paths. "tests for
+      malformed JSON" or "tests that check …" stay behaviours with
+      scenarios.
+    - Such a requirement needs no scenario. The receipt covers it only when
+      that receipt's own executed case identities show every named file,
+      every test file the run added for "new"/"added" tests (at least one),
+      or every test file in the project for any other phrase, as a superset.
+    - A run with no case identity shows nothing. A missing file, no added
+      test, or an unexecuted file stays debt, and the DONE refusal names
+      exactly what the receipt lacks.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
