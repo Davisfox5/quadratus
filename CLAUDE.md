@@ -3337,8 +3337,24 @@ Key design decisions already settled:
       scenarios.
     - Such a requirement needs no scenario. The receipt covers it only when
       that receipt's own executed case identities show every named file,
-      every test file the run added for "new"/"added" tests (at least one),
-      or every test file in the project for any other phrase, as a superset.
+      every new test case for "new"/"added" tests (at least one), or every
+      test file in the project for any other phrase, as a superset.
+    - New tests are new cases, not new files (root review of c653d94, PR73
+      6725376982: a case appended to an existing test file was refused as
+      "the run added no test file"). `_new_case_problems` reads the cases each
+      Python test file defines (`_python_case_defs`, static) at run start
+      (`_original_tests`) and now:
+      - a name a file did not define at run start is new;
+      - a name whose body is that of a run-start case now gone from its
+        file is that test renamed, not new;
+      - each new case must be among the receipt's executed ids;
+      - a changed file whose cases cannot be read (not Python, or not
+        parseable) is named as unknown;
+      - changed bytes alone are not a new test.
+    - A Markdown code span is a command only when it starts with a runner
+      (`_command_rest`). A backticked path beside a backticked command is a
+      path; two command spans, or a command span beside an unquoted second
+      command, are refused.
     - A run with no case identity shows nothing. A missing file, no added
       test, or an unexecuted file stays debt, and the DONE refusal names
       exactly what the receipt lacks.

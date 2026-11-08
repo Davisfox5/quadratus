@@ -251,6 +251,12 @@ R1 = ("python3 -m unittest discover -s tests passes on the delivered source, inc
     ("`pytest -q` passes, including", False),
     ("`python -m pytest -k refunds` passes, including every test", False),
     ("`pytest -q` passes and refunds are atomic, including new tests", False),
+    # Cycle11 review: a backticked path is a path, not a second command.
+    ("`pytest -q` passes, including every test in `tests/test_existing.py` and new feature tests.", True),
+    ("`pytest -q` and `npm test` pass", False),
+    ("`pytest -q` passes and npm test passes", False),
+    ("`pytest -q` passes, including tests for `POST /refund` returning 400", False),
+    ("`pytest -q tests/test_a.py -k refunds` passes, including `tests/test_a.py`", False),
 ])
 def test_a_population_clause_is_read_by_grammar(tmp_path, text, pure):
     from types import SimpleNamespace
@@ -269,15 +275,18 @@ def test_the_cycle10_r1_population_is_its_named_file_and_the_runs_added_tests(tm
 
 SUITE = "`python -m pytest -q` passes on the delivered source, including every test in tests/test_app.py and the new tests"
 NEW_TEST = "from app import add\n\n\ndef test_negatives():\n    assert add(-1, -2) == -3\n"
+#: The run-start test file with one more case appended (cycle11 review).
+APPENDED = FILES["tests/test_app.py"] + "\n\ndef test_new_feature():\n    assert add(-1, -2) == -3\n"
 
 
-def _population_run(tmp_path, monkeypatch, name, suite, *, new_test):
+def _population_run(tmp_path, monkeypatch, name, suite, *, new_test=False, tests=None):
     scope = _scope(proofs=_proofs("R1"))
     scope["permitted_paths"].append("tests/test_new.py")
     plan = _plan(scope, requirements=f"R1: add(a, b) returns the sum\nR2: {suite}")
 
     def lead(call, replay):
-        files = {"app.py": FIXED, **({"tests/test_new.py": NEW_TEST} if new_test else {})}
+        files = {"app.py": FIXED, **({"tests/test_new.py": NEW_TEST} if new_test else {}),
+                 **({"tests/test_app.py": tests} if tests is not None else {})}
         H.write(call, files)
         return f"Implemented add.\nPROVES: P1 - {CASE}\nCHANGED: {json.dumps(sorted(files))}"
     auditor = judging_scenarios(lambda c, r: f"R1: MET - {CASE}\nR2: MET - the harness's own complete run of that "
@@ -298,8 +307,17 @@ def test_a_population_the_receipt_shows_is_covered_for_the_audit_with_no_task(tm
     assert replay.result.completed, replay.result.error
 
 
+def test_a_new_case_appended_to_an_existing_test_file_is_a_new_test(tmp_path, monkeypatch):
+    """Cycle11 review: c653d94 refused this as "the run added no test file"."""
+    replay = _population_run(tmp_path, monkeypatch, "appended", SUITE, tests=APPENDED)
+    record = H.result_json(replay)
+    (cover,) = record["receipt_coverage"]
+    assert cover["requirement"] == "R2"
+    assert [c.task for c in replay.of("lead")] == ["t1"] and replay.result.completed, replay.result.error
+
+
 @pytest.mark.parametrize("suite, missing", [
-    (SUITE, "the run added no test file (the new tests)"),
+    (SUITE, "the run added no test case (the new tests)"),
     ("`python -m pytest -q` passes on the delivered source, including every test in tests/test_gone.py",
      "tests/test_gone.py is not a test file on the current source"),
 ])
@@ -312,3 +330,69 @@ def test_a_population_the_receipt_does_not_show_stays_debt_and_names_what_is_mis
     assert refusals and missing in refusals[0], refusals[:1]
     assert not record["requirements"]["status"].get("R2", "").startswith("met"), "no MET without the population"
     assert not replay.result.completed
+
+
+# -- C (cycle11 review). new tests are new cases, read from run-start and current source ------------
+
+OLD = "from app import add\n\n\ndef test_old():\n    assert add(1, 2) == 3\n"
+
+
+def _cases(tmp_path, files, passed, *, start=None):
+    """A session over a real project, ``start`` as the run-start test bytes,
+    and a run whose executed ids are ``passed``."""
+    project = tmp_path / "p"
+    for path, text in files.items():
+        (project / path).parent.mkdir(parents=True, exist_ok=True)
+        (project / path).write_text(text)
+    session = _session(project, {"R1": "`pytest -q` passes, including every test in `tests/test_existing.py` and "
+                                       "new feature tests."})
+    session._original_tests = None if start is False else {
+        k: v.encode() for k, v in (start if start is not None else {"tests/test_existing.py": OLD}).items()}
+    run = dict(cwd=".", report_cases=list(passed), qualified_names=set(), executed_names={})
+    return session, run
+
+
+@pytest.mark.parametrize("name, files, passed, start, problem", [
+    ("new case in the same file",
+     {"tests/test_existing.py": OLD + "\n\ndef test_new_feature():\n    assert add(-1, -2) == -3\n"},
+     ["tests/test_existing.py::test_old", "tests/test_existing.py::test_new_feature"], None, ""),
+    ("new case in a new file",
+     {"tests/test_existing.py": OLD, "tests/test_new.py": NEW_TEST},
+     ["tests/test_existing.py::test_old", "tests/test_new.py::test_negatives"], None, ""),
+    ("parametrized new case",
+     {"tests/test_existing.py": OLD + "\n\nimport pytest\n\n@pytest.mark.parametrize('x', [1])\n"
+                                      "def test_new_feature(x):\n    assert add(x, 0) == x\n"},
+     ["tests/test_existing.py::test_old", "tests/test_existing.py::test_new_feature[1]"], None, ""),
+    ("no new case", {"tests/test_existing.py": OLD}, ["tests/test_existing.py::test_old"], None,
+     "the run added no test case"),
+    ("changed bytes, no new case", {"tests/test_existing.py": OLD + "\n# a comment\n"},
+     ["tests/test_existing.py::test_old"], None, "the run added no test case"),
+    ("an old test renamed", {"tests/test_existing.py": OLD.replace("test_old", "test_new_feature")},
+     ["tests/test_existing.py::test_new_feature"], None, "renames a run-start test"),
+    ("a new case not executed",
+     {"tests/test_existing.py": OLD + "\n\ndef test_new_feature():\n    assert add(-1, -2) == -3\n"},
+     ["tests/test_existing.py::test_old"], None, "new case tests/test_existing.py::test_new_feature was not executed"),
+    ("an unreadable changed file",
+     {"tests/test_existing.py": OLD, "tests/ui.test.js": "test('x', () => {})\n"},
+     ["tests/test_existing.py::test_old"], {"tests/test_existing.py": OLD, "tests/ui.test.js": "\n"},
+     "which cases are new in tests/ui.test.js cannot be read"),
+    ("no run-start record", {"tests/test_existing.py": OLD}, ["tests/test_existing.py::test_old"], False,
+     "the run-start tests were not recorded"),
+])
+def test_new_tests_are_new_case_identities_shown_executed(tmp_path, name, files, passed, start, problem):
+    session, run = _cases(tmp_path, files, passed, start=start)
+    got = session._population_problem("R1", run)
+    assert (problem in got) if problem else got == "", (name, got)
+
+
+def test_an_unknown_finding_survives_closed_normalization_and_a_mixed_claim_keeps_its_scenario(tmp_path):
+    from types import SimpleNamespace
+
+    from quadratus.session import _read_resolves
+    session = _registry(tmp_path)
+    resolves, _spec_ = _read_resolves(session._normalize_resolves(_spec("x\nCOVERS: R22\nRESOLVES: RFT4-14, RFT8-2")))
+    assert resolves == ["RFT8-2"]
+    session.memory.ledger.requirements["R30"] = ("`pytest -q` passes, including every test in `tests/test_a.py`, "
+                                                 "and refunds are atomic")
+    spec = SimpleNamespace(scope=SimpleNamespace(proofs=None, review_only=False), task_id="t5")
+    assert "declares no proof scenarios" in session._proof_problem(spec, ["R30"])

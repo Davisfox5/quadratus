@@ -2339,6 +2339,58 @@ def _population_clause(text: str) -> Tuple[str, Optional[List[dict]]]:
     return before, items
 
 
+#: A runner at the start of a command span (``Session._command_requirement``).
+_RUNNER_SPAN = r"(?:[\w./~-]*/)?(?:python3?|pytest|npm|npx|node|make)"
+
+
+def _command_rest(text: str, argv) -> Optional[str]:
+    """A requirement's text with its one command taken out, every other
+    Markdown code span read as the plain text it marks, or None when the text
+    holds more than one command span or the command cannot be found exactly
+    once (cycle11 review, PR73 6725376982: "`pytest -q` passes, including every
+    test in `tests/test_existing.py` ..." was refused as two commands). A code
+    span is a command only when it starts with a runner; a path, a name or any
+    other span is ordinary text for the reader that follows."""
+    ticked = re.findall(r"`([^`\n]+)`", text)
+    commands = [t for t in ticked if re.match(r"\s*" + _RUNNER_SPAN + r"\b", t)]
+    if len(commands) > 1:
+        return None
+    if commands:
+        span = f"`{commands[0]}`"
+        if text.count(span) != 1:
+            return None
+        rest = text.replace(span, " ")
+    else:
+        phrase = " ".join(argv or ())
+        plain = re.sub(r"`([^`\n]+)`", r"\1", text)
+        if not phrase or plain.count(phrase) != 1:
+            return None
+        rest = plain.replace(phrase, " ")
+    return re.sub(r"`([^`\n]+)`", r"\1", rest)
+
+
+def _python_case_defs(data) -> Optional[Dict[str, str]]:
+    """The test cases a Python test file defines, ``name`` or
+    ``Class::method`` (nested classes joined by ``::``), each with a dump of
+    its body; None when the file cannot be parsed. Static: a case generated
+    at run time has no entry here."""
+    import ast
+    try:
+        tree = ast.parse(data.decode("utf-8") if isinstance(data, bytes) else str(data))
+    except (SyntaxError, UnicodeDecodeError, ValueError):
+        return None
+    out: Dict[str, str] = {}
+
+    def walk(nodes, prefix):
+        for node in nodes:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                out["::".join(prefix + [node.name])] = ast.dump(ast.Module(body=node.body, type_ignores=[]))
+            elif isinstance(node, ast.ClassDef):
+                walk(node.body, prefix + [node.name])
+    walk(tree.body, [])
+    return out
+
+
 def _command_words(words) -> List[str]:
     """The leading words of an unquoted phrase that are the command itself:
     the runner (``python -m <module>`` counts as one), then only operands a
@@ -11542,7 +11594,7 @@ class Session:
         import shlex
         text = str(self.memory.ledger.requirements.get(rid) or "")
         ticked = re.findall(r"`([^`\n]+)`", text)
-        runner = r"(?:[\w./~-]*/)?(?:python3?|pytest|npm|npx|node|make)"
+        runner = _RUNNER_SPAN
         phrase = next((t for t in ticked if re.match(r"\s*" + runner + r"\b", t)), None)
         if phrase is None:
             match = re.search(r"(?<![\w./-])(" + runner + r"\b[^;\n`]*)", text)
@@ -11583,16 +11635,9 @@ class Session:
         argv = self._command_requirement(rid) or []
         if not argv or not _test_runner_shape(argv):
             return False
-        ticked = re.findall(r"`([^`\n]+)`", text)
-        if ticked:
-            if len(ticked) != 1:
-                return False
-            rest = text.replace(f"`{ticked[0]}`", " ")
-        else:
-            phrase = " ".join(argv)
-            if text.count(phrase) != 1:
-                return False
-            rest = text.replace(phrase, " ")
+        rest = _command_rest(text, argv)
+        if rest is None:
+            return False
         rest, population = _population_clause(rest)
         if population is not None and not population:
             return False
@@ -11603,10 +11648,45 @@ class Session:
         """The test population a pure test-command requirement says its run
         includes (``_population_clause``), or None when it names none."""
         text = str(self.memory.ledger.requirements.get(rid) or "")
-        ticked = re.findall(r"`([^`\n]+)`", text)
-        argv = self._command_requirement(rid) or []
-        rest = text.replace(f"`{ticked[0]}`", " ") if ticked else text.replace(" ".join(argv), " ")
-        return _population_clause(rest)[1] or None
+        rest = _command_rest(text, self._command_requirement(rid) or [])
+        return (_population_clause(rest)[1] or None) if rest is not None else None
+
+    def _new_case_problems(self, tests, current: dict, passed: set, text: str) -> List[str]:
+        """What a receipt lacks for "the new tests" (cycle11 review, PR73
+        6725376982: a new case appended to an existing test file was refused
+        as "the run added no test file"). New tests are new test cases, read
+        from the run-start bytes (``_original_tests``) and the current source:
+        a case name a test file did not define at run start, in a new or a
+        changed file. A case whose body is that of a run-start case now gone
+        from its file is the old test renamed, never new. Each new case must
+        appear among the receipt's executed ids; at least one must exist. A
+        changed test file whose cases cannot be read (not Python, or not
+        parseable) leaves which cases are new unknown, and that is said."""
+        if self._original_tests is None:
+            return [f"which tests are new is unknown: the run-start tests were not recorded ({text[:60]})"]
+        new, renamed, unknown = [], [], []
+        for path in tests:
+            before, now = self._original_tests.get(path), current.get(path)
+            if before == now:
+                continue
+            defs_now = _python_case_defs(now) if path.endswith(".py") else None
+            defs_before = ({} if before is None else _python_case_defs(before)) if path.endswith(".py") else None
+            if defs_now is None or defs_before is None:
+                unknown.append(path)
+                continue
+            gone = {body for name, body in defs_before.items() if name not in defs_now}
+            for name, body in defs_now.items():
+                if name in defs_before:
+                    continue
+                (renamed if body in gone else new).append(f"{path}::{name}")
+        out = []
+        if unknown:
+            out.append(f"which cases are new in {', '.join(unknown[:3])} cannot be read from the source")
+        if not new and not unknown:
+            out.append(f"the run added no test case ({text[:60]})"
+                       + (f"; {', '.join(renamed[:3])} renames a run-start test" if renamed else ""))
+        out += [f"new case {case} was not executed" for case in new if case not in passed]
+        return out
 
     def _population_problem(self, rid: str, run: dict) -> str:
         """Why one receipt's run does not show the population ``rid`` names,
@@ -11631,7 +11711,7 @@ class Session:
         except Exception:  # noqa: BLE001 -- unknown is not shown
             return "the current source could not be read to find the named tests"
         tests = sorted(n for n in current if _test_family(n))
-        added = sorted(n for n in tests if self._original_tests is not None and n not in self._original_tests)
+        passed = _run_passed_cases(run)
         missing = []
         for item in population:
             if item["paths"]:
@@ -11642,11 +11722,7 @@ class Session:
                         missing.append(f"{path} is not a test file on the current source")
                     missing += [f"no executed case from {t}" for t in named if t not in files]
             elif item["added"]:
-                if self._original_tests is None:
-                    missing.append(f"which tests are new is unknown ({item['text'][:60]})")
-                elif not added:
-                    missing.append(f"the run added no test file ({item['text'][:60]})")
-                missing += [f"no executed case from {t} (added by the run)" for t in added if t not in files]
+                missing += self._new_case_problems(tests, current, passed, item["text"])
             else:
                 missing += [f"no executed case from {t}" for t in tests if t not in files]
         missing = list(dict.fromkeys(missing))
@@ -11662,10 +11738,9 @@ class Session:
         the command passing, for an actionable correction. Empty otherwise."""
         text = str(self.memory.ledger.requirements.get(rid) or "")
         argv = self._command_requirement(rid) or []
-        ticked = re.findall(r"`([^`\n]+)`", text)
-        if not argv or not _test_runner_shape(argv) or len(ticked) > 1 or self._test_command_requirement(rid):
+        rest = _command_rest(text, argv) if argv else None
+        if rest is None or not _test_runner_shape(argv) or self._test_command_requirement(rid):
             return []
-        rest = text.replace(f"`{ticked[0]}`", " ") if ticked else text.replace(" ".join(argv), " ")
         before, population = _population_clause(rest)
         if population:
             rest = before
