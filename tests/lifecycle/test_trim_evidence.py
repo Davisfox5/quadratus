@@ -13,7 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import FILES, Script
+from tests.lifecycle.replies import judging_scenarios
+from tests.lifecycle.test_lifecycle_matrix import ADD_PROOF, ADD_SHOWN, FILES, Script
 from tests.lifecycle.test_step2_recovery import _R1, _TYPED, DECL_SIMPLE, _plan
 
 # -- B: the terminal budget note -------------------------------------------------------------
@@ -62,7 +63,11 @@ def _starved_run(tmp_path, monkeypatch, where, total):
     where.mkdir()
     return H.run(where, monkeypatch, Script(
         orchestrator=_plan(declared), lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:5",
-        auditor=lambda c, r: "R1: MET - app.py:5", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        # The audit answers its whole required list (cycle05): R1 and the
+        # executed P1 row, judged by this fixture's authored basis, so no
+        # completion call is added to the six this case measures.
+        auditor=judging_scenarios(lambda c, r: "R1: MET - app.py:5", ADD_PROOF, basis=ADD_SHOWN),
+        **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=1, record_complete=False,
         limits=RunLimits(max_calls=120, max_reported_tokens=total, wall_seconds=600,
                          max_concurrent_workers=2, reserve_tokens_per_call=600))
