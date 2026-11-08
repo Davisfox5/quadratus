@@ -3073,7 +3073,16 @@ _PASS_ONLY_WORDS = frozenset("""
     exit exits existing fail fails failing failure failures full green is it its must no on pass passes
     passing project run runs running should source status succeed succeeds success successfully suite test
     tests the under using via when whole with without zero 0 error errors
+    keep keeps kept continue continues continuing still remain remains stay stays also both each after
+    passed ran execute executes executed complete completes current final clean to change changes
 """.split())
+#: Ordinary grammatical variants of the same claim (cycle08 run
+#: 20261108T121411Z-720c5d46: R17, "All existing tests keep passing and
+#: `python3 -m unittest discover -s tests` passes on the delivered source", was
+#: read as a behaviour for the word "keep", its task was sent back, a 148,417-
+#: token planning call was spent, and the planner dropped R17 and R21). Words
+#: that change what is claimed (unchanged, preserved, behaviour, a value or
+#: an endpoint) are still outside the vocabulary.
 
 
 def _test_runner_shape(argv) -> bool:
@@ -3814,6 +3823,9 @@ class Session:
         #: decision (``_declaration_decision``) for the whole job, appended
         #: before its call, with its outcome and ids.
         self.done_declarations: List[dict] = []
+        #: Pure test-command requirements covered for the audit by the
+        #: harness's own exact receipt (cycle08, ``_cover_by_receipt``).
+        self.receipt_coverage: List[dict] = []
         self._planning_decision = False
         #: The job's commitment to end after one task whose ordinary route
         #: could not be paid (admission/3, ``_commit_terminal``); carried.
@@ -10978,7 +10990,15 @@ class Session:
         missing = [r for r in covers if r not in named and not self._test_command_requirement(r)]
         extra = sorted(r for r in named if r not in covers)
         if missing:
-            return f"COVERS names {', '.join(missing)} but no proof scenario shows {'it' if len(missing) == 1 else 'them'}."
+            # Say why a requirement that names a test command still needs a
+            # scenario, so the one correction addresses it (cycle08: the
+            # planner dropped R17 and R21 instead).
+            named_commands = [f"{r} names a test command but also claims '{' '.join(words[:12])}'"
+                              for r in missing if (words := self._test_command_extra_words(r))]
+            return (f"COVERS names {', '.join(missing)} but no proof scenario shows {'it' if len(missing) == 1 else 'them'}."
+                    + (" " + "; ".join(named_commands) + ": declare a scenario for that claim and keep the "
+                       "requirement in COVERS (the command's own run is cited from the harness's receipt)."
+                       if named_commands else ""))
         if extra:
             return f"Proof scenarios name requirements the task does not COVER: {', '.join(extra)}."
         texts = self.memory.ledger.requirements
@@ -11207,6 +11227,7 @@ class Session:
             self._note(f"DONE sent back: unsettled ambiguous requirements: {', '.join(unsettled)}")
             return False
         status = ledger.requirement_status
+        self._cover_by_receipt(claimed)
         uncovered = [r for r in ledger.requirements
                      if r in claimed and not status.get(r, "").startswith(("covered", "met"))]
         if uncovered:
@@ -11306,6 +11327,35 @@ class Session:
             return False
         return True
 
+    def _cover_by_receipt(self, claimed) -> None:
+        """A requirement whose whole claim is that a named test command passes
+        (``_test_command_requirement``), never covered by a task (no status,
+        or open; not one an audit found NOT MET), is covered for the audit
+        when the harness's own exact receipt of that command shows it run
+        whole and passed on the current source, gate and environment
+        (``_command_receipt_citation``). The fact is the receipt; the MET is
+        the independent audit's. Cycle08: the planner dropped R17 and R21
+        from COVERS after a sendback and DONE stopped on "not covered" while
+        the gate's unittest run was passing. A missing, stale, failed,
+        filtered or skipping receipt covers nothing. Kept on
+        ``receipt_coverage`` (result.json, checkpoint)."""
+        ledger = self.memory.ledger
+        status = ledger.requirement_status
+        for rid in ledger.requirements:
+            current = str(status.get(rid, "") or "open")
+            if rid not in claimed or current.startswith(("covered", "met", "NOT MET")):
+                continue
+            if not self._test_command_requirement(rid):
+                continue
+            receipt, problem = self._command_receipt_citation(rid)
+            if receipt is None:
+                continue
+            status[rid] = f"covered (harness receipt {receipt['id']}: `{receipt['command']}` passed on the current source)"
+            self.receipt_coverage.append(dict(requirement=rid, receipt=receipt["id"], command=receipt["command"],
+                                              source=receipt.get("source"), gate=receipt.get("gate")))
+            self._note(f"{rid} covered by the harness's receipt {receipt['id']} of `{receipt['command']}`; "
+                       "the audit judges it")
+
     def _auditor(self) -> Optional[str]:
         """A brain-trust member from a vendor other than the orchestrator's,
         or None. Never the seat's own vendor: an audit that shares the
@@ -11376,6 +11426,20 @@ class Session:
             rest = text.replace(phrase, " ")
         words = re.findall(r"[a-z0-9']+", rest.lower())
         return bool(words) and all(w.removesuffix("'s") in _PASS_ONLY_WORDS for w in words)
+
+    def _test_command_extra_words(self, rid: str) -> List[str]:
+        """For a requirement that names exactly one runner-shaped command but
+        is not a pure run-and-pass claim, the words beside the command that
+        are outside ``_PASS_ONLY_WORDS``: what the requirement claims besides
+        the command passing, for an actionable correction. Empty otherwise."""
+        text = str(self.memory.ledger.requirements.get(rid) or "")
+        argv = self._command_requirement(rid) or []
+        ticked = re.findall(r"`([^`\n]+)`", text)
+        if not argv or not _test_runner_shape(argv) or len(ticked) > 1 or self._test_command_requirement(rid):
+            return []
+        rest = text.replace(f"`{ticked[0]}`", " ") if ticked else text.replace(" ".join(argv), " ")
+        return list(dict.fromkeys(w for w in re.findall(r"[a-z0-9']+", rest.lower())
+                                  if w.removesuffix("'s") not in _PASS_ONLY_WORDS))
 
     @staticmethod
     def _command_key(argv) -> Tuple[str, ...]:

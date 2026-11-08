@@ -3231,6 +3231,34 @@ Key design decisions already settled:
     - The covers-correction allowance is unchanged.
   - *Prompts.* The planner's reading rule and `_EXECUTED_ERROR_RULE` state
     the same distinction.
+- **A pure suite-pass claim is read in its ordinary forms and reaches the
+  audit on the gate's own receipt** (cycle08 run 20261108T121411Z-720c5d46,
+  PR73 6721926382).
+  - *What happened.* R17 was "All existing tests keep passing and `python3
+    -m unittest discover -s tests` passes on the delivered source". It was
+    read as a behaviour for the one word "keep". t6 was sent back, and the
+    re-plan reported 148,417 tokens. The planner then dropped R17 and R21
+    from COVERS, and DONE stopped on "not covered" while the gate's unittest
+    run on the delivered source was passing. t7's terminal route was 95,181
+    tokens short, less than that re-plan.
+  - *Vocabulary.* `_PASS_ONLY_WORDS` now carries ordinary grammatical
+    variants: keep, continue, still, remain, stay, also, both, each, after,
+    to, change, passed, ran, executed, complete, current, final, clean.
+    Words that change the claim stay outside it (unchanged, preserved, a
+    behaviour, a value, an endpoint).
+  - *Actionable refusal.* A requirement that names a runner-shaped command
+    but claims more is refused with the words it claims besides the command
+    (`_test_command_extra_words`). The message says to give that claim a
+    scenario and keep the requirement in COVERS.
+  - *Coverage from the receipt* (`_cover_by_receipt`, at DONE and at the
+    cap, before the coverage check). A pure test-command requirement that no
+    task covered and no audit found NOT MET is covered for the audit by
+    `_command_receipt_citation`. That is the exact command, run whole and
+    passed on the current source, gate and environment, with cases executed
+    and none skipped. A missing, stale, failed, filtered or skipping receipt
+    covers nothing. The fact is the receipt; the MET is the independent
+    audit's, and a NOT MET goes back to the planner as before. Kept on
+    `receipt_coverage` (result.json, checkpoint).
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
