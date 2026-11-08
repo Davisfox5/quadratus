@@ -21,6 +21,31 @@ _EXPECTED_IDS = re.compile(r"Expected ids: (?P<ids>[^.\n]+)\.")
 _ID = re.compile(r"^[A-Z][A-Z0-9]*-?\d+$")
 
 
+_REQUIRED_KINDS = {"requirements": "requirement", "review findings carried to you": "finding",
+                   "acceptance rows": "row", "executed restatements": "restatement"}
+_REQUIRED_LINE = re.compile(r"^- (" + "|".join(re.escape(k) for k in _REQUIRED_KINDS) + r") \([^)]*\): (.+)$",
+                            re.MULTILINE)
+
+
+def required_lines(prompt: str) -> Dict[str, List[str]]:
+    """The ids an audit prompt's 'Lines this reply must contain' block asks
+    for, by kind (requirement, finding, row, restatement); read from the
+    last such block, as a completion prompt names only what it asks."""
+    block = prompt.rsplit("## Lines this reply must contain", 1)
+    if len(block) < 2:
+        return {}
+    out: Dict[str, List[str]] = {}
+    for kind, ids in _REQUIRED_LINE.findall(block[1]):
+        out[_REQUIRED_KINDS[kind]] = [i.strip() for i in ids.split(",") if i.strip()]
+    return out
+
+
+def audit_draws(replay) -> list:
+    """The audit calls that are audits, not the one same-auditor completion
+    of omitted ids (cycle05), whose prompt names what it lacked."""
+    return [c for c in replay.of("auditor") if "It gave no line for:" not in c.prompt]
+
+
 def requested_obligations(prompt: str) -> List[dict]:
     """The evidence obligations the prompt lists (Session._obligations_block),
     each with its id, task, bound requirement ids, behavior, runner and

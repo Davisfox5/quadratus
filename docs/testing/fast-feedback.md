@@ -29,8 +29,13 @@ python tools/ci/check.py --base LAST_VALIDATED_COMMIT --output /tmp/quadratus-ch
 ```
 
 This includes staged, unstaged and new Python files, prints the selection, and
-runs it once. The output directory must be new. `--full` explicitly requests a
-full local regression. Lint remains `python -m ruff check .`.
+runs it once. The output directory must be new. When the selector falls back to
+the full suite on its own (shared configuration, an unknown or non-Python
+contract path such as CLAUDE.md, an unresolvable import, an unreachable change),
+the command saves the plan and a `ci-required.json` receipt, launches no
+pytest and exits 3: broad regression belongs to the eight-shard CI, not a serial
+local run. `--full` explicitly requests a full local regression. Lint remains
+`python -m ruff check .`.
 
 Use the last applicable validated commit, not an arbitrary recent commit, as the
 base. Inspect the plan's changed paths and selected/omitted files. If a known

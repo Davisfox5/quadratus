@@ -3067,6 +3067,52 @@ Key design decisions already settled:
     resolution outcomes. The stop text, result.json and truth_check read
     that one record; a passing check is stated, never treated as acceptance,
     and an unasked recheck stays `not_attempted`.
+- **Cycle05: DONE settles declaration-only debt without a task, and the
+  audit asks for one list of lines** (PR73 6715806056, after cycle04
+  routed restatable NOT RUN items through editing tasks and its audit
+  reply omitted O21/O50/O51/O55 while marking their requirements MET).
+  - *DONE declarations.* Before the DONE send-back, when every
+    deterministic blocker is one a declaration settles
+    (`_done_declaration_plan`), each owning lead gets one bounded
+    `proof-binding` call for all its ids (`_declare_at_done`): no planner
+    call, no task slot, a read-only copy, the declaration round cap, priced
+    at the reserve (`plan_admissions` scope `done-declaration`) and refused
+    by the finish hold like any ordinary call. Eligible: a NOT RUN item that
+    names nothing a check can run, with no cases yet, owned by the task that
+    reported it or the last one that took it over; or a test scenario row
+    whose bound case went stale, with a runner. Never eligible (the edit
+    route and its pricing stand): any blocker that needs an edit, known
+    editing work, a skip fact, a bound item, a failed or runner-less row,
+    an ambiguous id, an unknown, unavailable or already-asked owner, an
+    owner whose lead is the auditor (its restatement could never be judged
+    independently), a latest check that did not pass on the current source,
+    or no complete run naming an executed case. Only RUNS and PROVES lines
+    naming the listed ids are read, through the editing readers with the
+    owner as the active task; another id is dropped and recorded, a line
+    naming no id unreads the reply. A cap, a finish refusal, a provider
+    failure or a source, gate or environment that moved leaves every id
+    held. The record (`done_declarations`, result.json, checkpoint, merged
+    from children) is written before the call: one attempt per owner for
+    the job, never retried. Settlement is the existing exact receipt
+    (`_discharge_record`), and the audit judges sufficiency; nothing is
+    closed and no reviewer is stood in for.
+  - *Audit contract.* Executed restatements are listed under their own
+    heading ("Executed restatements awaiting your judgment"), never under
+    "Not shown to have run" and never as a debt row to judge nothing about;
+    the NOT MET rule names only its own heading. `_audit_required_ids` is
+    the one list (requirements, carried findings, acceptance rows the audit
+    reads that no current judgment holds, awaiting restatements), printed as
+    "Lines this reply must contain" and used to find omissions
+    (`_audit_omitted`: no line led by the id; a malformed line is an
+    answer). "Nothing else" is gone.
+  - *Completion.* Omitted ids get one same-auditor completion
+    (`_complete_audit` over `_complete_judgment`, role auditor, finishing
+    stage audit) on the shared `max_judgment_completions`; only lines led by
+    an omitted id are appended to the reply, so an answered verdict is never
+    overwritten and a conflict in the completion judges nothing. Spent
+    allowance, a refusal or a provider failure leaves the omission as it was;
+    nothing is inferred from a requirement's MET. The audit record keeps
+    `reply_artifact`, `required`, `omitted` and `completion`.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

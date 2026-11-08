@@ -2250,6 +2250,9 @@ _COMMAND_PROSE_STOPS = frozenset({
 
 
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
+#: The id a reply line answers: its leading '<id>:' (a bullet, a number and
+#: backticks allowed), for the audit's required-line list (cycle05).
+_ANSWER_ID = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?`?([A-Za-z][A-Za-z0-9]*-?\d+)`?\s*:")
 
 #: How a finding is stated, for reviewers and the auditor alike: what the
 #: orchestrator needs to test it (evidence loop, 2026-10-15).
@@ -3634,6 +3637,9 @@ class Session:
         #: RESOLVES send-backs already made for a scope route (cycle04), so
         #: the same naming proceeds the second time.
         self.scope_sendbacks: List[str] = []
+        #: No-edit DONE declarations (cycle05): one per owning task for the
+        #: whole job, appended before its call, with its outcome and ids.
+        self.done_declarations: List[dict] = []
         self._planning_decision = False
         #: The job's commitment to end after one task whose ordinary route
         #: could not be paid (admission/3, ``_commit_terminal``); carried.
@@ -10091,6 +10097,7 @@ class Session:
                 self.review_findings.extend(child.review_findings)
                 self.scope_declarations.extend(dict(d) for d in getattr(child, "scope_declarations", []) or [])
                 self.scope_gate_skips.extend(dict(d) for d in getattr(child, "scope_gate_skips", []) or [])
+                self.done_declarations.extend(dict(d) for d in getattr(child, "done_declarations", []) or [])
                 self.deferred_evidence.extend(child.deferred_evidence)
                 self.scenario_corrections.extend(child.scenario_corrections)
                 self.evidence_routes.extend(child.evidence_routes)
@@ -11029,9 +11036,29 @@ class Session:
             # already held, then could not pay the repair).
             blocked = self._deterministic_blockers()
             needs_editing = bool(getattr(self, "_blockers_need_editing", True))
+            declared, declaration = None, ""
+            if blocked:
+                # Declaration-only debt is settled first, by its owning leads,
+                # with no planner call and no task slot (cycle05); a mixed set
+                # keeps the edit route below and its pricing.
+                held_before = dict(blocked)
+                declared, declaration = self._done_declarations(blocked)
+                if declared is not None:
+                    blocked = self._deterministic_blockers()
+                    needs_editing = bool(getattr(self, "_blockers_need_editing", True))
+                    declaration = (f"asked {', '.join(declared)}; still held: {', '.join(blocked) or 'none'}"
+                                   f" (of {', '.join(held_before)})")
             source = self._source_fingerprint() if self.project else None
             again = any(not g.get("audit_asked") and g.get("source") == source
                         and sorted(g.get("blocked") or {}) == sorted(blocked) for g in self.done_gates)
+            if declared is not None and not blocked:
+                moved = any(str(d.get("outcome", "")).startswith("void") for d in self.done_declarations
+                            if d.get("owner") in declared)
+                self.done_gates.append(dict(site="done", blocked={}, audit_asked=True, source=source,
+                                            declaration=declaration,
+                                            why=("the source moved during a declaration, so the record's blockers "
+                                                 "are not known on it; the audit judges" if moved else
+                                                 "the owning leads' declarations left nothing held; the audit judges")))
             if blocked:
                 continuation = self._continuation_admission(needs_editing)
                 if continuation["feasible"] and not again:
@@ -11047,11 +11074,11 @@ class Session:
                         "that takes one of these routes, or reply DONE again to have the independent audit "
                         "judge the rest.")
                     self.done_gates.append(dict(site="done", blocked=dict(blocked), continuation=continuation,
-                                                audit_asked=False, source=source))
+                                                audit_asked=False, source=source, declaration=declaration))
                     self._note(f"DONE sent back before any audit: {', '.join(blocked)} held by the record")
                     return False
                 self.done_gates.append(dict(site="done", blocked=dict(blocked), continuation=continuation,
-                                            audit_asked=True, source=source,
+                                            audit_asked=True, source=source, declaration=declaration,
                                             why=("DONE repeated over the same held requirements on this source"
                                                  if again else "no continuation is admissible")))
         if self._explicit_tasks is not None:
@@ -11330,12 +11357,14 @@ class Session:
             self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
             return {r: (False, "no auditor from another vendor available") for r in audited}
         packet_before = self._packet()
-        prompt = (
+        required = self._audit_required_ids(audited, carried, obligations_rows, auditor)
+        evidence = (
             self._authority_context(audited, ids)
             + self._evidence_block()
             + self._findings_block(carried, standing)
-            + self._obligations_block(obligations_rows)
-            + "\n\nYou are an independent auditor. The project in your working directory is the "
+            + self._obligations_block(obligations_rows))
+        instructions = (
+            "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. The goal above is the authority; the requirements are this run's reading "
             "of it, and the decisions and rulings listed above bind. Where a requirement's wording "
             "states a condition the goal, a decision and a ruling do not, judge the goal's own "
@@ -11346,8 +11375,9 @@ class Session:
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
             "with what the product actually does today. A user-interface requirement is met only "
-            "with rendered evidence above. Reply with exactly one line per requirement and nothing "
-            "else: 'R1: MET - <file path or test name that shows it>' or "
+            "with rendered evidence above. Reply with exactly the lines listed under 'Lines this reply "
+            "must contain' below, one per id, and no other line that starts with an id. A requirement's "
+            "line is 'R1: MET - <file path or test name that shows it>' or "
             "'R1: NOT MET - <what is missing or contradicts the goal>; at <file and function>; "
             "example: <an input or call and the wrong result it gives, or none for a qualitative "
             "requirement>'. A MET without a cited "
@@ -11369,7 +11399,12 @@ class Session:
                " Each legacy acceptance or reading row listed above needs its own '<O-id>: SUFFICIENT "
                "<evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; it is never judged by "
                "your verdict on its requirement.")
+            + ("" if not any(k == "restatement" for _, k in required) else
+               " Each executed restatement listed under its own heading above needs its own '<O-id>: SUFFICIENT "
+               "<how the cases exercise the whole reported behaviour>' or '<O-id>: INSUFFICIENT <what they leave "
+               "unexercised>' line; your verdict on a requirement it holds never judges it.")
         )
+        prompt = evidence + instructions + self._audit_lines_block(required)
         saved = self._active_spec
         self._active_spec = None
         audit_binding = self._judgment_binding(SimpleNamespace(task_id="audit"), auditor, "audit")
@@ -11385,6 +11420,16 @@ class Session:
             self._note(f"requirements audit failed: {type(exc).__name__}: {str(exc)[:160]}")
         finally:
             self._active_spec = saved
+        reply_ref = self.store.put(reply or "(no reply)", kind=f"audit-reply:{auditor}", author=auditor).id
+        omitted = [] if failed else self._audit_omitted(reply or "", required)
+        completion = None
+        if omitted:
+            # One same-auditor completion of exactly the omitted ids, on the
+            # job's shared judgment allowance (cycle05): never a second audit
+            # of the answered ids, never an inference from a requirement's
+            # MET, and nothing when the allowance or the seat is unavailable.
+            reply, completion = self._complete_audit(auditor, reply or "", omitted, required,
+                                                     evidence + instructions)
         packet_after = self._packet()
         if packet_after.digest != packet_before.digest or (self.project and packet_before.source is None):
             # Anything the verdicts are about moved while they were made:
@@ -11393,7 +11438,9 @@ class Session:
             moved = ("the tree changed during the audit" if packet_after.source != packet_before.source
                      or packet_before.source is None else "the evidence packet changed during the audit")
             self._note(f"{moved}; the verdicts are void")
-            self.requirement_audits.append(dict(auditor=auditor, result=f"void: {moved}"))
+            self.requirement_audits.append(dict(auditor=auditor, result=f"void: {moved}", reply_artifact=reply_ref,
+                                                required=[i for i, _ in required], omitted=omitted,
+                                                completion=completion))
             return {r: (False, moved) for r in audited}
         found, stated = {}, []
         citation_receipts: Dict[str, dict] = {}
@@ -11455,7 +11502,9 @@ class Session:
                                             findings_carried=[r["fid"] for r in carried],
                                             findings_standing=[r["fid"] for r in standing],
                                             acceptance=dict(self._last_acceptance), packet=packet_after.digest,
-                                            failed=failed))
+                                            failed=failed, reply_artifact=reply_ref,
+                                            required=[i for i, _ in required], omitted=omitted,
+                                            completion=completion))
         if not failed:
             # Every audit records the packet it was about (the cap's final
             # audit records the same binding below, settled), so the record
@@ -11481,6 +11530,117 @@ class Session:
                                      verdicts={r: [ok, why] for r, (ok, why) in verdicts.items()},
                                      acceptance=dict(self._last_acceptance))
         return verdicts
+
+    _AUDIT_FORMS = {
+        "requirement": "MET or NOT MET",
+        "finding": "INVALIDATED or UNRESOLVED",
+        "row": "SUFFICIENT or INSUFFICIENT",
+        "restatement": "SUFFICIENT or INSUFFICIENT",
+    }
+    _AUDIT_KINDS = {
+        "requirement": "requirements",
+        "finding": "review findings carried to you",
+        "row": "acceptance rows",
+        "restatement": "executed restatements",
+    }
+
+    def _audit_lines_block(self, required, *, completion: bool = False) -> str:
+        """The audit's one list of required lines (cycle05), grouped by kind
+        with the form each takes."""
+        lines = []
+        for kind in ("requirement", "finding", "row", "restatement"):
+            ids = [i for i, k in required if k == kind]
+            if ids:
+                lines.append(f"- {self._AUDIT_KINDS[kind]} ({self._AUDIT_FORMS[kind]}): {', '.join(ids)}")
+        head = ("One line for each of these ids only, in the form above for its kind. A line for any other id is "
+                "not read, and your other answers stand as you gave them." if completion else
+                "One line for each id below, in the form above for its kind. An id with no line is an unanswered "
+                "question, never an approval.")
+        return "\n\n## Lines this reply must contain\n" + head + "\n" + "\n".join(lines)
+
+    @staticmethod
+    def _answer_id(line: str) -> Optional[str]:
+        """The id a reply line answers (its leading '<id>:'), upper-cased, or None."""
+        hit = _ANSWER_ID.match((line or "").replace("**", ""))
+        return hit.group(1).upper() if hit else None
+
+    def _audit_omitted(self, reply: str, required) -> List[str]:
+        """The required ids no line of the reply answers at all (cycle05). A
+        line that names the id in a form its reader refuses is an answer, read
+        as the reader reads it (no verdict), never an omission to re-ask."""
+        answered = {self._answer_id(line) for line in (reply or "").splitlines()}
+        return [i for i, _ in required if i.upper() not in answered]
+
+    def _complete_audit(self, auditor: str, reply: str, omitted: List[str], required, body: str):
+        """The one same-auditor completion of an audit's omitted ids
+        (``_complete_judgment``: same seat, the auditor role, read-only, the
+        bound identity compared before and after, the job's shared
+        ``max_judgment_completions`` claimed first and never refunded), run
+        as the audit's own finishing stage. Only lines answering an omitted
+        id are appended to the reply; any other line is dropped and counted.
+        Returns ``(reply, completion record)``."""
+        spec = SimpleNamespace(task_id="audit")
+        kinds = dict(required)
+        asked = [(i, kinds[i]) for i in omitted]
+        short = self._audit_completion_short()
+        if short:
+            # Priced before the claim: a call the budget cannot hold would
+            # reach its latched limit and stop the run, so none is made and
+            # the allowance is not spent (cycle05).
+            completion = dict(asked=list(omitted), outcome=f"not attempted: {short}", answered=[],
+                              still_omitted=list(omitted), dropped_lines=0, raw_artifact=None, reply_artifact=None)
+            self._note(f"audit completion by {auditor} not attempted: {short}")
+            return reply, completion
+        context = ("Your audit reply on this exact packet is on record and stands; it is not repeated here, and "
+                   f"none of its answers is asked again. It gave no line for: {', '.join(omitted)}.\n\n")
+        answer = None
+        try:
+            with finishing("audit"):
+                answer = self._complete_judgment(
+                    spec, auditor, "audit", reply, [f"a line for each of {', '.join(omitted)}"], role="auditor",
+                    prompt=body + self._audit_lines_block(asked, completion=True), context=context,
+                    outcome=self.run_outcome)
+        except ProviderError as exc:
+            self._note(f"audit completion by {auditor} failed: {type(exc).__name__}")
+        record = next((r for r in reversed(self.judgment_completions)
+                       if r.get("task") == "audit" and r.get("seat") == auditor and r.get("kind") == "audit"), {})
+        wanted = {i.upper() for i in omitted}
+        kept, dropped = [], 0
+        for line in (answer or "").splitlines():
+            if self._answer_id(line) in wanted:
+                kept.append(line)
+            elif self._answer_id(line) is not None:
+                dropped += 1
+        answered = [i for i in omitted if i.upper() in {self._answer_id(line) for line in kept}]
+        if record and record.get("outcome") == "answered":
+            record["judgment"] = ("answered every omitted id" if len(answered) == len(omitted)
+                                  else f"still no line for {', '.join(i for i in omitted if i not in answered)}")
+        completion = dict(asked=list(omitted), outcome=str(record.get("outcome") or "not attempted"),
+                          answered=answered, still_omitted=[i for i in omitted if i not in answered],
+                          dropped_lines=dropped, raw_artifact=record.get("raw_artifact"),
+                          reply_artifact=record.get("reply_artifact"))
+        self._note(f"audit completion by {auditor}: asked {', '.join(omitted)}; {completion['outcome']}; "
+                   f"answered {', '.join(answered) or 'none'}")
+        return (reply + ("\n" + "\n".join(kept) if kept else "")), completion
+
+    def _audit_completion_short(self) -> str:
+        """Why the budget cannot hold one more call of the audit's finishing
+        stage now, or "": a call left, the reserve in tokens and some wall
+        time (the audit is the last finishing stage, so nothing later is
+        held for). No budget, nothing to price."""
+        budget = self._budget()
+        if budget is None:
+            return ""
+        snap = budget.snapshot()
+        limits = snap.get("limits") or {}
+        reserve = int(limits.get("reserve_tokens_per_call") or 0)
+        if int(limits.get("max_calls") or 0) - int(snap.get("reserved_attempts") or 0) < 1:
+            return "no call is left in the run's budget"
+        if reserve and int(limits.get("max_reported_tokens") or 0) - int(snap.get("reported_tokens") or 0) < reserve:
+            return "the tokens left do not hold one reserve-sized call"
+        if float(limits.get("wall_seconds") or 0) - float(snap.get("elapsed_seconds") or 0) <= 0:
+            return "no wall time is left"
+        return ""
 
     def _audit_binding(self, ids: Optional[List[str]]) -> str:
         """What a final audit's verdicts are about: the audited ids and the
@@ -11871,8 +12031,14 @@ class Session:
     def _obligations_block(self, rows: List[dict]) -> str:
         if not rows:
             return ""
-        debt = [o for o in rows if delivery.purpose_of(o) != "acceptance"]
+        # A restated item already executed is shown, with the line that judges
+        # it, under its own heading (``_not_run_block``), never here as a row
+        # to judge nothing about (cycle05).
+        awaiting = set(self._restated_executed_ids())
+        debt = [o for o in rows if delivery.purpose_of(o) != "acceptance" and o.get("oid") not in awaiting]
         rows = [o for o in rows if delivery.purpose_of(o) == "acceptance"]
+        if not debt and not rows:
+            return ""
         lines = []
         if debt:
             # Execution debt is shown apart from acceptance evidence and
@@ -13596,14 +13762,66 @@ class Session:
                 out.append(path)
         return out
 
+    def _restated_executed_ids(self, audited=None, auditor: Optional[str] = None) -> List[str]:
+        """Ids of restated NOT RUN items the harness's own complete run on
+        the current source executed and no current independent judgment
+        holds: evidence awaiting a judgment (cycle05). With ``audited``, only
+        items holding one of those requirements; with ``auditor``, only items
+        that seat may judge (it did not write the restatement)."""
+        from collections import Counter
+        counts = Counter(e.get("oid") for e in self.unexecuted_acceptance if e.get("oid"))
+        out = []
+        for e in self._standing_not_run():
+            if not (e.get("oid") and counts[e["oid"]] == 1 and e.get("restatements")):
+                continue
+            if self._discharge_record(e) is None:
+                continue
+            if audited is not None and not any(r in audited for r in e.get("requirements") or ()):
+                continue
+            if auditor is not None and auditor == (e["restatements"][-1] or {}).get("author"):
+                continue
+            out.append(e["oid"])
+        return out
+
+    def _audit_required_ids(self, audited, carried, rows, auditor: Optional[str]) -> List[Tuple[str, str]]:
+        """The one authoritative list of lines an audit reply must contain,
+        as ``(id, kind)`` (cycle05): every audited requirement; every review
+        finding carried to the auditor; every acceptance row binding an
+        audited requirement that the audit reads and no current judgment
+        holds (an executed test row, a legacy or reading row; a capture row
+        is the design reviewer's); every executed restatement awaiting
+        judgment. The prompt lists exactly these, and an id with no line in
+        the reply is an omitted answer (``_audit_omitted``)."""
+        required: List[Tuple[str, str]] = [(r, "requirement") for r in audited]
+        required += [(r["fid"], "finding") for r in carried]
+        for o in rows:
+            if (delivery.purpose_of(o) != "acceptance" or o.get("superseded_by")
+                    or not any(r[0] in audited for r in o.get("requirements") or ())):
+                continue
+            modality = o.get("modality") or "test"
+            if not ((modality == "test" and o.get("execution") == "ran") or modality in ("legacy", "reading")):
+                continue
+            if delivery.EvidenceObligation.from_dict(o).sufficiency_current:
+                continue
+            required.append((o["oid"], "row"))
+        seen = {i for i, _ in required}
+        required += [(oid, "restatement") for oid in self._restated_executed_ids(audited, auditor)
+                     if oid not in seen]
+        return required
+
     def _not_run_block(self) -> str:
         """The audit's view of what is not shown to have run."""
         unrun = self._unnamed_standing()
         standing = self._standing_not_run()
+        # Executed restatements are evidence awaiting judgment, not items that
+        # did not run (cycle05: one heading held both, and told the auditor
+        # both to judge them and that their requirements are NOT MET).
+        awaiting = [e for e in standing if e.get("restatements") and self._discharge_record(e) is not None]
+        standing = [e for e in standing if not any(e is a for a in awaiting)]
         unread = self._open_inspections()
         repaired = [e for e in getattr(self, "generated_test_repairs", []) or []
                     if not _test_repair_settled(e, self.review_findings)]
-        if not unrun and not standing and not unread and not repaired:
+        if not unrun and not standing and not unread and not repaired and not awaiting:
             return ""
         lines = []
         for entry in repaired:
@@ -13624,18 +13842,30 @@ class Session:
                          + (f" (holds {', '.join(entry['requirements'])}"
                             + (f"; {entry['association']}" if entry.get("association") else "") + ")"
                             if entry["requirements"] else "")
-                         + (f" [restated by {entry['restatements'][-1].get('task')} ({entry['restatements'][-1].get('author')}) "
-                            f"as {', '.join(binding.get('cases') or [])}; executed and passed on the current source: judge it "
-                            f"only by your own line '{entry.get('oid')}: SUFFICIENT <how these cases exercise the whole "
-                            f"reported behaviour>' or '{entry.get('oid')}: INSUFFICIENT <what they leave unexercised>'; "
-                            "unjudged it stays held]"
-                            if entry.get("restatements") and self._discharge_record(entry) is not None else
-                            f" [bound to {', '.join(binding['cases'])}: discharged only by the harness's gate "
+                         + (f" [bound to {', '.join(binding['cases'])}: discharged only by the harness's gate "
                             "executing it whole]" if binding.get("cases") else
                             f" [not bound to any case: {binding['problem']}]" if binding.get("problem") else ""))
-        return ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
-                + "\nA requirement whose only evidence is a file listed here is NOT MET, and so is a "
-                "requirement a task covering it reported NOT RUN: name what did not run.")
+        out = ""
+        if lines:
+            out = ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
+                   + "\nA requirement whose only evidence is a file listed under this heading is NOT MET, and so is "
+                   "a requirement an item listed under this heading holds: name what did not run.")
+        if awaiting:
+            rows = []
+            for entry in awaiting:
+                last = entry["restatements"][-1] or {}
+                rows.append(f"- {entry.get('oid')}: task {entry['task']} ({entry['role']}) reported NOT RUN: "
+                            f"{_display_item(entry['item'])}" + (f" - {entry['why']}" if entry["why"] else "")
+                            + (f" (holds {', '.join(entry['requirements'])})" if entry["requirements"] else "")
+                            + f"; restated by {last.get('task')} ({last.get('author')}) as "
+                            f"{', '.join(entry.get('cases') or [])}")
+            out += ("\n\n## Executed restatements awaiting your judgment (harness records)\n" + "\n".join(rows)
+                    + "\nEach item above was restated as exact cases, and the harness's own complete passing run on "
+                    "the current source executed every one of them. Judge each only by your own line '<O-id>: "
+                    "SUFFICIENT <how these cases exercise the whole reported behaviour>' or '<O-id>: INSUFFICIENT "
+                    "<what they leave unexercised>'. A requirement such an item holds stays not met until your "
+                    "SUFFICIENT line for it, and your MET on the requirement does not judge the item.")
+        return out
 
     def _executed_cases(self, citations, rid=None) -> List[str]:
         """The cited cases shown executed and passed on the current source,
@@ -15295,6 +15525,275 @@ class Session:
             if parts:
                 out[rid] = "; ".join(parts)[:400]
         return out
+
+    # -- no-edit DONE declarations (cycle05) ------------------------------------
+    def _declaration_owner(self, entry: dict) -> str:
+        """The task whose lead may restate a NOT RUN item: the last task that
+        took it over by DISCHARGES, else the one that reported it."""
+        taken = [t.get("task") for t in entry.get("taken_over_by") or () if t.get("task")]
+        return str(taken[-1] if taken else entry.get("task") or "")
+
+    def _owner_lead(self, task_id: str) -> str:
+        """The lead seat the task's record names as invoked, or ""."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == task_id), None)
+        return str(getattr(outcome, "lead", "") or "") if outcome is not None else ""
+
+    def _done_declaration_plan(self, blocked: Dict[str, str]) -> Tuple[Dict[str, dict], str]:
+        """``(plan, why_not)``: the owning leads to ask, grouped per owner
+        (``{owner: {lead, intent, oids, pids}}``), when every deterministic
+        blocker is one a declaration can settle with cases that already
+        exist, ran and passed (cycle05); else an empty plan and why. Eligible
+        only when nothing in the record needs an edit: ``needs_editing``
+        false is necessary, never sufficient. Each blocker must be a NOT RUN
+        item naming nothing a check can run, with no cases yet, or a test
+        acceptance row whose bound case went stale, with an authorized
+        runner; its owner and the owner's lead must be known and the lead
+        reachable and not the auditor (its restatement could never be judged
+        independently); the latest check must have passed on the current source
+        with a complete run that names its executed cases (the receipts a
+        declaration is settled against: no suite is run); and no owner may
+        have been asked already (one attempt per owner for the whole job)."""
+        if getattr(self, "_blockers_need_editing", True):
+            return {}, "a blocker needs a code or test change"
+        work = [w for w in self._editing_work()]
+        if work:
+            return {}, f"editing work is known: {work[0][:160]}"
+        check = self.checks[-1] if self.checks else {}
+        current = self._source_fingerprint() if self.project else None
+        if not (current and check.get("source") == current and check.get("passed")):
+            return {}, "the latest check did not pass on the current source"
+        if not any(_complete_run(r) and _run_passed_cases(r) for r in _check_runs(check, self.project)):
+            return {}, "no complete run on the current source names an executed case"
+        asked = {d.get("owner") for d in self.done_declarations}
+        auditor = self._auditor()
+        if auditor is None:
+            return {}, "no auditor from another vendor is available to judge a declaration"
+        standing = [e for e in self._standing_not_run()
+                    if not (e.get("restatements") and self._discharge_record(e) is not None)]
+        from collections import Counter
+        counts = Counter(e.get("oid") for e in self.unexecuted_acceptance if e.get("oid"))
+        plan: Dict[str, dict] = {}
+
+        def owner_of(owner: str) -> Tuple[Optional[dict], str]:
+            if not owner:
+                return None, "an item's owning task is unknown"
+            if owner in asked:
+                return None, f"{owner}'s lead was already asked for its declaration"
+            lead = self._owner_lead(owner)
+            if not lead:
+                return None, f"no lead seat is on record for {owner}"
+            if not self._available(lead):
+                return None, f"{owner}'s lead {lead} is unavailable"
+            if lead == auditor:
+                # Its restatement could never be judged independently: the
+                # audit ignores a judgment by the restatement's own author.
+                return None, f"{owner}'s lead {lead} is the auditor, so its declaration could not be judged independently"
+            # What the task did, as its close-out recorded it (the dispatch
+            # text is not kept past the task).
+            closed = next((h for h in reversed(self.history) if getattr(h, "task_id", None) == owner), None)
+            intent = str(getattr(closed, "summary", "") or "")[:300]
+            return plan.setdefault(owner, dict(lead=lead, intent=intent, oids=[], pids=[])), ""
+
+        for rid in blocked:
+            for entry in [e for e in standing if rid in (e.get("requirements") or ())]:
+                oid = entry.get("oid")
+                if entry.get("kind") == "skipped":
+                    return {}, f"{rid} is held by skipped cases ({_display_item(entry['item'])[:80]}); only execution settles them"
+                if not oid or counts[oid] != 1:
+                    return {}, f"a NOT RUN item holding {rid} has no unique id"
+                if entry.get("cases") or entry.get("restatements"):
+                    return {}, f"{oid} is bound to cases; only their execution settles it"
+                if entry.get("executable") if "executable" in entry else self._not_run_executable(entry):
+                    return {}, f"{oid} names something a check can run"
+                slot, why = owner_of(self._declaration_owner(entry))
+                if slot is None:
+                    return {}, why
+                if oid not in slot["oids"]:
+                    slot["oids"].append(oid)
+            for row in self.evidence_obligations:
+                if (not any(r[0] == rid for r in row.get("requirements") or ()) or row.get("execution") == "ran"
+                        or row.get("modality") in ("reading", "legacy") or row.get("superseded_by")
+                        or row.get("kind") == "not_run"):
+                    continue
+                stale = str(row.get("binding") or "").startswith("stale")
+                if not (stale or row.get("runner") is None or row.get("execution") == "failed"):
+                    continue
+                if row.get("runner") is None:
+                    return {}, f"{row['oid']} has no authorized runner"
+                if row.get("execution") == "failed" or not stale:
+                    return {}, f"{row['oid']} failed its execution"
+                if (row.get("kind") != "acceptance" or (row.get("modality") or "test") != "test"
+                        or not row.get("proof_id")):
+                    return {}, f"{row['oid']} is not a declared test scenario"
+                slot, why = owner_of(str(row.get("task") or ""))
+                if slot is None:
+                    return {}, why
+                if row["proof_id"] not in slot["pids"]:
+                    slot["pids"].append(row["proof_id"])
+        if not plan:
+            return {}, "no blocker names an item a declaration settles"
+        return plan, ""
+
+    def _done_declarations(self, blocked: Dict[str, str]) -> Tuple[Optional[List[str]], str]:
+        """Settle declaration-only blockers at DONE without a planner call or
+        a task slot (cycle05): one bounded read-only ``proof-binding`` call
+        per owning lead, all of that owner's ids together, priced at the
+        reserve and admitted against what is left after the held finish.
+        Returns the attempted owners, or None and why nothing was asked. The
+        record (``done_declarations``) is appended before each call, so an
+        attempt that may have started is never offered again, across
+        repeated DONEs, resumes and merges."""
+        plan, why = self._done_declaration_plan(blocked)
+        if not plan:
+            return None, why
+        if self._budget() is not None:
+            stages = [delivery.PlanStage(f"declaration by {spec['lead']} for {owner}", "reserve")
+                      for owner, spec in plan.items()]
+            verdict = self._admit_plan("done-declaration", stages, scope="done-declaration")
+            if not verdict.feasible:
+                return None, f"the declarations cannot be paid: {str(verdict.detail)[:200]}"
+        attempted = []
+        for owner, spec in plan.items():
+            self._declare_at_done(owner, spec)
+            attempted.append(owner)
+        self._refresh_obligations()
+        return attempted, ""
+
+    def _declaration_identity(self) -> dict:
+        """What a DONE declaration is about: the source, gate and environment."""
+        return dict(source=self._source_fingerprint() if self.project else None,
+                    gate=_gate_identity(self._current_gate()), environment=self._environment_id())
+
+    def _declare_at_done(self, owner: str, spec: dict) -> dict:
+        """One owner's DONE declaration call and its strict reading. Only
+        RUNS lines for the listed NOT RUN ids and PROVES lines for the listed
+        scenarios are read, through the same readers an editing reply uses
+        (``_record_runs``, ``_record_proves``) with the owner as the active
+        task; a line naming an unlisted id is dropped and recorded; a RUNS or
+        PROVES line naming no id makes the whole reply unread. A cap, a
+        refusal by the finish hold or the seat, a transport failure, or a
+        source, gate or environment that moved during the call leaves every
+        id held as it was. Nothing is closed, judged or retried here: the
+        harness settles execution against receipts already on record and
+        the independent audit judges sufficiency."""
+        lead, oids, pids = spec["lead"], list(spec["oids"]), list(spec["pids"])
+        before = self._declaration_identity()
+        record = dict(owner=owner, lead=lead, oids=oids, pids=pids, source=before["source"], outcome="",
+                      intent=str(spec.get("intent") or "")[:300], dropped=[], settled=[], held=[])
+        self.done_declarations.append(record)
+        self.store.put(json.dumps(record), kind="done-declaration-intent", author="harness")
+        items = [e for e in self.unexecuted_acceptance if e.get("oid") in oids]
+        rows = [r for r in self.evidence_obligations if r.get("task") == owner and r.get("proof_id") in pids
+                and str(r.get("binding") or "").startswith("stale") and not r.get("superseded_by")]
+        lines = []
+        if items:
+            lines.append("NOT RUN items of your task that name nothing a check can run:")
+            lines += [f"- {e['oid']}: {_display_item(e['item'])[:300]}" + (f" - {str(e.get('why'))[:160]}"
+                                                                            if e.get("why") else "") for e in items]
+        if rows:
+            lines.append("Proof scenarios of your task whose bound case no longer exists:")
+            for row in rows:
+                told = dict(row.get("scenario") or ())
+                lines.append(f"- {row['proof_id']}: {told.get('operation') or row.get('behavior') or ''} | state: "
+                             f"{told.get('state') or ''} | expect: {told.get('expect') or ''} (binding now: "
+                             f"{row.get('binding')})")
+        ids = oids + pids
+        prompt = (
+            f"Task {owner}" + (f" (its close-out: {spec['intent']})" if spec.get("intent") else "")
+            + "\n\nThe run is finishing. The harness's record on the current "
+            "source holds these items of your task, and each is settled by a declaration of where its proof already "
+            "lives, not by an edit:\n" + "\n".join(lines) + "\n\n"
+            + ("For each NOT RUN item, where cases that exercise the whole reported behaviour exist in the project's "
+               "tests as they stand now, write one line 'RUNS: O<n> - file::[Class::]test_case' per case. " if items else "")
+            + ("For each scenario, write one line 'PROVES: P<n> - file::[Class::]test_case' per case that proves it. "
+               + PROVES_RULE + " " if rows else "")
+            + TEST_SUBSTANCE_RULE + f"\nOnly lines naming the ids above ({', '.join(ids)}) are read; a RUNS or PROVES "
+            "line that names no id leaves the whole reply unread. Where no such case exists, write no line for that "
+            "id: it stays held for an editing task. Do not change files: this call declares; it does not edit. The "
+            "harness settles each case only against a check it already ran on this exact source in which that case "
+            "executed and passed, and an independent auditor judges whether the cases exercise everything the item "
+            "or scenario says.")
+        saved = self._active_spec
+        self._active_spec = None
+        reply = None
+        try:
+            with invocation(owner, "proof-binding"):
+                reply = self._invoke_model(lead, prompt)
+        except TurnLimitReached as exc:
+            record["outcome"] = f"capped at {exc.turns or 'its'} rounds: no declaration"
+            if exc.partial_text:
+                record["partial_artifact"] = self.store.put(exc.partial_text, kind=f"done-declaration-capped:{owner}",
+                                                            author=lead).id
+        except FinishReserved as exc:
+            self.finish_refusals.append(dict(task=owner, what="DONE declaration", detail=str(exc)[:300]))
+            record["outcome"] = "refused to keep the finish"
+        except ProviderError as exc:
+            record["outcome"] = f"stopped: {type(exc).__name__}"
+            record["error_artifact"] = self.store.put(str(exc), kind=f"done-declaration-error:{owner}",
+                                                      author="harness").id
+        finally:
+            self._active_spec = saved
+        if reply is not None:
+            record["reply_artifact"] = self.store.put(reply, kind=f"done-declaration:{owner}", author=lead).id
+            after = self._declaration_identity()
+            if after != before:
+                moved = sorted(k for k in before if before[k] != after[k])
+                record["outcome"] = f"void: {', '.join(moved)} changed during the call"
+            else:
+                self._read_done_declaration(owner, lead, reply, oids, pids, record)
+        for oid in oids:
+            entry = next((e for e in self.unexecuted_acceptance if e.get("oid") == oid), None)
+            done = entry is not None and bool(entry.get("restatements")) and self._discharge_record(entry) is not None
+            (record["settled"] if done else record["held"]).append(oid)
+        for pid in pids:
+            row = next((r for r in self.evidence_obligations if r.get("task") == owner and r.get("proof_id") == pid
+                        and not r.get("superseded_by")), None)
+            done = row is not None and row.get("binding") == "bound" and row.get("execution") == "ran"
+            (record["settled"] if done else record["held"]).append(pid)
+        self._note(f"DONE declaration by {lead} for {owner}: {record['outcome']}; executed "
+                   f"{', '.join(record['settled']) or 'none'}; held {', '.join(record['held']) or 'none'}")
+        return record
+
+    def _read_done_declaration(self, owner, lead, reply, oids, pids, record) -> None:
+        """The strict reading of one DONE declaration reply (``_declare_at_done``)."""
+        runs, proves, unnamed = [], [], []
+        for match in _RUNS_ANY.finditer(reply or ""):
+            named = re.match(r"\s*(O\d+)\b", match.group(1))
+            if named is None:
+                unnamed.append(match.group(0).strip()[:120])
+            elif named.group(1) in oids:
+                runs.append(match.group(0).strip())
+            else:
+                record["dropped"].append(match.group(0).strip()[:120])
+        for match in _PROVES_ANY.finditer(reply or ""):
+            named = _PROVES_PID.match(match.group(1))
+            if named is None:
+                unnamed.append(match.group(0).strip()[:120])
+            elif named.group(1) in pids:
+                proves.append(match.group(0).strip())
+            else:
+                record["dropped"].append(match.group(0).strip()[:120])
+        problems = [dict(task=owner, role="proof-binding", author=lead,
+                         problem=f"DONE declaration: not a listed id's line, not read: {line}")
+                    for line in record["dropped"]]
+        if unnamed:
+            record["outcome"] = "unparseable: a RUNS or PROVES line names no id; nothing was read"
+            problems += [dict(task=owner, role="proof-binding", author=lead,
+                              problem=f"DONE declaration: names no id, whole reply unread: {line}") for line in unnamed]
+        elif not runs and not proves:
+            record["outcome"] = "no line for a listed id"
+        else:
+            saved = self._active_spec
+            self._active_spec = SimpleNamespace(task_id=owner, description=record.get("intent") or "")
+            try:
+                if proves:
+                    self._record_proves(lead, "proof-binding", "\n".join(proves))
+                if runs:
+                    self._record_runs(lead, "proof-binding", "\n".join(runs))
+            finally:
+                self._active_spec = saved
+            record["outcome"] = "declared"
+        self.proof_binding_problems.extend(problems)
 
     def _continuation_admission(self, needs_editing: bool = True, *, naming: bool = True, before=(),
                                 scope: str = "done-continuation") -> dict:

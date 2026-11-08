@@ -33,6 +33,7 @@ import pytest
 from quadratus import checkpoint
 from quadratus.session import _SCENARIO_REPLY, TaskSpec, _typed_finding, _typed_near_miss
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import audit_draws
 from tests.lifecycle.test_lifecycle_matrix import FILES
 from tests.lifecycle.test_proof_binding import CASE, _acceptance, _at, _lead, _plan, _proofs, _scope
 from tests.lifecycle.test_recovery_handoff import GROK_CAP, NARRATION, _batch_script
@@ -396,7 +397,7 @@ def test_held_debt_in_the_last_slot_goes_to_the_caps_completion_decision(tmp_pat
     assert "goes to the cap's completion decision" in closes[0]["reasons"][0]
     assert closes[-1]["site"] == "cap" and closes[-1]["holds"]
     assert len(replay.of("orchestrator")) == 2, "the goal question was asked"
-    assert len(replay.of("auditor")) == 1, "the audit ran on the confirmed goal"
+    assert len(audit_draws(replay)) == 1, "the audit ran on the confirmed goal"
     assert not replay.result.completed and "RFT1-1" in replay.result.error, replay.result.error
     # The goal was confirmed; the requirements check then refuses MET over
     # the review finding its designated judge never closed.

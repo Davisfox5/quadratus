@@ -105,3 +105,43 @@ def test_configuration_filter_cannot_hide_planned_case(tmp_path):
     proc = run(tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads((tmp_path / "result/receipt.json").read_text())["collected"] == 1
+
+
+def test_an_automatic_full_fallback_saves_its_plan_and_launches_no_pytest(tmp_path):
+    """PR73 6716159070: a fallback the selector chose (here an unknown
+    contract path) is the eight-shard CI's to run. The local command keeps the
+    plan, writes a ci-required receipt and returns non-success without
+    starting pytest; --full stays the explicit serial opt-in."""
+    import shutil
+
+    repo(tmp_path, 'def test_one():\n    assert True\n')
+    shutil.copytree(TOOLS, tmp_path / 'tools/ci', ignore=shutil.ignore_patterns('__pycache__'))
+    subprocess.run(['git', 'add', 'tools'], cwd=tmp_path, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '--no-gpg-sign', '-qm', 'runner'], cwd=tmp_path, check=True)
+    (tmp_path / 'CONTRACT.md').write_text('read by nothing the selector can see\n')
+    subprocess.run(['git', 'add', 'CONTRACT.md'], cwd=tmp_path, check=True)
+    (tmp_path / 'tests/test_one.py').write_text("def test_one():\n    assert open('CONTRACT.md')\n")
+
+    def check(out, *extra):
+        return subprocess.run([sys.executable, str(tmp_path / 'tools/ci/check.py'), '--base', 'HEAD',
+                               '--output', str(tmp_path / out), *extra], cwd=tmp_path,
+                              env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'},
+                              capture_output=True, text=True, timeout=20)
+    proc = check('auto')
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    p = json.loads((tmp_path / 'auto/plan.json').read_text())
+    assert p['fallback'] is True and p['coverage'] == 'full'
+    receipt = json.loads((tmp_path / 'auto/ci-required.json').read_text())
+    assert receipt['status'] == 'ci-required' and receipt['reasons'] == p['reasons']
+    assert not (tmp_path / 'auto/results').exists(), 'no pytest was launched'
+    assert 'no local pytest launched' in proc.stdout
+    proc = check('explicit', '--full')
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    r = json.loads((tmp_path / 'explicit/results/receipt.json').read_text())
+    assert r['collected'] == r['finished'] == 1
+
+
+def test_a_selection_that_reaches_every_test_is_not_a_fallback(tmp_path):
+    p = repo(tmp_path, 'def test_one():\n    assert True\n')
+    assert p['coverage'] == 'full' and p['fallback'] is False, p['reasons']

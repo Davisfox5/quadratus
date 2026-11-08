@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.lifecycle.replies import audit_draws
 from tests.lifecycle.test_explicit_tasks import READING_JUDGED, README_TASK, _run, _script
 from tests.lifecycle.test_lifecycle_matrix import judging
 
@@ -48,4 +49,4 @@ def test_failed_claim_is_not_reclassified_as_unclaimed(tmp_path, monkeypatch):
     record = json.loads((Path(replay.result.run_dir) / 'result.json').read_text())['explicit_tasks']
     assert record['requirements_claimed'] == ['R1']
     assert record['requirements_unclaimed'] == ['R2']
-    assert len(replay.of('auditor')) == 1
+    assert len(audit_draws(replay)) == 1, 'one audit draw; a completion of omitted ids is not one'

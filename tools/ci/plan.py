@@ -14,6 +14,11 @@ import subprocess
 from pathlib import Path
 
 SMOKE = ('tests/test_run_budget.py', 'tests/test_prompt_rule_parity.py')
+#: The reasons of a selection made by impact routing; any other reason is a
+#: full fallback (an explicit --full, shared configuration, an unknown path,
+#: an unresolvable import or an unreachable change).
+SELECTED = ('transitive imports, literal module/path references, changed tests and contract smoke',
+            'documentation/metadata only; lint still required')
 GLOBAL = {'pyproject.toml', 'pytest.ini', 'setup.cfg', 'setup.py', 'requirements.txt',
           'requirements-dev.txt', 'tests/conftest.py'}
 
@@ -167,6 +172,7 @@ def build(root, changed, *, full=False, shards=8, durations=None):
                 source_sha256=snapshot(root), selected=selected, omitted=sorted(set(all_tests) - set(selected)), shards=groups,
                 files_sha256={p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in selected},
                 coverage='focused' if len(selected) < len(all_tests) else 'full',
+                fallback=not all(r in SELECTED for r in reasons),
                 limitation='Static impact selection cannot prove arbitrary dynamic dependencies. Full compatibility runs retain that coverage.')
 
 

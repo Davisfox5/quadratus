@@ -24,7 +24,7 @@ import pytest
 from quadratus import checkpoint, jobstore, monitor
 from quadratus.session import Session, invocation_context
 from tests.lifecycle import harness as H
-from tests.lifecycle.replies import judging_scenarios, scenario_text
+from tests.lifecycle.replies import judging_scenarios, required_lines, scenario_text
 from tests.lifecycle.test_delivery_controller import (
     GATE_FILES,
     HTTP_FILES,
@@ -416,9 +416,19 @@ def test_a_settled_judgment_the_record_never_consumed_is_not_asked_again_on_resu
         return original(self, found, audited)
     monkeypatch.setattr(Session, "_apply_acceptance", die_before_consumption)
     script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
-    script.overrides["auditor"] = judging_scenarios(
+    judge = judging_scenarios(
         lambda call, replay: ("R1: MET - app.py\nR2: NOT MET - README lacks the example the goal asks for; at "
                               "README.md; example: none"), *simple_proofs("R1"), basis=SIMPLE_SHOWN)
+
+    def auditor(call, replay):
+        # The whole required-line contract (cycle05): every acceptance row
+        # the prompt asks for is answered, so no completion is drawn and the
+        # one audit reply is the only receipt.
+        reply = judge(call, replay)
+        said = {line.split(":", 1)[0].strip() for line in reply.splitlines() if ":" in line}
+        return reply + "".join(f"\n{oid}: INSUFFICIENT README.md lacks the example"
+                               for oid in required_lines(call.prompt).get("row", []) if oid not in said)
+    script.overrides["auditor"] = auditor
     # Three slots: the planner's DONE after t2 follows a quiescent point, so
     # the source the checkpoint holds is the delivered one and the only
     # thing between the checkpoint and the death is the settled judgment.

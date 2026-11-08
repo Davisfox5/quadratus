@@ -23,7 +23,7 @@ import re
 import pytest
 
 from tests.lifecycle import harness as H
-from tests.lifecycle.replies import judging_scenarios, recheck_reply
+from tests.lifecycle.replies import judging_scenarios, recheck_reply, required_lines
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED
 from tests.lifecycle.test_proof_binding import (
     CASE,
@@ -40,7 +40,6 @@ from tests.lifecycle.test_workflow_repair import MET, SKIP_TESTS, Seen, _script
 CODE = "BLOCKING: no negative case covers subtraction of negatives | basis: R1 | impact: correctness"
 PRODUCTION = "NOT RUN: app.py - its socket path is outside my allowed paths, so I did not exercise it"
 PLAN1 = _plan(_scope(proofs=_proofs("R1")))
-JUDGE = re.compile(r"judge it only by your own line '(O\d+): SUFFICIENT")
 RESTATE = re.compile(r"^- (O\d+)(?: \(reported by \w+, holds [^)]*\))?: NOT RUN: app\.py", re.MULTILINE)
 
 
@@ -70,7 +69,7 @@ def _auditor(verdict="SUFFICIENT test_add drives add through the path the item n
 
     def auditor(call, replay):
         reply = base(call, replay)
-        return reply + "".join(f"\n{oid}: {verdict}" for oid in dict.fromkeys(JUDGE.findall(call.prompt)))
+        return reply + "".join(f"\n{oid}: {verdict}" for oid in required_lines(call.prompt).get("restatement", []))
     return auditor
 
 
