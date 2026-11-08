@@ -3637,8 +3637,9 @@ class Session:
         #: RESOLVES send-backs already made for a scope route (cycle04), so
         #: the same naming proceeds the second time.
         self.scope_sendbacks: List[str] = []
-        #: No-edit DONE declarations (cycle05): one per owning task for the
-        #: whole job, appended before its call, with its outcome and ids.
+        #: No-edit DONE declarations (cycle05): one per owning task and
+        #: decision (``_declaration_decision``) for the whole job, appended
+        #: before its call, with its outcome and ids.
         self.done_declarations: List[dict] = []
         self._planning_decision = False
         #: The job's commitment to end after one task whose ordinary route
@@ -15552,7 +15553,13 @@ class Session:
         independently); the latest check must have passed on the current source
         with a complete run that names its executed cases (the receipts a
         declaration is settled against: no suite is run); and no owner may
-        have been asked already (one attempt per owner for the whole job)."""
+        have been asked already about the same decision
+        (``_declaration_decision``: the source, gate and environment, the ids
+        asked, the items and rows as recorded and the requirement revisions
+        they hold). The same state is asked once for the job, whatever its
+        answer; a state that differs in any of these is a new decision
+        (cycle05 correction, PR73 6716888092: a new item on a later source
+        was refused because its owner had been asked once before)."""
         if getattr(self, "_blockers_need_editing", True):
             return {}, "a blocker needs a code or test change"
         work = [w for w in self._editing_work()]
@@ -15564,7 +15571,12 @@ class Session:
             return {}, "the latest check did not pass on the current source"
         if not any(_complete_run(r) and _run_passed_cases(r) for r in _check_runs(check, self.project)):
             return {}, "no complete run on the current source names an executed case"
-        asked = {d.get("owner") for d in self.done_declarations}
+        asked = {(d.get("owner"), d.get("decision")) for d in self.done_declarations if d.get("decision")}
+        # A record written before the decision was kept (9c17005) is read by
+        # what it did record: the same source and the same ids are the same
+        # decision; one that recorded no source holds its owner, never an
+        # extra call.
+        legacy = [d for d in self.done_declarations if not d.get("decision")]
         auditor = self._auditor()
         if auditor is None:
             return {}, "no auditor from another vendor is available to judge a declaration"
@@ -15577,8 +15589,6 @@ class Session:
         def owner_of(owner: str) -> Tuple[Optional[dict], str]:
             if not owner:
                 return None, "an item's owning task is unknown"
-            if owner in asked:
-                return None, f"{owner}'s lead was already asked for its declaration"
             lead = self._owner_lead(owner)
             if not lead:
                 return None, f"no lead seat is on record for {owner}"
@@ -15632,6 +15642,14 @@ class Session:
                     slot["pids"].append(row["proof_id"])
         if not plan:
             return {}, "no blocker names an item a declaration settles"
+        for owner, slot in plan.items():
+            slot["decision"] = self._declaration_decision(owner, slot["oids"], slot["pids"])
+            current = self._source_fingerprint() if self.project else None
+            same_legacy = any(d.get("owner") == owner and (d.get("source") is None or (
+                d.get("source") == current and sorted(d.get("oids") or []) == sorted(slot["oids"])
+                and sorted(d.get("pids") or []) == sorted(slot["pids"]))) for d in legacy)
+            if (owner, slot["decision"]) in asked or same_legacy:
+                return {}, f"{owner}'s lead was already asked for its declaration in this exact state"
         return plan, ""
 
     def _done_declarations(self, blocked: Dict[str, str]) -> Tuple[Optional[List[str]], str]:
@@ -15659,6 +15677,28 @@ class Session:
         self._refresh_obligations()
         return attempted, ""
 
+    def _declaration_decision(self, owner: str, oids, pids) -> str:
+        """What one DONE declaration decides: the owner, the source, gate and
+        environment, the NOT RUN items asked (id, item, requirements,
+        binding) and the scenario rows asked (id, oid, binding, cases), and
+        the current revisions of the requirements they hold. Equal digests
+        are the same decision and are asked once; anything that moves the
+        question makes a new one (cycle05 correction)."""
+        revisions = self._requirement_revisions()
+        items = [dict(oid=e.get("oid"), item=e.get("item"), requirements=sorted(e.get("requirements") or []),
+                      binding=e.get("binding"), cases=list(e.get("cases") or []))
+                 for e in self.unexecuted_acceptance if e.get("oid") in oids]
+        rows = [dict(pid=r.get("proof_id"), oid=r.get("oid"), binding=r.get("binding"), cases=list(r.get("cases") or []),
+                     requirements=[list(x) for x in r.get("requirements") or []])
+                for r in self.evidence_obligations if r.get("task") == owner and r.get("proof_id") in pids
+                and not r.get("superseded_by")]
+        held = sorted({rid for e in items for rid in e["requirements"]}
+                      | {x[0] for r in rows for x in r["requirements"]})
+        body = dict(owner=owner, **self._declaration_identity(), oids=sorted(oids), pids=sorted(pids),
+                    items=sorted(items, key=lambda e: str(e["oid"])), rows=sorted(rows, key=lambda r: str(r["pid"])),
+                    revisions={rid: int(revisions.get(rid, 1)) for rid in held})
+        return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
     def _declaration_identity(self) -> dict:
         """What a DONE declaration is about: the source, gate and environment."""
         return dict(source=self._source_fingerprint() if self.project else None,
@@ -15679,6 +15719,7 @@ class Session:
         lead, oids, pids = spec["lead"], list(spec["oids"]), list(spec["pids"])
         before = self._declaration_identity()
         record = dict(owner=owner, lead=lead, oids=oids, pids=pids, source=before["source"], outcome="",
+                      decision=spec.get("decision") or self._declaration_decision(owner, oids, pids),
                       intent=str(spec.get("intent") or "")[:300], dropped=[], settled=[], held=[])
         self.done_declarations.append(record)
         self.store.put(json.dumps(record), kind="done-declaration-intent", author="harness")

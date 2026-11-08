@@ -312,3 +312,35 @@ def test_a_declaration_is_admitted_at_the_reserve_where_a_write_granted_continua
     (gate, *_rest) = record["done_gates"]
     assert gate["continuation"]["feasible"] is False and gate["continuation"]["route"] == "write-granted"
     assert gate["audit_asked"] is True
+
+
+def test_a_later_source_makes_a_new_decision_for_the_same_owner_and_it_is_asked_once(tmp_path, monkeypatch):
+    """Root's correction on 9c17005 (PR73 6716888092): t1's lead answered
+    nothing at the first DONE; t2 then changed the source. The same item on
+    the new source is a new decision, asked once and settled; the first
+    state was never asked again."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED
+    seen, answers = Seen(), []
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return _lead()(call, replay)
+        H.write(call, {"app.py": FIXED + "\n# t2: documented the sum\n"})
+        return f"Documented add.\nPROVES: P1 - {CASE}\nCHANGED: [\"app.py\"]"
+
+    def answer(call, replay):
+        answers.append(call)
+        oid = DECLARED.search(call.prompt).group(1)
+        return "No existing case exercises it." if len(answers) == 1 else f"RUNS: {oid} - {CASE}"
+    repair = PLAN1.replace("Implement add in app.py.", "Document the sum in app.py.")
+    script = _script(seen, collaborator=_clean, orchestrator=_then_done(PLAN1, "DONE", repair), lead=lead,
+                     auditor=_auditor())
+    script.overrides["proof-binding"] = answer
+    replay = _run(tmp_path, monkeypatch, "later", script, max_tasks=3)
+    record = H.result_json(replay)
+    first, second = record["done_declarations"]
+    assert first["owner"] == second["owner"] == "t1" and first["oids"] == second["oids"]
+    assert first["source"] != second["source"] and first["decision"] != second["decision"]
+    assert first["outcome"] == "no line for a listed id" and second["outcome"] == "declared"
+    assert len(replay.of("proof-binding")) == 2 and [c.task for c in replay.of("lead")] == ["t1", "t2"]
+    assert replay.result.completed, replay.result.error

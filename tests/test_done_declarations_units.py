@@ -62,7 +62,9 @@ def runs(monkeypatch):
 def test_an_item_naming_nothing_runnable_is_planned_for_its_owning_lead_with_its_close_out(tmp_path, runs):
     session, runs["run"] = _session(tmp_path)
     plan, why = session._done_declaration_plan({"R1": "NOT RUN"})
+    decision = plan["t1"].pop("decision")
     assert why == "" and plan == {"t1": dict(lead="claude:opus", intent="Implemented add.", oids=["O2"], pids=[])}
+    assert decision == session._declaration_decision("t1", ["O2"], [])
     session, runs["run"] = _session(tmp_path / "s", entries=[dict(ITEM, taken_over_by=[dict(task="t3")])])
     session.task_outcomes.append(TaskOutcome(task_id="t3", intent="implementation", lead="openai:sol",))
     session._auditor = lambda: "xai:grok"
@@ -90,7 +92,9 @@ def test_an_item_naming_nothing_runnable_is_planned_for_its_owning_lead_with_its
     ("failed row", dict(entries=[], rows=[dict(STALE, execution="failed", binding="bound")]), None, "failed"),
     ("not a scenario", dict(entries=[], rows=[dict(STALE, proof_id=None)]), None, "not a declared test scenario"),
     ("unavailable lead", {}, lambda s: setattr(s, "_available", lambda k: False), "is unavailable"),
-    ("already asked", {}, lambda s: s.done_declarations.append(dict(owner="t1")), "already asked"),
+    ("already asked", {}, lambda s: s.done_declarations.append(
+        dict(owner="t1", decision=s._declaration_decision("t1", ["O2"], []))), "already asked"),
+    ("legacy owner-only record", {}, lambda s: s.done_declarations.append(dict(owner="t1")), "already asked"),
 ])
 def test_a_blocker_a_declaration_cannot_settle_keeps_the_edit_route(tmp_path, runs, name, kw, change, why):
     session, runs["run"] = _session(tmp_path, **kw)
@@ -100,19 +104,66 @@ def test_a_blocker_a_declaration_cannot_settle_keeps_the_edit_route(tmp_path, ru
     assert plan == {} and why in said, (name, said)
 
 
-def test_a_merged_childs_record_spends_the_owner_exactly_as_its_own_would(tmp_path, runs):
+def test_a_merged_childs_record_spends_the_same_decision_exactly_as_its_own_would(tmp_path, runs):
     """Parallel children's done_declarations come back whole beside the
-    parent's (the merge extends the list); one attempt per owner reads the
-    merged list, and the record survives a checkpoint round trip."""
+    parent's (the merge extends the list); the owner and decision they
+    record are refused again on the same state, and the record survives a
+    checkpoint round trip."""
     session, runs["run"] = _session(tmp_path)
-    child = SimpleNamespace(done_declarations=[dict(owner="t1", outcome="declared", oids=["O2"])])
+    decided = dict(owner="t1", outcome="no line for a listed id", oids=["O2"],
+                   decision=session._declaration_decision("t1", ["O2"], []))
+    child = SimpleNamespace(done_declarations=[decided])
     session.done_declarations.extend(dict(d) for d in child.done_declarations)
     assert "already asked" in session._done_declaration_plan({"R1": "held"})[1]
     state = checkpoint.capture_state(session)
-    assert state["done_declarations"] == [dict(owner="t1", outcome="declared", oids=["O2"])]
+    assert state["done_declarations"] == [decided]
     resumed, _ = _session(tmp_path / "resumed")
     checkpoint.restore_state(resumed, state)
-    assert "already asked" in resumed._done_declaration_plan({"R1": "held"})[1]
+    assert "already asked" in resumed._done_declaration_plan({"R1": "held"})[1], "the same state, resumed"
+
+
+def test_a_new_decision_for_an_asked_owner_gets_its_own_declaration(tmp_path, runs):
+    """Root's control on 9c17005 (PR73 6716888092): t1 was asked about O2 on
+    S; later work left a new held item O9 on S2. That is another decision,
+    admitted once; the same O9 on S2 again is refused."""
+    session, runs["run"] = _session(tmp_path, entries=[dict(ITEM, oid="O9")])
+    asked_before = dict(owner="t1", source="S", oids=["O2"], pids=[], outcome="declared",
+                        decision=session._declaration_decision("t1", ["O2"], []))
+    session.done_declarations = [asked_before]
+    session._source_fingerprint = lambda: "S2"
+    session.checks = [dict(source="S2", passed=True, environment="E", gate="")]
+    plan, why = session._done_declaration_plan({"R1": "new held item after later work"})
+    assert why == "" and plan["t1"]["oids"] == ["O9"]
+    session.done_declarations.append(dict(owner="t1", oids=["O9"], decision=plan["t1"]["decision"]))
+    assert "already asked" in session._done_declaration_plan({"R1": "held"})[1], "the same new state is asked once"
+
+
+def test_roots_control_a_record_from_before_the_decision_is_matched_by_its_source_and_ids(tmp_path, runs):
+    """Root's exact control on 9c17005: the record 9c17005 wrote (owner,
+    source S, O2) against a new held item O9 on S2. Not the same decision."""
+    session, runs["run"] = _session(tmp_path, entries=[dict(ITEM, oid="O9")])
+    session.done_declarations = [dict(owner="t1", source="S", oids=["O2"], pids=[], outcome="declared")]
+    session._source_fingerprint = lambda: "S2"
+    session.checks = [dict(source="S2", passed=True, environment="E", gate="")]
+    plan, why = session._done_declaration_plan({"R1": "new held item after later work"})
+    assert why == "" and plan["t1"]["oids"] == ["O9"], why
+    session.done_declarations = [dict(owner="t1", source="S2", oids=["O9"], pids=[], outcome="declared")]
+    assert "already asked" in session._done_declaration_plan({"R1": "held"})[1], "the same state as it recorded it"
+
+
+@pytest.mark.parametrize("name, change", [
+    ("source", lambda s: setattr(s, "_source_fingerprint", lambda: "S3")),
+    ("environment", lambda s: setattr(s, "_environment_id", lambda: "E2")),
+    ("item", lambda s: s.unexecuted_acceptance[0].update(item="app.py cli.py")),
+    ("requirement revision", lambda s: setattr(s, "_requirement_revisions", lambda: {"R1": 2})),
+])
+def test_each_part_of_the_decision_moves_it_and_the_answer_never_does(tmp_path, runs, name, change):
+    session, runs["run"] = _session(tmp_path)
+    before = session._declaration_decision("t1", ["O2"], [])
+    session.done_declarations.append(dict(owner="t1", outcome="unparseable: names no id", decision=before))
+    assert session._declaration_decision("t1", ["O2"], []) == before, "a recorded answer changes nothing"
+    change(session)
+    assert session._declaration_decision("t1", ["O2"], []) != before, name
 
 
 @pytest.mark.parametrize("name, effect, outcome", [
@@ -142,6 +193,7 @@ def test_a_declaration_call_that_does_not_answer_on_the_same_source_leaves_every
     record = session._declare_at_done("t1", dict(lead="claude:opus", intent="", oids=["O2"], pids=[]))
     assert record["outcome"].startswith(outcome) and record["held"] == ["O2"] and read == []
     assert session.done_declarations == [record], "recorded before the call: never offered again"
+    assert record["decision"] == session._declaration_decision("t1", ["O2"], []) or name == "moved"
     if name == "capped":
         assert record["partial_artifact"], "the partial text is kept and never read"
     if name == "finish":

@@ -3092,8 +3092,17 @@ Key design decisions already settled:
     naming no id unreads the reply. A cap, a finish refusal, a provider
     failure or a source, gate or environment that moved leaves every id
     held. The record (`done_declarations`, result.json, checkpoint, merged
-    from children) is written before the call: one attempt per owner for
-    the job, never retried. Settlement is the existing exact receipt
+    from children) is written before the call: one attempt per owner and
+    decision for the job, never retried. The decision
+    (`_declaration_decision`) is the source, gate and environment, the ids
+    asked, the items and rows as recorded and the revisions of the
+    requirements they hold; any answer, a refusal or an unreadable one
+    included, leaves it as it was, so the same state is never asked twice,
+    while a later source or a new held item is a new decision with its own
+    one call (root on 9c17005, PR73 6716888092: an owner-only lock refused a
+    new item after later work). A record from 9c17005 without a decision
+    matches by its source and ids, and holds its owner if it has no source.
+    Settlement is the existing exact receipt
     (`_discharge_record`), and the audit judges sufficiency; nothing is
     closed and no reviewer is stood in for.
   - *Audit contract.* Executed restatements are listed under their own
