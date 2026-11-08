@@ -3179,6 +3179,49 @@ Key design decisions already settled:
   - *Unchanged.* TurnLimitReached, refusals, PartialWorkSuspected, window
     and auth exhaustion, unknown usage and every other ProviderError keep
     their behaviour.
+- **A documentation assertion about behaviour is not the behaviour**
+  (cycle07 run 20261108T091024Z-75154efd, PR73 6720016289). R23 was "README
+  documents the new Store methods, HTTP endpoints and CLI commands,
+  including the refusal rules, without narrowing the contract". Every
+  reading proof for it was refused because `_error_clause` matched
+  "refusal", and the final task was sent back until the correction budget
+  stopped the run. The audit lowering and the review hold read the same word
+  and would have demanded an executed case for a README. This was a guard
+  design failure, a keyword promoted to an unconditional stop. It is
+  corrected by classification, not by a larger cap.
+  - *The reading* (`_behaviour_text`, `_behavioural_error`). A clause
+    whose subject is documentation the work writes (a README, the docs or
+    documentation, a changelog, a guide or manual, a named .md/.rst/.adoc
+    file) with a documenting verb, or a clause starting with the
+    imperative Document/Describe/Explain, asserts what that text says. Its
+    object is not a claim about the program. The error rule applies to what
+    remains:
+    - text before the documentation subject;
+    - other sentences and semicolon clauses;
+    - a behaviour coordinated after the clause ("Document rejection and
+      reject invalid input" keeps "reject invalid input").
+  - *Conservative on purpose.* Program output (help, usage, messages) is
+    never documentation here. A passive "is documented in" is not
+    recognised, so it stays behaviour and needs executed evidence. This is
+    a structural reading of prose, not an understanding of it, and other
+    phrasings stay where they were.
+  - *Consumers.* All of these read `_behavioural_error`:
+    - `_proof_problem`, for reading and capture evidence;
+    - `_lower_unexercised_errors`, the audit;
+    - `_hold_unexercised_errors`, the review;
+    - `boundary_classes`.
+
+    A refused reading proof names each behavioural requirement, quotes the
+    behaviour it asserts, and says the claim takes an executed scenario
+    while the documentation claim keeps reading evidence.
+  - *Unchanged.*
+    - Reading evidence still needs a documentation-file location.
+    - A behaviour in docs, or a mixed requirement, still needs an executed
+      case.
+    - Sufficiency stays with the original judges.
+    - The covers-correction allowance is unchanged.
+  - *Prompts.* The planner's reading rule and `_EXECUTED_ERROR_RULE` state
+    the same distinction.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

@@ -337,8 +337,11 @@ def _docs_lead(call, replay):
 @pytest.mark.requirements_ledger
 @pytest.mark.parametrize("location, requirement, text", [
     ("app.py", DOCS_REQ, "declares reading evidence at app.py, which is not a documentation file"),
-    ("README.md", "R1: README documents that add raises TypeError on a non-number",
-     "declares reading evidence for an error or refusal requirement"),
+    # Error behaviour itself placed in documentation is refused; a
+    # requirement that only asks the README to document it is a documentation
+    # claim (cycle07, tests/lifecycle/test_documentation_claims.py).
+    ("README.md", "R1: add raises TypeError on a non-number",
+     "declares reading evidence for R1, which asserts error or refusal behaviour of the program"),
 ])
 def test_reading_evidence_is_refused_outside_documentation_and_for_error_requirements(tmp_path, monkeypatch,
                                                                                        location, requirement, text):

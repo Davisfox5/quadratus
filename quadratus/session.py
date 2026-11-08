@@ -667,7 +667,9 @@ _SCOPE_REQUEST = (
     'logged: "unchanged" is not "empty"). A scenario is discharged only by a named test case '
     'that runs and passes, which the lead binds in its delivery, and is unproved until then. '
     'Only a documentation claim may declare "evidence": "reading" (its location a documentation '
-    'file, never for an error or refusal requirement): it is judged by the audit reading and '
+    'file, never for a requirement that asserts error or refusal behaviour of the program; one that '
+    'only asks documentation to describe that behaviour is a documentation claim, and behaviour beside '
+    'it in the same requirement takes its own executed scenario): it is judged by the audit reading and '
     'citing that file and never by a check. ' + _TEST_COMMAND_RULE + ' Nothing else is exempt by its location or wording: a '
     'scenario without that declaration is an executable claim wherever it points. The harness '
     'checks the mapping, not its completeness, and the independent review judges that. Size the proof '
@@ -3120,6 +3122,57 @@ def _error_clause(text: str) -> bool:
     return bool(_ERROR_CLAUSE.search(text or ""))
 
 
+#: A documentation assertion about behaviour is not the behaviour (cycle07
+#: run 20261108T091024Z-75154efd: R23, "README documents the new Store
+#: methods, HTTP endpoints and CLI commands, including the refusal rules",
+#: was refused reading evidence for the word "refusal", the last task was
+#: never admitted, and its audit would have lowered the MET for the same
+#: word). A clause whose subject is documentation the work writes (a README,
+#: the docs or documentation, a changelog, a guide or manual, a named .md,
+#: .rst or .adoc file) and whose verb documents something, or that starts with
+#: the imperative Document, Describe or Explain, asserts what that text says;
+#: the words it documents are its object, not claims about the program. A
+#: behaviour coordinated after it ("Document rejection and reject invalid
+#: input") is a claim of its own and is kept. Program output (help or usage
+#: text, messages) is never documentation here, and a passive "is documented
+#: in" is not recognised: such text stays behaviour, the conservative side.
+_DOC_SUBJECT = (r"(?:readme(?:\.\w+)?|docs?|documentation|changelog|(?:user\s+)?guide|manual|"
+                r"[\w./-]+\.(?:md|rst|adoc))")
+_DOC_ACTIVE = re.compile(
+    r"(?i)\b" + _DOC_SUBJECT + r"\s+(?:(?:must|should|shall)\s+)?(?:also\s+)?"
+    r"(?:documents?|describes?|explains?|lists?|states?|mentions?|notes?|covers?)\b")
+_DOC_IMPERATIVE = re.compile(r"(?i)^\s*(?:document|describe|explain)\b")
+_BEHAVIOUR_AFTER = re.compile(
+    r"(?i)(?:\band\b|,|\bthen\b)\s+(?:it\s+|they\s+|the\s+[\w-]+\s+)?(?:(?:must|should|shall|also)\s+)?"
+    r"(?:rejects?|refuses?|raises?|returns?|responds?|exits?|fails?|denies|deny|validates?|aborts?|leaves?|"
+    r"stores?|creates?|updates?|deletes?|writes?|prints?)\b")
+
+
+def _behaviour_text(text: str) -> str:
+    """The requirement with each documentation clause's object removed: what
+    it asserts about the program itself (``_DOC_ACTIVE``). Clauses are split
+    at a sentence end or a semicolon; text before a documentation subject and
+    any behaviour coordinated after it stay."""
+    kept = []
+    for clause in re.split(r"(?<=[.;])\s+|;\s*", text or ""):
+        hit = _DOC_ACTIVE.search(clause) or _DOC_IMPERATIVE.match(clause)
+        if hit is None:
+            kept.append(clause)
+            continue
+        rest = clause[hit.end():]
+        after = _BEHAVIOUR_AFTER.search(rest)
+        kept.append(clause[:hit.start()] + (rest[after.start():] if after else ""))
+    return " ".join(kept)
+
+
+def _behavioural_error(text: str) -> bool:
+    """Whether a requirement asserts error, refusal or invalid-input
+    behaviour of the program (``_error_clause`` over ``_behaviour_text``):
+    the claim that needs executed negative-path evidence. Documentation that
+    describes such behaviour is not that claim."""
+    return _error_clause(_behaviour_text(text))
+
+
 #: An error requirement whose input is an integer or an identifier (Davis,
 #: 2026-11-04, R19 of grok-worker-01: the 5000-digit ID). General
 #: vocabulary only, never a project's field names.
@@ -3161,7 +3214,7 @@ def boundary_classes(texts) -> list:
         classes.append(f"a decimal of {limit + 1} digits, where text is converted with this Python's int() "
                        f"(its limit is {limit} digits, sys.get_int_max_str_digits())")
     return [(rid, list(classes)) for rid, text in texts
-            if _error_clause(text) and _INTEGER_INPUT.search(text or "")]
+            if _behavioural_error(text) and _INTEGER_INPUT.search(_behaviour_text(text))]
 
 
 def boundary_note(texts) -> str:
@@ -3200,7 +3253,9 @@ _EXECUTED_ERROR_RULE = (
     "tests/test_config.py::ConfigTests::test_wrong_type'. A bare test name or a file alone is not such a "
     "citation. Each cited case must have run and passed on this source in the approved checks, or "
     "in a scratch test the harness ran for this requirement. A MET without that is not counted, "
-    "whatever it says. Other requirements cite files or tests as before.")
+    "whatever it says. A requirement that only asks documentation to describe errors or refusals is a "
+    "documentation claim, judged by reading that documentation; the behaviour it describes is judged under "
+    "the requirements that assert it. Other requirements cite files or tests as before.")
 
 
 #: A token that is a source or test file by its extension (a path operand
@@ -10898,9 +10953,10 @@ class Session:
                 if legacy != "on":
                     return (f"Proof scenario {proof['id']} declares capture evidence, but this task is not design "
                             "work with design evidence in force; declare a test case instead.")
-                if any(_error_clause(str(texts.get(r, ""))) for r in proof["requirements"]):
-                    return (f"Proof scenario {proof['id']} declares capture evidence for an error or refusal "
-                            "requirement; that needs an executed case.")
+                behavioural = [r for r in proof["requirements"] if _behavioural_error(str(texts.get(r, "")))]
+                if behavioural:
+                    return (f"Proof scenario {proof['id']} declares capture evidence for {', '.join(behavioural)}, "
+                            "which asserts error or refusal behaviour; that needs an executed case (evidence test).")
                 continue
             if proof.get("evidence", "test") != "reading":
                 continue
@@ -10911,9 +10967,21 @@ class Session:
             if not str(proof["location"]).lower().endswith(_DOC_SUFFIXES):
                 return (f"Proof scenario {proof['id']} declares reading evidence at {proof['location']}, which is "
                         "not a documentation file; a behavioural scenario needs a test case (evidence test).")
-            if any(_error_clause(str(texts.get(r, ""))) for r in proof["requirements"]):
-                return (f"Proof scenario {proof['id']} declares reading evidence for an error or refusal requirement; "
-                        "that needs an executed case.")
+            behavioural = [r for r in proof["requirements"] if _behavioural_error(str(texts.get(r, "")))]
+            if behavioural:
+                # Name the requirement and the behaviour it asserts, and the
+                # modality that fits, so the one correction can be made
+                # (cycle07: the bare refusal spent the correction budget).
+                others = [r for r in proof["requirements"] if r not in behavioural]
+                shown = "; ".join(f"{r}: '{_behaviour_text(str(texts.get(r, ''))).strip()[:160]}'"
+                                  for r in behavioural)
+                return (f"Proof scenario {proof['id']} declares reading evidence for {', '.join(behavioural)}, which "
+                        f"asserts error or refusal behaviour of the program ({shown}); prove that behaviour with an "
+                        "executed case in its own scenario (evidence test)"
+                        + (f", and keep reading evidence for the documentation claim of {', '.join(others)}"
+                           if others else "")
+                        + ". A requirement that only asks documentation to describe such behaviour takes reading "
+                        "evidence.")
         return ""
 
     def _covers_problem(self, covers) -> str:
@@ -14089,7 +14157,7 @@ class Session:
         texts = self.memory.ledger.requirements
         out = []
         for rid, (met, why) in list((original if original is not None else found).items()):
-            if not met or rid not in audited or not _error_clause(texts.get(rid, "")):
+            if not met or rid not in audited or not _behavioural_error(texts.get(rid, "")):
                 continue
             if self._executed_cases(_cited_cases(why), rid=rid):
                 continue
@@ -20224,7 +20292,7 @@ class Session:
                         else set())
         held = []
         for rid, rest in _met_lines(note).items():
-            if verdicts.get(rid) is not True or rid not in texts or not _error_clause(texts[rid]):
+            if verdicts.get(rid) is not True or rid not in texts or not _behavioural_error(texts[rid]):
                 continue
             cited = _cited_cases(rest)
             if set(cited) & demonstrated or self._executed_cases(cited):
