@@ -3050,6 +3050,35 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-cycle05-done-declarations",
+      "purpose": "Cycle05 (PR73 6715806056, 6716159070): no-edit DONE declarations, one audit required-line list, same-auditor completion of omitted ids; check.py full fallback hands broad regression to CI",
+      "base": "3b8ae4f15c6e3c5b7fc4b4e4df94902ea1133ab0",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/checkpoint.py",
+        "quadratus/project_run.py",
+        "tools/ci/check.py",
+        "tools/ci/plan.py",
+        "docs/testing/fast-feedback.md",
+        "tests/test_done_declarations_units.py",
+        "tests/lifecycle/test_done_declarations.py",
+        "tests/test_ci_runner.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-11-08T03:06:02Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "9c17005",
+        "at": "2026-11-08T03:27:20Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
