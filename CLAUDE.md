@@ -3280,12 +3280,22 @@ Key design decisions already settled:
     prose, and the extracted argv is the command's identity for the receipt.
     A `-k` selection, an application command and a mixed claim stay
     scenarios.
-  - *Inherited NOT RUN* (`_inherited_not_run`). A later task's NOT RUN line
-    naming the same file paths as another task's standing item, binding no
-    scenario of its own, about files this task did not change, is kept on
-    `inherited_not_run` and as `repeated_by` on the original. It is never a
-    new obligation over the repeating task's requirements. The original
-    item stays debt with its owner and requirements.
+  - *Inherited NOT RUN* (`_inherited_not_run`; corrected after root's
+    review of f7fc186, PR73 6723584415). Equal path sets inherited a
+    different scenario about the same test file, and a repeat made after the
+    application under test changed. A repeat is now the same report only
+    when all of these hold:
+    - the whole item text and its binding are the same;
+    - it names a path and no `| for:` requirement;
+    - the gate and environment are the same;
+    - the source fingerprint recorded with the earlier report (each entry's
+      `source`) equals the current one, both known;
+    - this task's measured changes, where the harness has them, are empty.
+    Such a repeat is kept on `inherited_not_run` and as `repeated_by` on
+    the original, with no new obligation and no declaration call. Anything
+    different or unknown is the task's own report and holds its own
+    requirements. That debt still reaches its owning lead through the DONE
+    declaration route, one call per owner.
   - *Declarations before the coverage gate.* DONE's declaration route and
     the cap's `_declare_at_cap` now run before the "not covered" refusal,
     once per DONE. In cycle09 an uncovered or audit-NOT-MET requirement

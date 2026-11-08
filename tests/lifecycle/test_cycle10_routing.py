@@ -198,46 +198,102 @@ def test_an_unlisted_requirement_in_resolves_is_sent_back_with_its_typed_route(t
     assert not replay.result.completed
 
 
-# -- C1. a repeated limitation is inherited, never re-filed -------------------------------------------
+# -- C1. only the same report on the same source is inherited ---------------------------------------
 
 HTTP = "NOT RUN: tests/test_http.py live HTTP acceptance cases/steps - no server can be started in my copy"
 
 
-def _with_item(tmp_path):
-    session = _session(tmp_path, {"R5": "GET /tickets returns 200", "R9": "README documents add"})
-    session._active_spec = SimpleNamespace(task_id="t3")
-    session._current_covers = ["R5"]
-    session._record_not_run("openai:sol", "lead", HTTP)
+def _reporting(tmp_path, report=HTTP):
+    """t1 (R1) reports the HTTP item on the project as it is; the next call
+    is t2's (R2). A real project, so the source fingerprint is measured."""
+    project = tmp_path / "p"
+    (project / "ticket_app").mkdir(parents=True)
+    (project / "tests").mkdir()
+    (project / "ticket_app" / "api.py").write_text("def patch():\n    return 200\n")
+    (project / "tests" / "test_http.py").write_text("def test_live():\n    pass\n")
+    session = _session(project, {"R1": "GET /tickets returns 200", "R2": "PATCH conflicts return 409"})
+    session._active_spec = SimpleNamespace(task_id="t1")
+    session._current_covers = ["R1"]
+    session._record_not_run("openai:sol", "lead", report)
     (first,) = session.unexecuted_acceptance
-    session._active_spec = SimpleNamespace(task_id="t5")
-    session._current_covers = ["R9"]
-    return session, first
+    session._active_spec = SimpleNamespace(task_id="t2")
+    session._current_covers = ["R2"]
+    session._task_changed_files = lambda spec: []
+    return session, first, project
 
 
-def test_a_later_task_repeating_a_standing_item_about_files_it_did_not_change_inherits_it(tmp_path):
-    session, first = _with_item(tmp_path)
+def _blockers(session):
+    session.checks.append(dict(source=session._source_fingerprint(), passed=True, results=[]))
+    return session._deterministic_blockers()
+
+
+def test_root_control_1_the_same_report_on_the_same_source_is_linked_to_its_owner(tmp_path):
+    session, first, _ = _reporting(tmp_path)
     obligations = len(session.evidence_obligations)
     session._record_not_run("grok:worker", "lead", HTTP)
-    assert session.unexecuted_acceptance == [first], "no new item for t5"
-    assert len(session.evidence_obligations) == obligations, "no new obligation"
+    assert session.unexecuted_acceptance == [first] and len(session.evidence_obligations) == obligations
     (repeat,) = session.inherited_not_run
-    assert repeat["task"] == "t5" and repeat["owner"] == "t3" and repeat["of"] == first.get("oid")
-    assert repeat["requirements_covered"] == ["R9"] and first["requirements"] == ["R5"]
-    assert first["repeated_by"] == [dict(task="t5", role="lead", after_check=0)]
-    assert "R9" not in session._deterministic_blockers(), "t5's own requirement is not held by t3's item"
+    assert repeat["task"] == "t2" and repeat["owner"] == "t1" and repeat["of"] == first["oid"]
+    assert first["repeated_by"] == [dict(task="t2", role="lead", after_check=0)]
+    assert set(_blockers(session)) == {"R1"}, "the owner's hold stands; nothing new is invented"
 
 
-@pytest.mark.parametrize("reply, changed", [
-    (HTTP, ["tests/test_http.py"]),
-    ("NOT RUN: tests/test_other.py live cases - no server", []),
-    ("NOT RUN: the live HTTP acceptance steps - no server", []),
-])
-def test_an_item_about_its_own_change_or_another_file_or_no_file_is_the_tasks_own(tmp_path, reply, changed):
-    session, first = _with_item(tmp_path)
-    session._task_changed_files = lambda spec: list(changed)
+def _own(session, first):
+    assert session.inherited_not_run == [] and "repeated_by" not in first
+    assert len(session.unexecuted_acceptance) == 2 and session.unexecuted_acceptance[-1]["task"] == "t2"
+    assert set(_blockers(session)) == {"R1", "R2"}, "the later report keeps its own requirement's hold"
+
+
+def test_root_control_2_a_different_scenario_about_the_same_file_is_its_own_report(tmp_path):
+    """Root's texts: the same single path, two different scenarios."""
+    session, first, _ = _reporting(tmp_path, "NOT RUN: tests/test_http.py live HTTP acceptance - no server")
+    session._record_not_run("grok:worker", "lead", "NOT RUN: tests/test_http.py concurrent PATCH conflict scenario"
+                                                     " - no server")
+    _own(session, first)
+
+
+def test_root_control_3_the_same_text_after_the_application_changed_is_a_fresh_report(tmp_path):
+    session, first, project = _reporting(tmp_path)
+    (project / "ticket_app" / "api.py").write_text("def patch():\n    return 409\n")
+    session._task_changed_files = lambda spec: ["ticket_app/api.py"]
+    session._record_not_run("grok:worker", "lead", HTTP)
+    _own(session, first)
+
+
+def test_a_changed_source_is_fresh_even_when_the_tasks_own_changes_are_not_measured(tmp_path):
+    """Per-task changed-file data unavailable: the source fingerprint decides."""
+    session, first, project = _reporting(tmp_path)
+    (project / "ticket_app" / "api.py").write_text("def patch():\n    return 409\n")
+    session._record_not_run("grok:worker", "lead", HTTP)
+    _own(session, first)
+
+
+def test_measured_changes_keep_the_report_even_where_the_fingerprint_came_back_equal(tmp_path):
+    session, first, _ = _reporting(tmp_path)
+    session._task_changed_files = lambda spec: ["ticket_app/api.py"]
+    session._record_not_run("grok:worker", "lead", HTTP)
+    _own(session, first)
+
+
+@pytest.mark.parametrize("change", ["gate", "environment", "claim", "unknown source", "no path", "case"])
+def test_a_different_gate_environment_claim_case_or_unknown_identity_keeps_its_own_debt(tmp_path, change):
+    session, first, project = _reporting(tmp_path)
+    reply = HTTP
+    if change == "gate":
+        session._current_gate = lambda: dict(commands=["python -m pytest -q tests/test_other.py"])
+    elif change == "environment":
+        session._environment_id = lambda: "another-environment"
+    elif change == "claim":
+        reply = HTTP + " | for: R2"
+    elif change == "unknown source":
+        session._source_fingerprint = lambda: None
+    elif change == "no path":
+        first["item"] = "the live HTTP acceptance steps"
+        reply = "NOT RUN: the live HTTP acceptance steps - no server"
+    elif change == "case":
+        reply = "NOT RUN: tests/test_http.py::test_live - no server"
     session._record_not_run("grok:worker", "lead", reply)
-    assert len(session.unexecuted_acceptance) == 2 and session.inherited_not_run == []
-    assert session.unexecuted_acceptance[-1]["task"] == "t5"
+    assert session.inherited_not_run == [] and len(session.unexecuted_acceptance) == 2, change
 
 
 # -- C2. declarations are offered before the coverage gate --------------------------------------------

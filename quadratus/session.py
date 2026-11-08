@@ -13367,6 +13367,9 @@ class Session:
                          # another source, gate or environment left the typed
                          # row unexecuted while the prompts showed no debt).
                          gate=_gate_identity(self._current_gate()), environment=self._environment_id())
+            # The source the report was made on (cycle10 correction): only a
+            # repeat on this exact source can be the same report.
+            entry["source"] = self._source_fingerprint() if self.project else None
             # What the item names, bound now so a later genuine execution
             # can discharge it (evidence lifecycle batch, 2026-10-29).
             self._bind_not_run(entry)
@@ -13378,7 +13381,8 @@ class Session:
                 self._note(f"task {task}: {role} said it could not read {', '.join(_pure_reading(item))}; "
                            "reading is not a check, so nothing is held for it")
                 continue
-            prior = self._inherited_not_run(entry)
+            claimed = re.findall(r"R\d+", declared.group(1).upper()) if declared else []
+            prior = None if claimed else self._inherited_not_run(entry)
             if prior is not None:
                 # A repeat of another task's standing item about files this
                 # task did not change is that item, not a new obligation of
@@ -13414,29 +13418,47 @@ class Session:
                 entry["executable"] = self._not_run_executable(entry)
 
     def _inherited_not_run(self, entry: dict) -> Optional[dict]:
-        """The standing NOT RUN item of an earlier task that ``entry``
-        repeats, or None (cycle10). A repeat names the same file paths as
-        that item (or the same text with at least one path), binds no
-        scenario of its own task, and this task changed none of those
-        paths: it is a limitation the run already holds, with its owner and
-        its requirements, and the repeating task inherits it, never a new
-        obligation over its own requirements. An item naming no path, one
-        that binds this task's scenario, or one about a file this task
-        changed is this task's own report."""
-        if (entry.get("binding") or {}).get("scenario"):
+        """The standing NOT RUN item of an earlier task that ``entry`` is the
+        same report of, or None (cycle10; root review of f7fc186, PR73
+        6723584415: equal path sets inherited a different scenario about the
+        same test file, and a repeat after the application under test
+        changed). Every one of these must hold, and anything unknown keeps
+        the report as this task's own debt:
+
+        - the whole item is the same text (whitespace and case aside), and
+          its binding (kind, scenario, cases, problem) is the same, with no
+          scenario of this task in it;
+        - it names at least one path, and the reporting seat names no
+          requirement for it (``| for: R<n>`` is the caller's to check);
+        - it was reported under the same gate and environment;
+        - the project's source fingerprint, now, equals the one recorded
+          with the earlier report, both known, so nothing the scenario
+          exercises has changed since (application code included); and
+        - this task's measured changes, where the harness has them, are
+          empty.
+
+        Such a repeat is linked to its owner and adds no obligation; a
+        report that differs in any of these is a new report."""
+        binding = entry.get("binding") or {}
+        if binding.get("scenario") or not _item_paths(str(entry.get("item") or "")):
             return None
-        item = str(entry.get("item") or "")
-        paths = set(_item_paths(item))
-        if not paths:
+        source = entry.get("source")
+        if not source:
             return None
-        if paths & set(self._task_changed_files(self._active_spec)):
+        if self._task_changed_files(self._active_spec):
             return None
-        text = " ".join(item.lower().split())
+        text = " ".join(str(entry.get("item") or "").lower().split())
+
+        def same_binding(other: dict) -> bool:
+            keys = ("kind", "scenario", "cases", "problem")
+            return all((other.get("binding") or {}).get(k) == binding.get(k) for k in keys)
         for prior in self._standing_not_run():
-            if prior.get("task") == entry.get("task") or prior.get("kind") == "skipped":
+            if (prior.get("task") == entry.get("task") or prior.get("kind") == "skipped" or not prior.get("oid")
+                    or prior.get("association_claimed")):
                 continue
-            other = str(prior.get("item") or "")
-            if set(_item_paths(other)) == paths or " ".join(other.lower().split()) == text:
+            if (" ".join(str(prior.get("item") or "").lower().split()) == text and same_binding(prior)
+                    and prior.get("gate") == entry.get("gate") and prior.get("environment") == entry.get("environment")
+                    and prior.get("source") == source):
                 return prior
         return None
 
