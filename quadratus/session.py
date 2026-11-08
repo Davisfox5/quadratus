@@ -3062,6 +3062,48 @@ _REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+M
 #: or value is named. Such a requirement is accepted only on executed
 #: negative-path evidence (Session._executed_cases); no model's reading,
 #: applicability note or "tested" claim stands in for a run.
+#: Every word a requirement whose whole claim is "this test command runs and
+#: passes" may use besides the command itself (``_test_command_requirement``).
+#: A word outside it (a behaviour, a value, an endpoint, a status) makes the
+#: requirement a behaviour with its own scenario.
+_PASS_ONLY_WORDS = frozenset("""
+    a all an and any be before by case cases cleanly code completion declaring delivered done entire every
+    exit exits existing fail fails failing failure failures full green is it its must no on pass passes
+    passing project run runs running should source status succeed succeeds success successfully suite test
+    tests the under using via when whole with without zero 0 error errors
+""".split())
+
+
+def _test_runner_shape(argv) -> bool:
+    """Whether argv is a test runner run as a whole: ``pytest`` or
+    ``python -m pytest|unittest`` followed only by options, ``discover``
+    (unittest), test paths or a ``tests``/``test`` folder, or exactly
+    ``npm test`` / ``make test``. An option's value that is not one of those
+    (``-k refunds``) is a selection, and an application run (``python app.py
+    pytest``) is not a runner."""
+    argv = [str(a) for a in argv or ()]
+    if not argv:
+        return False
+    head, rest = os.path.basename(argv[0]), argv[1:]
+    if head in ("npm", "make"):
+        return rest == ["test"]
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", head):
+        if len(rest) < 2 or rest[0] != "-m" or rest[1] not in ("pytest", "unittest"):
+            return False
+        runner, rest = rest[1], rest[2:]
+    elif head == "pytest":
+        runner = "pytest"
+    else:
+        return False
+    for arg in rest:
+        if arg.startswith("-") or (runner == "unittest" and arg == "discover"):
+            continue
+        if is_test_path(arg) or arg.rstrip("/") in ("tests", "test"):
+            continue
+        return False
+    return True
+
+
 _ERROR_CLAUSE = re.compile(
     r"\b(?:raises?|raised|raising|rejects?|rejected|rejecting|rejection|refus(?:e|es|ed|ing|al)|invalid|"
     r"malformed|non-?zero|exceptions?|denied|forbidden|conflicts?|not found|(?:HTTP|status)\s*[45]\d\d|"
@@ -11191,19 +11233,39 @@ class Session:
         return argv or None
 
     def _test_command_requirement(self, rid: str) -> bool:
-        """Whether a requirement's claim is that a named test command passes
-        (``_TEST_COMMAND_RULE``): the command its text names
-        (``_command_requirement``) is a test runner, python's unittest or
-        pytest, ``npm test`` or ``make test``. A requirement naming any other
-        command (a server, a CLI under test) is a behaviour and needs its
-        scenario."""
+        """Whether a requirement's whole claim is that a named test command
+        passes (``_TEST_COMMAND_RULE``). Conservative: anything unclear keeps
+        its scenario. Both must hold (root review of 63fbef7, PR73
+        6718399838: a runner name anywhere in argv exempted three
+        behavioural requirements):
+
+        - the requirement names exactly one command, and it has a test
+          runner's own shape (``_test_runner_shape``): ``pytest`` or
+          ``python -m pytest`` / ``python -m unittest`` followed only by
+          options, ``discover``, test paths or ``tests``, or exactly
+          ``npm test`` / ``make test``. ``python app.py pytest`` runs an
+          application, and a ``-k`` selection is not the whole suite;
+        - with that command removed, every word of the requirement is
+          run-and-pass vocabulary (``_PASS_ONLY_WORDS``): no behaviour,
+          value, endpoint or status is asserted beside it. "refunds are
+          atomic" or "malformed JSON returning 400" next to the command
+          make it a behaviour, which needs its scenario."""
+        text = str(self.memory.ledger.requirements.get(rid) or "")
         argv = self._command_requirement(rid) or []
-        if not argv:
+        if not argv or not _test_runner_shape(argv):
             return False
-        head = os.path.basename(argv[0])
-        if head == "pytest" or "pytest" in argv[1:3] or "unittest" in argv[1:3]:
-            return True
-        return head in ("npm", "make") and len(argv) > 1 and argv[1] == "test"
+        ticked = re.findall(r"`([^`\n]+)`", text)
+        if ticked:
+            if len(ticked) != 1:
+                return False
+            rest = text.replace(f"`{ticked[0]}`", " ")
+        else:
+            phrase = " ".join(argv)
+            if text.count(phrase) != 1:
+                return False
+            rest = text.replace(phrase, " ")
+        words = re.findall(r"[a-z0-9']+", rest.lower())
+        return bool(words) and all(w.removesuffix("'s") in _PASS_ONLY_WORDS for w in words)
 
     @staticmethod
     def _command_key(argv) -> Tuple[str, ...]:

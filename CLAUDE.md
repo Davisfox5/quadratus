@@ -3132,12 +3132,18 @@ Key design decisions already settled:
       The t6 recheck saw only the revision and asked for a truthful NOT RUN
       to be deleted.
     - A requirement whose whole claim is that a named test command passes
-      (`_test_command_requirement`: unittest, pytest, `npm test`,
-      `make test`) needs no proof scenario (`_TEST_COMMAND_RULE`, stated to
+      needs no proof scenario (`_TEST_COMMAND_RULE`, stated to
       the planner, and to the lead and reviewers that cover one). The
       harness's exact receipt is cited and the audit judges it. It stays NOT
       MET when no configured check runs the command. t5/t6 built a test that
-      ran the suite inside itself.
+      ran the suite inside itself. Classification is conservative
+      (`_test_command_requirement`; root review of 63fbef7, PR73 6718399838):
+      exactly one command, of a runner's own shape (`_test_runner_shape`:
+      `pytest` or `python -m pytest|unittest` with only options,
+      `discover`, test paths or `tests`; exactly `npm test` or `make test`),
+      and every other word in run-and-pass vocabulary (`_PASS_ONLY_WORDS`).
+      A runner name as an application argument, a `-k` selection, or any
+      behaviour beside the command keeps the scenario.
     - The task cap reaches the declaration route (`_declare_at_cap`) before
       it skips the goal question as known incomplete, and before the final
       audit. It uses the same plan, decision accounting and pricing, with no

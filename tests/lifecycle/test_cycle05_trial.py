@@ -79,6 +79,51 @@ def test_only_a_test_runner_command_is_a_test_command_requirement(tmp_path):
     assert [r for r in REQS if session._test_command_requirement(r)] == ["R24", "R25", "R26"]
 
 
+#: Root's review of 63fbef7 (PR73 6718399838): a runner name anywhere in argv
+#: exempted these behaviours from their scenarios.
+ROOT_BEHAVIOURS = [
+    "`pytest -q tests/refunds.py` passes and refunds are atomic when the bank rejects a transfer",
+    "`python app.py pytest` prints the requested test runner name and exits zero",
+    "Add tests for malformed JSON returning 400; run `pytest -q` before completion",
+]
+OTHER_BEHAVIOURS = [
+    "`python -m app serve` starts the server and GET /tickets returns 200",
+    "`python -m pytest -k refunds` passes",
+    "`pytest` and `npm test` pass",
+    "tests are written with unittest",
+    "python app.py pytest prints the runner name",
+]
+PASS_ONLY = [
+    "the whole suite passes under `python -m unittest discover`",
+    "pytest -q passes on the delivered source",
+    "`npm test` passes",
+    "Run `pytest -q` before declaring completion",
+    "The project's tests run with `python3 -m unittest discover -s tests` and pass",
+    "All tests pass when run with `python -m pytest`",
+]
+
+
+@pytest.mark.parametrize("text, exempt", [(t, False) for t in ROOT_BEHAVIOURS + OTHER_BEHAVIOURS]
+                         + [(t, True) for t in PASS_ONLY])
+def test_only_a_whole_claim_that_a_test_runner_passes_is_exempt_from_its_scenario(tmp_path, text, exempt):
+    session = _session(tmp_path, {"R1": text})
+    assert session._test_command_requirement("R1") is exempt, text
+    spec = SimpleNamespace(scope=SimpleNamespace(proofs=None, review_only=False), task_id="t5")
+    problem = session._proof_problem(spec, ["R1"])
+    assert (problem == "") is exempt, (text, problem)
+    if not exempt:
+        assert "declares no proof scenarios" in problem, "the behaviour keeps its scenario mapping"
+
+
+def test_a_runner_shape_is_the_runner_run_whole():
+    from quadratus.session import _test_runner_shape
+    assert _test_runner_shape(["python3.12", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"])
+    assert _test_runner_shape(["pytest", "-q", "tests/test_app.py"]) and _test_runner_shape(["make", "test"])
+    for argv in (["python", "app.py", "pytest"], ["python", "-m", "pytest", "-k", "refunds"],
+                 ["npm", "test", "--", "--grep", "x"], ["npm", "run", "build"], ["python", "-m", "app"], []):
+        assert not _test_runner_shape(argv), argv
+
+
 def test_a_test_command_requirement_maps_to_no_scenario_and_a_behaviour_still_does(tmp_path):
     from quadratus.session import _SCOPE_REQUEST, _TEST_COMMAND_RULE
     session = _session(tmp_path, REQS)
