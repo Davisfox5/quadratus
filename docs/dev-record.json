@@ -3073,8 +3073,8 @@
       "claimed_at": "2026-11-08T03:06:02Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "286bcb9d4203def1488852477de2a132c35a8be0",
-        "at": "2026-11-08T15:28:05Z"
+        "sha": "028324eb018b658234187c6217a381cadffbcba0",
+        "at": "2026-11-08T16:01:51Z"
       },
       "reviews": [],
       "blockers": [],
