@@ -277,6 +277,12 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         monkeypatch.delenv(f"QUADRATUS_CLI_ARGS_{vendor}", raising=False)
     monkeypatch.delenv("QUADRATUS_CONTAINED", raising=False)
     monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    # These synthetic projects use pytest's built-ins and explicitly declared
+    # plugins only. Every real gate uses a fresh bytecode prefix, so automatic
+    # discovery otherwise reimports/recompiles unrelated installed plugins on
+    # every controller round. PYTEST_PLUGINS and project conftest hooks still
+    # load normally, including the real attribution producer.
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     monkeypatch.setattr(cli_providers, "_launch", fake_launch(replay))
     monkeypatch.setattr(cli_providers.CLIProvider, "available", lambda self: True)
     if lead_runs_commands:
