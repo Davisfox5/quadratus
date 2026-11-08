@@ -3193,18 +3193,23 @@ Key design decisions already settled:
     whose subject is documentation the work writes (a README, the docs or
     documentation, a changelog, a guide or manual, a named .md/.rst/.adoc
     file) with a documenting verb, or a clause starting with the
-    imperative Document/Describe/Explain, asserts what that text says. Its
-    object is not a claim about the program. The error rule applies to what
-    remains:
-    - text before the documentation subject;
-    - other sentences and semicolon clauses;
-    - a behaviour coordinated after the clause ("Document rejection and
-      reject invalid input" keeps "reject invalid input").
-  - *Conservative on purpose.* Program output (help, usage, messages) is
-    never documentation here. A passive "is documented in" is not
-    recognised, so it stays behaviour and needs executed evidence. This is
-    a structural reading of prose, not an understanding of it, and other
-    phrasings stay where they were.
+    imperative Document/Describe/Explain, asserts what that text says. Only
+    its confident part is removed:
+    - the documenting verb's own object, up to the first
+      `_SEGMENT_BOUNDARY` (a comma or semicolon, and/or/but/while/whereas/
+      then/so that/ensure/which/whose);
+    - later segments that open with an `_OBJECT_CONTINUATION` word
+      (including, such as, with, without, for, of, in, as, ...).
+
+    Every other segment is kept as a possible runtime claim, and the error
+    rule applies to it. Root's review of 06c708d (PR73 6720550674) found
+    that "and API rejects", "and the HTTP API rejects", ", while the
+    service rejects" and "and ensure ... are rejected" were all discarded
+    as documentation because only a short verb grammar was recognised.
+    Unrecognised now means behaviour. The cost is stated: "README documents
+    the refusal rules and the error codes" is kept as possible behaviour,
+    and "..., including the error codes" is the unambiguous documentation
+    form.
   - *Consumers.* All of these read `_behavioural_error`:
     - `_proof_problem`, for reading and capture evidence;
     - `_lower_unexercised_errors`, the audit;

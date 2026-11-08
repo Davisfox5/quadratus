@@ -46,10 +46,49 @@ PLAN_2 = _simple("README.md", "Document add and its refusal rules in README.md."
     ("Refusal rules are documented in the README", True),
     ("The CLI --help explains the refusal rules", True),
     ("GET /tickets/<id> returns 404 for an unknown ticket", True),
+    ("docs/errors.md lists every error code", False),
+    # Root review of 06c708d (PR73 6720550674) and nearby unseen forms: a
+    # predicate after a boundary inside a documentation clause stays behaviour.
+    *[(t, True) for t in [
+        "README documents rejection and API rejects invalid IDs without mutation",
+        "README documents rejection and the HTTP API rejects invalid IDs without mutation",
+        "README documents rejection, while the service rejects invalid IDs without mutation",
+        "Document the error codes and ensure invalid IDs are rejected without mutation",
+        "README documents the refusal rules; malformed IDs must be refused",
+        "The README explains the error codes, but the CLI exits non-zero on invalid input",
+    ]],
+    # The conservative cost, stated: a listed item that itself names error
+    # vocabulary after "and" is kept as possible behaviour ("including ..."
+    # is the unambiguous documentation form).
+    ("README documents the refusal rules and the error codes", True),
+    ("README documents the refusal rules, including the error codes", False),
 ])
 def test_a_documentation_assertion_about_behaviour_is_not_the_behaviour(text, behavioural):
     assert _error_clause(text), "every case names error language somewhere"
     assert _behavioural_error(text) is behavioural, _behaviour_text(text)
+
+
+ROOT_MIXED = [
+    "README documents rejection and API rejects invalid IDs without mutation",
+    "README documents rejection and the HTTP API rejects invalid IDs without mutation",
+    "README documents rejection, while the service rejects invalid IDs without mutation",
+    "Document the error codes and ensure invalid IDs are rejected without mutation",
+    "The README explains the error codes, but the CLI exits non-zero on an invalid ID",
+]
+
+
+@pytest.mark.parametrize("text", ROOT_MIXED)
+def test_a_mixed_requirement_keeps_its_runtime_obligation_in_every_consumer(tmp_path, text):
+    """Root's four controls on 22de5f9, and one unseen form: a reading proof
+    is refused, an uncited MET is lowered, and the boundary candidates apply."""
+    session = _session(tmp_path, {"R1": text})
+    problem = session._proof_problem(_spec(_reading("P1", ["R1"])), ["R1"])
+    assert "declares reading evidence for R1," in problem, problem
+    session._executed_cases = lambda cited, rid=None: []
+    found = {"R1": (True, "README.md documents it")}
+    assert [x["requirement"] for x in session._lower_unexercised_errors(found, {"R1": text})] == ["R1"]
+    assert found["R1"][0] is False
+    assert boundary_classes([("R1", text)]), "the integer/identifier candidates still reach its lead and reviewer"
 
 
 def test_the_boundary_candidates_follow_the_behaviour_not_the_documentation():

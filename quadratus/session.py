@@ -3142,27 +3142,45 @@ _DOC_ACTIVE = re.compile(
     r"(?i)\b" + _DOC_SUBJECT + r"\s+(?:(?:must|should|shall)\s+)?(?:also\s+)?"
     r"(?:documents?|describes?|explains?|lists?|states?|mentions?|notes?|covers?)\b")
 _DOC_IMPERATIVE = re.compile(r"(?i)^\s*(?:document|describe|explain)\b")
-_BEHAVIOUR_AFTER = re.compile(
-    r"(?i)(?:\band\b|,|\bthen\b)\s+(?:it\s+|they\s+|the\s+[\w-]+\s+)?(?:(?:must|should|shall|also)\s+)?"
-    r"(?:rejects?|refuses?|raises?|returns?|responds?|exits?|fails?|denies|deny|validates?|aborts?|leaves?|"
-    r"stores?|creates?|updates?|deletes?|writes?|prints?)\b")
+#: Where a documentation clause's object may end and another claim begin: a
+#: comma or semicolon, a coordinator, a subordinator, or "ensure" (root review
+#: of 06c708d, PR73 6720550674: "and API rejects", "and the HTTP API rejects",
+#: ", while the service rejects", "and ensure ... are rejected" were all
+#: discarded as documentation). The word that opens a segment stays with it.
+_SEGMENT_BOUNDARY = re.compile(
+    r"\s*[,;]\s*|\s+(?=(?:and|or|but|while|whereas|then|so\s+that|ensur(?:e|es|ing)|which|whose)\b)",
+    re.IGNORECASE)
+_COORDINATOR = re.compile(r"(?i)^(?:and|or|then)\b\s*")
+#: A segment that continues the documented object rather than asserting
+#: something new: it opens with one of these words.
+_OBJECT_CONTINUATION = re.compile(
+    r"(?i)^(?:including|such\s+as|for\s+example|e\.g\.|like|covering|listing|with|without|for|of|in|as|"
+    r"plus|alongside)\b")
 
 
 def _behaviour_text(text: str) -> str:
-    """The requirement with each documentation clause's object removed: what
-    it asserts about the program itself (``_DOC_ACTIVE``). Clauses are split
-    at a sentence end or a semicolon; text before a documentation subject and
-    any behaviour coordinated after it stay."""
+    """The requirement with the confident part of each documentation clause
+    removed: what it asserts about the program itself (``_DOC_ACTIVE``).
+    Clauses are split at a sentence end or a semicolon. In a documentation
+    clause only the documenting verb's own object (up to the first
+    ``_SEGMENT_BOUNDARY``) and later segments that continue it
+    (``_OBJECT_CONTINUATION``: "including the refusal rules", "without
+    narrowing the contract") are removed; text before the documentation
+    subject and every other segment stay, as possible runtime claims, so an
+    unrecognised predicate defaults to behaviour."""
     kept = []
     for clause in re.split(r"(?<=[.;])\s+|;\s*", text or ""):
         hit = _DOC_ACTIVE.search(clause) or _DOC_IMPERATIVE.match(clause)
         if hit is None:
             kept.append(clause)
             continue
-        rest = clause[hit.end():]
-        after = _BEHAVIOUR_AFTER.search(rest)
-        kept.append(clause[:hit.start()] + (rest[after.start():] if after else ""))
-    return " ".join(kept)
+        kept.append(clause[:hit.start()])
+        segments = [seg for seg in _SEGMENT_BOUNDARY.split(clause[hit.end():]) if seg and seg.strip()]
+        for seg in segments[1:]:
+            body = _COORDINATOR.sub("", seg.strip())
+            if body and not _OBJECT_CONTINUATION.match(body):
+                kept.append(body)
+    return " ".join(part for part in kept if part.strip())
 
 
 def _behavioural_error(text: str) -> bool:
