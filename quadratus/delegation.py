@@ -354,6 +354,12 @@ def safe_diagnostics(value) -> dict:
     status = value.get('status')
     if type(status) is int and 100 <= status <= 599:
         result['status'] = status
+    # The wait before a re-sent attempt and why (providers.TransientOverload).
+    wait = value.get('retry_wait_seconds')
+    if type(wait) in (int, float) and 0 <= wait <= 86_400:
+        result['retry_wait_seconds'] = float(wait)
+    if value.get('retry_cause') == 'overloaded':
+        result['retry_cause'] = 'overloaded'
     failure_class = value.get('failure_class')
     if failure_class in ('cap', 'auth', 'rate_limited', 'unavailable'):
         result['failure_class'] = failure_class

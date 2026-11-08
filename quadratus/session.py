@@ -3153,7 +3153,10 @@ def boundary_classes(texts) -> list:
     limit = _int_conversion_limit()
     classes = ["non-numeric text, where the ID is numeric", "an empty or missing value",
                "a negative value and zero, where the ID is a positive integer",
-               "2**63 (9223372036854775808), where values reach a signed 64-bit or SQLite INTEGER store"]
+               "2**63 (9223372036854775808), where values reach a signed 64-bit or SQLite INTEGER store",
+               # The same store's lower edge (cycle06 run: a negative ID past
+               # it reached the binding unchecked while the upper was bounded).
+               "-(2**63)-1 (-9223372036854775809), where a negative value is accepted and reaches the same store"]
     if limit:
         classes.append(f"a decimal of {limit + 1} digits, where text is converted with this Python's int() "
                        f"(its limit is {limit} digits, sys.get_int_max_str_digits())")

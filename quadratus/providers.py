@@ -66,6 +66,26 @@ class PartialWorkSuspected(ProviderError):
         self.cause = cause
 
 
+class TransientOverload(ProviderError):
+    """The vendor said it was overloaded and did not answer: a typed status
+    (Anthropic's 529 overloaded_error, as the Claude CLI's error envelope
+    reports it) on a call whose usage the envelope settled. Retried a
+    bounded number of times by ``_generate_once``, only where a replay
+    cannot be a second edit (cycle06 run 20261108T075040Z-4454b282: the
+    read-only planner's 529 ended a run with 32 calls and 2.36M tokens
+    left). Never matched from a model's prose."""
+
+    def __init__(self, message: str, *, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+#: How many times one call is re-sent after a TransientOverload, each one a
+#: separately admitted attempt (``_observed_call``): budget, finish hold and
+#: ledger as for any attempt.
+MAX_TRANSIENT_RETRIES = 2
+
+
 class ProviderRefusal(ProviderError):
     """The model's safety classifiers declined the request.
 
@@ -342,6 +362,8 @@ class LLMProvider:
         started = time.monotonic()
         failure = None
         text = ""
+        waited = getattr(self, "_retry_wait", None)
+        self._retry_wait = None
         try:
             text = self._call(prompt, system, turns)
             if not text:
@@ -351,6 +373,10 @@ class LLMProvider:
             failure = exc
             raise
         finally:
+            if waited:
+                # The wait before this re-sent attempt, on its own ledger row.
+                self.last_diagnostics = {**(getattr(self, "last_diagnostics", None) or {}),
+                                         "retry_wait_seconds": waited["seconds"], "retry_cause": waited["cause"]}
             budget_failure = None
             if control is not None:
                 try:
@@ -397,6 +423,15 @@ class LLMProvider:
                 if not text:
                     raise ProviderError(f"{self.label} returned an empty response.")
                 return text
+            except TransientOverload as exc:
+                wait = self._transient_wait(exc, attempt)
+                if wait is None:
+                    raise
+                log.warning("%s was overloaded (status %s); re-sending the same call in %.1fs (attempt %d).",
+                            self.label, exc.status, wait, attempt + 1)
+                self._retry_wait = dict(seconds=round(wait, 3), cause="overloaded", status=exc.status)
+                time.sleep(wait)
+                continue
             except (ProviderError, RunBudgetExceeded):
                 raise
             except Exception as exc:
@@ -433,6 +468,46 @@ class LLMProvider:
                     continue
                 break
         raise ProviderError(f"{self.label} call failed: {last_exc}") from last_exc
+
+    def _transient_wait(self, exc: "TransientOverload", attempt: int) -> Optional[float]:
+        """The wait before re-sending a call the vendor refused as overloaded,
+        or None when it must not be re-sent: the retries are spent
+        (``MAX_TRANSIENT_RETRIES``, within ``max_retries``), the call could
+        write (a replay against a tree it may have changed is a second edit),
+        its usage is unknown (nothing settled the attempt), or the wait would
+        not leave the run's own wall time, after the finish hold, for the
+        call itself. The same seat, model and role are re-sent; nothing
+        falls back to another model or an API key."""
+        if attempt >= min(MAX_TRANSIENT_RETRIES, self.max_retries - 1):
+            return None
+        if getattr(self, "allow_writes", False):
+            return None
+        if getattr(self, "last_usage", None) is None:
+            return None
+        wait = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
+        control = getattr(self, "run_budget", None)
+        if control is not None:
+            snap = control.snapshot()
+            limits = snap.get("limits") or {}
+            from .run_budget import FINISH_STAGES, finish_stage
+            stage = finish_stage.get()
+            pending = [p for p in ((snap.get("finish_protection") or {}).get("pending") or []) if p in FINISH_STAGES]
+            # The finishing calls still held after this one (all of them for
+            # an ordinary call), as the budget's own admission counts them.
+            held_calls = len(pending if stage is None else
+                             [p for p in pending if FINISH_STAGES.index(p) > FINISH_STAGES.index(stage)])
+            if limits.get("max_calls") is not None and (
+                    int(limits["max_calls"]) - int(snap.get("reserved_attempts") or 0) < 1 + held_calls):
+                # No attempt is left for it: waiting would only delay the
+                # same stop (or the finish hold's refusal).
+                return None
+            held = float((snap.get("finish_protection") or {}).get("held_wall_seconds") or 0)
+            left = float(limits.get("wall_seconds") or 0) - float(snap.get("elapsed_seconds") or 0) - held
+            if wait >= left / 2:
+                # Half of what is left at most: the re-sent call needs time
+                # of its own after the wait.
+                return None
+        return wait
 
 
 def _field(obj, name: str, default=None):

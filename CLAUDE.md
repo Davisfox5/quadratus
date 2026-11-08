@@ -3154,6 +3154,31 @@ Key design decisions already settled:
       and a later one cannot represent. `_PROTOCOL_RULE` (audit and review)
       reads requirements under the named protocol's semantics, for example
       no body on HEAD.
+- **A typed overload on a read-only call is re-sent, boundedly; nothing else
+  is** (cycle06 run 20261108T075040Z-4454b282, PR73 6719287741). The
+  planner's Claude CLI answered "API Error: 529 Overloaded" with zero usage.
+  `_extract_claude_result` raised a plain ProviderError and `_generate_once`
+  rethrows every ProviderError, so the run ended with 32 calls, 2.36M tokens
+  and 3 slots left.
+  - *The one retried failure.* A claude error envelope whose status is 529
+    (`api_error_status`, or the client's own "API Error: 529" line,
+    `_envelope_status`) and that carries usage is `TransientOverload`. A
+    model's prose is never read for it, and a 5xx other than 529 is not one.
+  - *When it is re-sent* (`_generate_once`, `_transient_wait`):
+    - at most `MAX_TRANSIENT_RETRIES` (2) times, and never past
+      `max_retries`, so a summary view's single attempt stays single;
+    - only on a call that cannot write, so it is never an ambiguous replay;
+    - only with settled usage;
+    - only when the budget leaves an attempt beyond the finishing calls
+      still held, and the wait is under half the wall time left after the
+      finish hold.
+  - *What a re-send is.* The same seat, model, role and prompt; no other
+    model or API key. Each re-send is its own admitted attempt (reserve,
+    settle, ledger row, finish hold). The re-sent row carries
+    `retry_wait_seconds` and `retry_cause: overloaded`.
+  - *Unchanged.* TurnLimitReached, refusals, PartialWorkSuspected, window
+    and auth exhaustion, unknown usage and every other ProviderError keep
+    their behaviour.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

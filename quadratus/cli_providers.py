@@ -66,7 +66,14 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .delegation import NativeChild
-from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn, TurnLimitReached
+from .providers import (
+    LLMProvider,
+    ProviderError,
+    ProviderRefusal,
+    TransientOverload,
+    Turn,
+    TurnLimitReached,
+)
 
 log = logging.getLogger(__name__)
 
@@ -223,6 +230,17 @@ def client_version(path: str, args: Sequence[str]) -> Optional[str]:
     return _CLIENT_VERSIONS[key]
 
 
+def _envelope_status(payload: dict, detail: str) -> Optional[int]:
+    """The HTTP status a claude error envelope reports: its integer
+    ``api_error_status``, else one the client's own error line states
+    (``API Error: 529 ...``, ``_STATUS_IN_TEXT``), else None."""
+    status = payload.get("api_error_status")
+    if type(status) is int and 100 <= status <= 599:
+        return status
+    found = _STATUS_IN_TEXT.search(detail or "")
+    return int(found.group(1)) if found else None
+
+
 def _extract_claude_result(stdout: str) -> str:
     """Pull the assistant text out of ``claude --output-format json``."""
     payload = json.loads(stdout)
@@ -255,6 +273,12 @@ def _extract_claude_result(stdout: str) -> str:
             "; ".join(str(e) for e in errors) if isinstance(errors, list) else "")
         if not str(detail).strip():
             detail = f"no detail in the envelope (subtype {payload.get('subtype')!r})"
+        status = _envelope_status(payload, str(detail))
+        if status == 529 and isinstance(payload.get("usage"), dict):
+            # Overloaded, typed by the envelope's own status (or the client's
+            # "API Error: 529" error line), with usage the envelope settled:
+            # the one failure re-sent by _generate_once (cycle06 run).
+            raise TransientOverload(f"claude reported an error: {str(detail)[:300]}", status=status)
         raise ProviderError(f"claude reported an error: {str(detail)[:300]}")
     if payload.get("stop_reason") == "max_tokens":
         # The output limit cut the final message: whatever text came back is

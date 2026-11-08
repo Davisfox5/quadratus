@@ -193,5 +193,6 @@ def test_a_returned_status_names_an_error_requirement_and_reaches_the_int64_cand
     assert bool(rows) is (error and "id" in text)
     if rows:
         assert any("9223372036854775808" in c for c in rows[0][1])
+        assert any("-9223372036854775809" in c for c in rows[0][1]), "both edges of the signed 64-bit store"
     assert "an integer wider than a storage column or a database binding" in _ERROR_BOUNDARY_LENS
 
