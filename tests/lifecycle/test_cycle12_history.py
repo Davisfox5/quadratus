@@ -209,7 +209,7 @@ def test_a_long_reason_never_cuts_the_example_and_omissions_are_counted(tmp_path
     history = session._audit_history(["R1"])
     assert history.count(f"Example: {example}.") == 3, "the example is whole on every shown entry"
     assert "more characters in artifact art5" in history
-    assert "(2 earlier entries for R1 not shown: audit(s) 1, 2; reply artifacts art1, art2)" in history
+    assert "(2 earlier audit entries not shown here, for 1 requirement(s): R1. Each audit's whole reply" in history
 
 
 def test_stale_source_revised_requirement_later_met_and_rulings_are_shown_as_such(tmp_path):
@@ -223,8 +223,8 @@ def test_stale_source_revised_requirement_later_met_and_rulings_are_shown_as_suc
     assert "an earlier source S1" in history
     assert "revised since (now 3): judge the current wording" in history
     assert "Audit 2 later found R1 MET on another source." in history
-    assert "Current decision for R1 (binds over any older condition)" in history
-    assert "Current ruling naming R1 (binds over any older condition): R1 accepts '+1' as 1" in history
+    assert "Current decision naming R1 (binds over any older condition)" in history
+    assert "Current ruling 1 naming R1 (binds over any older condition): R1 accepts '+1' as 1" in history
 
 
 def test_reading_history_changes_no_finding_owner_or_status(tmp_path):
@@ -311,3 +311,52 @@ def test_the_reviewer_is_offered_the_note_only_for_an_error_requirement(tmp_path
     assert _BOUNDARY_NOTE_RULE in session._goal_authority()
     session._covered_texts = lambda: [("R2", "add returns the sum")]
     assert _BOUNDARY_NOTE_RULE not in session._goal_authority()
+
+
+# -- 3b. one shared bound, framing and metadata included (root review of b54a28c) -------------------
+
+def test_many_requirements_and_their_metadata_stay_inside_one_bound_with_every_omission_counted(tmp_path):
+    """Root's reproduction: 23 requirements, one 500-character reason and a
+    400-character example each, rendered 24,515 characters on b54a28c."""
+    from quadratus.session import _HISTORY_TOTAL_CHARS
+    rids = [f"R{n}" for n in range(1, 24)]
+    session = _session(tmp_path, {rid: f"{rid} refuses invalid input" for rid in rids})
+    session.memory.ledger.decisions["R2"] = "R2 - spellings are unspecified, so '+1' stays accepted"
+    session.memory.ledger.rulings.append("R3 is judged on the HTTP layer only. " + "x" * 900)
+    example = "PATCH /t/1 with " + "y" * 380
+    session.requirement_audits = [dict(
+        auditor="openai:sol", source="S1", reply_artifact="art1", failed=False,
+        verdicts={rid: dict(met=False, why="w") for rid in rids}, stated=list(rids),
+        stated_reasons={rid: f"{rid} " + "z" * 496 + f"; example: {example}" for rid in rids},
+        revisions={rid: 1 for rid in rids}, bases={})]
+    history = session._audit_history(rids)
+    assert len(history) <= _HISTORY_TOTAL_CHARS, len(history)
+    assert "historical questions, not current findings" in history and "transfers no finding or owner" in history
+    shown = [rid for rid in rids if f"\n- {rid}: audit 1" in history]
+    assert 0 < len(shown) < len(rids)
+    hidden = len(rids) - len(shown)
+    assert (f"({hidden} earlier audit entries not shown here, for {hidden} requirement(s): " in history
+            and "Each audit's whole reply is kept as a run artifact (audits 1-1, kind audit-reply)" in history)
+    assert f"and {hidden - 8} more" in history, "the omission line names a bounded list"
+    assert history.count(f"Example: {example}.") == len(shown), "every shown entry keeps its whole example"
+    if "R2" in shown:
+        assert "Current decision naming R2 (binds over any older condition)" in history
+    if "R3" in shown:
+        assert "Current ruling 1 naming R3 binds over any older condition; it is" in history
+        assert "x" * 50 not in history, "a long ruling is named, never cut"
+
+
+def test_a_requirement_is_never_shown_without_what_supersedes_it(tmp_path):
+    from quadratus.session import _HISTORY_TOTAL_CHARS
+    rids = ["R1", "R2"]
+    session = _session(tmp_path, {"R1": "refuses invalid input", "R2": "refuses invalid input"})
+    session.memory.ledger.rulings.extend([f"R2 ruling {i}: " + "q" * 500 for i in range(12)])
+    session.requirement_audits = [dict(
+        auditor="openai:sol", source="S1", reply_artifact="art1", failed=False,
+        verdicts={rid: dict(met=False, why="w") for rid in rids}, stated=list(rids),
+        stated_reasons={rid: f"{rid} fails; example: input {rid}" for rid in rids}, revisions={}, bases={})]
+    history = session._audit_history(rids)
+    assert len(history) <= _HISTORY_TOTAL_CHARS
+    assert "- R1: audit 1" in history
+    assert "- R2: audit 1" not in history and "none shown for R2" in history, \
+        "R2's older condition is not shown when its rulings do not all fit"

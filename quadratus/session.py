@@ -3509,6 +3509,11 @@ _HISTORY_PER_REQUIREMENT = 3
 _HISTORY_REASON_CHARS = 500
 _HISTORY_EXAMPLE_CHARS = 400
 _HISTORY_TOTAL_CHARS = 6000
+#: A decision or ruling longer than this is named, never cut.
+_HISTORY_BINDING_CHARS = 600
+#: Reserved inside the total for the one omission line, which names at
+#: most eight requirement ids per list and so always fits.
+_HISTORY_FOOTER_CHARS = 600
 _NOT_MET_SEGMENT = re.compile(r";\s*(basis|evidence|at|example)\s*:\s*", re.IGNORECASE)
 
 
@@ -12986,34 +12991,6 @@ class Session:
                 line += (f" Audit {number} later found {rid} MET on "
                          + ("this source." if current and source == current else "another source."))
             return line
-        blocks, used, omitted = [], 0, {}
-        for rid in rids:
-            items = entries[rid]
-            if not items:
-                continue
-            shown = items[-_HISTORY_PER_REQUIREMENT:]
-            hidden = items[:-_HISTORY_PER_REQUIREMENT]
-            lines = []
-            for entry in reversed(shown):
-                text = render(rid, entry)
-                if used + len(text) > _HISTORY_TOTAL_CHARS and lines:
-                    hidden.append(entry)
-                    continue
-                lines.append(text)
-                used += len(text)
-            lines.reverse()
-            decision = ledger.decisions.get(rid)
-            if decision:
-                lines.append(f"  Current decision for {rid} (binds over any older condition): {decision[:300]}")
-            for ruling in ledger.rulings:
-                if re.search(rf"\b{re.escape(rid)}\b", ruling):
-                    lines.append(f"  Current ruling naming {rid} (binds over any older condition): {ruling[:300]}")
-            if hidden:
-                omitted[rid] = hidden
-                lines.append(f"  ({len(hidden)} earlier entr{'y' if len(hidden) == 1 else 'ies'} for {rid} not shown: "
-                             f"audit(s) {', '.join(str(e['number']) for e in sorted(hidden, key=lambda e: e['number']))}; "
-                             f"reply artifacts {', '.join(sorted({str(e['artifact']) for e in hidden}))})")
-            blocks.append("\n".join(lines))
         head = ("\n\n## Earlier audits of these requirements (historical questions, not current findings)\n\n"
                 "Each line is what an earlier independent audit wrote about a requirement here, on the source and "
                 "requirement revision it names. It is a question to judge afresh on the current source: not a "
@@ -13026,6 +13003,74 @@ class Session:
         else:
             head += (" Work and review that touch these requirements should hold for these questions and for the "
                      "rest of the requirement's input, not only for the last example.")
+
+        def binding_lines(rid: str) -> List[str]:
+            # A decision or ruling is shown whole or not at all: a cut one
+            # could change what it says. Too long to show, it is named with
+            # where to read it, and it still binds.
+            out = []
+            named = [("decision", ledger.decisions.get(rid), "the orchestrator's decisions")] if ledger.decisions.get(rid) else []
+            named += [(f"ruling {i + 1}", r, "the operator's rulings") for i, r in enumerate(ledger.rulings)
+                      if re.search(rf"\b{re.escape(rid)}\b", r)]
+            for label, text, where in named:
+                text = " ".join(str(text).split())
+                if len(text) <= _HISTORY_BINDING_CHARS:
+                    out.append(f"  Current {label} naming {rid} (binds over any older condition): {text}")
+                else:
+                    out.append(f"  Current {label} naming {rid} binds over any older condition; it is {len(text)} "
+                               f"characters, too long to show whole here: read it in {where}.")
+            return out
+        # One shared bound for the whole block, framing and metadata
+        # included (root review of b54a28c: the first entry of every
+        # requirement was admitted after the bound was spent, and decisions,
+        # rulings and omission lists were never counted). Each requirement
+        # enters as a unit, its newest entry with every decision or ruling
+        # naming it, so no older condition is ever shown without what
+        # supersedes it; older entries fill what is left; whatever does not
+        # fit is counted in one bounded line.
+        budget = _HISTORY_TOTAL_CHARS - len(head) - 1 - _HISTORY_FOOTER_CHARS
+        shown: Dict[str, List[dict]] = {}
+        bindings: Dict[str, List[str]] = {}
+        for rid in rids:
+            items = entries[rid]
+            if not items:
+                continue
+            unit = [render(rid, items[-1])] + binding_lines(rid)
+            cost = sum(len(line) + 1 for line in unit)
+            if cost <= budget:
+                shown[rid], bindings[rid] = [items[-1]], unit[1:]
+                budget -= cost
+        for depth in range(2, _HISTORY_PER_REQUIREMENT + 1):
+            for rid in list(shown):
+                items = entries[rid]
+                if len(items) < depth:
+                    continue
+                text = render(rid, items[-depth])
+                if len(text) + 1 <= budget:
+                    shown[rid].insert(0, items[-depth])
+                    budget -= len(text) + 1
+        blocks = []
+        for rid in rids:
+            if rid in shown:
+                blocks.append("\n".join([render(rid, e) for e in shown[rid]] + bindings[rid]))
+        hidden = {rid: [e for e in entries[rid] if all(e is not x for x in shown.get(rid, []))] for rid in rids}
+        hidden = {rid: items for rid, items in hidden.items() if items}
+        if hidden:
+            count = sum(len(items) for items in hidden.values())
+            whole = [rid for rid in hidden if rid not in shown]
+            numbers = sorted({e["number"] for items in hidden.values() for e in items})
+
+            def ids(names: List[str]) -> str:
+                return ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+            footer = (f"({count} earlier audit entr{'y' if count == 1 else 'ies'} not shown here, for "
+                      f"{len(hidden)} requirement(s): {ids(list(hidden))}"
+                      + (f"; none shown for {ids(whole)}, whose binding decisions or rulings, if any, are in the "
+                         "decisions and rulings" if whole else "")
+                      + f". Each audit's whole reply is kept as a run artifact (audits {numbers[0]}-{numbers[-1]}, "
+                      "kind audit-reply), retrievable by its id.)")
+            blocks.append(footer)
+        if not blocks:
+            return ""
         return head + "\n" + "\n".join(blocks)
 
     def _record_boundary_notes(self, key, role, reply: str, *, task=None) -> None:

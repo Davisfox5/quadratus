@@ -3381,9 +3381,20 @@ Key design decisions already settled:
       earlier), the requirement revision (`revisions`, recorded per audit;
       "revised since" when it moved), the reply artifact, a later MET, and
       a decision or ruling naming the requirement.
-    - It is bounded: 3 entries per requirement, 500 characters of
-      explanation, the example kept apart up to 400, 6,000 in all, and
-      every omission counted with its audits and artifacts.
+    - It is bounded by one shared total of 6,000 characters that includes
+      the header, decisions, rulings and the omission line (root review of
+      b54a28c: the first entry of every requirement was admitted after the
+      bound was spent, and 23 requirements rendered 24,515 characters).
+      - Each requirement enters as a unit: its newest entry with every
+        decision or ruling naming it, so an older condition is never shown
+        without what supersedes it.
+      - Older entries (up to 3 per requirement) fill what is left.
+      - Explanations are 500 characters, and the example is kept apart up
+        to 400 with an explicit artifact pointer past that.
+      - A decision or ruling over 600 characters is named with where to read
+        it, never cut.
+      - Whatever does not fit is counted in one bounded line: the counts, at
+        most eight ids per list, and the audit-reply artifacts to retrieve.
     - It is labelled as historical questions: not current findings, not
       proof, no owner or finding transferred, nothing reopened.
     - A parallel child reads its parent's audits. The new fields ride in
