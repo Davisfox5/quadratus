@@ -31,19 +31,29 @@ def test_generate_returns_text():
     assert len(p.calls) == 1
 
 
-def test_retries_then_succeeds():
+def test_retries_then_succeeds(monkeypatch):
+    waits = []
+    monkeypatch.setattr("quadratus.providers.time.sleep", waits.append)
+    monkeypatch.setattr("quadratus.providers.random.uniform", lambda *_: 0.25)
     p = FakeProvider("openai", "ChatGPT", fail_times=2, max_retries=5)
+    p.retry_base_delay = 2.0
     out = p.generate("task")
     assert "ChatGPT" in out
     # Two failures + one success.
     assert p._attempts == 3
+    assert waits == [2.25, 4.25]
 
 
-def test_gives_up_after_max_retries():
+def test_gives_up_after_max_retries(monkeypatch):
+    waits = []
+    monkeypatch.setattr("quadratus.providers.time.sleep", waits.append)
+    monkeypatch.setattr("quadratus.providers.random.uniform", lambda *_: 0.25)
     p = FakeProvider("openai", "ChatGPT", fail_times=10, max_retries=3)
+    p.retry_base_delay = 2.0
     with pytest.raises(ProviderError):
         p.generate("task")
     assert p._attempts == 3
+    assert waits == [2.25, 4.25], "there is no wait after the last allowed attempt"
 
 
 def test_non_retryable_fails_immediately():

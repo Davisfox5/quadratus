@@ -173,6 +173,9 @@ def test_history_is_rendered_into_the_prompt(claude, monkeypatch):
 
 
 def test_timeout_is_retried_then_surfaces(claude, monkeypatch):
+    waits = []
+    monkeypatch.setattr("quadratus.providers.time.sleep", waits.append)
+    monkeypatch.setattr("quadratus.providers.random.uniform", lambda *_: 0.25)
     claude.retry_base_delay = 0.0
     claude.max_retries = 2
     attempts = []
@@ -188,6 +191,7 @@ def test_timeout_is_retried_then_surfaces(claude, monkeypatch):
     assert attempts[0] != attempts[1]
     assert claude.last_session_id == attempts[-1]
     assert claude.last_usage is None
+    assert waits == [0.25]
 
 
 def test_empty_timeout_preserves_trace_identity_without_inventing_usage(claude, monkeypatch, tmp_path):
