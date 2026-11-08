@@ -3358,6 +3358,62 @@ Key design decisions already settled:
     - A run with no case identity shows nothing. A missing file, no added
       test, or an unexecuted file stays debt, and the DONE refusal names
       exactly what the receipt lacks.
+- **An audit's question travels with its requirement, and refusals stay
+  goal-bounded at every seat** (cycle11 run 20261108T191017Z-f99f6e43,
+  root's reconciliation in PR73 6726933807). The run ended at the 8-task cap
+  with R16 NOT MET. Each audit found one more defect of R16 and R18 (post-
+  commit reads, then boundary evidence, then a malformed ordinary header),
+  and `requirement_audits` held every question while no later prompt showed
+  one.
+  - *History transport* (`_audit_history`). Earlier audits' own NOT MET
+    words, for the requirements a call is about, reach:
+    - the draft lead, the revision and every later editing call (through
+      `_goal_block`);
+    - the reviewer, the in-task recheck and the settlement or post-merge
+      recheck (for the requirements of the findings rechecked);
+    - every later audit, which is told to judge afresh.
+
+    The rules for what is shown:
+    - It is read from `requirement_audits` only; there is no second history.
+    - Only the auditor's own words appear (`stated_reasons`, now recorded
+      whole); a harness lowering is not a counterexample.
+    - Entries are deduplicated, with the auditor, the source (this one or
+      earlier), the requirement revision (`revisions`, recorded per audit;
+      "revised since" when it moved), the reply artifact, a later MET, and
+      a decision or ruling naming the requirement.
+    - It is bounded: 3 entries per requirement, 500 characters of
+      explanation, the example kept apart up to 400, 6,000 in all, and
+      every omission counted with its audits and artifacts.
+    - It is labelled as historical questions: not current findings, not
+      proof, no owner or finding transferred, nothing reopened.
+    - A parallel child reads its parent's audits. The new fields ride in
+      `requirement_audits`, which the checkpoint already carries.
+  - *Goal-bounded parsing.* The shared lens now says a parser or library
+    can accept input the requirement calls invalid, not only raise on it.
+    The goal decides what is invalid and what must stay accepted, and an
+    input the goal leaves unspecified is never one that must be refused.
+    `_EXECUTED_ERROR_RULE`, which the auditor gets, carries the same
+    caveat: an implementation-exposed representation the goal leaves
+    unspecified is a candidate risk, never a rejection to require. Executed
+    rejecting-path evidence for real error requirements is unchanged.
+  - *Basis as provenance* (`_not_met_basis`, root's adjustment). The audit's
+    NOT MET line asks for `basis:` (the goal, requirement or ruling words
+    contradicted, and how) and `evidence:` (executed reproduction, source
+    reading, or untested risk).
+    - The harness records what was stated and which texts any quoted words
+      occur in (`bases`). A match validates nothing, and no match discards
+      nothing.
+    - A missing basis is labelled for the planner ("no basis stated; the
+      verdict stands"). It costs no extra call and adds no gate or MET
+      shortcut. The existing completion and challenge paths are unchanged.
+  - *BOUNDARY notes.* For a covered error requirement the reviewer is
+    offered an optional line `BOUNDARY R<n>: <layers checked> - <case or
+    file:line> (executed | read)`.
+    - It is recorded on `boundary_notes` (8 per reply, 400 characters each;
+      result.json, checkpoint, merged back from parallel children).
+    - The audit is shown each note, or "none stated", as observations.
+    - A note is never proof or a gate, and never makes a clean review
+      unfinished (`_clean_goal_review`).
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

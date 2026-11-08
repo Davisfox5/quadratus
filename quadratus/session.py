@@ -2609,7 +2609,11 @@ _ERROR_BOUNDARY_LENS = (
     "from one while releasing resources after it is durable: the first must leave the state unchanged "
     "and report the refusal; after the second the change stands, so the caller must not be told the "
     "operation failed and the release failure must not surface as a crash. Check both at every entry "
-    "point that performs the operation, against the state read afterwards.")
+    "point that performs the operation, against the state read afterwards. A parser or library the code "
+    "relies on can also accept input the requirement calls invalid (a lenient header, number, date or "
+    "document reader), not only raise on it: the goal and the requirement decide what is invalid and "
+    "what must stay accepted, so check what each layer lets through as well as what it refuses, and "
+    "never treat an input the goal leaves unspecified as one that must be refused.")
 
 #: Counterpart entry points (Davis, 2026-11-04, after grok-worker-01: a
 #: review caught a cleanup failure on the CLI path, the fix became its own
@@ -3473,7 +3477,8 @@ def boundary_note(texts) -> str:
 _EXECUTED_ERROR_RULE = (
     "A requirement about errors, refusals or invalid input is accepted only on executed evidence: "
     "on its MET line, cite each test case that exercises the rejecting path (invalid types, missing "
-    "values, conflicts, and the representation or range boundaries the implementation exposes) by "
+    "values, conflicts, and the representation or range boundaries the implementation exposes where "
+    "the goal or the requirement makes them invalid) by "
     "its exact identity, file::test_name, or file::Class::test_name for a method, with [param] for "
     "one parametrized instance; for example 'R3: MET - tests/test_parser.py::test_invalid_syntax and "
     "tests/test_config.py::ConfigTests::test_wrong_type'. A bare test name or a file alone is not such a "
@@ -3481,7 +3486,30 @@ _EXECUTED_ERROR_RULE = (
     "in a scratch test the harness ran for this requirement. A MET without that is not counted, "
     "whatever it says. A requirement that only asks documentation to describe errors or refusals is a "
     "documentation claim, judged by reading that documentation; the behaviour it describes is judged under "
-    "the requirements that assert it. Other requirements cite files or tests as before.")
+    "the requirements that assert it. A representation the implementation exposes but the goal leaves "
+    "unspecified (a spelling of a number, a whitespace or case variant) is a candidate risk to check, "
+    "never a rejection to require: an input the contract accepts must stay accepted. Other requirements "
+    "cite files or tests as before.")
+
+
+#: A reviewer's optional note of the input layers it checked for a covered
+#: error requirement (cycle12): observational only, never proof or a gate.
+_BOUNDARY_NOTE_RULE = (
+    "Optionally, for each covered requirement about errors, refusals or invalid input, one line 'BOUNDARY "
+    "R<n>: <the input layers you checked> - <the case id or file:line for each> (executed | read)'. It is "
+    "recorded as what you checked and shown to the audit; it is never proof, never a verdict and never "
+    "required.")
+_BOUNDARY_NOTE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?BOUNDARY[ \t]+(R\d+)[ \t]*:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+#: Bounds on what one reply may record and what a prompt shows.
+_BOUNDARY_NOTE_CHARS = 400
+_BOUNDARY_NOTES_PER_REPLY = 8
+#: Bounds on the audit history a prompt carries (cycle12): per requirement,
+#: per reason, per example, and in all. What is left out is counted.
+_HISTORY_PER_REQUIREMENT = 3
+_HISTORY_REASON_CHARS = 500
+_HISTORY_EXAMPLE_CHARS = 400
+_HISTORY_TOTAL_CHARS = 6000
+_NOT_MET_SEGMENT = re.compile(r";\s*(basis|evidence|at|example)\s*:\s*", re.IGNORECASE)
 
 
 #: A token that is a source or test file by its extension (a path operand
@@ -3562,7 +3590,10 @@ def _clean_goal_review(text: str, rids) -> bool:
     verdicts = _requirement_verdicts(text)
     if not rids or any(verdicts.get(rid) is not True for rid in rids):
         return False
+    # An optional 'BOUNDARY R<n>:' note is an observation the prompt offers,
+    # never text that makes a clean review unfinished (cycle12).
     return all(_REQUIREMENT_VERDICT.match(line) or _INSPECTION_VERDICT.match(line) or _ROW_LINE.match(line)
+               or _BOUNDARY_NOTE.match(line)
                or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE for line in lines[1:])
 
 
@@ -4012,6 +4043,9 @@ class Session:
         #: (cycle10, ``_inherited_not_run``): kept with the standing item they
         #: repeat, never a new obligation of the repeating task.
         self.inherited_not_run: List[dict] = []
+        #: Reviewers' optional 'BOUNDARY R<n>:' notes (cycle12): the input
+        #: layers a seat says it checked, observational, never proof or a gate.
+        self.boundary_notes: List[dict] = []
         self._planning_decision = False
         #: The job's commitment to end after one task whose ordinary route
         #: could not be paid (admission/3, ``_commit_terminal``); carried.
@@ -4299,6 +4333,8 @@ class Session:
             # The restating task's reviewer judges its restated NOT RUN items
             # (cycle02): its own lines, never the lead's.
             self._judge_restated(key, reply if isinstance(reply, str) else "", task=context.get("task"))
+            self._record_boundary_notes(key, context.get("role"), reply if isinstance(reply, str) else "",
+                                        task=context.get("task"))
         return reply
 
     def _invoke_model_watched(self, key, prompt, *, allow_writes=False):
@@ -10472,6 +10508,7 @@ class Session:
                 self.scope_declarations.extend(dict(d) for d in getattr(child, "scope_declarations", []) or [])
                 self.scope_gate_skips.extend(dict(d) for d in getattr(child, "scope_gate_skips", []) or [])
                 self.done_declarations.extend(dict(d) for d in getattr(child, "done_declarations", []) or [])
+                self.boundary_notes.extend(dict(d) for d in getattr(child, "boundary_notes", []) or [])
                 self.deferred_evidence.extend(child.deferred_evidence)
                 self.scenario_corrections.extend(child.scenario_corrections)
                 self.evidence_routes.extend(child.evidence_routes)
@@ -10753,8 +10790,10 @@ class Session:
             origins = [e for e in group if e.get("task") and e["task"] != spec.task_id and e.get("description")]
             reviewed = "".join(f"Task {e['task']}, as you reviewed it: {e['description'][:1500]}\n\n"
                                for e in {e["task"]: e for e in origins}.values())
+            history = self._audit_history([(r.get("requirement") or [None])[0] for r in records])
             prompt = (self._role_packet(spec, "reviewer") + "\n\n"
                       + (self._finding_contract(records) + "\n\n" if records else "")
+                      + (history.strip() + "\n\n" if history else "")
                       + f"Task: {spec.description}\n\n" + reviewed
                       + f"{situation}\n\n"
                       + (f"Your findings left open:\n{self._finding_lines(records)}\n\n" + instructions
@@ -11540,7 +11579,8 @@ class Session:
                 self.finish_routing.append(dict(requirement=rid, site="done refused", why=unmet[rid][:300], **route))
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
-                + "\n".join(f"- {r}: {why[:300]}\n  route: {routes[r]['route']}" for r, why in unmet.items())
+                + "\n".join(f"- {r}: {why[:300]}" + self._basis_label(r) + f"\n  route: {routes[r]['route']}"
+                             for r, why in unmet.items())
                 + "\nName a task that fixes them with these requirement ids in COVERS (RESOLVES names only "
                 "finding ids, F<n> or RFT<task>-<n>, never a requirement): a repair for a finding on the "
                 "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
@@ -11548,6 +11588,19 @@ class Session:
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
         return True
+
+    def _basis_label(self, rid: str) -> str:
+        """How the latest audit's NOT MET for ``rid`` stated its basis, for
+        the planner: provenance only, the verdict stands either way."""
+        audit = self.requirement_audits[-1] if self.requirement_audits else {}
+        basis = (audit.get("bases") or {}).get(rid)
+        if basis is None:
+            return ""
+        if not basis.get("stated"):
+            return " (no basis stated by the auditor; the verdict stands)"
+        if basis.get("quoted") and not basis.get("quoted_in"):
+            return " (its quoted basis was not found in the goal, the requirement or a ruling; recorded only)"
+        return ""
 
     def _cover_by_receipt(self, claimed) -> None:
         """A requirement whose whole claim is that a named test command passes
@@ -11968,7 +12021,9 @@ class Session:
             self._authority_context(audited, ids)
             + self._evidence_block()
             + self._findings_block(carried, standing)
-            + self._obligations_block(obligations_rows))
+            + self._obligations_block(obligations_rows)
+            + self._audit_history(list(audited), judge=True)
+            + self._boundary_notes_block(list(audited)))
         instructions = (
             "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. The goal above is the authority; the requirements are this run's reading "
@@ -11984,9 +12039,12 @@ class Session:
             "with rendered evidence above. Reply with exactly the lines listed under 'Lines this reply "
             "must contain' below, one per id, and no other line that starts with an id. A requirement's "
             "line is 'R1: MET - <file path or test name that shows it>' or "
-            "'R1: NOT MET - <what is missing or contradicts the goal>; at <file and function>; "
-            "example: <an input or call and the wrong result it gives, or none for a qualitative "
-            "requirement>'. A MET without a cited "
+            "'R1: NOT MET - <what is missing or contradicts the goal>; basis: <the words of the goal, the "
+            "requirement or a ruling it contradicts, quoted, and how the delivered behaviour contradicts "
+            "them>; evidence: <executed reproduction | source reading | untested risk>; at <file and "
+            "function>; example: <an input or call and the wrong result it gives, or none for a "
+            "qualitative requirement>'. The original goal outranks a requirement's generated wording. A "
+            "MET without a cited "
             "file or test is counted as not met. A citation resolves only as a project-relative "
             "file path with an extension, or a test function named test_* defined in a file "
             "whose name starts with test and ends in .py; other names do not resolve."
@@ -12100,6 +12158,8 @@ class Session:
         # auditor wrote stands only where the record agrees.
         lowered += self._apply_acceptance(found, audited)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
+        stated_reasons = {r: original[r][1] for r in stated if r in audited and r in original}
+        revisions_now = self._requirement_revisions()
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
                                                                        for r, (ok, why) in verdicts.items()},
                                             lowered=lowered, stated=[r for r in stated if r in audited],
@@ -12110,7 +12170,14 @@ class Session:
                                             acceptance=dict(self._last_acceptance), packet=packet_after.digest,
                                             failed=failed, reply_artifact=reply_ref,
                                             required=[i for i, _ in required], omitted=omitted,
-                                            completion=completion))
+                                            completion=completion,
+                                            # The auditor's own NOT MET words, whole, with the
+                                            # requirement revision judged and the basis as stated:
+                                            # what later seats are shown as history (cycle12).
+                                            stated_reasons=stated_reasons,
+                                            revisions={r: int(revisions_now.get(r, 1)) for r in audited},
+                                            bases={r: self._not_met_basis(r, why)
+                                                   for r, why in stated_reasons.items()}))
         if not failed:
             # Every audit records the packet it was about (the cap's final
             # audit records the same binding below, settled), so the record
@@ -12788,6 +12855,212 @@ class Session:
             record["stage"] = "done"
             self._consume_evidence(record)
             self._quiescent()
+
+    # -- audit history and observational records (cycle12) -----------------------
+    @staticmethod
+    def _not_met_segments(why: str) -> Dict[str, str]:
+        """A NOT MET line's labelled segments (``basis``, ``evidence``,
+        ``at``, ``example``) and the explanation before them, as written."""
+        text = str(why or "")
+        marks = list(_NOT_MET_SEGMENT.finditer(text))
+        out = {"explanation": text[:marks[0].start()] if marks else text}
+        for i, mark in enumerate(marks):
+            end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+            out.setdefault(mark.group(1).lower(), text[mark.end():end].strip())
+        return {k: v.strip() for k, v in out.items()}
+
+    def _not_met_basis(self, rid: str, why: str) -> dict:
+        """The basis an auditor stated for a NOT MET, as provenance only
+        (cycle12, root's adjustment): what it quoted, its evidence kind as
+        written, and which texts the quoted words occur in. An occurrence
+        never validates the claim and its absence never discards it; the
+        verdict stays the auditor's."""
+        parts = self._not_met_segments(why)
+        basis, evidence = parts.get("basis", ""), parts.get("evidence", "")
+        quoted = [q.strip() for q in re.findall(r"[\"\u201c']([^\"\u201d']{3,200})[\"\u201d']", basis) if q.strip()]
+        ledger = self.memory.ledger
+        texts = [("goal", self.memory.goal), (rid, ledger.requirements.get(rid, ""))]
+        texts += [(f"ruling {i + 1}", r) for i, r in enumerate(ledger.rulings)]
+        texts += [(f"decision {k}", v) for k, v in ledger.decisions.items()]
+
+        def norm(text: str) -> str:
+            return " ".join(str(text or "").lower().split())
+        found = sorted({name for q in quoted for name, text in texts if norm(q) and norm(q) in norm(text)})
+        return dict(basis=basis[:600], evidence=evidence[:80], quoted=[q[:200] for q in quoted][:6],
+                    quoted_in=found, stated=bool(basis))
+
+    def _audit_source(self):
+        """The audits, ledger and revisions this seat reads history from: a
+        parallel child reads its parent's (its own ledger is off)."""
+        parent = getattr(self, "_authority_parent", None)
+        owner = parent if parent is not None and not self.requirement_audits else self
+        return owner.requirement_audits, owner.memory.ledger, owner
+
+    def _audit_history(self, rids, *, judge: bool = False) -> str:
+        """Earlier audits' own NOT MET reasons for ``rids``, as historical
+        questions (cycle12; cycle11 run 20261108T191017Z: each audit found
+        one more defect of R16 and R18 and nothing showed the repair's lead,
+        its reviewer or the next audit what earlier audits had asked).
+        Read from ``requirement_audits`` only, never a second history: the
+        auditor's own words (a harness lowering is not a counterexample),
+        deduplicated, with the auditor, the source and requirement revision
+        judged, the reply artifact, whether a later audit found it MET, and
+        a decision or ruling naming it. Bounded per requirement, per reason
+        and in all, the example kept apart from the explanation so a long
+        explanation never cuts it, and every omission counted. Nothing here
+        is a current finding, an owner, proof or a new requirement."""
+        audits, ledger, owner = self._audit_source()
+        rids = [r for r in dict.fromkeys(rids or ()) if r]
+        if not audits or not rids:
+            return ""
+        current = self._source_fingerprint() if self.project else None
+        revisions = owner._requirement_revisions()
+        entries: Dict[str, List[dict]] = {rid: [] for rid in rids}
+        index: Dict[tuple, dict] = {}
+        for number, audit in enumerate(audits, 1):
+            verdicts = audit.get("verdicts") or {}
+            if audit.get("failed") or not verdicts:
+                continue
+            stated = audit.get("stated_reasons")
+            if stated is None:
+                # An audit recorded before cycle12: its own NOT MET lines are
+                # the ids it stated, with the verdict text kept for them.
+                stated = {r: (verdicts.get(r) or {}).get("why", "") for r in audit.get("stated") or ()}
+            for rid in rids:
+                verdict = verdicts.get(rid)
+                if verdict is None:
+                    continue
+                if verdict.get("met"):
+                    for entry in entries[rid]:
+                        entry.setdefault("met_later", (number, audit.get("source")))
+                    continue
+                why = str(stated.get(rid) or "").strip()
+                if not why:
+                    continue
+                key = (rid, " ".join(why.lower().split()))
+                if key in index:
+                    index[key]["again"].append(number)
+                    index[key].pop("met_later", None)
+                    continue
+                entry = dict(number=number, auditor=audit.get("auditor") or "unknown", source=audit.get("source"),
+                             revision=(audit.get("revisions") or {}).get(rid), artifact=audit.get("reply_artifact"),
+                             why=why, again=[], basis=(audit.get("bases") or {}).get(rid))
+                index[key] = entry
+                entries[rid].append(entry)
+        if not any(entries.values()):
+            return ""
+
+        def clip(text: str, limit: int, artifact) -> str:
+            text = " ".join(str(text or "").split())
+            if len(text) <= limit:
+                return text
+            return text[:limit] + f" [... {len(text) - limit} more characters in artifact {artifact or 'unavailable'}]"
+
+        def render(rid: str, entry: dict) -> str:
+            parts = self._not_met_segments(entry["why"])
+            where = ("this source" if current and entry["source"] == current else
+                     f"an earlier source {str(entry['source'])[:12]}" if entry["source"] else "an unrecorded source")
+            now = int(revisions.get(rid, 1))
+            rev = entry["revision"]
+            revised = ("requirement revision not recorded" if rev is None else
+                       f"requirement revision {rev}" + (f", revised since (now {now}): judge the current wording"
+                                                        if int(rev) != now else ""))
+            line = (f"- {rid}: audit {entry['number']} by {entry['auditor']} on {where} ({revised}; reply artifact "
+                    f"{entry['artifact'] or 'unavailable'}): "
+                    + clip(parts.get("explanation", ""), _HISTORY_REASON_CHARS, entry["artifact"]))
+            basis = entry.get("basis") or {}
+            line += (f" Basis as stated: {clip(parts['basis'], 300, entry['artifact'])}." if parts.get("basis")
+                     else " No basis was stated.")
+            if parts.get("evidence"):
+                line += f" Evidence as stated: {clip(parts['evidence'], 80, entry['artifact'])}."
+            if basis.get("quoted") and not basis.get("quoted_in"):
+                line += " Its quoted words were not found in the goal, the requirement or a ruling (recorded only)."
+            if parts.get("at"):
+                line += f" At: {clip(parts['at'], 200, entry['artifact'])}."
+            if parts.get("example"):
+                line += f" Example: {clip(parts['example'], _HISTORY_EXAMPLE_CHARS, entry['artifact'])}."
+            if entry["again"]:
+                line += f" Stated again by audit(s) {', '.join(map(str, entry['again']))}."
+            if entry.get("met_later"):
+                number, source = entry["met_later"]
+                line += (f" Audit {number} later found {rid} MET on "
+                         + ("this source." if current and source == current else "another source."))
+            return line
+        blocks, used, omitted = [], 0, {}
+        for rid in rids:
+            items = entries[rid]
+            if not items:
+                continue
+            shown = items[-_HISTORY_PER_REQUIREMENT:]
+            hidden = items[:-_HISTORY_PER_REQUIREMENT]
+            lines = []
+            for entry in reversed(shown):
+                text = render(rid, entry)
+                if used + len(text) > _HISTORY_TOTAL_CHARS and lines:
+                    hidden.append(entry)
+                    continue
+                lines.append(text)
+                used += len(text)
+            lines.reverse()
+            decision = ledger.decisions.get(rid)
+            if decision:
+                lines.append(f"  Current decision for {rid} (binds over any older condition): {decision[:300]}")
+            for ruling in ledger.rulings:
+                if re.search(rf"\b{re.escape(rid)}\b", ruling):
+                    lines.append(f"  Current ruling naming {rid} (binds over any older condition): {ruling[:300]}")
+            if hidden:
+                omitted[rid] = hidden
+                lines.append(f"  ({len(hidden)} earlier entr{'y' if len(hidden) == 1 else 'ies'} for {rid} not shown: "
+                             f"audit(s) {', '.join(str(e['number']) for e in sorted(hidden, key=lambda e: e['number']))}; "
+                             f"reply artifacts {', '.join(sorted({str(e['artifact']) for e in hidden}))})")
+            blocks.append("\n".join(lines))
+        head = ("\n\n## Earlier audits of these requirements (historical questions, not current findings)\n\n"
+                "Each line is what an earlier independent audit wrote about a requirement here, on the source and "
+                "requirement revision it names. It is a question to judge afresh on the current source: not a "
+                "current finding, not proof either way, not a new requirement, and it transfers no finding or "
+                "owner. A decision, a ruling or a revised requirement shown here outranks a condition an older "
+                "line assumed, and the original goal outranks them all.")
+        if judge:
+            head += (" Judge each requirement on the current source yourself; where an earlier question still "
+                     "holds, say so on its line, and where it no longer does, say what now shows that.")
+        else:
+            head += (" Work and review that touch these requirements should hold for these questions and for the "
+                     "rest of the requirement's input, not only for the last example.")
+        return head + "\n" + "\n".join(blocks)
+
+    def _record_boundary_notes(self, key, role, reply: str, *, task=None) -> None:
+        """Keep a reviewer's 'BOUNDARY R<n>:' lines (cycle12) as observations:
+        bounded, attributed, bound to the source they were written on. They
+        are never proof, a verdict or a gate."""
+        current = None
+        for match in list(_BOUNDARY_NOTE.finditer(reply or ""))[:_BOUNDARY_NOTES_PER_REPLY]:
+            if current is None:
+                current = (self._source_fingerprint() if self.project else None) or ""
+            self.boundary_notes.append(dict(task=task or getattr(self._active_spec, "task_id", "run"), author=key,
+                                            role=role, requirement=match.group(1),
+                                            note=match.group(2)[:_BOUNDARY_NOTE_CHARS], source=current or None))
+
+    def _boundary_notes_block(self, rids) -> str:
+        """For the audit: what reviewers said they checked for each covered
+        error requirement, or 'none stated' (cycle12). Observations only."""
+        texts = dict(self._requirement_texts_now())
+        errors = [r for r in rids if _behavioural_error(texts.get(r, ""))]
+        if not errors:
+            return ""
+        current = self._source_fingerprint() if self.project else None
+        lines = []
+        for rid in errors:
+            notes = [n for n in self.boundary_notes if n.get("requirement") == rid][-3:]
+            if not notes:
+                lines.append(f"- {rid}: none stated")
+                continue
+            for n in notes:
+                where = "this source" if current and n.get("source") == current else "an earlier source"
+                lines.append(f"- {rid}: {n['author']} ({n['role']}, {n['task']}, {where}): {n['note']}")
+        return ("\n\n## Input layers reviewers said they checked (observations, not proof)\n\n"
+                "Each line is a reviewer's own note of what it checked for a requirement about errors or invalid "
+                "input. It is not evidence that a layer is handled and decides nothing; judge every layer the "
+                "requirement's input passes through yourself.\n" + "\n".join(lines))
 
     def _final_challenge(self, unmet: dict) -> dict:
         """After the task cap's final audit: the orchestrator may challenge
@@ -20361,6 +20634,9 @@ class Session:
             boundary = boundary_note(self._covered_texts()).strip()
             if boundary:
                 parts.append(boundary)
+            history = self._audit_history([rid for rid, _ in self._covered_texts()]).strip()
+            if history:
+                parts.append(history)
         map_block = self._map_block()
         if map_block:
             parts.append(map_block)
@@ -20694,7 +20970,8 @@ class Session:
                 + self.memory.goal.strip()
                 + ("\n\n## Original requirements this task covers (verbatim)\n\n"
                    + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else "")
-                + boundary_note(covered))
+                + boundary_note(covered)
+                + self._audit_history([rid for rid, _ in covered]))
 
     def _writer_goal(self) -> str:
         """The goal block for an editing call after the draft (r11 on
@@ -20738,6 +21015,7 @@ class Session:
                    "finding. A review that leaves a covered requirement without such a line is recorded "
                    "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
                    "only by those lines. " + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE if covered else "")
+                + (" " + _BOUNDARY_NOTE_RULE if any(_behavioural_error(t) for _, t in covered) else "")
                 + (" " + _TEST_COMMAND_RULE if any(self._test_command_requirement(r) for r, _ in covered) else "")
                 + (" " + _PROBE_RULE if covered and self._probe_applies(peer) else ""))
 
@@ -21388,7 +21666,9 @@ class Session:
             # taken, so the identity the judge is handed is the one compared.
             instructions = self._recheck_instructions(ids)
             binding = self._judgment_binding(spec, peer, "recheck")
+            history = self._audit_history([(r.get("requirement") or [None])[0] for r in mine])
             prompt = (self._role_packet(spec, 'reviewer') + '\n\n' + self._finding_contract(mine) + '\n\n' +
+                      (history.strip() + '\n\n' if history else '') +
                       f"Task: {spec.description}\n\n"
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       + self._routing_facts(mine)
