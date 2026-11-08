@@ -809,6 +809,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'scope_sendbacks': list(getattr(session, 'scope_sendbacks', []) or []) if session else [],
         'done_declarations': list(getattr(session, 'done_declarations', []) or []) if session else [],
         'receipt_coverage': list(getattr(session, 'receipt_coverage', []) or []) if session else [],
+        'resolves_normalized': list(getattr(session, 'resolves_normalized', []) or []) if session else [],
+        'inherited_not_run': list(getattr(session, 'inherited_not_run', []) or []) if session else [],
         # Acceptance rows a parallel child could not execute, declared by the
         # harness and rechecked by the same reviewer after the merge gate.
         'deferred_evidence': list(getattr(session, 'deferred_evidence', []) or []) if session else [],

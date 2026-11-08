@@ -2268,6 +2268,70 @@ _COMMAND_PROSE_STOPS = frozenset({
 })
 
 
+#: Options of a test runner that take a value, so the next word is the
+#: option's operand, not prose (``_command_words``).
+_RUNNER_VALUED = {
+    "unittest": frozenset({"-s", "-p", "-t", "-k", "--start-directory", "--pattern", "--top-level-directory"}),
+    "pytest": frozenset({"-k", "-m", "-p", "-c", "-o", "--rootdir", "--maxfail", "--deselect", "--ignore",
+                         "--confcutdir", "--basetemp"}),
+}
+
+
+def _command_words(words) -> List[str]:
+    """The leading words of an unquoted phrase that are the command itself:
+    the runner (``python -m <module>`` counts as one), then only operands a
+    command has (an option, the value of an option the runner takes with a
+    value, a path or pattern, ``discover`` for unittest, ``test`` after npm or
+    make, a ``tests``/``test`` folder). The first other word ends it, and so
+    does a word that ends the sentence or clause (its punctuation is not part
+    of the command). A prose stop-word (``_COMMAND_PROSE_STOPS``) never
+    continues it."""
+    if not words:
+        return []
+    out = [words[0].rstrip(".,:;")]
+    if out[0] != words[0]:
+        return out
+    head = os.path.basename(out[0])
+    i, runner = 1, None
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", head) and len(words) > 2 and words[1] == "-m":
+        runner = words[2].rstrip(".,:;")
+        out += ["-m", runner]
+        if runner != words[2]:
+            return out
+        i = 3
+    elif head == "pytest":
+        runner = "pytest"
+    elif head in ("npm", "make"):
+        runner = head
+    valued = _RUNNER_VALUED.get(runner, frozenset())
+    expect_value = False
+    while i < len(words):
+        word = words[i]
+        bare = word.rstrip(".,:;")
+        lowered = bare.lower()
+        if expect_value:
+            ok, expect_value = bool(bare), False
+        elif lowered in _COMMAND_PROSE_STOPS:
+            ok = False
+        elif bare.startswith("-"):
+            ok, expect_value = True, bare.split("=", 1)[0] in valued and "=" not in bare
+        elif re.search(r"[/=*\[\]]", bare) or re.search(r"\.\w+$", bare):
+            ok = True
+        elif runner == "unittest" and lowered == "discover":
+            ok = True
+        elif runner in ("npm", "make") and lowered == "test" and i == 1:
+            ok = True
+        else:
+            ok = lowered in ("tests", "test")
+        if not ok:
+            break
+        out.append(bare)
+        if bare != word:
+            break
+        i += 1
+    return out
+
+
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 #: The id a reply line answers: its leading '<id>:' (a bullet, a number and
 #: backticks allowed), for the audit's required-line list (cycle05).
@@ -3826,6 +3890,14 @@ class Session:
         #: Pure test-command requirements covered for the audit by the
         #: harness's own exact receipt (cycle08, ``_cover_by_receipt``).
         self.receipt_coverage: List[dict] = []
+        #: RESOLVES lines read by their typed ids (cycle10,
+        #: ``_normalize_resolves``): requirement ids the audit holds NOT MET
+        #: moved to COVERS and annotations dropped, each kept as written.
+        self.resolves_normalized: List[dict] = []
+        #: NOT RUN items a later task repeated about files it did not change
+        #: (cycle10, ``_inherited_not_run``): kept with the standing item they
+        #: repeat, never a new obligation of the repeating task.
+        self.inherited_not_run: List[dict] = []
         self._planning_decision = False
         #: The job's commitment to end after one task whose ordinary route
         #: could not be paid (admission/3, ``_commit_terminal``); carried.
@@ -8514,6 +8586,7 @@ class Session:
                     self.store.put(hypothesis, kind="hypothesis",
                                    author="operator" if self._explicit_tasks is not None else self.seat().key)
                 self._note(f"hypothesis for {spec.task_id}: {(hypothesis or 'none stated')[:160]}")
+            spec = self._normalize_resolves(spec)
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
             if problem:
@@ -11228,6 +11301,28 @@ class Session:
             return False
         status = ledger.requirement_status
         self._cover_by_receipt(claimed)
+        early = None
+        if not final and self._explicit_tasks is None:
+            # Declaration-only debt is offered to its owning leads before the
+            # coverage gate (cycle10, PR73 6722947726: with a requirement
+            # uncovered or held NOT MET by the audit, DONE was refused above
+            # the declaration route and done_declarations stayed empty while
+            # the same binding-only items were re-filed task after task). The
+            # plan's own rules decide; uncovered work is not editing debt.
+            first = self._deterministic_blockers()
+            if first:
+                held = dict(first)
+                declared, why = self._done_declarations(first)
+                early = (declared, why, held)
+                if declared is not None:
+                    self._note(f"DONE declarations asked {', '.join(declared)} before the coverage gate")
+        if final and self._explicit_tasks is None:
+            # The cap's final check reaches the same declaration route DONE
+            # does (cycle05 trial t7: an admission refusal at the cap went to
+            # the goal question and the final audit, and declaration-only
+            # debt was never offered to its owners), before the coverage gate
+            # as DONE's is (cycle10).
+            self._declare_at_cap()
         uncovered = [r for r in ledger.requirements
                      if r in claimed and not status.get(r, "").startswith(("covered", "met"))]
         if uncovered:
@@ -11249,12 +11344,16 @@ class Session:
             blocked = self._deterministic_blockers()
             needs_editing = bool(getattr(self, "_blockers_need_editing", True))
             declared, declaration = None, ""
-            if blocked:
+            if blocked or early is not None:
                 # Declaration-only debt is settled first, by its owning leads,
                 # with no planner call and no task slot (cycle05); a mixed set
-                # keeps the edit route below and its pricing.
-                held_before = dict(blocked)
-                declared, declaration = self._done_declarations(blocked)
+                # keeps the edit route below and its pricing. Asked once per
+                # DONE, before the coverage gate (cycle10).
+                if early is not None:
+                    declared, declaration, held_before = early
+                else:
+                    held_before = dict(blocked)
+                    declared, declaration = self._done_declarations(blocked)
                 if declared is not None:
                     blocked = self._deterministic_blockers()
                     needs_editing = bool(getattr(self, "_blockers_need_editing", True))
@@ -11293,12 +11392,6 @@ class Session:
                                             audit_asked=True, source=source, declaration=declaration,
                                             why=("DONE repeated over the same held requirements on this source"
                                                  if again else "no continuation is admissible")))
-        if final and self._explicit_tasks is None:
-            # The cap's final check reaches the same declaration route DONE
-            # does (cycle05 trial t7: an admission refusal at the cap went to
-            # the goal question and the final audit, and declaration-only
-            # debt was never offered to its owners).
-            self._declare_at_cap()
         if self._explicit_tasks is not None:
             self._note("requirements no listed task claimed, left unjudged: "
                        + ", ".join(self.explicit["requirements_unclaimed"]))
@@ -11321,8 +11414,10 @@ class Session:
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
                 + "\n".join(f"- {r}: {why[:300]}\n  route: {routes[r]['route']}" for r, why in unmet.items())
-                + "\nName a task that fixes them (with COVERS): a repair for a finding on the behaviour; for "
-                "execution debt, a task whose checks run what the NOT RUN item binds.")
+                + "\nName a task that fixes them with these requirement ids in COVERS (RESOLVES names only "
+                "finding ids, F<n> or RFT<task>-<n>, never a requirement): a repair for a finding on the "
+                "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
+                "independent audit judges the repaired source.")
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
         return True
@@ -11375,15 +11470,14 @@ class Session:
         runner = r"(?:[\w./~-]*/)?(?:python3?|pytest|npm|npx|node|make)"
         phrase = next((t for t in ticked if re.match(r"\s*" + runner + r"\b", t)), None)
         if phrase is None:
-            match = re.search(r"(?<![\w./-])(" + runner + r"\b(?:\s+-m\s+\S+)?[^.;\n`]*)", text)
-            phrase = match.group(1) if match else None
-            if phrase is not None:
-                # Prose ends where the sentence turns back to English: the
-                # command is the runner and its own operands, never the words
-                # around it ("run pytest before declaring completion").
-                words = phrase.split()
-                stop = next((i for i, w in enumerate(words[1:], 1) if w.lower() in _COMMAND_PROSE_STOPS), len(words))
-                phrase = " ".join(words[:stop])
+            match = re.search(r"(?<![\w./-])(" + runner + r"\b[^;\n`]*)", text)
+            if match is not None:
+                # The command is the runner and its own operands, never the
+                # words around it: read token by token, structurally
+                # (``_command_words``), not by a list of English stop-words
+                # (cycle09: "... -s tests successfully before declaring
+                # completion" kept "successfully" as an argument).
+                phrase = " ".join(_command_words(match.group(1).split()))
         if phrase is None:
             return None
         try:
@@ -13284,6 +13378,24 @@ class Session:
                 self._note(f"task {task}: {role} said it could not read {', '.join(_pure_reading(item))}; "
                            "reading is not a check, so nothing is held for it")
                 continue
+            prior = self._inherited_not_run(entry)
+            if prior is not None:
+                # A repeat of another task's standing item about files this
+                # task did not change is that item, not a new obligation of
+                # this task (cycle10: one free-text 'tests/test_http.py live
+                # HTTP acceptance' line from t3 was re-filed by t5, t6 and t7
+                # and held each task's unrelated requirements).
+                repeat = dict(task=task, role=role, author=key, item=entry["item"], why=entry["why"],
+                              after_check=entry["after_check"], of=prior.get("oid"), owner=prior.get("task"),
+                              requirements_covered=list(self._current_covers))
+                if not any(r["task"] == task and r["item"] == repeat["item"] and r["after_check"] == repeat["after_check"]
+                           for r in self.inherited_not_run):
+                    self.inherited_not_run.append(repeat)
+                    prior.setdefault("repeated_by", []).append(dict(task=task, role=role, after_check=repeat["after_check"]))
+                    self._note(f"task {task}: {role} repeated {prior.get('oid') or prior.get('task')}'s NOT RUN item "
+                               f"about files it did not change ({_display_item(entry['item'])[:100]}); kept with "
+                               f"{prior.get('task')}'s item, not a new obligation")
+                continue
             self._associate_not_run(entry, re.findall(r"R\d+", declared.group(1).upper()) if declared else ())
             # A report after a check is a new report: an earlier run cannot
             # discharge what was said about the source since (F3: a re-report
@@ -13300,6 +13412,33 @@ class Session:
                 # it is recorded, so no route promises a run that cannot
                 # discharge it (cycle02, completion-cycle01 O15).
                 entry["executable"] = self._not_run_executable(entry)
+
+    def _inherited_not_run(self, entry: dict) -> Optional[dict]:
+        """The standing NOT RUN item of an earlier task that ``entry``
+        repeats, or None (cycle10). A repeat names the same file paths as
+        that item (or the same text with at least one path), binds no
+        scenario of its own task, and this task changed none of those
+        paths: it is a limitation the run already holds, with its owner and
+        its requirements, and the repeating task inherits it, never a new
+        obligation over its own requirements. An item naming no path, one
+        that binds this task's scenario, or one about a file this task
+        changed is this task's own report."""
+        if (entry.get("binding") or {}).get("scenario"):
+            return None
+        item = str(entry.get("item") or "")
+        paths = set(_item_paths(item))
+        if not paths:
+            return None
+        if paths & set(self._task_changed_files(self._active_spec)):
+            return None
+        text = " ".join(item.lower().split())
+        for prior in self._standing_not_run():
+            if prior.get("task") == entry.get("task") or prior.get("kind") == "skipped":
+                continue
+            other = str(prior.get("item") or "")
+            if set(_item_paths(other)) == paths or " ".join(other.lower().split()) == text:
+                return prior
+        return None
 
     def _associate_not_run(self, entry: dict, declared=()) -> None:
         """Which of the task's covered requirements a NOT RUN item holds
@@ -18387,6 +18526,59 @@ class Session:
         return [f["id"] for f in self.findings
                 if f["status"] == "open" and (rid is None or rid in f["requirements"])]
 
+    def _normalize_resolves(self, spec):
+        """Read a RESOLVES line by its typed ids before admission (cycle10,
+        PR73 6722947726: the planner wrote ``RESOLVES: R17 (audit), R24
+        (audit)`` for a repair of what the final audit found not met, every
+        id was read as an unknown finding, and the sendbacks spent the
+        correction allowance until the run stalled). A parenthesised
+        annotation is not an id and is dropped. A requirement id whose only
+        hold is the audit's NOT MET (no open finding names it) is the
+        COVERS route the DONE refusal names, so it moves to COVERS and the
+        same independent audit judges the repair. Everything else stays on
+        the line for ``_resolves_problem``: a finding id, a requirement held
+        by an open finding (its typed ids are named back), one that is not
+        NOT MET, one that is not listed, and any malformed token. The line
+        as written and what moved are kept on ``resolves_normalized``."""
+        if not self.config.requirements_ledger:
+            return spec
+        text = spec.description or ""
+        matches = list(_RESOLVES.finditer(text))
+        if len(matches) != 1:
+            return spec
+        match = matches[0]
+        raw = match.group(1)
+        dropped = re.findall(r"\([^()]*\)", raw)
+        tokens = [t for t in re.split(r"[\s,]+", re.sub(r"\([^()]*\)", " ", raw).strip()) if t]
+        ledger = self.memory.ledger
+        moved = []
+        for token in tokens:
+            if (re.fullmatch(r"R\d+", token) and token in ledger.requirements
+                    and str(ledger.requirement_status.get(token) or "").startswith("NOT MET")
+                    and not self._open_findings_for(token) and token not in moved):
+                moved.append(token)
+        if not moved and not dropped:
+            return spec
+        kept = [t for t in tokens if t not in moved]
+        # A line left with no id is kept empty, so it is refused as naming
+        # none; one whose ids all moved is gone.
+        line = ("RESOLVES: " + ", ".join(kept)) if kept else ("" if moved else "RESOLVES:")
+        body = text[:match.start()] + line + text[match.end():]
+        if moved:
+            cover = _COVERS.search(body)
+            if cover:
+                have = re.findall(r"R\d+", cover.group(1))
+                ids = have + [r for r in moved if r not in have]
+                body = body[:cover.start()] + "COVERS: " + ", ".join(ids) + body[cover.end():]
+            else:
+                body = body.rstrip() + "\nCOVERS: " + ", ".join(moved)
+        self.resolves_normalized.append(dict(task=spec.task_id, written=raw.strip()[:300], moved_to_covers=moved,
+                                             annotations=[d[:80] for d in dropped], kept=kept))
+        self._note(f"{spec.task_id}: RESOLVES read by typed ids"
+                   + (f"; {', '.join(moved)} (held NOT MET by the audit) moved to COVERS" if moved else "")
+                   + (f"; annotation(s) {', '.join(dropped)} dropped" if dropped else ""))
+        return replace(spec, description=body.strip())
+
     def _resolves_problem(self, resolves, covers, spec) -> str:
         """Why a RESOLVES line cannot stand, before any lead call; "" if it can."""
         if resolves is None:
@@ -18399,6 +18591,23 @@ class Session:
             return f"RESOLVES names a finding twice: {', '.join(resolves)}."
         by_id = {f["id"]: f for f in self.findings}
         reviews = {r["fid"]: r for r in self.review_findings}
+        requirements = [r for r in resolves if re.fullmatch(r"R\d+", r) and r not in by_id and r not in reviews]
+        if requirements:
+            # A requirement id is never read as a finding (cycle10); what is
+            # left here is one the record does not hold NOT MET by the audit
+            # alone (``_normalize_resolves`` moved those to COVERS).
+            parts = []
+            for rid in requirements:
+                owing = self._open_findings_for(rid)
+                if rid not in self.memory.ledger.requirements:
+                    parts.append(f"{rid} is not a listed requirement")
+                elif owing:
+                    parts.append(f"{rid} is held by open finding(s) {', '.join(owing)}: name those in RESOLVES "
+                                 f"and {rid} in COVERS")
+                else:
+                    state = str(self.memory.ledger.requirement_status.get(rid) or "open")
+                    parts.append(f"{rid} is a requirement ({state[:60]}), not a finding: name it in COVERS")
+            return ("RESOLVES names only finding ids (F<n>, RFT<task>-<n>); " + "; ".join(parts) + ".")
         unknown = [r for r in resolves if r not in by_id and r not in reviews]
         if unknown:
             return f"RESOLVES names findings that do not exist: {', '.join(unknown)}."

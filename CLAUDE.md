@@ -3259,6 +3259,39 @@ Key design decisions already settled:
     covers nothing. The fact is the receipt; the MET is the independent
     audit's, and a NOT MET goes back to the planner as before. Kept on
     `receipt_coverage` (result.json, checkpoint).
+- **A repair is read by typed ids, a bare command by its own words, and a
+  repeated limitation is inherited** (cycle09 terminal, PR73 6722947726).
+  - *RESOLVES with requirement ids* (`_normalize_resolves`, before COVERS
+    is read). The planner wrote `RESOLVES: R17 (audit), R24 (audit)` for
+    what the final audit held NOT MET; every token was an unknown finding
+    and the sendbacks spent the correction allowance until RunStalled. A
+    parenthesised annotation is dropped. A requirement id whose only hold is
+    the audit's NOT MET (no open finding names it) moves to COVERS, which
+    is the route the DONE refusal names, and the same independent audit
+    judges the repair. Any other requirement id stays and is refused with
+    its typed route: held by open findings (named back), not NOT MET, or
+    not listed. A line left with no id is refused as naming none. Kept on
+    `resolves_normalized` (result.json, checkpoint). The DONE refusal says
+    RESOLVES names only finding ids. Caps and the allowance are unchanged.
+  - *Bare commands* (`_command_words`, `_RUNNER_VALUED`). An unquoted
+    command is the runner, its options, a valued option's operand, paths and
+    patterns, unittest's `discover`, and `test` after npm or make. It stops
+    at the first other word, so "successfully", "cleanly" and the like are
+    prose, and the extracted argv is the command's identity for the receipt.
+    A `-k` selection, an application command and a mixed claim stay
+    scenarios.
+  - *Inherited NOT RUN* (`_inherited_not_run`). A later task's NOT RUN line
+    naming the same file paths as another task's standing item, binding no
+    scenario of its own, about files this task did not change, is kept on
+    `inherited_not_run` and as `repeated_by` on the original. It is never a
+    new obligation over the repeating task's requirements. The original
+    item stays debt with its owner and requirements.
+  - *Declarations before the coverage gate.* DONE's declaration route and
+    the cap's `_declare_at_cap` now run before the "not covered" refusal,
+    once per DONE. In cycle09 an uncovered or audit-NOT-MET requirement
+    refused DONE first and `done_declarations` stayed empty. The plan's own
+    rules decide as before: a mixed set with editing debt asks nobody, and
+    nothing is met without the audit.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
