@@ -57,15 +57,34 @@ PLAN_2 = _simple("README.md", "Document add and its refusal rules in README.md."
         "README documents the refusal rules; malformed IDs must be refused",
         "The README explains the error codes, but the CLI exits non-zero on invalid input",
     ]],
-    # The conservative cost, stated: a listed item that itself names error
-    # vocabulary after "and" is kept as possible behaviour ("including ..."
-    # is the unambiguous documentation form).
-    ("README documents the refusal rules and the error codes", True),
+    # A coordinated noun list stays the documented object; a coordinated
+    # predicate is a claim (root review of 621df07, PR73 6720918371).
+    ("README documents the refusal rules and the error codes", False),
     ("README documents the refusal rules, including the error codes", False),
+    ("README documents the API, including the error codes, and the API rejects invalid IDs", True),
+    ("README documents the API, including the error codes, and invalid IDs are refused", True),
 ])
 def test_a_documentation_assertion_about_behaviour_is_not_the_behaviour(text, behavioural):
     assert _error_clause(text), "every case names error language somewhere"
     assert _behavioural_error(text) is behavioural, _behaviour_text(text)
+
+
+#: Root's original six controls (PR73 6720550674, 6720918371).
+ROOT_POSITIVES = [
+    "README documents the API, including refusal rules and invalid ID responses.",
+    "The docs/errors.md lists the rejection codes for invalid IDs.",
+]
+
+
+@pytest.mark.parametrize("text", ROOT_POSITIVES)
+def test_a_pure_documentation_requirement_is_read_in_every_consumer(tmp_path, text):
+    session = _session(tmp_path, {"R1": text})
+    location = "docs/errors.md" if "errors.md" in text else "README.md"
+    assert session._proof_problem(_spec(_reading("P1", ["R1"], location=location)), ["R1"]) == ""
+    session._executed_cases = lambda cited, rid=None: []
+    found = {"R1": (True, f"{location} documents it")}
+    assert session._lower_unexercised_errors(found, {"R1": text}) == [] and found["R1"][0] is True
+    assert boundary_classes([("R1", text)]) == [], "no runtime boundary candidate for documentation"
 
 
 ROOT_MIXED = [
@@ -74,6 +93,7 @@ ROOT_MIXED = [
     "README documents rejection, while the service rejects invalid IDs without mutation",
     "Document the error codes and ensure invalid IDs are rejected without mutation",
     "The README explains the error codes, but the CLI exits non-zero on an invalid ID",
+    "README documents the API, including the error codes, and the API rejects invalid IDs without mutation",
 ]
 
 

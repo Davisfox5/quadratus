@@ -3144,30 +3144,47 @@ _DOC_ACTIVE = re.compile(
 _DOC_IMPERATIVE = re.compile(r"(?i)^\s*(?:document|describe|explain)\b")
 #: Where a documentation clause's object may end and another claim begin: a
 #: comma or semicolon, a coordinator, a subordinator, or "ensure" (root review
-#: of 06c708d, PR73 6720550674: "and API rejects", "and the HTTP API rejects",
-#: ", while the service rejects", "and ensure ... are rejected" were all
-#: discarded as documentation). The word that opens a segment stays with it.
+#: of 06c708d, PR73 6720550674). The word that opens a segment stays with it.
 _SEGMENT_BOUNDARY = re.compile(
     r"\s*[,;]\s*|\s+(?=(?:and|or|but|while|whereas|then|so\s+that|ensur(?:e|es|ing)|which|whose)\b)",
     re.IGNORECASE)
-_COORDINATOR = re.compile(r"(?i)^(?:and|or|then)\b\s*")
-#: A segment that continues the documented object rather than asserting
-#: something new: it opens with one of these words.
+_COORDINATOR = re.compile(r"(?i)^(?:and|or)\b\s*")
+#: A segment opened by one of these always starts a claim of its own.
+_SUBORDINATOR = re.compile(r"(?i)^(?:but|while|whereas|then|so\s+that|ensur(?:e|es|ing)|which|whose)\b")
+#: A segment that continues the documented object: it opens with one of these.
 _OBJECT_CONTINUATION = re.compile(
     r"(?i)^(?:including|such\s+as|for\s+example|e\.g\.|like|covering|listing|with|without|for|of|in|as|"
     r"plus|alongside)\b")
+#: A predicate in a segment: an auxiliary or modal, or a finite or
+#: participle form of a verb that asserts what the program does. Explicit and
+#: lexical on purpose (root review of 621df07, PR73 6720918371): a coordinated
+#: noun list ("refusal rules and invalid ID responses") carries none and stays
+#: the documented object; "and the API rejects invalid IDs" carries one and is
+#: a claim. Nouns that share a stem ("rejection", "refusal", "responses",
+#: "errors", "conflicts") are not verb forms here.
+_PREDICATE = re.compile(
+    r"(?i)\b(?:is|are|was|were|be|been|being|do|does|did|must|should|shall|will|would|can|cannot|could|may|"
+    r"might|has|have|had|"
+    r"reject(?:s|ed|ing)?|refus(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|return(?:s|ed|ing)?|respond(?:s|ed|ing)?|"
+    r"answer(?:s|ed|ing)?|exit(?:s|ed|ing)?|fail(?:s|ed|ing)?|den(?:y|ies|ied|ying)|validat(?:e|es|ed|ing)|"
+    r"abort(?:s|ed|ing)?|leav(?:e|es|ing)|left|stor(?:e|es|ed|ing)|creat(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|"
+    r"delet(?:e|es|ed|ing)|writ(?:e|es|ing)|wrote|written|print(?:s|ed|ing)?|accept(?:s|ed|ing)?|"
+    r"emit(?:s|ted|ting)?|sends?|sent|throw(?:s|n|ing)?|threw|crash(?:es|ed|ing)?|keeps?|kept|"
+    r"preserv(?:e|es|ed|ing)|mutat(?:e|es|ed|ing)|produc(?:e|es|ed|ing))\b")
 
 
 def _behaviour_text(text: str) -> str:
-    """The requirement with the confident part of each documentation clause
+    """The requirement with each documentation clause's documented object
     removed: what it asserts about the program itself (``_DOC_ACTIVE``).
-    Clauses are split at a sentence end or a semicolon. In a documentation
-    clause only the documenting verb's own object (up to the first
-    ``_SEGMENT_BOUNDARY``) and later segments that continue it
-    (``_OBJECT_CONTINUATION``: "including the refusal rules", "without
-    narrowing the contract") are removed; text before the documentation
-    subject and every other segment stay, as possible runtime claims, so an
-    unrecognised predicate defaults to behaviour."""
+    Clauses are split at a sentence end or a semicolon; text before the
+    documentation subject stays. After the documenting verb, the object runs
+    through its first segment and on through every later segment that opens
+    with an ``_OBJECT_CONTINUATION`` word, or that is a coordinated item
+    (and, or, a comma) carrying no ``_PREDICATE``: a noun list. A segment
+    opened by a subordinator (but, while, then, ensure, ...) or carrying a
+    predicate is a claim of its own and stays, and so does everything after
+    it. Any segment whose form this cannot place stays: uncertain is
+    behaviour."""
     kept = []
     for clause in re.split(r"(?<=[.;])\s+|;\s*", text or ""):
         hit = _DOC_ACTIVE.search(clause) or _DOC_IMPERATIVE.match(clause)
@@ -3175,11 +3192,15 @@ def _behaviour_text(text: str) -> str:
             kept.append(clause)
             continue
         kept.append(clause[:hit.start()])
-        segments = [seg for seg in _SEGMENT_BOUNDARY.split(clause[hit.end():]) if seg and seg.strip()]
+        segments = [seg.strip() for seg in _SEGMENT_BOUNDARY.split(clause[hit.end():]) if seg and seg.strip()]
+        claim = False
         for seg in segments[1:]:
-            body = _COORDINATOR.sub("", seg.strip())
-            if body and not _OBJECT_CONTINUATION.match(body):
-                kept.append(body)
+            body = _COORDINATOR.sub("", seg)
+            if not claim and body and (_OBJECT_CONTINUATION.match(body)
+                                      or (not _SUBORDINATOR.match(body) and not _PREDICATE.search(body))):
+                continue
+            claim = True
+            kept.append(body)
     return " ".join(part for part in kept if part.strip())
 
 

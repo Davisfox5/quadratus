@@ -3201,15 +3201,19 @@ Key design decisions already settled:
     - later segments that open with an `_OBJECT_CONTINUATION` word
       (including, such as, with, without, for, of, in, as, ...).
 
-    Every other segment is kept as a possible runtime claim, and the error
-    rule applies to it. Root's review of 06c708d (PR73 6720550674) found
-    that "and API rejects", "and the HTTP API rejects", ", while the
-    service rejects" and "and ensure ... are rejected" were all discarded
-    as documentation because only a short verb grammar was recognised.
-    Unrecognised now means behaviour. The cost is stated: "README documents
-    the refusal rules and the error codes" is kept as possible behaviour,
-    and "..., including the error codes" is the unambiguous documentation
-    form.
+    A coordinated item (and, or, a comma) also continues the object when it
+    carries no `_PREDICATE` (an auxiliary or modal, or a runtime verb form
+    such as rejects, returns, raises, exits, answers). So "including refusal
+    rules and invalid ID responses" is a noun list (root review of 621df07,
+    PR73 6720918371). A segment opened by a subordinator (but, while, then,
+    ensure, ...), or carrying a predicate, is a claim. It stays, with
+    everything after it, and the error rule applies to it. Root's review of
+    06c708d (PR73 6720550674) found "and API rejects", "and the HTTP API
+    rejects", ", while the service rejects" and "and ensure ... are
+    rejected" discarded under the earlier grammar. The remaining
+    uncertainty is stated: the predicate list is lexical, so a coordinated
+    item whose only verb is outside it ("and the API emits 400") is read as
+    a noun.
   - *Consumers.* All of these read `_behavioural_error`:
     - `_proof_problem`, for reading and capture evidence;
     - `_lower_unexercised_errors`, the audit;
