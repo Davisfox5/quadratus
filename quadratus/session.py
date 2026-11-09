@@ -3601,6 +3601,13 @@ _BOUNDARY_NOTES_PER_REPLY = 8
 #: per reason, per example, and in all. What is left out is counted.
 _HISTORY_PER_REQUIREMENT = 3
 _HISTORY_REASON_CHARS = 500
+#: The reason a DONE send-back and ``finish_routing`` show for an unmet
+#: requirement (unchanged bound; cycle20 discloses what it leaves out).
+_FINISH_REASON_CHARS = 300
+#: How many distinct counterexamples one NOT MET line may name (cycle20):
+#: each audit used to hand over one example per requirement, and each repair
+#: fixed that one. A ceiling, never a minimum; the line grammar is unchanged.
+_AUDIT_EXAMPLES = 3
 _HISTORY_EXAMPLE_CHARS = 400
 _HISTORY_TOTAL_CHARS = 6000
 #: A decision or ruling longer than this is named, never cut.
@@ -3608,6 +3615,16 @@ _HISTORY_BINDING_CHARS = 600
 #: Reserved inside the total for the one omission line, which names at
 #: most eight requirement ids per list and so always fits.
 _HISTORY_FOOTER_CHARS = 600
+#: A quoted span in an auditor's stated basis (cycle20): a straight or curly
+#: double-quoted span, or a single-quoted one whose quote marks sit at word
+#: boundaries, with apostrophes between letters (goal's, isn't) allowed inside.
+#: Opening and closing marks must pair; an apostrophe inside a word never
+#: opens or closes a span (the pattern before read "the goal's rule" as the
+#: opening of a quote and reported spans no text contains).
+_QUOTED_SPAN = re.compile(
+    r'"([^"\n]{3,200}?)"'
+    r"|\u201c([^\u201c\u201d\n]{3,200}?)\u201d"
+    r"|(?<!\w)'((?:[^'\n]|(?<=\w)'(?=\w)){3,200}?)'(?!\w)")
 _NOT_MET_SEGMENT = re.compile(r";\s*(basis|evidence|at|example)\s*:\s*", re.IGNORECASE)
 
 
@@ -11665,13 +11682,15 @@ class Session:
                 continuation = self._continuation_admission(needs_editing)
                 if continuation["feasible"] and not again:
                     routes = {r: self._evidence_route(r, why) for r, why in blocked.items()}
+                    shown = {r: self._shown_reason(r, why) for r, why in blocked.items()}
                     for rid, route in routes.items():
                         self.finish_routing.append(dict(requirement=rid, site="done refused before audit",
-                                                        why=blocked[rid][:300], **route))
+                                                        why=blocked[rid][:_FINISH_REASON_CHARS], **shown[rid][1],
+                                                        **route))
                     self._done_refusal = (
                         "\n\n--- DONE SENT BACK ---\nNo audit was asked: the harness's record on the current "
                         "source already holds these requirements not met, whatever an audit would say:\n"
-                        + "\n".join(f"- {r}: {why[:300]}\n  route: {routes[r]['route']}" for r, why in blocked.items())
+                        + "\n".join(f"- {r}: {shown[r][0]}\n  route: {routes[r]['route']}" for r in blocked)
                         + f"\nA continuation is admissible now ({continuation['detail'][:200]}). Name a task "
                         "that takes one of these routes, or reply DONE again to have the independent audit "
                         "judge the rest.")
@@ -11705,12 +11724,14 @@ class Session:
             unmet = self._final_challenge(unmet)
         if unmet:
             routes = {r: self._evidence_route(r, why) for r, why in unmet.items()}
+            shown = {r: self._shown_reason(r, why) for r, why in unmet.items()}
             for rid, route in routes.items():
-                self.finish_routing.append(dict(requirement=rid, site="done refused", why=unmet[rid][:300], **route))
+                self.finish_routing.append(dict(requirement=rid, site="done refused",
+                                                why=unmet[rid][:_FINISH_REASON_CHARS], **shown[rid][1], **route))
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
-                + "\n".join(f"- {r}: {why[:300]}" + self._basis_label(r) + f"\n  route: {routes[r]['route']}"
-                             for r, why in unmet.items())
+                + "\n".join(f"- {r}: {shown[r][0]}" + self._basis_label(r) + f"\n  route: {routes[r]['route']}"
+                             for r in unmet)
                 + "\nName a task that fixes them with these requirement ids in COVERS (RESOLVES names only "
                 "finding ids, F<n> or RFT<task>-<n>, never a requirement): a repair for a finding on the "
                 "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
@@ -11718,6 +11739,66 @@ class Session:
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
         return True
+
+    def _audit_text_artifact(self, audit: dict, text: str) -> Tuple[Optional[str], str]:
+        """The artifact of one audit that holds ``text`` verbatim (whitespace
+        normalised): its reply, or its completion's reply (an omitted id
+        answered on the completion is not in the first reply). ``(None,
+        "reply artifact")`` when neither is stored or holds it, so a pointer
+        never names a reply that does not contain the words (cycle20)."""
+        def norm(value) -> str:
+            return " ".join(str(value or "").split())
+        want = norm(text)
+        for ref, label in ((audit.get("reply_artifact"), "reply artifact"),
+                           ((audit.get("completion") or {}).get("reply_artifact"), "completion reply artifact")):
+            if not ref or not want:
+                continue
+            try:
+                held = self.store.get(ref)
+            except (KeyError, OSError, ValueError):
+                continue
+            if want in norm(held):
+                return ref, label
+        return None, "reply artifact"
+
+    def _reason_source(self, rid: str, why: str) -> Tuple[Optional[str], str]:
+        """Where the whole of a finish reason can be read (cycle20): the
+        audit reply, or that audit's completion reply, that holds this exact
+        text (whitespace normalised), found from the audit whose verdict for
+        ``rid`` is this reason; never an audit reply that does not contain
+        it. A reason the harness wrote or revised (a lowering, a synthesized
+        verdict, a record held before any audit) is kept as its own artifact
+        and named as the reason as recorded. Returns ``(artifact id or None,
+        what it is)``."""
+        def norm(text) -> str:
+            return " ".join(str(text or "").split())
+        want = norm(why)
+        for audit in reversed(self.requirement_audits):
+            if norm(((audit.get("verdicts") or {}).get(rid) or {}).get("why")) != want:
+                continue
+            ref, label = self._audit_text_artifact(audit, why)
+            if ref:
+                return ref, "audit " + label.replace(" artifact", "")
+            break
+        try:
+            return self.store.put(str(why), kind=f"finish-reason:{rid}", author="harness").id, "the reason as recorded"
+        except OSError:
+            return None, "no stored copy"
+
+    def _shown_reason(self, rid: str, why: str) -> Tuple[str, dict]:
+        """The finish reason as the send-back shows it: whole when it fits
+        ``_FINISH_REASON_CHARS``, else that many characters and a marker that
+        counts what was left out and names the artifact holding the whole
+        text, readable with FETCH (cycle20: the cut was silent and named no
+        artifact). Returns ``(text, record fields for finish_routing)``."""
+        why = str(why or "")
+        if len(why) <= _FINISH_REASON_CHARS:
+            return why, {}
+        ref, label = self._reason_source(rid, why)
+        omitted = len(why) - _FINISH_REASON_CHARS
+        marker = (f" [... {omitted} more characters in {label} {ref}; read it whole with FETCH: {ref}]" if ref
+                  else f" [... {omitted} more characters; {label}]")
+        return why[:_FINISH_REASON_CHARS] + marker, dict(why_omitted=omitted, why_artifact=ref, why_source=label)
 
     def _basis_label(self, rid: str) -> str:
         """How the latest audit's NOT MET for ``rid`` stated its basis, for
@@ -12188,8 +12269,9 @@ class Session:
             "'R1: NOT MET - <what is missing or contradicts the goal>; basis: <the words of the goal, the "
             "requirement or a ruling it contradicts, quoted, and how the delivered behaviour contradicts "
             "them>; evidence: <executed reproduction | source reading | untested risk>; at <file and "
-            "function>; example: <an input or call and the wrong result it gives, or none for a "
-            "qualitative requirement>'. The original goal outranks a requirement's generated wording. A "
+            "function>; example: <each distinct input or call you found and the wrong result it gives, at "
+            "most " + str(_AUDIT_EXAMPLES) + ", separated by ' | ', or none for a qualitative requirement>'. Name "
+            "only examples you found; one is enough, and none is asked for beyond them. The original goal outranks a requirement's generated wording. A "
             "MET without a cited "
             "file or test is counted as not met. A citation resolves only as a project-relative "
             "file path with an extension, or a test function named test_* defined in a file "
@@ -13123,7 +13205,7 @@ class Session:
         verdict stays the auditor's."""
         parts = self._not_met_segments(why)
         basis, evidence = parts.get("basis", ""), parts.get("evidence", "")
-        quoted = [q.strip() for q in re.findall(r"[\"\u201c']([^\"\u201d']{3,200})[\"\u201d']", basis) if q.strip()]
+        quoted = [q.strip() for match in _QUOTED_SPAN.finditer(basis) for q in match.groups() if q and q.strip()]
         ledger = self.memory.ledger
         texts = [("goal", self.memory.goal), (rid, ledger.requirements.get(rid, ""))]
         texts += [(f"ruling {i + 1}", r) for i, r in enumerate(ledger.rulings)]
@@ -13188,8 +13270,9 @@ class Session:
                     index[key]["again"].append(number)
                     index[key].pop("met_later", None)
                     continue
+                artifact, kind = owner._audit_text_artifact(audit, why)
                 entry = dict(number=number, auditor=audit.get("auditor") or "unknown", source=audit.get("source"),
-                             revision=(audit.get("revisions") or {}).get(rid), artifact=audit.get("reply_artifact"),
+                             revision=(audit.get("revisions") or {}).get(rid), artifact=artifact, kind=kind,
                              why=why, again=[], basis=(audit.get("bases") or {}).get(rid))
                 index[key] = entry
                 entries[rid].append(entry)
@@ -13211,7 +13294,7 @@ class Session:
             revised = ("requirement revision not recorded" if rev is None else
                        f"requirement revision {rev}" + (f", revised since (now {now}): judge the current wording"
                                                         if int(rev) != now else ""))
-            line = (f"- {rid}: audit {entry['number']} by {entry['auditor']} on {where} ({revised}; reply artifact "
+            line = (f"- {rid}: audit {entry['number']} by {entry['auditor']} on {where} ({revised}; {entry['kind']} "
                     f"{entry['artifact'] or 'unavailable'}): "
                     + clip(parts.get("explanation", ""), _HISTORY_REASON_CHARS, entry["artifact"]))
             basis = entry.get("basis") or {}
@@ -13370,7 +13453,9 @@ class Session:
         tested = {tuple(r["key"][:2]) for r in self.evidence_requests if r.get("identity") == identity}
         routes = {rid: self._evidence_route(rid, why) for rid, why in unmet.items()}
         for rid, route in routes.items():
-            self.finish_routing.append(dict(requirement=rid, site="final challenge", why=unmet[rid][:300], **route))
+            self.finish_routing.append(dict(requirement=rid, site="final challenge",
+                                            why=unmet[rid][:_FINISH_REASON_CHARS],
+                                            **self._shown_reason(rid, unmet[rid])[1], **route))
         open_ = {rid: e for rid, e in self._disputable().items()
                  if e["kind"] == "audit" and rid in unmet and ("audit", e["identity"]) not in tested
                  and routes[rid]["challengeable"]}

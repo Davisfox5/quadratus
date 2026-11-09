@@ -33,6 +33,7 @@ candidate carries no authority to change final DONE behaviour.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
@@ -427,9 +428,54 @@ def _reached(inputs: CompletionInputs) -> str:
     return f"the task cap ({inputs.max_tasks}) was reached"
 
 
+#: The terminal summary's bound on the send-back it quotes (unchanged).
+_WHY_CHARS = 400
+_LABEL_OPEN = re.compile(r" \((?:its quoted basis|no basis stated)")
+
+
 def _why(inputs: CompletionInputs) -> str:
+    """The send-back the terminal summary quotes, within ``_WHY_CHARS``
+    (cycle20). Whole lines are kept while they fit; a line that does not is
+    cut at a word, never inside a provenance label, and keeps its
+    requirement id, then one marker counts what was left out; for an
+    audit's send-back it says each reason is whole, or with its artifact, in
+    ``finish_routing``. Short text is unchanged."""
     why = (inputs.done_refusal or "").replace(_SENT_BACK, "").strip()
-    return why[:400] or "the requirements check did not pass"
+    if len(why) <= _WHY_CHARS:
+        return why or "the requirements check did not pass"
+    lines = why.splitlines()
+    audit = why.startswith(_AUDIT_FOUND)
+    kept: list = []
+    for i, line in enumerate(lines):
+        rest = "\n".join(lines[i:])
+        marker = _omitted(len(rest), audit)
+        room = _WHY_CHARS - len("\n".join(kept)) - (1 if kept else 0) - len(marker)
+        if len(line) <= room and i < len(lines) - 1:
+            kept.append(line)
+            continue
+        if len(line) <= room:
+            kept.append(line)
+            break
+        cut = line[:max(0, room)]
+        label = _LABEL_OPEN.search(cut)
+        if label is not None:
+            cut = cut[:label.start()]
+        elif " " in cut:
+            cut = cut[:cut.rfind(" ")]
+        cut = cut.rstrip()
+        kept.append(cut + _omitted(len(rest) - len(cut), audit))
+        break
+    return "\n".join(kept).strip()
+
+
+#: The send-back that lists an audit's unmet requirements; only its reasons
+#: are routed, so only it may say ``finish_routing`` holds each one.
+_AUDIT_FOUND = "An independent audit found these requirements not met:"
+
+
+def _omitted(count: int, audit: bool) -> str:
+    return (f" [... {count} more characters; each reason, whole or with its artifact, is in result.json "
+            "finish_routing]" if audit else f" [... {count} more characters]")
 
 
 def _checks_standing_failed(debt: Debt) -> bool:

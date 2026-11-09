@@ -4689,6 +4689,37 @@ Key design decisions already settled:
   - The refusal message and `_SCOPE_REQUEST` both state the distinction.
     The one-correction bound is unchanged.
 
+- **A clipped finish reason names where it is whole; quotes pair; an audit
+  may name up to three examples** (cycle20, root's reconciliation of the
+  cycle19 terminal, PR73 6748219666).
+  - Clipped reasons, before: the DONE send-back and `finish_routing` cut
+    each reason at 300 characters in silence and named no artifact, so the
+    planner could not FETCH the rest.
+  - Clipped reasons, now: `_shown_reason` keeps the 300-character payload
+    (`_FINISH_REASON_CHARS`) and adds `[... N more characters in <what> <id>;
+    read it whole with FETCH: <id>]`. `finish_routing` gains `why_omitted`,
+    `why_artifact` and `why_source`.
+  - Where the pointer points (`_reason_source`, `_audit_text_artifact`):
+    the audit reply or its completion reply that holds those exact words.
+    A harness-written or revised reason is stored as its own artifact,
+    named "the reason as recorded". The history head uses the same check,
+    and a stored id that does not hold the words reads unavailable.
+  - The terminal summary (`completion_decision._why`) keeps whole lines
+    within 400 characters. It cuts a line at a word, never inside a
+    provenance label, keeps the requirement id, and says where each whole
+    reason is.
+  - Quotes in a basis: `_QUOTED_SPAN` pairs its marks. Straight and curly
+    double quotes are read, and single quotes only at word boundaries; an
+    apostrophe inside a word (goal's, isn't) never opens or closes a span.
+  - Why the quote fix: the old pattern read "the goal's rule" as a quote
+    and reported spans no text contains. This did not cause cycle19's
+    label; that basis quoted a literal ellipsis, honestly absent, and no
+    fuzzy match was added.
+  - Audit examples: the NOT MET form allows up to `_AUDIT_EXAMPLES` (3)
+    distinct examples found, separated by ` | `, in the same call. There is
+    no minimum, the grammar is unchanged, and the effect on a live run is
+    unproven.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

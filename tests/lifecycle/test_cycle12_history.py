@@ -186,6 +186,16 @@ def _audit(number, rid="R1", why="it fails", *, met=False, stated=True, source="
                 bases={})
 
 
+def _stored(session):
+    """Each hand-set audit's reply stored as the audit stores it, so the
+    history's pointer is checked against the words it names (cycle20: an
+    id that holds no such text is shown as unavailable)."""
+    for audit in session.requirement_audits:
+        if audit.get("verdicts"):
+            text = "\n".join(f"{r}: NOT MET - {v['why']}" for r, v in audit["verdicts"].items())
+            audit["reply_artifact"] = session.store.put(text, kind="audit-reply:openai:sol", author="openai:sol").id
+
+
 def test_only_the_auditors_own_reasons_are_shown_deduplicated_with_their_provenance(tmp_path):
     session = _session(tmp_path, {"R1": "add returns the sum"})
     session.requirement_audits = [
@@ -195,10 +205,12 @@ def test_only_the_auditors_own_reasons_are_shown_deduplicated_with_their_provena
         _audit(4, why="audit failed", failed=True),
         dict(auditor="openai:sol", result="void: the tree changed"),
     ]
+    _stored(session)
     history = session._audit_history(["R1"])
     assert history.count("- R1: audit") == 1 and "Stated again by audit(s) 2" in history
     assert "MET claimed without a file" not in history and "audit failed" not in history
-    assert "reply artifact art1" in history and "requirement revision 1" in history
+    art1 = session.requirement_audits[0]["reply_artifact"]
+    assert f"reply artifact {art1}" in history and "requirement revision 1" in history
 
 
 def test_a_long_reason_never_cuts_the_example_and_omissions_are_counted(tmp_path):
@@ -206,9 +218,10 @@ def test_a_long_reason_never_cuts_the_example_and_omissions_are_counted(tmp_path
     example = "add(" + "9" * 300 + ", 1) returns a negative number"
     session.requirement_audits = [_audit(n, why=f"case {n} " + "z" * 2000 + f"; example: {example}")
                                   for n in range(1, 6)]
+    _stored(session)
     history = session._audit_history(["R1"])
     assert history.count(f"Example: {example}.") == 3, "the example is whole on every shown entry"
-    assert "more characters in artifact art5" in history
+    assert f"more characters in artifact {session.requirement_audits[4]['reply_artifact']}" in history
     assert "(2 earlier audit entries not shown here, for 1 requirement(s): R1. Each audit's whole reply" in history
 
 
