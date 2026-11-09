@@ -12747,6 +12747,12 @@ class Session:
         for o in rows:
             if not o.get("superseded_by") or not o.get("scenario"):
                 continue
+            # Only a row whose behaviour is exactly its generated summary and
+            # whose own scenario (its own proof and bound cases) is shown may
+            # refer to a successor: a distinct claim or an over-bound scenario
+            # keeps the full row (root review of 10a9433).
+            if not (self._behavior_is_generated(o) and self._scenario_shown(o)):
+                continue
             current, seen = o, {id(o)}
             for _ in range(len(rows)):
                 candidates = [r for r in rows if r is not current and r.get("task") == current.get("superseded_by")
@@ -12766,15 +12772,18 @@ class Session:
 
     def _superseded_row_line(self, o: dict, successor: dict, modality: str) -> str:
         """A superseded row named against the row that holds its scenario
-        now: everything that is its own (task, requirements, modality,
+        now: everything that is its own (task, requirements, its proof id, modality,
         runner, execution, the reason it had before it was superseded,
         sufficiency and its judge, bound cases that differ) stays on the
         line; only the shared scenario text is referred to."""
         runner = (o.get("runner") or "NONE (prerequisite missing)") if modality == "test" else "none"
         before = (o.get("pre_supersession") or {}).get("reason")
         cases = list(o.get("cases") or ())
+        own, theirs = self._scenario_field(o, "proof"), self._scenario_field(successor, "proof")
         return (f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): superseded by task "
-                f"{o['superseded_by']}; the same scenario as {successor['oid']}, stated there; evidence {modality}; "
+                f"{o['superseded_by']}; its proof {own} is the same scenario as {successor['oid']}"
+                + (f" (proof {theirs})" if theirs and theirs != own else "")
+                + f", stated there; evidence {modality}; "
                 f"runner {runner}; execution {o['execution']}"
                 + (f" (before it was superseded: {before})" if before else "")
                 + f"; sufficiency {o['sufficiency']}"

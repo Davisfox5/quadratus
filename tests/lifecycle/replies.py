@@ -50,7 +50,8 @@ _SCENARIO_FIELDS = re.compile(r"^  scenario: proof: (?P<proof>.*?); operation: (
                               r"state: (?P<state>.*?); expect: (?P<expect>.*?); location: (?P<location>.*?)"
                               r"(?:; evidence: |; capture: |; bound cases: |$)", re.MULTILINE)
 _COMPACT = re.compile(r"^scenario \S+ \(stated once below\)$")
-_SUPERSEDED = re.compile(r"^superseded by task \S+; the same scenario as (?P<oid>O\d+), stated there$")
+_SUPERSEDED = re.compile(r"^superseded by task \S+; its proof \S+ is the same scenario as (?P<oid>O\d+)"
+                         r"(?: \(proof \S+\))?, stated there$")
 
 
 def requested_obligations(prompt: str) -> List[dict]:

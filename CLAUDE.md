@@ -3450,6 +3450,12 @@ Key design decisions already settled:
       chain with no revisit.
     - No successor, two candidates, a cycle, or a successor whose scenario
       is not shown keeps the full row.
+    - Only a row whose own behaviour is exactly its generated summary and
+      whose own scenario (its own proof id and bound cases) is shown may
+      refer to a successor. A distinct claim, or an own scenario over the
+      bound, keeps the full row with its "leave unjudged" line (root review
+      of 10a9433: the compact line dropped a distinct adverse claim). The
+      line names the predecessor's own proof id beside the successor's.
     - Required lines, supersession and judgment are unchanged.
   - *Review observations* (`_review_notes_grouped`).
     - Texts identical character for character are listed once. Whitespace

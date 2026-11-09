@@ -102,13 +102,39 @@ def test_a_superseded_chain_refers_to_its_current_row_and_keeps_its_own_facts(tm
             _row("O3", "t3", scenario=_scenario(pid="P2"), cases=["tests/test_app.py::test_add"])]
     new = _render(session, rows)
     line = next(x for x in new.splitlines() if x.startswith("- O1 "))
-    assert line.startswith("- O1 (t1; R1): superseded by task t2; the same scenario as O3, stated there; evidence test")
+    assert line.startswith("- O1 (t1; R1): superseded by task t2; its proof P1 is the same scenario as O3 (proof P2), "
+                           "stated there; evidence test")
     assert "execution failed (before it was superseded: tests/test_app.py::test_old failed on its source)" in line
     assert "sufficiency insufficient by openai:sol" in line
     assert "its own bound cases: tests/test_app.py::test_old" in line
     assert next(x for x in new.splitlines() if x.startswith("- O2 ")).count("the same scenario as O3") == 1
     assert new.count("  scenario: proof:") == 1, "the shared scenario text is stated once, on O3"
     assert {r["oid"]: r["behavior"] for r in requested_obligations(new)}["O1"] == rows[2]["behavior"]
+
+
+def test_a_superseded_row_with_a_distinct_claim_keeps_it_verbatim(tmp_path):
+    """Root's repro on 10a9433: the compact line dropped the predecessor's own
+    behaviour, so a distinct adverse claim disappeared."""
+    session = _session(tmp_path)
+    claim = "Distinct adverse claim: the parser still mutates on malformed input."
+    rows = [_row("O1", "t1", superseded_by="t2", behavior=claim), _row("O2", "t2")]
+    assert claim in _render(session, rows, compact=False)
+    new = _render(session, rows)
+    line = next(x for x in new.splitlines() if x.startswith("- O1 "))
+    assert f"): {claim}; evidence test" in line and "the same scenario as" not in line
+
+
+def test_a_superseded_row_whose_own_scenario_is_over_the_bound_is_not_shown_as_its_successors(tmp_path):
+    """A successor with a shorter case list is shown; the predecessor's own
+    scenario, with its long case list, is not, and keeps its refusal line."""
+    session = _session(tmp_path)
+    rows = [_row("O1", "t1", superseded_by="t2", cases=[f"tests/test_app.py::test_{'x' * 40}_{n}" for n in range(90)]),
+            _row("O2", "t2", cases=["tests/test_app.py::test_add"])]
+    new = _render(session, rows)
+    o1 = new.split("- O1 ", 1)[1].split("\n- O", 1)[0]
+    assert "the same scenario as" not in o1
+    assert "over the 4,000-character bound for this prompt and not shown; leave this row unjudged" in o1
+    assert "- O2 (t2; R1): scenario P1 (stated once below)" in new, "the successor itself is compact as before"
 
 
 @pytest.mark.parametrize("name, rows", [
