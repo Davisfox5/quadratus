@@ -40,6 +40,7 @@ size was necessary.
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 import json
 import re
@@ -459,20 +460,74 @@ def is_test_path(path: str) -> bool:
 _DEFINED = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(")
 _DEFINED_WITH_ARGS = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(([^()]*)\)")
 _ELIDED = frozenset({"...", "\u2026"})
-_QUOTED = re.compile(r"`\s*(?:def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`")
+_QUOTED = re.compile(r"`\s*(def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`")
+#: The anchored assertion grammar (cycle19): a backticked ``name(args)``
+#: without ``def`` states a signature only when, on its own line, one of these
+#: phrases ends directly before its opening backtick (an optional colon
+#: between): "signature" or "signature is", "define", "defines", "defined as",
+#: "declare", "declares", "declared as", "make it". These are the forms the
+#: historical regressions assert with (attempt 2: "give the function
+#: signature `...`"; acceptance: "app.py defines `...`"; f6: "actually make it
+#: `...`"). Every other backticked ``name(args)`` is an invocation or an
+#: example and never a signature, however the sentence around it reads.
+_ASSERTED = re.compile(r"(?:\bsignature(?:\s+is)?|\bdefines?|\bdefined\s+as|\bdeclares?|\bdeclared\s+as"
+                       r"|\bmake\s+it)\s*:?\s*$", re.IGNORECASE)
+#: How far before a quoted form the assertion grammar looks, on its line.
+_ASSERTED_WINDOW = 40
+#: A parameter list longer than this is not read as one (bounded parsing).
+_MAX_PARAMETERS_CHARS = 400
+
+
+def _parameter_list(args: str) -> bool:
+    """Whether ``args`` reads as a Python parameter list, by static parsing
+    only (``ast``; nothing is executed or imported). A placeholder such as
+    ``<argv list>`` or an elision is not one and states no signature."""
+    if len(args) > _MAX_PARAMETERS_CHARS:
+        return False
+    try:
+        ast.parse(f"def _f({args}):\n    pass\n")
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
+def _asserted(text: str, start: int) -> bool:
+    """Whether the assertion grammar ends directly before ``start`` on its
+    line (``_ASSERTED``)."""
+    line = text[:start].rsplit("\n", 1)[-1]
+    return bool(_ASSERTED.search(line[-_ASSERTED_WINDOW:]))
 
 
 def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, List[str]]:
     """Every signature the declaration gives each function it defines.
 
-    A function is *declared* only where the description writes ``def name(``.
-    For those names, every ``def`` line and every backticked ``name(args)``
-    across the whole declaration is collected, with whitespace normalised.
-    Incidental calls (``float()``, ``len(row)``) are never declared, so they
-    cannot trip the check, and neither can a backticked name that is not a
-    function: attempt 3 of the blind acceptance quoted the CSV columns
-    ``Start (s)`` and ``End (s)`` in acceptance, which read as ``name(args)``
-    but are column headings. Requiring a ``def`` keeps the check on functions.
+    A function is *declared* where the description, the intended result or
+    an acceptance condition writes ``def name(``. For those names a signature
+    is (cycle19, PR73 6745520095):
+
+    - a definition: every ``def name(args)``, in a code block or in
+      backticks, in the description or the fields; or
+    - an asserted signature: a backticked ``name(args)`` that the anchored
+      assertion grammar (``_ASSERTED``) directly precedes on its line.
+
+    Any other backticked ``name(args)`` is an invocation or an example (a
+    test calling ``main(argv)``, an expected ``TypeError`` from ``f(1)``) and
+    is never collected: cycle18 stalled because ``main(argv)`` in test
+    guidance read as a second signature beside ``def main(argv=None)``.
+    Signatures are compared as written, whitespace normalised, so a rename or
+    a changed default in a real assertion is a difference even where the two
+    would bind the same call. A form whose parentheses do not read as a
+    parameter list (an elision such as ``(...)``, a placeholder) states no
+    signature and is skipped (f6-download-guard on 2ffa7f6). Incidental calls
+    (``float()``, ``len(row)``) and backticked names that are not functions
+    (attempt 3's column headings ``Start (s)``) are never declared, since
+    only a ``def`` declares a name.
+
+    Limits: names are matched as written, with no class or module
+    resolution, so two methods of one name in different classes are one
+    name, as before; a qualified invocation (``store.add(x)``) is not the
+    declared name and is never collected; and a form with nested
+    parentheses (a default of ``()``) is not read, as before.
 
     Returns ``{name: [distinct signatures, in order of appearance]}``. More
     than one entry for a name is the contradiction the decomposition prompt
@@ -482,8 +537,8 @@ def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, L
     from the first draft. The lead implemented one and was measured against
     the other.
     """
-    quoted_fields = [x for group in fields for x in group]
-    declared = set(_DEFINED.findall(description))
+    texts = [description, *[x for group in fields for x in group]]
+    declared = {name for text in texts for name in _DEFINED.findall(text)}
     if not declared:
         return {}
     found: Dict[str, List[str]] = {}
@@ -502,16 +557,19 @@ def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, L
             # orchestrator could not act on. An elision says nothing about
             # the parameters, so it is not collected.
             return
+        if not _parameter_list(args):
+            return
         normalised = ", ".join(parts)
         forms = found.setdefault(name, [])
         if normalised not in forms:
             forms.append(normalised)
 
-    for name, args in _DEFINED_WITH_ARGS.findall(description):
-        note(name, args)
-    for text in [description, *quoted_fields]:
-        for name, args in _QUOTED.findall(text):
+    for text in texts:
+        for name, args in _DEFINED_WITH_ARGS.findall(text):
             note(name, args)
+        for match in _QUOTED.finditer(text):
+            if match.group(1) or _asserted(text, match.start()):
+                note(match.group(2), match.group(3))
     return found
 
 
@@ -522,7 +580,10 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
     Raises :class:`ValueError` with a message the correction round can quote.
     The prompt asks for a final description with one signature per function,
     quoted verbatim in acceptance; this is the backstop for when the
-    orchestrator thinks aloud inside the description instead.
+    orchestrator thinks aloud inside the description instead. Only
+    definitions and asserted signatures are compared (``declared_signatures``);
+    the message says so, so the one correction is not spent rewriting call
+    examples (cycle19).
     """
     forms = declared_signatures(description, [scope.intended_result], scope.acceptance)
     for name, variants in forms.items():
@@ -531,7 +592,10 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
             raise ValueError(
                 f"the declaration gives {name} more than one signature ({listed}); "
                 f"write the description as final text with exactly one signature "
-                f"per function and quote it verbatim in acceptance"
+                f"per function and quote it verbatim in acceptance (a signature is a "
+                f"`def {name}(<parameters>)` form or a form written directly after 'signature', "
+                f"'defines' or 'make it'; a quoted call such as a test's invocation is "
+                f"an example, never a signature)"
             )
 
 

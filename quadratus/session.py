@@ -699,7 +699,10 @@ _SCOPE_REQUEST = (
     'alternatives or thinking aloud; if you change your mind, rewrite the line. Give '
     'each function exactly one signature, and quote that signature verbatim in '
     'intended_result and acceptance. A declaration whose signatures disagree is '
-    'rejected and comes back for correction. You get one correction: a second '
+    'rejected and comes back for correction. A signature is a `def name(...)` form, or a form '
+    'written directly after "signature", "defines" or "make it"; write signatures as `def name(...)`. '
+    'A quoted call, such as a test invoking the function or a wrong call expected to raise, is an '
+    'example, never a second signature. You get one correction: a second '
     'invalid declaration stops the run, and the correction must be a task, not '
     'DONE, ASK or FETCH. Keep the declaration short (well under 20,000 bytes).'
 )

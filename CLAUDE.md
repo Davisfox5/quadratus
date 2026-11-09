@@ -4659,6 +4659,36 @@ Key design decisions already settled:
     33dd DONE audit marked R17 MET before t8, and t8 changed only tests, so
     that was detection variance.
 
+- **A signature is a definition or an asserted signature; a quoted call is
+  an example** (cycle19, root's reconciliation of the cycle18 terminal, PR73
+  6745520095).
+  - What went wrong in cycle18: the planner declared `def main(argv=None)`
+    and said a test helper runs `main(argv)`. `scope.declared_signatures`
+    collected every backticked `name(args)` for a `def`-declared name, read
+    the call as a second signature, and refused the batch and then its one
+    correction. The run stalled before the CLI or README task ran.
+  - What counts as a signature now:
+    - a `def name(args)` form, in a code block or backticks, in the
+      description, `intended_result` or acceptance;
+    - a backticked `name(args)` placed directly after the anchored
+      assertion grammar `_ASSERTED` on its line: "signature" or "signature
+      is", "define(s)", "defined as", "declare(s)", "declared as", "make it".
+      These are the historical attempt-2, acceptance and f6 forms.
+  - Everything else is an invocation or example and is never collected,
+    including a deliberately wrong call a negative test expects to raise.
+    No call-fit or binding rule was added: a call's validity is the task's
+    behaviour to test.
+  - Real assertions are compared exactly as normalised text, so a rename or
+    changed default still conflicts.
+  - A form whose parentheses do not parse as a parameter list
+    (`_parameter_list`: static `ast`, bounded, nothing executed) states
+    nothing and is skipped. That covers elisions and placeholders.
+  - Unchanged limits: no class or module resolution (two methods of one
+    name are one name), qualified calls are never the declared name, and
+    nested parentheses are not read.
+  - The refusal message and `_SCOPE_REQUEST` both state the distinction.
+    The one-correction bound is unchanged.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on
