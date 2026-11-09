@@ -4720,6 +4720,50 @@ Key design decisions already settled:
     no minimum, the grammar is unchanged, and the effect on a live run is
     unproven.
 
+- **What dispatch would refuse is refused at intake, before any charge**
+  (cycle21, root's reconciliation of the cycle20 terminal, PR73
+  6751283026).
+  - What went wrong in cycle20: t8's role packet (the P1-P9 SCOPE, kept as
+    `tests/lifecycle/cycle20_t8_scope.json`) was refused for size only in
+    `_prepare_dispatch`, after slot 8 was charged. The run stopped with no
+    correction, admission or lead. Earlier, t7 named `readme.md` while the
+    file is `README.md`, and was refused at merge after the whole task.
+  - Packet size: `policy.role_packet` raises `PacketTooLarge` (a
+    `PolicyError`, same message). It carries `needed`, `limit` and the
+    scope's parts (`TaskScope.component_bytes`), measured by the builder's
+    shared `_packet_contract`. Bytes are UTF-8 and exclusions are exempt, as
+    before.
+  - Intake check: `Session._packet_problem` builds every required packet
+    the dispatch would, with the same `policy.scope`, `_packet_roles`,
+    `_role_packet` and cap. A size refusal goes back to the planner, serial
+    and batch, on the shared `_covers_corrections` allowance, before the
+    slot, recovery or listed-task marks, the admission or any call. The
+    send-back gives measured sizes; `packet_refusals` records it.
+  - Unchanged: other policy refusals stop at dispatch as before, and no
+    scope or checklist text is cut.
+  - Backstop: a `PacketTooLarge` that still reaches dispatch before the
+    task's admission (and before `_dispatch_prepared` names it) is recorded
+    not started and uncharged. `_unmark_not_started` undoes its recovery
+    charge, listed-task ran mark and takeover. After admission it stays
+    charged.
+  - The prompt: `_scope_request` states the policy's `packet_limit` and
+    measured `packet_overhead`. The old "well under 20,000 bytes" was the
+    no-policy packet's limit (`_FALLBACK_PACKET_BYTES`), stated only when
+    no policy applies.
+  - Path spelling: `_path_case_problem` / `_case_collision` send back a
+    SCOPE path that differs only in letter case from an existing path.
+    Spellings come from `os.listdir` as stored, never `Path.exists`, so a
+    case-insensitive host gives the same answer. A glob component ends the
+    walk, links are not followed, ambiguity names nothing, and a spelling
+    in an excluded or forbidden path is not disclosed. Nothing is corrected.
+  - `repo_scan` names the README as stored (`readme_name`).
+  - Command label: `_without_command_label` drops one parenthetical that
+    only labels the command, "(configured unittest check)" or "(the
+    required test command)", inside `_command_rest`, so detection and the
+    correction's extra words agree. Any other word keeps the claim mixed:
+    "(configured database check)", another runner's name, a filter or a
+    second label.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

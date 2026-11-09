@@ -45,6 +45,19 @@ class PolicyError(ValueError):
     pass
 
 
+class PacketTooLarge(PolicyError):
+    """A required role packet over its byte limit (cycle21): the same
+    refusal and message as before, with what was measured. ``needed`` is the
+    packet's mandatory UTF-8 bytes with operator exclusions exempt, exactly
+    as the limit is applied; ``components`` splits the task's own scope text
+    (``TaskScope.component_bytes``) from the policy's fixed part."""
+
+    def __init__(self, needed: int, limit: int, components=None, role: str = ""):
+        self.needed, self.limit, self.role = int(needed), int(limit), role
+        self.components = dict(components or {})
+        super().__init__(f'Required role packet exceeds {limit} bytes; narrow the task')
+
+
 def _json(text):
     def pairs(items):
         result = {}
@@ -231,9 +244,49 @@ class RepositoryPolicy:
         Required scope/checklist text is never silently cut. Oversized contracts
         stop before dispatch; only reference notes may be excerpted.
         """
-        plan = self.resolve(scope.permitted_paths if scope else ())
+        contract, exclusion_bytes, limit = self._packet_contract(scope, role)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
+        if room < 0:
+            needed = limit - room
+            scope_bytes = scope.component_bytes() if scope is not None else {}
+            raise PacketTooLarge(needed, limit, dict(scope_bytes, fixed=needed - scope_bytes.get('scope', 0)),
+                                 role=role)
+        notes = conventions.encode()[:room + 1]
+        for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
+            if len(notes) > room:
+                break
+            path = self.root / _path(name, self.root)
+            if not path.is_file():
+                continue
+            with path.open('rb') as source:
+                notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
+        truncated = len(notes) > room
+        return contract + heading + notes[:room].decode('utf-8', errors='ignore') + (marker if truncated else '')
+
+    @property
+    def packet_limit(self) -> int:
+        """The role packet's byte limit as the packet builder applies it."""
         context = self.document.get('context', {})
-        limit = min(24_000, context.get('reference_bytes_limit', 12_000))
+        return min(24_000, context.get('reference_bytes_limit', 12_000))
+
+    def packet_overhead(self, role='lead') -> int:
+        """The mandatory bytes a role packet carries besides a task's own
+        scope text, measured with the builder itself on an empty scope (the
+        default families and gates; a task's paths can select others). Only
+        for stating the room in a prompt; the refusal is always measured."""
+        contract, exclusion_bytes, _ = self._packet_contract(None, role)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        return (len((contract + heading + marker).encode()) - exclusion_bytes
+                - len('Scope: no task scope declared.'.encode()))
+
+    def _packet_contract(self, scope, role):
+        """The packet's mandatory text, the exempt exclusion bytes and the
+        limit: the one builder the refusal and the measurement share."""
+        plan = self.resolve(scope.permitted_paths if scope else ())
+        limit = self.packet_limit
         scope_text = scope.render() if scope else 'Scope: no task scope declared.'
         # Exclusions are operator protections, not optional reference notes.
         # Their count or filename length must not prevent a run from starting.
@@ -278,23 +331,7 @@ class RepositoryPolicy:
             'gates': visible_gates, 'absent': plan['absent_gates'],
             'skipped': plan['skipped_gates'], 'adapters': plan['adapters']}, sort_keys=True))
         parts.append('Repository decisions: ' + json.dumps(self.document.get('decisions', [])))
-        contract = '\n'.join(parts)
-        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
-        marker = '\n[Reference notes truncated to packet byte limit]'
-        room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
-        if room < 0:
-            raise PolicyError(f'Required role packet exceeds {limit} bytes; narrow the task')
-        notes = conventions.encode()[:room + 1]
-        for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
-            if len(notes) > room:
-                break
-            path = self.root / _path(name, self.root)
-            if not path.is_file():
-                continue
-            with path.open('rb') as source:
-                notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
-        truncated = len(notes) > room
-        return contract + heading + notes[:room].decode('utf-8', errors='ignore') + (marker if truncated else '')
+        return '\n'.join(parts), exclusion_bytes, limit
 
     def resolve(self, paths=(), *, writing=False):
         paths = sorted({_path(p, self.root) for p in paths})

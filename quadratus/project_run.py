@@ -813,6 +813,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'inherited_not_run': list(getattr(session, 'inherited_not_run', []) or []) if session else [],
         'boundary_notes': list(getattr(session, 'boundary_notes', []) or []) if session else [],
         'restatement_judgments': list(getattr(session, 'restatement_judgments', []) or []) if session else [],
+        'packet_refusals': list(getattr(session, 'packet_refusals', []) or []) if session else [],
         # Acceptance rows a parallel child could not execute, declared by the
         # harness and rechecked by the same reviewer after the merge gate.
         'deferred_evidence': list(getattr(session, 'deferred_evidence', []) or []) if session else [],

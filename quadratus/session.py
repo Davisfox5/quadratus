@@ -78,6 +78,7 @@ from .outcome import (
     primary,
     unclassified,
 )
+from .policy import PacketTooLarge
 from .providers import (
     PartialWorkSuspected,
     PermissionBlocked,
@@ -704,8 +705,11 @@ _SCOPE_REQUEST = (
     'A quoted call, such as a test invoking the function or a wrong call expected to raise, is an '
     'example, never a second signature. You get one correction: a second '
     'invalid declaration stops the run, and the correction must be a task, not '
-    'DONE, ASK or FETCH. Keep the declaration short (well under 20,000 bytes).'
+    'DONE, ASK or FETCH.'
 )
+
+#: The no-policy role packet's byte limit (``Session._role_packet``).
+_FALLBACK_PACKET_BYTES = 20_000
 
 #: What a UI task's SCOPE capture declares when the harness captures (Run 19:
 #: a favicon task declared a wait on an element visible at load, and the
@@ -2404,6 +2408,34 @@ def _population_clause(text: str) -> Tuple[str, Optional[List[dict]]]:
 _RUNNER_SPAN = r"(?:[\w./~-]*/)?(?:python3?|pytest|npm|npx|node|make)"
 
 
+def _case_collision(root: Path, declared: str) -> Optional[str]:
+    """The existing spelling of ``declared`` when some component of it is
+    absent under that exact name but present under one name that differs
+    only in letter case; None when the path exists as written, is new, is
+    ambiguous, passes through a link, or reaches a glob component first
+    (cycle21). Reads directory listings only, never file contents."""
+    parts = [p for p in PurePosixPath(str(declared).strip("/")).parts if p not in ("", ".")]
+    current, spelled = root, []
+    for i, part in enumerate(parts):
+        if any(ch in part for ch in "*?["):
+            return None
+        try:
+            names = os.listdir(current)
+        except OSError:
+            return None
+        if part in names:
+            current = current / part
+            spelled.append(part)
+            if i < len(parts) - 1 and (current.is_symlink() or not current.is_dir()):
+                return None
+            continue
+        folded = [n for n in names if n.casefold() == part.casefold()]
+        if len(folded) != 1:
+            return None
+        return "/".join(spelled + [folded[0]] + list(parts[i + 1:]))
+    return None
+
+
 def _command_rest(text: str, argv) -> Optional[str]:
     """A requirement's text with its one command taken out, every other
     Markdown code span read as the plain text it marks, or None when the text
@@ -2427,7 +2459,39 @@ def _command_rest(text: str, argv) -> Optional[str]:
         if not phrase or plain.count(phrase) != 1:
             return None
         rest = plain.replace(phrase, " ")
-    return re.sub(r"`([^`\n]+)`", r"\1", rest)
+    return _without_command_label(re.sub(r"`([^`\n]+)`", r"\1", rest), argv)
+
+
+def _command_runner_name(argv) -> Optional[str]:
+    """The runner a test command names: ``pytest``, ``unittest`` (``python -m
+    unittest``), ``npm`` or ``make``; None for anything else."""
+    argv = [str(a) for a in argv or ()]
+    if not argv:
+        return None
+    head = os.path.basename(argv[0])
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", head) and len(argv) > 2 and argv[1] == "-m":
+        return argv[2] if argv[2] in ("pytest", "unittest") else None
+    return head if head in ("pytest", "npm", "make") else None
+
+
+def _without_command_label(rest: str, argv) -> str:
+    """``rest`` without one parenthetical that only labels the command it
+    follows, such as "(configured unittest check)" or "(the required test
+    command)" (cycle21: R23 was read as claiming "configured unittest check"
+    beside the command, and the planner wrote a test that loads the test
+    suite). The whole parenthetical must be that label: an optional "the",
+    "configured", "required" or "approved", optionally the command's own
+    runner name and "test", then "check", "command" or "gate". Any other word
+    ("(configured database check)") keeps it, and the requirement keeps its
+    scenario."""
+    runner = _command_runner_name(argv)
+    label = (r"\(\s*(?:the\s+)?(?:configured|required|approved)\s+"
+             + (rf"(?:{re.escape(runner)}\s+)?" if runner else "")
+             + r"(?:test\s+)?(?:check|command|gate)\s*\)")
+    found = list(re.finditer(label, rest, re.IGNORECASE))
+    if len(found) != 1:
+        return rest
+    return rest[:found[0].start()] + " " + rest[found[0].end():]
 
 
 def _python_case_defs(data) -> Optional[Dict[str, str]]:
@@ -3874,6 +3938,9 @@ class Session:
         #: Every judgment-completion decision (session._complete_judgment):
         #: attempted or not, with its claim, outcome and the raw reply kept.
         self.judgment_completions: List[dict] = []
+        #: Role packets refused for size at intake, before any charge (cycle21):
+        #: task, role, measured bytes, the limit and the scope's parts.
+        self.packet_refusals: List[dict] = []
         #: Mandatory judgments that ended without a valid verdict and were not
         #: completed: the obligation view names them (session._judgment_gap).
         self.judgment_gaps: List[dict] = []
@@ -5695,7 +5762,7 @@ class Session:
         if policy is not None:
             return policy.role_packet(spec.scope, role, notes)
         contract = '## Role packet\n' + (spec.scope.render() if spec.scope else 'Scope: not declared.')
-        if len(contract.encode()) > 20_000:
+        if len(contract.encode()) > _FALLBACK_PACKET_BYTES:
             raise RunStalled('Task scope exceeds the role packet limit; narrow the task')
         return contract + '\nConventions notes:\n' + notes.encode()[:3000].decode('utf-8', errors='ignore')
 
@@ -6286,6 +6353,108 @@ class Session:
         # the lead's packet was refused. Same builder, same 12,000-byte cap.
         for role in self._packet_roles(spec):
             self._role_packet(spec, role)
+        self._dispatch_prepared = spec.task_id
+
+    def _unmark_not_started(self, spec: TaskSpec, decision: dict, *, why: str) -> None:
+        """Undo the dispatch marks the serial loop set for a task that never
+        began (cycle21): its survey recovery charge, its listed-task ran mark
+        and its DISCHARGES takeover, and record it not started. Only for a
+        refusal before the task's admission; started work keeps every mark."""
+        if self.config.survey is not None and decision.get("charged"):
+            self.survey["recovery_used"] = max(0, int(self.survey.get("recovery_used", 0) or 0) - 1)
+            decision["charged"] = False
+            decision["not_started"] = True
+        if self._explicit_tasks is not None:
+            ran = self.explicit.get("ran") or []
+            self.explicit["ran"] = [r for r in ran if r.get("task") != spec.task_id]
+        for entry in self.unexecuted_acceptance:
+            if entry.get("taken_over_by"):
+                entry["taken_over_by"] = [t for t in entry["taken_over_by"] if t.get("task") != spec.task_id]
+        self.not_started.append(dict(task=spec.task_id, lead=getattr(spec, "lead", None),
+                                     description=(spec.description or "")[:300], detail=str(why)[:300]))
+
+    def _scope_request(self) -> str:
+        """The SCOPE rules with the role packet bound this run enforces
+        (cycle21: the prompt said "well under 20,000 bytes" while the policy's
+        packet limit was 12,000). The limit is the policy's own, as the packet
+        builder applies it, with its mandatory overhead measured by the same
+        builder; without a policy, the fallback packet's limit."""
+        policy = self.config.repository_policy
+        if policy is None:
+            return (_SCOPE_REQUEST + f" The scope as rendered goes into each role packet, whose limit here is "
+                    f"{_FALLBACK_PACKET_BYTES:,} bytes; a task whose packet would not fit is refused.")
+        limit, overhead = policy.packet_limit, policy.packet_overhead("lead")
+        return (_SCOPE_REQUEST + f" The scope as rendered (intended result, paths, acceptance and every proof "
+                f"scenario, in UTF-8 bytes) goes into each role packet, whose limit is {limit:,} bytes; the "
+                f"policy's own checklists and check configuration already take about {overhead:,} of them, so "
+                f"the rendered scope must stay under about {max(0, limit - overhead):,} bytes. A task whose packet "
+                "would not fit is sent back with its measured size, before anything runs: narrow it or state its "
+                "scenarios more briefly, keeping every covered requirement's scenario.")
+
+    def _packet_problem(self, spec: TaskSpec) -> str:
+        """Why a task's required role packets would be refused, or "" (cycle21,
+        run 20261109T195618Z: t8's packet was built only at dispatch, after its
+        slot was charged, and the refusal stopped the run with no correction).
+        The same builder, roles and cap as ``_prepare_dispatch``: the scope as
+        the policy prepares it, then ``_role_packet`` for every role the task
+        carries. Only the typed size refusal is a problem here; every other
+        refusal is left for dispatch, where it stops as before."""
+        from .policy import PacketTooLarge
+        policy = self.config.repository_policy
+        if policy is None or getattr(spec, "scope", None) is None:
+            return ""
+        prepared = replace(spec, scope=policy.scope(spec.scope))
+        for role in self._packet_roles(prepared):
+            try:
+                self._role_packet(prepared, role)
+            except PacketTooLarge as exc:
+                self.packet_refusals.append(dict(task=spec.task_id, role=role, needed=exc.needed, limit=exc.limit,
+                                                 components=dict(exc.components)))
+                parts = exc.components
+                return (f"The {role} role packet for this task would be {exc.needed:,} bytes; the limit is "
+                        f"{exc.limit:,} (the repository policy's role packet limit). Its scope renders "
+                        f"{parts.get('scope', 0):,} bytes: proof scenarios {parts.get('proofs', 0):,}, acceptance "
+                        f"{parts.get('acceptance', 0):,}, intended result {parts.get('intended', 0):,}, the rest of "
+                        f"the scope text {parts.get('other', 0):,}; the policy's own checklists and check "
+                        f"configuration take {parts.get('fixed', 0):,}. Name the task again narrower, or state its "
+                        "scenarios, acceptance conditions and intended result more briefly; every covered "
+                        "requirement keeps its scenario and nothing required is dropped.")
+            except Exception:  # noqa: BLE001 -- any other refusal is dispatch's to raise
+                return ""
+        return ""
+
+    def _path_case_problem(self, spec: TaskSpec) -> str:
+        """A SCOPE path that differs only in letter case from an existing
+        project path, or "" (cycle21, run 20261109T195618Z: t7 named
+        ``readme.md`` while the file is ``README.md``, and the merge refused
+        the write only after the task was spent). Names are compared against
+        the directory entries as stored, so a case-insensitive filesystem that
+        resolves ``readme.md`` still shows ``README.md``. A glob component
+        ends the walk, a symbolic link is never followed, a path that does not
+        exist yet is a new file, and nothing is corrected: the planner names
+        the path again. An existing spelling in a path the task may not name
+        (an exclusion or a forbidden path) is not disclosed."""
+        scope = getattr(spec, "scope", None)
+        if not self.project or scope is None or not scope.permitted_paths:
+            return ""
+        policy = self.config.repository_policy
+        prepared = policy.scope(scope) if policy is not None else scope
+        hidden = list(prepared.forbidden_paths) + list(self.config.project_excludes or ())
+        root = Path(self.project)
+        problems = []
+        for declared in scope.permitted_paths:
+            found = _case_collision(root, declared)
+            if found is None:
+                continue
+            if any(_scope_matches(found, pattern) for pattern in hidden):
+                problems.append(f"`{declared}` differs only in letter case from an existing path this task may "
+                                "not name")
+            else:
+                problems.append(f"`{declared}` differs only in letter case from the existing `{found}`")
+        if not problems:
+            return ""
+        return ("SCOPE paths are exact, and " + "; ".join(problems) + ". Name the existing spelling, or a "
+                "different path for a new file; nothing is corrected for you.")
 
     def _packet_roles(self, spec: TaskSpec):
         """The role packets a task's calls carry: lead and reviewer always,
@@ -8022,7 +8191,7 @@ class Session:
                     + (self._done_refusal or "")
                     + self._findings_prompt()
                     + self._planner_failure_context()
-                    + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
+                    + ("\n\n" + self._scope_request() if self.project and self.config.allow_writes else "")
                     + ("\n\n" + _CAPTURE_SCOPE_REQUEST
                        + f" This task's id will be t{len(self.history) + 1}."
                        if self._capture_guidance() else "")
@@ -8194,7 +8363,7 @@ class Session:
                     # held to. The phase-4 rerun on a6c9576 (2026-09-28) spent
                     # it on the step schema and then stalled on the fixture
                     # path, a rule the orchestrator had never been shown.
-                    correction = (f"\n\nCORRECTION REQUIRED: {exc}.\n{_SCOPE_REQUEST}"
+                    correction = (f"\n\nCORRECTION REQUIRED: {exc}.\n{self._scope_request()}"
                                   + ("\n" + _CAPTURE_SCOPE_REQUEST if self._capture_guidance() else ""))
                     seat, reply = self._ask_seat(seat, build_with_correction)
                     if (control := parse_control(reply)) is not None:
@@ -8900,6 +9069,20 @@ class Session:
                 self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
                 previous_description = None
                 continue
+            problem = self._path_case_problem(spec) or self._packet_problem(spec)
+            if problem:
+                # Before any charge, recovery count, listed-task mark,
+                # admission or call (cycle21): an exact path the planner can
+                # spell, and role packets the dispatch builder would refuse
+                # for size, through the same bounded allowance as COVERS.
+                self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming tasks the dispatch would refuse: {problem}")
+                self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem}"
+                previous_description = None
+                continue
             lines = len(_RESOLVES.findall(spec.description or ""))
             resolves, spec = _read_resolves(spec)
             problem = (self._resolves_problem(resolves, covers, spec) if lines <= 1 else
@@ -9037,6 +9220,19 @@ class Session:
                     # charge read dispatched work with no admission named).
                     charged = False
                     self._refuse_admission_record([spec], exc, used=used)
+                raise
+            except PacketTooLarge as exc:
+                # The intake measures every required packet; one refused here
+                # anyway (a backstop) is truthful only when nothing of the task
+                # began: no admission, and dispatch never finished preparing.
+                # Then no slot, recovery or listed-task mark is spent, and the
+                # record says not started; the stop itself is unchanged
+                # (cycle21: slot 8 read charged with no admission or lead).
+                admitted = any(e.get("tasks") == [spec.task_id] for e in self.task_admissions)
+                if not admitted and getattr(self, "_dispatch_prepared", None) != spec.task_id:
+                    charged = False
+                    self._unmark_not_started(spec, decision, why=str(exc))
+                    self._slot_event("not_started", [spec.task_id], used, why=str(exc))
                 raise
             except FinishReserved as exc:
                 if not self._settle_not_started(spec, exc):
@@ -10486,6 +10682,13 @@ class Session:
                 problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
             else:
                 problem = problem or self._capture_problem(spec, None)
+            dispatchable = "" if problem else (self._path_case_problem(spec) or self._packet_problem(spec))
+            if dispatchable:
+                # The serial intake's exact-path and packet checks (cycle21),
+                # before the wave's admission or any child.
+                self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {dispatchable} Name the "
+                                      "tasks again.")
+                return False
             if not problem:
                 # The same ownership and closure admission as the serial
                 # intake, before any child's writer call (root review of

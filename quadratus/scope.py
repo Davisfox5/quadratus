@@ -239,26 +239,38 @@ class TaskScope:
         packet sent to a model still carries every exclusion, and permits()
         always enforces the full list.
         """
-        parts = ["## Scope of this task"]
+        return "\n".join(text for _name, text in self._render_parts(include_forbidden))
+
+    def component_bytes(self) -> Dict[str, int]:
+        """UTF-8 bytes of the rendered scope as the role packet counts it
+        (exclusions exempt) and of its larger parts, from the same parts
+        ``render`` joins (cycle21: a packet refusal says what to shorten)."""
+        parts = dict(self._render_parts(False))
+        sizes = {name: len(parts[name].encode()) for name in ("proofs", "acceptance", "intended") if name in parts}
+        whole = len(self.render(include_forbidden=False).encode())
+        return dict(scope=whole, **sizes, other=whole - sum(sizes.values()))
+
+    def _render_parts(self, include_forbidden: bool) -> List[Tuple[str, str]]:
+        parts = [("head", "## Scope of this task")]
         if self.intended_result:
-            parts.append(f"Intended result: {self.intended_result}")
+            parts.append(("intended", f"Intended result: {self.intended_result}"))
         if self.permitted_paths:
-            parts.append(
+            parts.append(("paths",
                 "You may change only these paths: "
                 + ", ".join(self.permitted_paths)
                 + ". A change anywhere else will be rejected as out of scope."
-            )
+            ))
         if self.forbidden_paths and include_forbidden:
-            parts.append("Never change: " + ", ".join(self.forbidden_paths) + ".")
+            parts.append(("forbidden", "Never change: " + ", ".join(self.forbidden_paths) + "."))
         if self.acceptance:
-            parts.append(
+            parts.append(("acceptance",
                 "This task is finished when:\n"
                 + "\n".join(f"  - {a}" for a in self.acceptance)
-            )
+            ))
         if self.review_only:
-            parts.append("Declared review-only: report findings; do not change project source.")
+            parts.append(("review", "Declared review-only: report findings; do not change project source."))
         if self.proofs:
-            parts.append("Proof scenarios (a test scenario is shown only by a named test case that runs and passes. "
+            parts.append(("proofs", "Proof scenarios (a test scenario is shown only by a named test case that runs and passes. "
                          + PROVES_RULE + " "
                          "A scenario marked 'evidence: reading' is a documentation claim the audit reads and cites; "
                          "one marked 'evidence: capture' is a visual state the harness renders and the design "
@@ -266,11 +278,11 @@ class TaskScope:
                          + "\n".join(f"  - {p['id']} [{', '.join(p['requirements'])}] {p['operation']}; given "
                                       f"{p['state']}; expect {p['expect']}; in {p['location']}"
                                       + (f"; evidence: {p['evidence']}" if p.get("evidence") in ("reading", "capture") else "")
-                                      for p in self.proofs))
+                                      for p in self.proofs)))
         if self.estimate:
-            parts.append("The planner's split of that size: "
+            parts.append(("estimate", "The planner's split of that size: "
                          + ", ".join(f"{k} {v}" for k, v in self.estimate.items())
-                         + " lines. The estimate below is the sum; every line counts the same.")
+                         + " lines. The estimate below is the sum; every line counts the same."))
         if self.max_lines:
             # The lead is told what the harness measures and what it does
             # with it (series rule-2ffa7f6 f3, f4 and f7: first tasks of 85
@@ -280,7 +292,7 @@ class TaskScope:
             # and complete requirements first, the tests that prove them,
             # then conciseness; the measured size reaches the reviewer, who
             # judges whether it was necessary.
-            parts.append(
+            parts.append(("size",
                 f"Expected size: about {self.max_lines} changed lines, counting added and removed "
                 f"lines in every file, tests in full. This is the planner's estimate, not a limit: "
                 f"the harness measures the diff after each editing call and reports the size to "
@@ -291,8 +303,8 @@ class TaskScope:
                 f"unrelated edits, no duplication, no padding. Never compress formatting, squeeze "
                 f"tests onto one line or leave a test out to fit a number; a reviewer judges "
                 f"whether the size was necessary, and length alone is not a finding."
-            )
-        return "\n".join(parts)
+            ))
+        return parts
 
     @classmethod
     def unbounded(cls) -> "TaskScope":

@@ -52,7 +52,9 @@ def test_the_scope_line_form_and_path_rules_are_stated():
     assert '"max_lines": ' + str(TASK_SIZE_GUIDE) in text and "never squeezed" in text
     assert "no greater than" not in text and "an overrun stops the task" not in text
     assert "one correction" in text and "not DONE, ASK or FETCH" in text
-    assert "20,000 bytes" in text
+    # The size bound is the role packet's, stated per run (cycle21,
+    # tests/lifecycle/test_cycle21_dispatch_intake.py); no fixed number here.
+    assert "20,000 bytes" not in text
 
 
 def test_the_capture_rules_are_stated_from_the_validator_constants():
