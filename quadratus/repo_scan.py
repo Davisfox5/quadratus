@@ -214,9 +214,9 @@ def _declared_checks(root: Path, manifests: List[str]) -> List[List[str]]:
     python = _python_check(root, manifests)
     if python:
         found.append(python)
-    if not found and "go.mod" in manifests:
+    if "go.mod" in manifests:
         found.append(["go", "test", "./..."])
-    if not found and "Cargo.toml" in manifests:
+    if "Cargo.toml" in manifests:
         found.append(["cargo", "test", "--quiet"])
     return found
 
@@ -304,6 +304,8 @@ def scan_repo(root) -> ScanReport:
             if entry.is_dir():
                 if entry.name not in _SKIP_DIRS and not entry.name.startswith("."):
                     stack.append(entry)
+                continue
+            if not entry.is_file():
                 continue
             report.file_count += 1
             lang = _LANGUAGES.get(entry.suffix.lower())

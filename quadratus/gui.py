@@ -7,6 +7,7 @@ import os
 import queue
 import re
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
@@ -112,25 +113,37 @@ class OperatorChannel:
         self.answers: "queue.Queue[str]" = queue.Queue()
         self.timeout = timeout
         self.waiting = False
+        self._answer_lock = threading.Lock()
 
     def ask(self, question: str) -> str:
         from .session import OperatorInputNeeded
-        self.waiting = True
-        self.questions.put(question)
+        # Each question owns its reply queue. A submit racing a timeout can
+        # then never become a ruling for a later question or run.
+        answers: "queue.Queue[str]" = queue.Queue(maxsize=1)
+        with self._answer_lock:
+            self.answers = answers
+            self.waiting = True
+            self.questions.put(question)
         try:
-            return self.answers.get(timeout=self.timeout)
+            return answers.get(timeout=self.timeout)
         except queue.Empty as exc:
             raise OperatorInputNeeded(question) from exc
         finally:
-            self.waiting = False
+            with self._answer_lock:
+                if self.answers is answers:
+                    self.waiting = False
 
     def answer(self, text: str) -> str:
         text = (text or "").strip()
-        if not self.waiting:
-            return "No question is waiting for an answer."
-        if not text:
-            return "Type an answer first."
-        self.answers.put(text)
+        with self._answer_lock:
+            if not self.waiting:
+                return "No question is waiting for an answer."
+            if not text:
+                return "Type an answer first."
+            # Consume the pending question before waking its worker: double
+            # clicks must not leave a second answer for the next ASK.
+            self.waiting = False
+            self.answers.put_nowait(text)
         return "Answer sent; the run continues."
 
 

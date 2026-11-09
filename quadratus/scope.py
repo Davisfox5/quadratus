@@ -329,8 +329,35 @@ def _matches(path: str, pattern: str) -> bool:
         return path == prefix or path.startswith(prefix + "/")
     # Also accept a double-star directory wildcard matching zero levels.
     if "**" in pattern:
-        return fnmatch.fnmatch(path, pattern.replace("**/", "*").replace("**", "*"))
+        # Each **/ is an optional directory segment, not an optional filename
+        # prefix: src/**/config.py must not permit src/myconfig.py. Translate
+        # the remaining glob pieces intact so multiple recursive directories
+        # can independently match zero or more levels.
+        parts = [fnmatch.translate(part).removesuffix(r"\Z").removesuffix(r"\z")
+                 for part in pattern.split("**/")]
+        return re.fullmatch(r"(?s:.*/)?".join(parts), path) is not None
     return False
+
+
+def _diff_lines(diff: str):
+    """Yield lines with their hunk membership, even if payload resembles a header."""
+    old = new = 0
+    for line in (diff or "").splitlines():
+        match = re.match(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)
+        if match:
+            old, new = (int(n) if n is not None else 1 for n in match.groups())
+            yield line, False
+            continue
+        in_hunk = old > 0 or new > 0
+        if in_hunk:
+            if line.startswith("-"):
+                old -= 1
+            elif line.startswith("+"):
+                new -= 1
+            elif line.startswith(" "):
+                old -= 1
+                new -= 1
+        yield line, in_hunk
 
 
 def changed_paths(diff: str) -> List[str]:
@@ -342,7 +369,9 @@ def changed_paths(diff: str) -> List[str]:
     side and a deleted one by its ``---`` side.
     """
     seen: List[str] = []
-    for line in (diff or "").splitlines():
+    for line, in_hunk in _diff_lines(diff):
+        if in_hunk:
+            continue
         if line.startswith(("Binary file changed: ", "Empty file added/deleted: ")):
             name = line.partition(": ")[2]
             if name not in seen:
@@ -368,8 +397,8 @@ def count_change_lines(diff: str) -> int:
     itself worth a look.
     """
     total = 0
-    for line in (diff or "").splitlines():
-        if line.startswith(("+++", "---", "@@", "diff --git", "index ")):
+    for line, in_hunk in _diff_lines(diff):
+        if not in_hunk and line.startswith(("+++", "---", "@@", "diff --git", "index ")):
             continue
         if line.startswith(("+", "-")):
             total += 1
@@ -385,8 +414,8 @@ def count_change_lines_by_path(diff: str) -> Dict[str, int]:
     """
     counts: Dict[str, int] = {}
     current = ""
-    for line in (diff or "").splitlines():
-        if line.startswith(("--- ", "+++ ")):
+    for line, in_hunk in _diff_lines(diff):
+        if not in_hunk and line.startswith(("--- ", "+++ ")):
             raw = line[4:].strip().split("\t")[0]
             if raw != "/dev/null" and raw:
                 current = raw[2:] if raw.startswith(("a/", "b/")) else raw

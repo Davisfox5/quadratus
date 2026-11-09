@@ -1043,6 +1043,11 @@ def _test_count(output):
     if unittest:
         skipped = re.findall(r'skipped=(\d+)', output)
         return max(0, int(unittest[-1]) - (int(skipped[-1]) if skipped else 0))
+    # Cargo emits one summary per test binary, then often an empty doc-test
+    # suite. The last summary alone would erase the cases already executed.
+    rust = re.findall(r'(?m)^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;', output)
+    if rust:
+        return sum(int(passed) + int(failed) for passed, failed in rust)
     # Pytest (and compact JS summaries) can report failed executions alongside
     # passes. Use one final summary line, excluding cases whose body did not run.
     for line in reversed(output.splitlines()):

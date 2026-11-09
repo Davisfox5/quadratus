@@ -273,7 +273,7 @@ def _is_test_suite(argv) -> bool:
     """Whether a command is a test runner, whose success needs a count."""
     identity = _check_identity(argv)
     return (identity[:3] == ('python', '-m', 'pytest') or '--test' in identity
-            or identity[:2] in (('npm', 'test'), ('npm', 't')))
+            or identity[:2] in (('npm', 'test'), ('npm', 't'), ('cargo', 'test')))
 
 
 def _extra_gate_commands(extra_checks):
@@ -332,7 +332,7 @@ def _gate_plan(command, extras, scan):
                           minimum_tests=1 if _is_test_suite(command) else None)] if command else [])
     gates += list(extras)
     gates += [GateCommand(id='declared-' + Path(c[0]).name + (f'-{i}' if i else ''), argv=tuple(c),
-                          minimum_tests=1)
+                          minimum_tests=1 if _is_test_suite(c) else None)
               for i, c in enumerate(declared)]
     return gates
 

@@ -571,6 +571,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             parser.error("--monitor takes no prompt and cannot be combined with probe, status or policy preview")
         return _run_monitor(args)
 
+    project_options = [
+        ("--clone", args.clone), ("--branch", args.branch),
+        ("--allow-writes", args.allow_writes), ("--check", args.check),
+        ("--extra-check", args.extra_check), ("--capture-profile", args.capture_profile),
+        ("--readiness", args.readiness), ("--repair-test", args.repair_tests),
+        ("--tasks", args.tasks), ("--rulings", args.rulings),
+        ("--resume", args.resume),
+        ("--survey-recovery", args.survey_recovery is not None),
+        ("--direct-tier", args.direct_tier),
+    ]
+    if not args.project:
+        requested = [name for name, value in project_options if value]
+        if requested:
+            parser.error(f"{', '.join(requested)} require --project")
+
     if (args.policy_preview or args.forbid or args.declared_paths) and not args.project:
         parser.error("--policy-preview, --path and --forbid require --project")
     if args.policy_preview:
@@ -610,9 +625,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.prompt:
         parser.error("a prompt is required (or use --status / --probe)")
 
-    if args.clone or args.branch or args.allow_writes or args.check:
-        if not args.project:
-            parser.error("--clone, --branch, --allow-writes and --check require --project")
     if args.max_tasks < 1:
         parser.error("--max-tasks must be at least 1")
     if (args.session or args.project) and any((args.claude_model, args.openai_model, args.grok_model)):

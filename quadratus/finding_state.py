@@ -156,7 +156,8 @@ class FindingState:
 
 
 def _task_category(outcome, fact) -> str:
-    kind, stage, detail = _get(fact, "kind", ""), _get(fact, "stage", ""), _get(fact, "detail", "") or ""
+    kind, stage = _get(fact, "kind", ""), _get(fact, "stage", "")
+    detail = str(_get(fact, "detail", "") or "")
     closed_as = str(_get(outcome, "closed_as", "") or "")
     if stage == "merge" and detail.startswith("not merged: "):
         return "unmerged"
@@ -182,7 +183,7 @@ def _task_category(outcome, fact) -> str:
 
 
 def _run_category(fact) -> str:
-    detail = _get(fact, "detail", "") or ""
+    detail = str(_get(fact, "detail", "") or "")
     if _get(fact, "legacy") is not None:
         return "stop"
     if detail == "a gate outside any task (the merge gate) failed":
@@ -255,6 +256,8 @@ def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> Find
         ordinals: Counter = Counter()
         for fact in _listed(_get(outcome, "facts"), f"task {label}'s facts", problems):
             kind, stage = str(_get(fact, "kind", "")), str(_get(fact, "stage", "") or "")
+            if not isinstance(_get(fact, "detail", ""), str):
+                problems.append(f"task {label} fact detail is not a string")
             if kind not in PRECEDENCE:
                 problems.append(f"task {label} fact of unknown class {kind!r} kept active")
             ordinals[(stage, kind)] += 1
@@ -263,8 +266,15 @@ def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> Find
                 category=_task_category(outcome, fact), kind=kind, state=_state(fact), task=tid, stage=stage,
                 detail=str(_get(fact, "detail", "") or ""), full=_get(fact, "full"),
                 has_full=_has(fact, "full"), legacy_route=bool(_get(fact, "legacy_route", False))))
-        for fid in ((_get(outcome, "open_at_close") or {}).get("findings") or []):
-            snapshot_ids.setdefault(fid, []).append(tid)
+        snapshot = _get(outcome, "open_at_close")
+        if snapshot is not None and not isinstance(snapshot, dict):
+            problems.append(f"task {label}'s open_at_close is not a record")
+        elif isinstance(snapshot, dict) and "findings" in snapshot:
+            for fid in _listed(snapshot["findings"], f"task {label}'s snapshot findings", problems):
+                if not isinstance(fid, str) or not fid:
+                    problems.append(f"task {label}'s snapshot finding has no id")
+                    continue
+                snapshot_ids.setdefault(fid, []).append(tid)
     for fid, tasks in snapshot_ids.items():
         known = by_id.get(fid)
         if known is None:
@@ -285,6 +295,8 @@ def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> Find
     stop = None
     for index, fact in enumerate(run_facts):
         kind, stage = str(_get(fact, "kind", "")), str(_get(fact, "stage", "") or "run")
+        if not isinstance(_get(fact, "detail", ""), str):
+            problems.append("run fact detail is not a string")
         if kind not in PRECEDENCE:
             problems.append(f"run fact of unknown class {kind!r} kept active")
         ordinals[(stage, kind)] += 1

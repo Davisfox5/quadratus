@@ -346,7 +346,8 @@ class LLMProvider:
         # a bound (Codex review of 961d2da on #53).
         shape = {}
         spec = getattr(self, 'spec', None)
-        if (getattr(self, 'summary_only', False) and spec is not None
+        if (getattr(self, 'summary_only', False) and not getattr(self, 'full_token_reserve', False)
+                and spec is not None
                 and getattr(spec, 'summary_turn_capped', lambda: False)()):
             from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
             shape = dict(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
@@ -564,6 +565,7 @@ class ClaudeProvider(LLMProvider):
             max_tokens=self.max_tokens,
             system=system,
             messages=messages,
+            timeout=self.timeout,
         )
         usage = _field(resp, 'usage')
         values = [_field(usage, key) for key in ('input_tokens', 'output_tokens')]
@@ -664,6 +666,7 @@ class OpenAIProvider(_OpenAISDKProvider):
             instructions=system,
             input=turns,
             max_output_tokens=self.max_tokens,
+            timeout=self.timeout,
         )
         usage = _field(resp, 'usage')
         self.last_usage = {'input_tokens': _field(usage, 'input_tokens'),
@@ -700,6 +703,7 @@ class GrokProvider(_OpenAISDKProvider):
             model=self.model,
             messages=messages,
             max_completion_tokens=self.max_tokens,
+            timeout=self.timeout,
         )
         usage = _field(resp, 'usage')
         self.last_usage = {'input_tokens': _field(usage, 'prompt_tokens'),
