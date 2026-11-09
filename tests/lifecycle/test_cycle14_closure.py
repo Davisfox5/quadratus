@@ -90,8 +90,9 @@ def test_a_declaration_by_the_auditors_own_seat_is_judged_by_another_independent
     assert judgment["source"] == record["source_fingerprint"] and judgment["decision"]
     judged = entry["restated_judgment"]
     assert judged["verdict"] == "sufficient" and judged["by"] == judgment["judge"] != auditor
-    (spent,) = [c for c in record["judgment_completions"] if c["task"] == "restatement-judgment"]
-    assert spent["claimed"] and spent["role"] == "recheck"
+    assert judgment["asked"] is True
+    assert not [c for c in record["judgment_completions"] if c["task"] == "restatement-judgment"], \
+        "a first ask is an ask, never the job's completion (cycle18)"
     assert [c.task for c in replay.of("lead")] == ["t1"], "no extra task"
     (row,) = [o for o in record["evidence_obligations"] if o.get("oid") == entry["oid"]]
     assert row["execution"] == "ran", row
@@ -128,9 +129,10 @@ def test_a_judgment_a_later_source_invalidated_is_asked_again_of_the_recorded_ju
                                                                                                    monkeypatch):
     """The O60 shape: Sol (the auditor) restated the item; Opus judged it
     SUFFICIENT; a repair by Sol then changed the source. The old judgment
-    is stale and never reused; the new decision goes to the recorded judge,
-    on the shared allowance, which the first judgment already spent, so the
-    item stays held and the record says why."""
+    is stale and never reused; the new decision goes to the recorded judge
+    as a first ask of its own (cycle18: it used to claim the job's one
+    completion, which the first judgment had already spent, so the item
+    stayed held on every later source)."""
     from tests.lifecycle.test_done_declarations import ADVERSE
     from tests.lifecycle.test_lifecycle_matrix import FIXED
     asked, audits = [], []
@@ -158,11 +160,13 @@ def test_a_judgment_a_later_source_invalidated_is_asked_again_of_the_recorded_ju
     assert second["judge"] == first["judge"] == "claude:opus", "the recorded judge is asked again"
     assert second["source"] != first["source"] and second["decision"] != first["decision"]
     assert second["source"] == record["source_fingerprint"]
-    assert second["outcome"] == "not attempted: the job's allowance is spent; held", second
-    assert len(asked) == 1, "the shared allowance bought one judgment call"
-    assert entry["restated_judgment"]["source"] == first["source"] != record["source_fingerprint"], "never reused"
+    assert second["outcome"] == "answered" and second["sufficient"] == [entry["oid"]], second
+    assert len(asked) == 2, "one first ask per decision"
+    assert not [c for c in record["judgment_completions"] if c["task"] == "restatement-judgment"]
+    first_judged, second_judged = entry["judgment_history"]
+    assert first_judged["source"] == first["source"] != record["source_fingerprint"], "never reused"
+    assert entry["restated_judgment"]["source"] == second_judged["source"] == record["source_fingerprint"]
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "no extra task"
-    assert not replay.result.completed
 
 
 def test_at_the_task_cap_the_auditors_own_restatement_is_judged_before_the_final_audit(tmp_path, monkeypatch):
@@ -301,15 +305,18 @@ def test_one_call_per_judge_for_all_its_items_asked_once_per_decision(tmp_path):
     assert session._judge_restatements("final") == [] and len(calls) == 1, "O3's adverse decision is not re-asked"
 
 
-def test_without_an_eligible_judge_or_allowance_the_item_stays_held_and_says_why(tmp_path):
+def test_without_an_eligible_judge_the_item_stays_held_and_a_spent_completion_never_blocks_a_first_ask(tmp_path):
     session, calls = _a2(tmp_path, available=lambda key: key == "openai:sol")
     (record,) = session._judge_restatements("done")
     assert record["judge"] is None and "no eligible independent seat" in record["outcome"] and calls == []
     assert session._judge_restatements("final") == [] and session.restatement_judgments == [record], "recorded once"
+    # The completion allowance is for an arrived reply that was not a
+    # judgment; with it turned off the first ask is still made (cycle18).
     session, calls = _a2(tmp_path / "off", limit=0)
     (record,) = session._judge_restatements("done")
-    assert record["outcome"] == "not attempted: turned off; held" and calls == []
-    assert not session._restated_judged(session.unexecuted_acceptance[0])
+    assert record["outcome"] == "answered" and record["asked"] and len(calls) == 1
+    assert session._restated_judged(session.unexecuted_acceptance[0])
+    assert session.judgment_completions == []
 
 
 def test_an_auditor_that_did_not_write_the_restatement_judges_it_itself(tmp_path):

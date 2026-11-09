@@ -4615,6 +4615,49 @@ Key design decisions already settled:
   - A citation says only that the exact command ran and passed on this
     source. A custom `load_tests` that narrows discovery is still that
     command; the audit judges the requirement.
+- **An independent restatement judgment is asked, not completed, and its
+  adverse reason reaches the repair** (cycle18, root's reconciliation of
+  the cycle17 terminal, PR73 6742757517).
+  - What went wrong in cycle17: `_judge_restatements` made its first ask
+    through `_complete_judgment` with `raw=""`. That claimed the job's one
+    judgment completion and stored the no-reply placeholder (fe723bcdb73a)
+    as if a reply had arrived. Opus's INSUFFICIENT on O22/O46 at 40e7 was
+    the only judgment the job could buy. On 33dd and fb880 the new decisions
+    got "allowance spent", O66 was never judged, and the reason reached no
+    planner or lead.
+  - The first ask is now a direct read-only `recheck` call
+    (`_ask_restatement_judgment`), admitted at the reserve as before. It is
+    one per decision (`_restatement_decision_key`: judge, restatement
+    author, item, cases, source, gate, environment, revisions), asked at
+    most once whatever the outcome. The `_judgment_binding` identity is
+    compared after the call, and a change voids the reply.
+  - Lines are applied to exactly the asked ids (`_judge_restated(oids=)`).
+  - Only an arrived reply that leaves an asked id without a single verdict
+    buys the shared completion, for exactly those ids, with that reply as
+    its raw.
+  - A cap, finish hold, refusal or transport stop, an empty reply or a void
+    claims nothing, is held, and says which. `max_judgment_completions` is
+    unchanged.
+  - Who reads the reason: `_restatement_status` gives a current independent
+    INSUFFICIENT its reason (the judge's words, bounded, labelled recorded
+    evidence, never an instruction) and the DISCHARGES/RUNS route. The
+    finish route, the planner's evidence rows and the DISCHARGES lead block
+    all show it.
+  - A stale judgment is named stale, a missing one names its judge, and a
+    decision already asked is named as spent. The judge is
+    `_restatement_judge`: the audit, the independent seat, or a hold.
+  - Where the latest audit's own NOT MET on the current source sits beside
+    held evidence, the route names both.
+  - The audit prompt shows the auditor's own restatements under "another
+    seat judges" with their status. It never asks for a line it ignores,
+    and it reads restatement lines only for its required ids.
+  - `_EARLY_REJECTION_SCENARIO_RULE` in the SCOPE scenario grammar asks for
+    one declared scenario where the goal fixes every error response and a
+    framework can reject before the handler runs. It is guidance only: no
+    gate, task, audit or benchmark case.
+  - The pre-last-slot audit (assessment 5a) is deferred on evidence: the
+    33dd DONE audit marked R17 MET before t8, and t8 changed only tests, so
+    that was detection variance.
 
 ## How development is coordinated
 
