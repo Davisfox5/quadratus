@@ -12706,6 +12706,82 @@ class Session:
                     "for this prompt and not shown; leave this row unjudged (an explicit INSUFFICIENT is allowed).")
         return f"\n  scenario: {text}"
 
+    @staticmethod
+    def _scenario_field(o: dict, key: str) -> str:
+        return str(dict(o.get("scenario") or {}).get(key) or "")
+
+    @classmethod
+    def _behavior_is_generated(cls, o: dict) -> bool:
+        """Whether a row's behaviour is exactly the summary
+        ``_register_acceptance_obligations`` generates from its own declared
+        scenario (proof, operation, prior state, expectation, location),
+        bounded as it is stored: then it says nothing the scenario line does
+        not. A legacy row, a mixed record or a behaviour that differs in any
+        character is its own claim and is never treated as redundant."""
+        scenario = dict(o.get("scenario") or {})
+        keys = ("proof", "operation", "state", "expect", "location")
+        if not all(k in scenario for k in keys):
+            return False
+        generated = (f"{scenario['proof']}: {scenario['operation']}; given {scenario['state']}; "
+                     f"expect {scenario['expect']}; in {scenario['location']}")
+        return str(o.get("behavior") or "") == generated[:300]
+
+    def _superseding_rows(self, rows: List[dict]) -> Dict[str, dict]:
+        """For each superseded acceptance row, the one row that now holds the
+        same proof, when it can be named exactly (cycle13): ``superseded_by``
+        is a task id, so the successor is the single acceptance row of that
+        task with the same scenario (proof id aside), the same requirement
+        revisions and the same modality, followed while it is itself
+        superseded, bounded by the number of rows and never revisiting a
+        row. No successor, two of them, a cycle, or a successor whose
+        scenario is not shown keeps the full row; nothing is mapped by
+        guess."""
+        def norm(o: dict):
+            # The identity ``_supersede_obligation`` matched on: every
+            # scenario field but the proof id, the requirement revisions and
+            # the modality.
+            scenario = dict(o.get("scenario") or {})
+            return (sorted((k, json.dumps(v, sort_keys=True, default=str)) for k, v in scenario.items() if k != "proof"),
+                    [list(r) for r in o.get("requirements") or ()], o.get("modality") or "test")
+        out: Dict[str, dict] = {}
+        for o in rows:
+            if not o.get("superseded_by") or not o.get("scenario"):
+                continue
+            current, seen = o, {id(o)}
+            for _ in range(len(rows)):
+                candidates = [r for r in rows if r is not current and r.get("task") == current.get("superseded_by")
+                              and r.get("kind", "acceptance") == "acceptance" and norm(r) == norm(o)]
+                if len(candidates) != 1 or id(candidates[0]) in seen:
+                    current = None
+                    break
+                current = candidates[0]
+                seen.add(id(current))
+                if not current.get("superseded_by"):
+                    break
+            else:
+                current = None
+            if current is not None and not current.get("superseded_by") and self._scenario_shown(current):
+                out[o["oid"]] = current
+        return out
+
+    def _superseded_row_line(self, o: dict, successor: dict, modality: str) -> str:
+        """A superseded row named against the row that holds its scenario
+        now: everything that is its own (task, requirements, modality,
+        runner, execution, the reason it had before it was superseded,
+        sufficiency and its judge, bound cases that differ) stays on the
+        line; only the shared scenario text is referred to."""
+        runner = (o.get("runner") or "NONE (prerequisite missing)") if modality == "test" else "none"
+        before = (o.get("pre_supersession") or {}).get("reason")
+        cases = list(o.get("cases") or ())
+        return (f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): superseded by task "
+                f"{o['superseded_by']}; the same scenario as {successor['oid']}, stated there; evidence {modality}; "
+                f"runner {runner}; execution {o['execution']}"
+                + (f" (before it was superseded: {before})" if before else "")
+                + f"; sufficiency {o['sufficiency']}"
+                + (f" by {o['judged_by']}" if o.get("judged_by") else "")
+                + (f"; its own bound cases: {', '.join(cases)}" if cases and cases != list(successor.get("cases") or ())
+                   else ""))
+
     def _obligations_block(self, rows: List[dict]) -> str:
         if not rows:
             return ""
@@ -12742,15 +12818,28 @@ class Session:
             return "\n".join(lines)
         lines.append("\n\n## Evidence obligations (harness records: execution is what ran; sufficiency is "
                      "your judgment, never the harness's)")
+        compact = getattr(self, "_compact_audit_packet", True)
+        successors = self._superseding_rows(rows) if compact else {}
         for o in rows:
             modality = o.get("modality") or "test"
+            successor = successors.get(o.get("oid"))
+            if successor is not None:
+                lines.append(self._superseded_row_line(o, successor, modality))
+                continue
             runner = (o['runner'] or 'NONE (prerequisite missing)') if modality == "test" else (
                 "none (reading claim: no runnable proof)" if modality == "reading" else
                 "none (capture claim: measured by the harness's verified render, judged by the design reviewer)"
                 if modality == "capture" else
                 "none (legacy acceptance: no scenario declared, no case bound, mapping unknown)")
+            # The scenario is stated once: a behaviour that is exactly the
+            # summary generated from the row's own scenario is not repeated
+            # beside it (cycle13); any other behaviour is a claim of its own
+            # and is shown whole, and so is every behaviour whose scenario
+            # is over the render bound and not shown.
+            behavior = (f"scenario {self._scenario_field(o, 'proof')} (stated once below)"
+                        if compact and self._behavior_is_generated(o) and self._scenario_shown(o) else o["behavior"])
             lines.append(f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): "
-                         f"{o['behavior']}; evidence {modality}; runner {runner}; "
+                         f"{behavior}; evidence {modality}; runner {runner}; "
                          f"execution {o['execution']}"
                          + (f" ({o['reason']})" if o.get("reason") else "")
                          + f"; sufficiency {o['sufficiency']}"
@@ -13002,7 +13091,10 @@ class Session:
                      "holds, say so on its line, and where it no longer does, say what now shows that.")
         else:
             head += (" Work and review that touch these requirements should hold for these questions and for the "
-                     "rest of the requirement's input, not only for the last example.")
+                     "rest of the requirement's input, not only for the last example. For each example, identify the "
+                     "rule the goal entitles at that input layer (the protocol's or the format's own grammar or "
+                     "contract) that the example breaks, and hold that rule across the cases it applies to, while "
+                     "every form the rule allows stays accepted. This says where to look; it adds no requirement.")
 
         def binding_lines(rid: str) -> List[str]:
             # A decision or ruling is shown whole or not at all: a cut one
@@ -21135,6 +21227,34 @@ class Session:
             self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=named,
                                           association=association, text=text, source=source))
 
+    def _review_notes_grouped(self, rows: List[dict], current) -> str:
+        """The same observations, each distinct text once (cycle13): texts
+        are grouped only when they are identical character for character, so
+        whitespace a note quotes stays material; every task, reviewer,
+        requirement association and source label that raised it is listed
+        with it, each as recorded, never merged into one reading; the shared
+        explanation is said once in the header. Nothing is dropped or cut."""
+        groups: Dict[str, List[dict]] = {}
+        for n in rows:
+            groups.setdefault(n["text"], []).append(n)
+
+        def raised(n: dict) -> str:
+            about = (f"about {', '.join(n['requirements'])}" if n.get("association", "named") == "named" else
+                     f"naming no requirement (the task covered {', '.join(n['requirements'])}; which one, if any, "
+                     "it concerns is uncertain)")
+            where = ("the current source" if n.get("source") and n["source"] == current
+                     else "an earlier source (it may no longer hold)")
+            return f"{n['task']} review by {n.get('peer') or 'unknown'}, {about}, written about {where}"
+        lines = [f"- raised by {'; '.join(raised(n) for n in group)}: {text}" for text, group in groups.items()]
+        return ("\n\n## Earlier task-review observations on these requirements (harness record, not verdicts)\n"
+                "Each line is one observation's exact text, after every review that raised it, with what that review "
+                "said it was about and the source it was written about. None was marked blocking and none was "
+                "rechecked.\n"
+                + "\n".join(lines)
+                + "\nA reviewer raised each of these without blocking on it. Reconcile each against the goal "
+                "and the current source yourself: an observation is neither a finding nor an approval, and "
+                "the reviewer's reason for not blocking binds nothing.")
+
     def _review_notes_block(self, audited: dict) -> str:
         """The carried review observations on the requirements judged, each
         labelled with whether it was written about the current source."""
@@ -21144,6 +21264,8 @@ class Session:
         rows = [n for n in self.review_notes if set(n["requirements"]) & set(audited)]
         if not rows:
             return ""
+        if getattr(self, "_compact_audit_packet", True):
+            return self._review_notes_grouped(rows, current)
         lines = [f"- {n['task']} review, "
                  + (f"about {', '.join(n['requirements'])}, " if n.get("association", "named") == "named" else
                     f"naming no requirement (the task covered {', '.join(n['requirements'])}; which one, if "

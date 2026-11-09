@@ -908,7 +908,8 @@ def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as
         carried = section[1]
         assert _NOTE in carried and "R9" not in carried, "only notes on the requirements judged"
         label = "written about an earlier source" if two else "written about the current source"
-        assert f"t1 review, about R1, {label}" in carried
+        # The raising review is named with its reviewer since cycle13.
+        assert re.search(rf"t1 review by \S+, about R1, {label}", carried), carried
         assert "neither a finding nor an approval" in carried
     # An observation decides nothing by itself: R1 is an error clause the
     # auditor cites by file only, so the executed-evidence rule (not the

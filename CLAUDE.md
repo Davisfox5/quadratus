@@ -3425,6 +3425,53 @@ Key design decisions already settled:
     - The audit is shown each note, or "none stated", as observations.
     - A note is never proof or a gate, and never makes a clean review
       unfinished (`_clean_goal_review`).
+- **The audit packet states each record once** (cycle12 run
+  20261108T231038Z-c546ec92, root's reconciliation).
+  - *What happened.* The run stopped on `call_token_ceiling`: the third
+    audit reported 504,836 tokens against the 500,000 per-call ceiling.
+    Its 114,325-character prompt carried 47,266 characters of evidence
+    obligations and 44,619 of task-review observations. Repetition plausibly
+    contributes; no saving is claimed until it is measured. Separately, the
+    audit's R17 NOT MET (a malformed field name reaching mutation) was a real
+    defect.
+  - *Obligations* (`_behavior_is_generated`). A behaviour that is exactly
+    the summary generated from its own scenario is replaced by "scenario P<n>
+    (stated once below)".
+    - Shown whole: a legacy row, a behaviour that differs in any character,
+      and any row whose scenario is over the render bound (the "leave
+      unjudged" line stays).
+  - *Superseded rows* (`_superseding_rows`). A superseded row names the row
+    that holds its scenario now, and keeps everything of its own: task,
+    requirements, modality, runner, execution, its pre-supersession reason,
+    sufficiency and judge, and bound cases that differ.
+    - `superseded_by` is a task id, so the successor must be that task's
+      single acceptance row with the same scenario (proof id aside), the
+      same requirement revisions and the same modality, followed through a
+      chain with no revisit.
+    - No successor, two candidates, a cycle, or a successor whose scenario
+      is not shown keeps the full row.
+    - Required lines, supersession and judgment are unchanged.
+  - *Review observations* (`_review_notes_grouped`).
+    - Texts identical character for character are listed once. Whitespace
+      is never normalized, since a quoted input can depend on it.
+    - Every raising review is kept: task, reviewer, its own association
+      (named, or "naming no requirement") and its source label.
+    - The repeated explanation moved to the header. Nothing is dropped or
+      cut.
+  - *History wording.* For editing and reviewing seats, the history asks
+    them to identify the rule the goal entitles at that input layer, hold it
+    across its cases, and keep the forms it allows accepted. It adds no
+    requirement and guarantees nothing.
+  - *`tools/audit_packet_size.py`.* Offline, read-only and call-free. It
+    reads the committed checkpoint, restores it onto a bare Session (an
+    empty private project folder, the saved audit source as the identity,
+    no provider), and renders the compared sections with the old renderer
+    (`_compact_audit_packet = False`) and the new one, like for like. It
+    reports characters per section and missing required row ids, and writes
+    only outside the run folder.
+    - It never claims to reconstruct the historical prompt; `state_match`
+      lists the mismatches.
+    - It refuses a stateless checkpoint.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

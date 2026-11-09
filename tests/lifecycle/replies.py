@@ -46,16 +46,36 @@ def audit_draws(replay) -> list:
     return [c for c in replay.of("auditor") if "It gave no line for:" not in c.prompt]
 
 
+_SCENARIO_FIELDS = re.compile(r"^  scenario: proof: (?P<proof>.*?); operation: (?P<operation>.*?); "
+                              r"state: (?P<state>.*?); expect: (?P<expect>.*?); location: (?P<location>.*?)"
+                              r"(?:; evidence: |; capture: |; bound cases: |$)", re.MULTILINE)
+_COMPACT = re.compile(r"^scenario \S+ \(stated once below\)$")
+_SUPERSEDED = re.compile(r"^superseded by task \S+; the same scenario as (?P<oid>O\d+), stated there$")
+
+
 def requested_obligations(prompt: str) -> List[dict]:
     """The evidence obligations the prompt lists (Session._obligations_block),
     each with its id, task, bound requirement ids, behavior, runner and
-    execution state; empty when the prompt lists none."""
+    execution state; empty when the prompt lists none. A row the compact
+    rendering states once (cycle13) gets back the generated behavior its
+    scenario line spells out, and a superseded row its successor's."""
     rows = []
     for hit in _OBLIGATION_ROW.finditer(prompt or ""):
+        behavior = hit.group("behavior")
+        if _COMPACT.match(behavior):
+            fields = _SCENARIO_FIELDS.search(prompt, hit.end())
+            if fields is not None:
+                behavior = (f"{fields['proof']}: {fields['operation']}; given {fields['state']}; "
+                            f"expect {fields['expect']}; in {fields['location']}")[:300]
         rows.append(dict(oid=hit.group("oid"), task=hit.group("task"),
                          requirements=[r.strip() for r in hit.group("requirements").split(",") if r.strip()],
-                         behavior=hit.group("behavior"), runner=hit.group("runner"),
+                         behavior=behavior, runner=hit.group("runner"),
                          execution=hit.group("execution"), modality=hit.group("modality") or "test"))
+    by_oid = {r["oid"]: r for r in rows}
+    for row in rows:
+        superseded = _SUPERSEDED.match(row["behavior"])
+        if superseded and superseded["oid"] in by_oid:
+            row["behavior"] = by_oid[superseded["oid"]]["behavior"]
     return rows
 
 
