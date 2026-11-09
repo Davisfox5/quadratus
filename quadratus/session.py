@@ -1707,12 +1707,14 @@ def _check_runs(check: dict, root=None) -> List[dict]:
     from types import SimpleNamespace
 
     from .integration import (
+        RUNNER_UNKNOWN,
         _test_count,
         case_outcomes,
         deselected_count,
         is_filtered,
         operand_paths,
         skipped_count,
+        unittest_discover_command,
     )
     receipts = check.get("receipts") or ()
     # A single-command gate's selection and cwd are recorded on the check; its
@@ -1745,12 +1747,29 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         # of 81adcc7, R2: pytest.ini's addopts = -k unit printed "1 passed, 1
         # deselected" for a named file and looked like a whole run).
         filtered = is_filtered(argv) or bool(row["selection"]) or deselected_count(row["output"]) > 0
+        # The command-level reading, for a citation of the exact command a
+        # requirement names (cycle17): the same selection, except that the
+        # harness's own unknown-runner diagnostic is dropped, matched whole,
+        # for a strict ``unittest discover`` shape. Every other reason
+        # stays. ``filtered`` and ``files`` are unchanged: discover still
+        # grants no whole-file or per-case reading.
+        command_reasons = []
+        if is_filtered(argv):
+            command_reasons.append("argv")
+        unknown, other = _split_runner_unknown(str(row["selection"] or ""), RUNNER_UNKNOWN)
+        if unknown and not unittest_discover_command(argv):
+            command_reasons.append("runner")
+        if other:
+            command_reasons.append("external")
+        if deselected_count(row["output"]) > 0:
+            command_reasons.append("deselected")
         names = _receipt_names(row)
         skipped_names = names[0] if names[0] is not None else case_outcomes(row["output"])[0]
         every_names = names[1]
         qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
+                        command_filtered=bool(command_reasons), command_reasons=command_reasons,
                         cwd=row["cwd"], command=row["command"], interpreter=row.get("interpreter"),
                         report_cases=_report_cases(row["report"]), report_classes=_report_classes(row["report"]),
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
@@ -1759,6 +1778,26 @@ def _check_runs(check: dict, root=None) -> List[dict]:
                         skipped_names=skipped_names, executed_names=executed_names, every_names=every_names,
                         qualified_names=qualified_names))
     return out
+
+
+def _split_runner_unknown(selection: str, marker: str) -> Tuple[bool, str]:
+    """``(found, rest)``: whether ``selection`` (reasons joined by '; ')
+    holds the unknown-runner diagnostic as a whole element, and what else it
+    holds. Only whole occurrences at element boundaries are taken out (the
+    marker itself contains '; '); anything left, however split, is another
+    reason (cycle17)."""
+    found, rest, i, sep = False, [], 0, "; "
+    while i < len(selection):
+        if selection.startswith(marker, i) and (i + len(marker) == len(selection)
+                                                or selection.startswith(sep, i + len(marker))):
+            found = True
+            i += len(marker) + len(sep)
+            continue
+        j = selection.find(sep, i)
+        j = len(selection) if j < 0 else j
+        rest.append(selection[i:j])
+        i = j + len(sep)
+    return found, "; ".join(x for x in rest if x.strip())
 
 
 def _receipt_names(receipt):
@@ -2504,6 +2543,15 @@ _MISSING_SCENARIO_RULE = (
     "a proof scenario for each missing behaviour, so its lead can bind the existing cases with PROVES; no lead "
     "or reviewer can add a scenario to a task, and the reviewer who raised the finding still judges whether it "
     "is resolved.")
+
+#: Why a receipt of the exact required command is not a whole-command run,
+#: by ``_check_runs``'s command reasons (cycle17): each says which fact holds.
+_COMMAND_SELECTION_REASONS = {
+    "argv": "its arguments carry an option the harness reads as a test selection",
+    "runner": "the harness cannot establish what this command form selects",
+    "external": "a test selection from the environment or configuration applies to it",
+    "deselected": "the runner reported deselected cases",
+}
 
 _IMPACT_RANK = ("other", "contract", "correctness", "irreversible", "security", "integrity", "data-loss")
 
@@ -11871,13 +11919,17 @@ class Session:
         """A command's identity for the citation: the interpreter by its
         public name (``/usr/bin/python3.11`` is ``python``; ``pytest`` is
         ``python -m pytest``, the same rule as project_run._check_identity),
-        the harness's own report token and ``-p no:cacheprovider`` removed,
-        every other argument kept exactly: a flag, a path or a filter makes
-        another command."""
-        from .integration import REPORT_TOKEN
+        the harness's own report token removed and, for a pytest command
+        only, ``-p no:cacheprovider`` (non-selecting plumbing there); every
+        other argument kept exactly: a flag, a path or a filter makes another
+        command. For ``unittest discover``, ``-p`` is the discovery pattern
+        and is never removed (cycle17: ``-p no:cacheprovider`` there is a
+        pattern, and dropping it equated two different discovery commands)."""
+        from .integration import REPORT_TOKEN, _is_pytest
         argv = [str(a) for a in argv or ()]
         if not argv:
             return ()
+        pytest = _is_pytest(argv)
         head, rest = os.path.basename(argv[0]), argv[1:]
         if re.fullmatch(r"python(\d+(\.\d+)*)?", head):
             head = "python"
@@ -11888,10 +11940,10 @@ class Session:
             if skip:
                 skip = False
                 continue
-            if arg == "-p" and i + 1 < len(rest) and rest[i + 1] == "no:cacheprovider":
+            if pytest and arg == "-p" and i + 1 < len(rest) and rest[i + 1] == "no:cacheprovider":
                 skip = True
                 continue
-            if arg == "-pno:cacheprovider" or REPORT_TOKEN in arg or arg.startswith("--quadratus-report="):
+            if (pytest and arg == "-pno:cacheprovider") or REPORT_TOKEN in arg or arg.startswith("--quadratus-report="):
                 continue
             out.append(arg)
         return (head, *out)
@@ -11954,8 +12006,14 @@ class Session:
                     reasons.append(f"its run {row.get('status') or 'did not pass'}")
                 if not row.get("required", True):
                     reasons.append("it is an optional command")
-                if run["filtered"]:
-                    reasons.append("it ran a selection, not the whole command")
+                # The command-level reading (cycle17); a run without it (a
+                # legacy or synthesized record) keeps the file-level one.
+                command_reasons = run.get("command_reasons")
+                if command_reasons is None:
+                    if run["filtered"]:
+                        reasons.append("it ran a selection, not the whole command")
+                else:
+                    reasons.extend(_COMMAND_SELECTION_REASONS[r] for r in command_reasons)
                 if str(run.get("cwd") or ".") not in ("", "."):
                     reasons.append("it ran from another directory, not the project root")
                 if not (run["tests"] or 0) > 0:
@@ -11977,7 +12035,13 @@ class Session:
                     # the summary line is the record (tests and skips read).
                     pass
                 if reasons:
-                    nearest = nearest or f"the receipt for `{public}` does not count: " + "; ".join(reasons)
+                    # The configuration already runs the requested command;
+                    # what is refused is this receipt's evidence. Only the
+                    # receipt id and the requirement's own public spelling
+                    # are named, never the gate's argv, interpreter or
+                    # environment values.
+                    nearest = nearest or (f"configured check {str(row.get('id') or 'check')[:60]} runs `{public}`; "
+                                          "its receipt does not count as evidence: " + "; ".join(reasons))
                     continue
                 return dict(id=f"check-{index + 1}", receipt=row.get("id"), command=public,
                             source=check.get("source"), gate=check.get("gate")), ""

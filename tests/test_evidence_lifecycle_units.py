@@ -411,7 +411,9 @@ def test_a_typed_receipt_of_exactly_the_named_command_on_the_current_identity_is
         "it executed no cases": _receipt_check(session, "python3 -m pytest -q", cases=(), output="no tests ran"),
         "it skipped 1 case(s)": _receipt_check(session, "python3 -m pytest -q", output="1 passed, 1 skipped", skipped=1),
         "it has failures": _receipt_check(session, "python3 -m pytest -q", counts=dict(failed=1)),
-        "it ran a selection, not the whole command": _receipt_check(session, "python3 -m pytest -q", selection="-k add"),
+        # The true reason (cycle17): the selection came from outside argv.
+        "a test selection from the environment or configuration applies to it":
+            _receipt_check(session, "python3 -m pytest -q", selection="-k add"),
         "its skips are unknown": _receipt_check(session, "python3 -m pytest -q", counts={"skipped": None}),
     }
     del negatives["its skips are unknown"]["report"]["counts"]["skipped"]  # the receipt shares the report

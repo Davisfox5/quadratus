@@ -1374,6 +1374,67 @@ def _config_addopts(path: Path) -> Optional[str]:
         return None
 
 
+#: The selection ``config_selection`` records for a command whose runner
+#: ``runner_of`` cannot name: what it selects is unknown, so no whole-file
+#: reading is ever granted from it. Matched whole, never as a substring.
+RUNNER_UNKNOWN = 'test runner not recognised from argv; selection not established'
+
+#: The value options ``unittest_discover_command`` admits, by spelling.
+_DISCOVER_VALUE_OPTIONS = {'-s': '-s', '--start-directory': '-s', '-p': '-p', '--pattern': '-p',
+                           '-t': '-t', '--top-level-directory': '-t'}
+
+
+def unittest_discover_command(argv) -> bool:
+    """Whether ``argv`` is a whole ``python -m unittest discover`` command in
+    the strict shape the harness can name as a command (cycle17, cycle16
+    R21: the exact required discover command passed with 66 cases and was
+    refused because no runner could be told from it).
+
+    The interpreter's basename is ``python``, ``pythonN`` or ``pythonN.M``
+    (the same grammar ``_is_unittest`` reads); then exactly ``-m unittest
+    discover``; then only the plain runner flags (``-v``, ``--verbose``,
+    ``-q``, ``--quiet``, ``-b``, ``--buffer``, ``-f``, ``--failfast``, ``-c``,
+    ``--catch``), the harness's report annotation, and each of the start
+    directory, pattern and top-level directory at most once, spelled
+    ``-s DIR``, ``--start-directory DIR`` or ``--start-directory=DIR`` (and
+    likewise ``-p``/``--pattern``, ``-t``/``--top-level-directory``), with a
+    non-empty value that does not start with ``-``. Anything else is not
+    this shape: ``-k``, an attached short value (``-stests``), a missing or
+    empty value, a repeated option, an unknown option, a positional argument,
+    a wrapper or ``-c`` code.
+
+    A command shape only: it names no runner for ``runner_of``, no file for
+    ``operand_paths`` and no case. A ``-t`` command is recognised here but
+    still carries ``-t``, which ``is_filtered`` reads as a selection flag,
+    so a command citation still refuses it (a narrow false negative)."""
+    argv = [str(a) for a in argv or ()]
+    if len(argv) < 4 or not _is_unittest(argv) or argv[3] != 'discover':
+        return False
+    seen = set()
+    rest = argv[4:]
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token.startswith(REPORT_TOKEN_PREFIX) or token in _UNITTEST_PLAIN_FLAGS:
+            i += 1
+            continue
+        name, eq, value = token.partition('=')
+        if name in _DISCOVER_VALUE_OPTIONS and (eq == '' or name.startswith('--')):
+            if not eq:
+                if i + 1 >= len(rest):
+                    return False
+                value = rest[i + 1]
+                i += 1
+            option = _DISCOVER_VALUE_OPTIONS[name]
+            if option in seen or not value or value.startswith('-'):
+                return False
+            seen.add(option)
+            i += 1
+            continue
+        return False
+    return True
+
+
 def config_selection(argv, cwd, root) -> str:
     """Test selection a command takes from outside its argv: ``addopts`` in
     pytest's configuration files from ``cwd`` up to ``root`` and
@@ -1390,7 +1451,7 @@ def config_selection(argv, cwd, root) -> str:
     # checks below apply to it. Its selection is unknown, never empty (Codex
     # review of 0d834bd, Y1).
     if runner_of(argv, root, cwd) is None:
-        found.append('test runner not recognised from argv; selection not established')
+        found.append(RUNNER_UNKNOWN)
     names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
     # Plugins named in PYTEST_PLUGINS load into every pytest the gate starts
     # and can drop collected tests silently (Codex review of d157378, T3).

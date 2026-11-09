@@ -4585,6 +4585,37 @@ Key design decisions already settled:
   - A planner may still ignore the context; the owner's adverse verdict
     still stops `FindingsUnresolved`.
 
+- **An exact `unittest discover` receipt is a command citation, and only
+  that** (cycle17, root's reconciliation of the cycle16 terminal, PR73
+  6740463929). R21 named `python3 -m unittest discover -s tests`, and the
+  frozen gate ran exactly that and passed 66 cases. The citation refused it
+  as "a selection" because `runner_of` names no runner for `discover` and
+  `config_selection` records that as unknown selection, and the planner then
+  asked Davis a configuration question the record answered.
+  - `integration.unittest_discover_command` is a strict shape:
+    `python[N[.M]] -m unittest discover`, the plain runner flags, the report
+    annotation, and `-s`/`-p`/`-t` (short with a separate value, long with a
+    separate or `=` value), each at most once with a non-empty value.
+    Anything else (`-k`, a positional, an attached short value, an unknown
+    option, a wrapper) is not the shape. It names no runner, file or case.
+  - `_check_runs` keeps `filtered` and `files` as they were, so discover
+    still discharges no NOT RUN path, case, class, scenario or skip fact. It
+    adds `command_reasons` / `command_filtered`: argv filters, external
+    selection, deselection and an unrecognised runner. The only exception
+    is that the exact `RUNNER_UNKNOWN` diagnostic, as a whole element, is
+    dropped for that shape. `-t` still counts as an argv selection flag, a
+    narrow false negative. A record without the field keeps the file-level
+    refusal.
+  - `_command_receipt_citation` reads the command reasons and says which
+    fact holds, naming only the receipt id and the requirement's public
+    spelling ("configured check X runs `cmd`; its receipt does not count as
+    evidence: …"). It shows no argv, interpreter path or environment value.
+    `_command_key` strips `-p no:cacheprovider` only for pytest; a unittest
+    `-p` is the discovery pattern.
+  - A citation says only that the exact command ran and passed on this
+    source. A custom `load_tests` that narrows discovery is still that
+    command; the audit judges the requirement.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on
