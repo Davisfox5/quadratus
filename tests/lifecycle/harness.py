@@ -171,6 +171,11 @@ def fake_launch(replay: Replay):
                     prompt, str(cwd or ""), list(argv))
         replay.calls.append(call)
         answer = replay.responder(call, replay)
+        if isinstance(answer, subprocess.CompletedProcess):
+            # A scripted process result: its own exit status and stderr
+            # (cycle15: a CLI's headless-approval line arrives on stderr).
+            call.reply = answer.stdout
+            return subprocess.CompletedProcess(argv, answer.returncode, answer.stdout, answer.stderr)
         stdout = answer if isinstance(answer, str) and answer.lstrip().startswith("{") else \
             ENVELOPE[vendor](answer if isinstance(answer, str) else str(answer))
         call.reply = stdout

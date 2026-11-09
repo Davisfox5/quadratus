@@ -363,6 +363,18 @@ def safe_diagnostics(value) -> dict:
     failure_class = value.get('failure_class')
     if failure_class in ('cap', 'auth', 'rate_limited', 'unavailable'):
         result['failure_class'] = failure_class
+    # The CLI's own headless-approval refusal (cycle15): tool, target scheme
+    # and a target digest only; the raw target stays in the private stderr.
+    block = value.get('permission_block')
+    if isinstance(block, dict) and block.get('headless_approval') is True:
+        tool, scheme, digest = block.get('tool'), block.get('scheme'), block.get('target_digest')
+        if (isinstance(tool, str) and atom.fullmatch(tool) and isinstance(scheme, str)
+                and re.fullmatch(r"[a-z][a-z0-9+.-]{0,15}", scheme) and isinstance(digest, str)
+                and re.fullmatch(r"[0-9a-f]{16}", digest)):
+            lines = block.get('lines')
+            result['permission_block'] = dict(tool=tool, scheme=scheme, headless_approval=True,
+                                              target_digest=digest,
+                                              lines=lines if type(lines) is int and 0 < lines <= 200 else 1)
     # How much of this call's input the model was being handed again. An agent
     # re-sends its whole conversation on every step, so a long loop's reported
     # total is mostly text it has already seen -- 402,816 of attempt 9's

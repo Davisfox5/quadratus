@@ -38,6 +38,8 @@ PRECEDENCE = ("refusal", "security", "integrity", "denial", "operator", "budget"
 #: handoff, never a product repair.
 _EXCEPTION_CLASS = {
     "ProviderRefusal": "refusal",
+    #: A tool call a headless CLI could not get approved (cycle15).
+    "PermissionBlocked": "denial",
     "PartialWorkStopped": "integrity",
     "PartialWorkSuspected": "integrity",
     "DependencyTreeChanged": "integrity",

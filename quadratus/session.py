@@ -78,7 +78,13 @@ from .outcome import (
     primary,
     unclassified,
 )
-from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
+from .providers import (
+    PartialWorkSuspected,
+    PermissionBlocked,
+    ProviderError,
+    ProviderRefusal,
+    TurnLimitReached,
+)
 from .registry import peers_for, resolve
 from .routing import (
     Seat,
@@ -5182,6 +5188,10 @@ class Session:
             return out
         except (DependencyTreeChanged, DependencyIdentityUnavailable):
             raise       # a run stop, never an errand's failure
+        except PermissionBlocked:
+            # A denial, never an errand the lead may reissue on another worker
+            # or tool (cycle15): it stops as raised.
+            raise
         except Exception as exc:  # noqa: BLE001 -- returned, not raised
             detail = str(exc)[:400]
             task.record("user", f"[worker {label}] FAILED: {detail}")
@@ -5200,6 +5210,10 @@ class Session:
                 out.append(self._close_workers(state, spec))
             return out
         for result in results:
+            if isinstance(result.failure, PermissionBlocked):
+                # A sibling's denial stops as raised too (cycle15).
+                self._note(f"worker {result.label} was blocked by a permission it cannot ask for; stopping")
+                raise result.failure
             if result.failure is not None and unclassified(result.failure):
                 # Siblings ran to completion; the unknown failure is then the
                 # operator's, as raised, before the lead sees any result (J27).
@@ -6313,7 +6327,9 @@ class Session:
         except ProviderError as exc:
             # Only a failed lead, not a consultant/worker or policy refusal,
             # may be replaced. Never replay partial or uninspectable edits.
-            if (isinstance(exc, (ProviderRefusal, PartialWorkSuspected))
+            # A headless permission block is a denial, never a transport
+            # failure another lead may take over (cycle15): it stops as raised.
+            if (isinstance(exc, (ProviderRefusal, PartialWorkSuspected, PermissionBlocked))
                     or getattr(exc, 'window_exhausted', False) or spec.lead
                     or self._active_call.get('model') != lead
                     or self._active_call.get('role') != 'lead'):
@@ -10602,8 +10618,12 @@ class Session:
                                           author=spec.lead)
                     reason = (f"changed files outside its scope: {', '.join(outside)}" if outside
                               else f"{type(exc).__name__}: {str(exc)[:200]}")
+                    # A child that changed nothing has no files to keep: the
+                    # line says so rather than pointing at an empty artifact
+                    # as if it held edits (cycle15, cycle14 t5).
                     self.open_findings.append(f"Parallel task {spec.task_id} was not merged ({reason}); "
-                                              f"its files are kept in artifact {kept.id}.")
+                                              + (f"its files are kept in artifact {kept.id}." if changed
+                                                 else "it changed no files."))
                     if mine is not None:
                         mine.note("integrity" if outside else classify(exc), f"not merged: {reason}",
                                   stage="merge")
@@ -10620,9 +10640,13 @@ class Session:
                         # continued by this run (root boundary evidence: a
                         # refusal, a cancellation below the cap, an unknown
                         # stop and a cap carrying an error all stop here).
-                        self._record_unmerged_failure(spec, mine, changed, base, kept,
-                                                      cause=classify(exc), reason=reason,
-                                                      role=str(child._active_call.get("role") or "lead"))
+                        failed = self._record_unmerged_failure(spec, mine, changed, base, kept,
+                                                               cause=classify(exc), reason=reason,
+                                                               role=str(child._active_call.get("role") or "lead"))
+                        if isinstance(exc, PermissionBlocked):
+                            # The bounded block, never the raw target
+                            # (cycle15); the stop stands as for a refusal.
+                            failed["permission_block"] = dict(exc.permission_block)
                     self._note(f"{spec.task_id} not merged: {reason[:160]}")
                     if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
                         fatal = fatal or exc
@@ -11182,7 +11206,8 @@ class Session:
         self._hold_task_findings(spec, f"left open when {spec.task_id} was not merged ({cause}): {reason[:160]}",
                                  outcome=outcome)
         record = dict(task=spec.task_id, lead=lead or spec.lead or (getattr(outcome, "lead", "") or ""),
-                      cause=cause, error=f"not merged: {reason}; its files are kept in artifact {kept.id}",
+                      cause=cause, error=(f"not merged: {reason}; " + (f"its files are kept in artifact {kept.id}"
+                                                                        if changed else "it changed no files")),
                       changed=list(changed), changed_lines=0, note="parallel batch: nothing was merged",
                       role=role, content=self._content_fingerprint([]), unmerged_artifact=kept.id,
                       **self._attempt_identity(spec))
@@ -18301,7 +18326,7 @@ class Session:
         elif names & {"DependencyTreeChanged", "DependencyIdentityUnavailable", "EvidenceIdentityMismatch",
                       "JobStoreUnavailable", "CheckpointRefused"}:
             cls = "integrity"
-        elif names & {"CapabilityUnavailable", "ProviderRefusal"}:
+        elif names & {"CapabilityUnavailable", "ProviderRefusal", "PermissionBlocked"}:
             cls = "permission"
         elif names & {"KeyboardInterrupt", "CancelledError"}:
             cls = "cancelled"
@@ -20551,9 +20576,16 @@ class Session:
         RESOLVES whose owner rechecked and did not accept it, or that was
         left again without its owner's verdict in an unchanged decision state
         (``_decision_state``), stops FindingsUnresolved; a recheck that was never asked is pending work
-        held like the rest (cycle01, PR73 6702597850). A capped
-        or failed task never reaches this policy: its close continues to the
-        planner by its own rule."""
+        held like the rest (cycle01, PR73 6702597850).
+
+        Where it applies (cycle15, corrected to the code): a capped or failed
+        serial task never reaches it, since the serial loop hands that task
+        back to the planner under the turn-limit breaker. A parallel batch
+        always reaches it after its merge, whatever its children did: capped
+        children are merged and owed, their findings counted here like any
+        other, and a child that was not merged (a raised call, a refusal, a
+        permission block) leaves an open finding no review debt holds, so the
+        batch stops FindingsOpen."""
         record = dict(closed=sorted(closed), slot_left=bool(slot_left), debt_recorded=bool(debt_recorded),
                       stop=None, holds=[], reasons=[])
         check_failed = bool(self.checks) and not self.checks[-1].get("passed")

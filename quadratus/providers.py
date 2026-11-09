@@ -86,6 +86,23 @@ class TransientOverload(ProviderError):
 MAX_TRANSIENT_RETRIES = 2
 
 
+class PermissionBlocked(ProviderError):
+    """A headless CLI call stopped on a tool call it needed approval for and
+    could not ask for (cycle15; cycle14 t5: grok's restricted seat opened
+    README.md through Fetch on a file:// URL and the turn came back
+    cancelled). Raised only from the CLI's own exact headless-approval line,
+    never from model text. A denial, not a transport failure: never retried,
+    never handed to another model or tool, never a failed task to continue.
+
+    ``permission_block`` is bounded metadata: the tool, the target's scheme
+    ("file", "https", ... or "path") and a digest of the target; the raw
+    target stays only in the private stderr evidence."""
+
+    def __init__(self, message: str, *, permission_block: Optional[dict] = None) -> None:
+        super().__init__(message)
+        self.permission_block = dict(permission_block or {})
+
+
 class ProviderRefusal(ProviderError):
     """The model's safety classifiers declined the request.
 

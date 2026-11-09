@@ -48,6 +48,7 @@ Design notes
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import math
@@ -68,6 +69,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from .delegation import NativeChild
 from .providers import (
     LLMProvider,
+    PermissionBlocked,
     ProviderError,
     ProviderRefusal,
     TransientOverload,
@@ -481,6 +483,38 @@ def _extract_grok_result(stdout: str) -> str:
     if not isinstance(text, str) or not text.strip():
         raise ProviderError("grok completed the turn with no answer text.")
     return text
+
+
+#: Grok's own line for a tool call a headless run could not get approved
+#: (cycle14 t5's saved stderr: "permission required: Fetch: file:///.../README.md
+#: was not run, as a headless run cannot ask for approval"). Matched whole,
+#: one line at a time; nothing else in stderr or the envelope is read as one.
+_GROK_HEADLESS_PERMISSION = re.compile(
+    r"permission required: (?P<tool>[A-Za-z][\w.-]{0,63}): (?P<target>\S(?:.{0,4094}\S)?) "
+    r"was not run, as a headless run cannot ask for approval")
+_TARGET_SCHEME = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]{0,15})://")
+
+
+def _extract_grok_permission_block(stderr: str) -> Optional[Dict[str, object]]:
+    """The bounded permission block from grok's exact headless-approval line,
+    or None (cycle15). ``tool`` as grok named it, ``scheme`` of the target
+    (``file``, ``https``, ... or ``path`` for a bare path), and a digest of
+    the target: the raw target (a machine path) stays only in the private
+    stderr tail. More than one such line keeps the first and counts them."""
+    found = []
+    for line in str(stderr or "").splitlines()[-200:]:
+        match = _GROK_HEADLESS_PERMISSION.fullmatch(line.strip())
+        if match is not None:
+            found.append(match)
+    if not found:
+        return None
+    first = found[0]
+    target = first.group("target")
+    scheme = _TARGET_SCHEME.match(target)
+    return dict(tool=first.group("tool"), scheme=(scheme.group("scheme").lower() if scheme else "path"),
+                headless_approval=True,
+                target_digest=hashlib.sha256(target.encode("utf-8", "replace")).hexdigest()[:16],
+                lines=len(found))
 
 
 #: Containers whose entries *are* tool calls by construction.
@@ -1663,6 +1697,14 @@ class CLISpec:
     #: count, attempted tool names), for the ledger. None where the CLI's
     #: output carries nothing of the kind.
     extract_diagnostics: Optional[Callable[[str], Optional[Dict[str, object]]]] = None
+    #: The CLI's own headless-approval refusal, read from stderr into bounded
+    #: metadata (cycle15). A call whose turn failed with one present raises
+    #: ``PermissionBlocked``. None where no such line is known.
+    extract_permission_block: Optional[Callable[[str], Optional[Dict[str, object]]]] = None
+    #: The local file readers a restricted seat already has, named in its
+    #: source-copy prompt (cycle15). Every name must be in
+    #: ``restricted_args``; the prompt never offers a tool the call lacks.
+    local_read_tools: tuple = ()
     #: Failed tool calls the agent made during this call (command, exit code,
     #: output tail), bounded, for the ledger. None where the CLI's output does
     #: not report its tool calls in a parseable form.
@@ -2382,6 +2424,8 @@ GROK_SPEC = CLISpec(
     extract=_extract_grok_result,
     extract_usage=_extract_grok_usage,
     extract_diagnostics=_extract_grok_diagnostics,
+    extract_permission_block=_extract_grok_permission_block,
+    local_read_tools=("read_file", "grep", "list_dir"),
     verified=True,
 )
 
@@ -3151,6 +3195,14 @@ class CLIProvider(LLMProvider):
 
         self._observe_output(proc.stdout)
         self.last_stderr = (proc.stderr or "")[-STDERR_TAIL:]
+        blocked = None
+        if self.spec.extract_permission_block is not None:
+            try:
+                blocked = self.spec.extract_permission_block(proc.stderr or "")
+            except Exception:  # noqa: BLE001 -- observational; the call's own failure stands
+                blocked = None
+            if blocked:
+                self.last_diagnostics = dict(self.last_diagnostics or {}, permission_block=blocked)
 
         if proc.returncode != 0:
             # A failing exit code does not mean there is nothing to read. The
@@ -3171,6 +3223,8 @@ class CLIProvider(LLMProvider):
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model
                     raise
+                if blocked:
+                    raise self._permission_blocked(parsed, blocked) from parsed
                 detail = (proc.stderr or '').strip()[:400]
                 if detail:
                     raise ProviderError(f'{parsed}; {detail}') from parsed
@@ -3190,7 +3244,23 @@ class CLIProvider(LLMProvider):
             raise
         except ProviderError as failure:
             failure.diagnostics = self.last_diagnostics
+            if blocked and not isinstance(failure, TurnLimitReached) and not getattr(failure, "auth_invalid", False):
+                raise self._permission_blocked(failure, blocked) from failure
             raise
+
+    def _permission_blocked(self, failure: ProviderError, blocked: Dict[str, object]) -> PermissionBlocked:
+        """The typed denial for a failed turn whose stderr carries the CLI's
+        own headless-approval line (cycle15). A refusal, a cap and an
+        authentication failure keep their own types (the caller re-raises
+        them first). The message names the tool, the scheme and the digest,
+        never the raw target."""
+        exc = PermissionBlocked(
+            f"{self.label} stopped: {blocked.get('tool')} on a {blocked.get('scheme')} target "
+            f"(digest {blocked.get('target_digest')}) needed approval a headless run cannot ask for; "
+            "the call was not completed and is not retried",
+            permission_block=blocked)
+        exc.diagnostics = self.last_diagnostics
+        return exc
 
     def _observe_output(self, stdout):
         """Extract accounting even when response parsing later fails."""

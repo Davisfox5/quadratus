@@ -4524,6 +4524,37 @@ Key design decisions already settled:
   original text) instead of a continuation task re-sending the bundle;
   no cap, budget or allowance grew.
 
+- **A headless permission block is a denial, and a restricted seat is told
+  its readers** (cycle15, root's reconciliation of the cycle14 terminal,
+  PR73 6734704072). cycle14 t5, `grok:worker` as a restricted editing seat in
+  a source copy, opened README.md through Fetch on a `file://` URL. Grok
+  printed `permission required: Fetch: <target> was not run, as a headless
+  run cannot ask for approval`, the turn came back cancelled with nothing
+  changed, and the record called it transport with "its files are kept".
+  - *Diagnostic.* `_extract_grok_permission_block` reads only that exact
+    stderr line into `{tool, scheme, headless_approval, target_digest}`. The
+    raw target stays in the private stderr tail, never in a message, record
+    or prompt. A failed turn with the line raises `PermissionBlocked`
+    (`providers.py`, class `denial`). A refusal, a cap and an authentication
+    failure keep their own types first. The block rides on the invocation
+    row (`safe_diagnostics`), the task fact and the failed handoff.
+  - *Never retried.* The draft handler re-raises it before any lead recovery,
+    so an unpinned serial lead gets no fallback rung. A worker's block stops
+    as raised instead of going back to the lead to reissue. In a batch the
+    child stays unmerged and stops `FindingsOpen` like a refusal. The terminal
+    record classes it `permission` (protective), after integrity and
+    uncertain writes. An unmerged child that changed nothing says "it changed
+    no files".
+  - *Guidance.* `CLISpec.local_read_tools` (grok: read_file, grep, list_dir,
+    all already in `restricted_args`) puts one sentence in a restricted
+    seat's copy prompt (`runtime.local_read_rule`). It says to read files
+    with those tools by relative path, never through a web or fetch tool or
+    a `file://` URL, and to report a denied action without retrying it
+    another way. Argv, tools and approvals are unchanged. Whether `read_file`
+    runs headless on grok 1.0.62 is not proven; the next fresh run shows it.
+  - `_close_policy`'s docstring now says what happens: serial capped or
+    failed tasks re-plan before it; a batch always reaches it.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

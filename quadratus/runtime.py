@@ -108,6 +108,24 @@ class UnknownModel(ProviderError):
     """A roster key names a vendor this fleet has no provider for."""
 
 
+def local_read_rule(provider) -> str:
+    """The local-file contract for a restricted seat whose CLI spec names its
+    file readers (cycle15; cycle14 t5 opened README.md through Fetch on a
+    file:// URL, which a headless restricted call cannot get approved). Names
+    only tools the seat already has (``CLISpec.local_read_tools``, each in
+    ``restricted_args``); "" for every other seat. Guidance: it grants and
+    removes nothing."""
+    spec = getattr(provider, "spec", None)
+    tools = tuple(getattr(spec, "local_read_tools", ()) or ())
+    if not (tools and getattr(provider, "restricted", False)):
+        return ""
+    named = tools[0] if len(tools) == 1 else ", ".join(tools[:-1]) + " or " + tools[-1]
+    return ("\nRead files in this copy with " + named
+            + ", by path relative to the working directory. Never open a local file through a web or fetch "
+            "tool or a file:// URL: this call cannot get that approved, and the call stops. If an action you "
+            "need is denied, do not retry it with another tool or path; report what you could not do.")
+
+
 class WindowExhausted(ProviderError):
     """A model reported its subscription rate-limit window spent.
 
@@ -761,6 +779,7 @@ class Fleet:
                      "Cite files by their path relative to the project root, not by the absolute "
                      "path of this copy: this copy is deleted when your call ends, and an "
                      "absolute path into it is a dead reference in the report.")
+            role += local_read_rule(provider)
             checks = tuple(getattr(self, "check_commands", ()) or ())
             probe = _probe_commands(checks, directory) if context.get("probe") else ()
             if checks and context.get("role") in REVIEW_CAPPED_ROLES and context.get("harness_checks"):
