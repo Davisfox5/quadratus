@@ -4797,8 +4797,12 @@ class Session:
             seat, reply = self._ask_seat(seat, build_with_correction)
             reply = self._absorb_requirements(reply)
             retry_control = parse_control(reply)
-            if retry_control is not None and retry_control.verb == "DONE":
-                return None
+            if retry_control is not None:
+                if retry_control.verb == "DONE":
+                    return None
+                raise RunStalled(
+                    f"An unresolved {retry_control.verb} request cannot become a task."
+                ) from exc
             try:
                 meta = _read_metadata(reply)
             except AmbiguousMetadata as second:

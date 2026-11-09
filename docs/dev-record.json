@@ -2192,6 +2192,47 @@
         "candidate": "5746057fcf7c5555327e5e25b8c51912a1df8b20",
         "at": "2026-10-18T18:19:11Z"
       }
+    },
+    {
+      "id": "T-codebase-audit-main-backport-20261109",
+      "purpose": "Compatible main backport of the user-authorized repository audit; latest development reconciliation is recorded separately",
+      "base": "10880af1c1289447d64956488965febd0d35ab70",
+      "owns": [
+        "quadratus/cli.py",
+        "quadratus/cli_providers.py",
+        "quadratus/decisions.py",
+        "quadratus/finding_state.py",
+        "quadratus/gui.py",
+        "quadratus/integration.py",
+        "quadratus/ledger.py",
+        "quadratus/outcome.py",
+        "quadratus/project.py",
+        "quadratus/project_run.py",
+        "quadratus/providers.py",
+        "quadratus/repo_scan.py",
+        "quadratus/scope.py",
+        "quadratus/session.py",
+        "quadratus/taskmeta.py",
+        "tests/test_scope_declaration_lint.py",
+        "tools/truth_check.py",
+        "tests/test_audit_integration_regressions.py",
+        "tests/test_audit_interfaces_regressions.py",
+        "tests/test_audit_ledger_regressions.py",
+        "tests/test_audit_session_regressions.py",
+        "tests/test_audit_transport_regressions.py"
+      ],
+      "author": "codex",
+      "reviewer": "independent-codex-review",
+      "state": "claimed",
+      "claimed_at": "2026-11-09T20:50:00Z",
+      "acknowledged": true,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "codex: User authorized commit only after current run ends. Cycle20 has exact job/worker terminal receipts, no surviving owned processes, released awake assertion and no live launcher/worker. This main-compatible source is byte-identical to the audited code validated by3806passing/63skipped full tests plus82regression cases; Ruff and whitespace clean. Newest development reconciliation is e64f6f82a63c1d87517eb17238441bbdddf62b76 and retains newer Claude provider recovery and authority behavior. Main does not receive the entire unfinished PR73. CI still pending; no live acceptance claimed."
+      ],
+      "acknowledged_at": "2026-11-09T20:50:00Z"
     }
   ],
   "receipts": [

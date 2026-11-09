@@ -26,6 +26,7 @@ the right source, skipped checks and UI capture evidence, not "a test passed".
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -38,7 +39,7 @@ EXIT = {VERIFIED: 0, UNVERIFIED: 1, NOT_MET: 2}
 #: is an unshown UI claim.
 UI_SUFFIXES = (".html", ".htm", ".css", ".scss", ".sass", ".less", ".jsx", ".tsx", ".vue", ".svelte")
 VIEWS = ("desktop", "mobile")
-_DIFF_FILE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+_DIFF_FILE = re.compile(r"^(?:\+\+\+|---) (.+)$")
 _PATH = re.compile(r"[\w./-]+\.\w+")
 
 
@@ -66,8 +67,56 @@ def _ran_tests(check) -> bool:
     return _reported_passes(check.get("report")) > 0 or bool((check.get("cases") or {}).get("executed"))
 
 
+def _diff_headers(diff: str):
+    """Lines outside unified-diff hunks, parsed independently of the engine.
+
+    An added line whose text begins ``++ b/page.html`` is hunk payload,
+    even though its diff representation looks exactly like a file header.
+    The hunk's old/new line counts decide when headers may be read again.
+    """
+    old = new = 0
+    for line in (diff or "").splitlines():
+        if old > 0 or new > 0:
+            if line.startswith("-"):
+                old -= 1
+            elif line.startswith("+"):
+                new -= 1
+            elif line.startswith(" "):
+                old -= 1
+                new -= 1
+            continue
+        hunk = re.match(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)
+        if hunk:
+            old, new = (int(n) if n is not None else 1 for n in hunk.groups())
+            continue
+        yield line
+
+
 def _ui_files(diff: str):
-    return sorted({p for p in _DIFF_FILE.findall(diff or "") if p.lower().endswith(UI_SUFFIXES)})
+    # Both sides matter: a deleted template has only an ``a/`` path, and
+    # Git C-quotes paths with tabs, quotes or non-ASCII bytes by default.
+    # Looking only for ``+++ b/`` silently treated those UI changes as code.
+    paths = set()
+    for line in _diff_headers(diff):
+        if line.startswith(("Binary file changed: ", "Empty file added/deleted: ")):
+            path = line.partition(": ")[2]
+            if path.lower().endswith(UI_SUFFIXES):
+                paths.add(path)
+            continue
+        header = _DIFF_FILE.match(line)
+        if header is None:
+            continue
+        path = header.group(1)
+        if path.startswith('"'):
+            try:
+                path = ast.literal_eval(path)
+            except (ValueError, SyntaxError):
+                continue
+        if isinstance(path, str) and path.startswith(("a/", "b/")):
+            path = path[2:]
+            if path.lower().endswith(UI_SUFFIXES):
+                paths.add(path)
+    return sorted(paths)
 
 
 def _approved_digests(record, task: str):

@@ -233,7 +233,7 @@ def parse_metadata(
         raise AmbiguousMetadata(
             "the reply carries more than one KIND line and they disagree; "
             "re-ask for a single label rather than routing on a guess",
-            candidates=[f"{k or '?'} {d or '?'}" for k, d in sorted(distinct)],
+            candidates=sorted(f"{k or '?'} {d or '?'}" for k, d in distinct),
         )
 
     index, (kind, difficulty, unknown) = parsed[0]

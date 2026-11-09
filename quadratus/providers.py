@@ -459,6 +459,7 @@ class ClaudeProvider(LLMProvider):
             max_tokens=self.max_tokens,
             system=system,
             messages=messages,
+            timeout=self.timeout,
         )
         usage = _field(resp, 'usage')
         values = [_field(usage, key) for key in ('input_tokens', 'output_tokens')]
@@ -559,6 +560,7 @@ class OpenAIProvider(_OpenAISDKProvider):
             instructions=system,
             input=turns,
             max_output_tokens=self.max_tokens,
+            timeout=self.timeout,
         )
         usage = _field(resp, 'usage')
         self.last_usage = {'input_tokens': _field(usage, 'input_tokens'),
@@ -595,6 +597,7 @@ class GrokProvider(_OpenAISDKProvider):
             model=self.model,
             messages=messages,
             max_completion_tokens=self.max_tokens,
+            timeout=self.timeout,
         )
         usage = _field(resp, 'usage')
         self.last_usage = {'input_tokens': _field(usage, 'prompt_tokens'),

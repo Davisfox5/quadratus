@@ -271,13 +271,20 @@ class JevDecider:
         question = {"type": "choice", "instructions": instructions,
                     "criteria": {answer: definitions.get(answer) for answer in decision.answers}}
         ticket = None
+        call_options = {}
         if self.budget is not None:
-            ticket, _remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}")
+            ticket, remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}")
+            # The SDK client retains its construction-time timeout. Override
+            # it only when the run has less time left, keeping ordinary client
+            # defaults and injected-client calls unchanged otherwise.
+            if remaining is not None and (self.timeout is None or remaining < self.timeout):
+                call_options["timeout"] = remaining
         started = time.perf_counter()
         response, failure = None, None
         try:
             response = self._sdk_client().system_one(
-                state=decision.context or decision.question, questions={name: question}, model=self.model)
+                state=decision.context or decision.question, questions={name: question},
+                model=self.model, **call_options)
         except Exception as exc:  # noqa: BLE001 -- refused, never guessed; the caller keeps its rule
             failure = exc
         finally:

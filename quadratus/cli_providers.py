@@ -153,7 +153,7 @@ def _extract_codex_result(stdout: str) -> str:
     """
     answer = ""
     errors: List[str] = []
-    failed = ""
+    failed = None
     saw_json = False
     for line in stdout.splitlines():
         line = line.strip()
@@ -164,8 +164,10 @@ def _extract_codex_result(stdout: str) -> str:
         except ValueError:
             continue
         saw_json = True
-        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
-            failed = str(event["error"].get("message") or "")
+        if event.get("type") == "turn.failed":
+            detail = event.get("error")
+            failed = (str(detail.get("message") or "") if isinstance(detail, dict)
+                      else "") or "no error detail in the event"
         item = event.get("item")
         if not isinstance(item, dict):
             continue
@@ -178,9 +180,10 @@ def _extract_codex_result(stdout: str) -> str:
             message = item.get("message")
             if isinstance(message, str) and message.strip():
                 errors.append(message.strip())
-    if answer:
-        return answer
-    if re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failed, re.IGNORECASE):
+    # An agent_message can be progress narration emitted before a terminal
+    # failure. The failed turn outranks any earlier text, even when the event
+    # omitted its error detail.
+    if re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failed or "", re.IGNORECASE):
         # GameTape run 6: the turn failed with 401 after the websocket dropped.
         # A run on a copied sign-in loses it when another codex client on the
         # same account refreshes the token. Named, and vendor-wide.
@@ -190,8 +193,10 @@ def _extract_codex_result(stdout: str) -> str:
             "account refreshed it. Sign in again before the next run.")
         error.auth_invalid = True
         raise error
-    if failed and not errors:
+    if failed is not None:
         raise ProviderError(f"codex turn failed: {failed[:300]}")
+    if answer:
+        return answer
     if errors:
         raise ProviderError(f"codex reported an error: {errors[-1][:300]}")
     if saw_json:
