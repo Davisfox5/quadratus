@@ -162,6 +162,10 @@ class TaskOutcome:
     #: {"from", "to", "reason", "failure"}. The contract's owner never changes;
     #: the last "to" is the owner actually invoked.
     owner_changes: List[dict] = field(default_factory=list)
+    #: The role packet allowance the task ran under when it was not the
+    #: policy's default (Davis, 2026-11-09): the lead's request and
+    #: justification, the orchestrator's grant and reason, and the sizes.
+    packet_allowance: Optional[dict] = None
     #: Places where a legacy applicability decision disagreed with the
     #: contract's derived requirement. Recorded, never acted on (phase 2).
     mismatches: List[str] = field(default_factory=list)

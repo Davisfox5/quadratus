@@ -199,7 +199,8 @@ def inspection_tools(model_key: str) -> str:
 #: rule-3572b72 f5's capture-redeclare ran 12 rounds and 403k tokens and
 #: returned no line at all. Bound well under the review cap, and never
 #: above the operator's lead cap where that is smaller.
-DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply", "proof-binding"})
+DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply", "proof-binding",
+                               "packet-justification"})
 DECLARATION_MAX_TURNS = 6
 #: Seats that plan, judge or review and hold no bounded worker bridge: native
 #: delegation is denied on every call they make, with every read tool kept.

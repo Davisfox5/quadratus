@@ -814,6 +814,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'boundary_notes': list(getattr(session, 'boundary_notes', []) or []) if session else [],
         'restatement_judgments': list(getattr(session, 'restatement_judgments', []) or []) if session else [],
         'packet_refusals': list(getattr(session, 'packet_refusals', []) or []) if session else [],
+        'packet_extensions': dict(
+            requests=list(getattr(session, 'packet_requests', []) or []),
+            rejected_decisions=list(getattr(session, 'packet_decisions_rejected', []) or []),
+        ) if session else dict(requests=[], rejected_decisions=[]),
         # Acceptance rows a parallel child could not execute, declared by the
         # harness and rechecked by the same reviewer after the merge gate.
         'deferred_evidence': list(getattr(session, 'deferred_evidence', []) or []) if session else [],

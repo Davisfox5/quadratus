@@ -238,13 +238,16 @@ class RepositoryPolicy:
     explicit: bool
     forbid: tuple = ()
 
-    def role_packet(self, scope, role, conventions=''):
+    def role_packet(self, scope, role, conventions='', *, limit=None):
         """A bounded shared contract, without another reviewer's conversation.
 
         Required scope/checklist text is never silently cut. Oversized contracts
-        stop before dispatch; only reference notes may be excerpted.
+        stop before dispatch; only reference notes may be excerpted. ``limit``
+        is a task's approved allowance (Davis, 2026-11-09: a lead's justified
+        request the orchestrator granted, ``Session._packet_allowance``); None
+        is the policy's default, ``packet_limit``.
         """
-        contract, exclusion_bytes, limit = self._packet_contract(scope, role)
+        contract, exclusion_bytes, limit = self._packet_contract(scope, role, limit)
         heading = '\nConventions notes (reference only; these do not grant permissions):\n'
         marker = '\n[Reference notes truncated to packet byte limit]'
         room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
@@ -267,9 +270,23 @@ class RepositoryPolicy:
 
     @property
     def packet_limit(self) -> int:
-        """The role packet's byte limit as the packet builder applies it."""
+        """The role packet's default byte limit: the policy's
+        ``reference_bytes_limit`` (12,000 when unset), which a repository
+        policy cannot set above 24,000. That clamp bounds the default only; a
+        task's approved allowance is passed to the builder as ``limit`` and is
+        bounded by the run's own ceiling (``Session._packet_ceiling``), never
+        by this figure."""
         context = self.document.get('context', {})
         return min(24_000, context.get('reference_bytes_limit', 12_000))
+
+    def packet_needed(self, scope, role) -> int:
+        """The mandatory bytes a role packet would carry for this scope, as
+        the builder measures them against a limit (exclusions exempt): the
+        size a task's allowance must reach for the packet to be built."""
+        contract, exclusion_bytes, _ = self._packet_contract(scope, role)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        return len((contract + heading + marker).encode()) - exclusion_bytes
 
     def packet_overhead(self, role='lead') -> int:
         """The mandatory bytes a role packet carries besides a task's own
@@ -282,11 +299,11 @@ class RepositoryPolicy:
         return (len((contract + heading + marker).encode()) - exclusion_bytes
                 - len('Scope: no task scope declared.'.encode()))
 
-    def _packet_contract(self, scope, role):
+    def _packet_contract(self, scope, role, limit=None):
         """The packet's mandatory text, the exempt exclusion bytes and the
         limit: the one builder the refusal and the measurement share."""
         plan = self.resolve(scope.permitted_paths if scope else ())
-        limit = self.packet_limit
+        limit = self.packet_limit if limit is None else int(limit)
         scope_text = scope.render() if scope else 'Scope: no task scope declared.'
         # Exclusions are operator protections, not optional reference notes.
         # Their count or filename length must not prevent a run from starting.

@@ -163,7 +163,7 @@ def test_the_scope_request_states_this_runs_limit_and_overhead(tmp_path):
     text = session._scope_request()
     assert f"whose limit is {policy.packet_limit:,} bytes" in text
     assert f"already take about {policy.packet_overhead('lead'):,}" in text
-    assert "20,000" not in text and "sent back with its measured size" in text
+    assert "well under 20,000" not in text and "sent back with its measured size" in text
     policy.document.setdefault("context", {})["reference_bytes_limit"] = 9_000
     assert "whose limit is 9,000 bytes" in session._scope_request()
     bare = Session("g", ArtifactStore(tmp_path / "b"), lambda *a, **k: "", config=SessionConfig())

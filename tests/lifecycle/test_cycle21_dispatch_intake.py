@@ -137,7 +137,7 @@ def test_a_case_only_path_is_sent_back_naming_the_existing_spelling(tmp_path, mo
 def test_the_dispatch_backstop_before_admission_is_not_started_and_uncharged(tmp_path, monkeypatch):
     """Intake switched off so the dispatch builder refuses: the stop and its
     message are unchanged; the slot, admission and marks say not started."""
-    monkeypatch.setattr(S.Session, "_packet_problem", lambda self, spec: "")
+    monkeypatch.setattr(S.Session, "_packet_problem", lambda self, spec, *a, **k: "")
     first = REQS.split("R2:")[0] + _task(_oversized())
     replay = H.run(tmp_path, monkeypatch, _script(first), files=FILES, max_tasks=2, record_complete=False)
     assert "Required role packet exceeds 12000 bytes; narrow the task" in (replay.result.error or "")

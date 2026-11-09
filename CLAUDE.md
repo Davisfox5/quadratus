@@ -4764,6 +4764,50 @@ Key design decisions already settled:
     "(configured database check)", another runner's name, a filter or a
     second label.
 
+- **A task may carry a larger role packet only under a granted extension**
+  (Davis, 2026-11-09: "the orchestrator should have latitude to extend that
+  if the lead can show justification for it").
+  - The default stays: the policy's `packet_limit` (12,000, and a policy
+    still cannot set its default past 24,000). A task's allowance is passed
+    to the builder as `limit`, so that clamp does not bound a grant.
+  - Intake (`_packet_problem`, serial and per batch block): over the
+    default, the task's lead is asked once per task and scope
+    (`_packet_justify`, role `packet-justification`, a declaration-capped
+    call in a source copy with no role packet). It answers `PACKET
+    EXTENSION: <bytes>` with `NECESSARY:` and `WHY NOT SHORTER:`, or
+    `PACKET NARROW:`. A justified request goes to the planner in the
+    send-back with its id; only the planner's own `PACKET GRANT: <id>
+    <bytes> | because: <reason>` line grants it (from the measured need to
+    the lead's request, within the ceiling). `PACKET REFUSE` refuses it.
+    Lines are read from the planner's reply only (`_read_packet_decisions`);
+    a grant the lead wrote, an unknown id, another task's id or an id
+    measured on a different scope applies nothing. Nothing is charged
+    before the grant. The send-back carrying a new justified request is the
+    protocol's step, paid by its call, and spends no correction for a
+    task's first two requests (`_PACKET_FREE_REQUESTS`; the run's correction
+    allowance is never reset, so it would otherwise stall the fourth task
+    that needs an extension). A repeat, a malformed or narrowing answer, an
+    undecided request or a refusal named again spends one.
+  - The grant is bound to its task id and the scope fingerprint it measured
+    (`_packet_fingerprint`, roles plus the rendered scope). Every packet of
+    that task, any role, serial or batch child, correction or resume, is
+    built under it (`_role_packet` → `_packet_allowance`). A reviewed
+    scenario correction is measured against it and recorded as a revision.
+    A later task, a batch sibling or a changed scope needs its own request.
+  - The ceiling (`_packet_ceiling`) is the run's own bound: half of what one
+    round of a capped call is planned to spend (per-call threshold ×
+    `TURN_CAP_MARGIN` / lead turns, or `TURN_CONTEXT_TOKENS`), at the
+    meter's bytes per token. That is 100,000 bytes on the canonical 500k
+    per call and 8 derived rounds. Over it, or when
+    `_packet_budget_problem` finds no room, no request is made.
+  - During a task the lead may ask once in its draft (the same three
+    lines); the seated orchestrator decides in one bounded call
+    (`_serve_packet_request`).
+  - On the record: `result.json` `packet_extensions` (requests with
+    justification, decision lines, grant, reasons, revisions; rejected
+    decision lines), the task outcome's `packet_allowance`, and the
+    checkpoint. A listed task has no orchestrator and gets no grant.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

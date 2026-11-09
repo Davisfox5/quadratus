@@ -711,6 +711,126 @@ _SCOPE_REQUEST = (
 #: The no-policy role packet's byte limit (``Session._role_packet``).
 _FALLBACK_PACKET_BYTES = 20_000
 
+#: A task's role packet may pass the policy's default only by an allowance
+#: the orchestrator granted on its lead's justified request (Davis,
+#: 2026-11-09: "the orchestrator should have latitude to extend that if the
+#: lead can show justification"). The ceiling no grant can pass is the run's
+#: own resource bound, not another fixed figure: the packet rides every round
+#: of every call that carries it, so it may take at most this share of the
+#: context one round of a capped call is planned to spend (the per-call token
+#: threshold times ``run_budget.TURN_CAP_MARGIN`` over the lead turn cap, or
+#: the measured ``run_budget.TURN_CONTEXT_TOKENS`` when the run sets neither),
+#: at the meter's ``usage.CHARS_PER_TOKEN``. The other half is the round's own
+#: reading, writing and tool output (``Session._packet_ceiling``).
+_PACKET_ROUND_SHARE = 0.5
+#: The calls whose every round re-sends a task's packet, for the budget
+#: estimate of an extension: the lead's draft, one review and one recheck.
+#: An estimate for the refusal only; what is charged is what the calls report.
+_PACKET_CARRYING_CALLS = 3
+#: The lead's request (at intake, or as its whole draft reply) and its two
+#: justification lines, read by their markers only.
+_PACKET_REQUEST_LINE = re.compile(r"^[ \t]*PACKET[ \t]+EXTENSION:[ \t]*([0-9][0-9,_]*)[ \t]*(?:bytes)?[ \t]*$",
+                                  re.IGNORECASE | re.MULTILINE)
+_PACKET_NECESSARY = re.compile(r"^[ \t]*NECESSARY:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+_PACKET_WHY_NOT_SHORTER = re.compile(r"^[ \t]*WHY[ \t]+NOT[ \t]+SHORTER:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+_PACKET_NARROW = re.compile(r"^[ \t]*PACKET[ \t]+NARROW:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+#: The orchestrator's decision, a line of its own reply naming the request id
+#: the harness issued: ``PACKET GRANT: <id> <bytes> | because: <reason>`` or
+#: ``PACKET REFUSE: <id> | because: <reason>``.
+_PACKET_DECISION = re.compile(r"^[ \t]*PACKET[ \t]+(GRANT|REFUSE):[ \t]*(\S*)[ \t]*(.*)$",
+                              re.IGNORECASE | re.MULTILINE)
+_PACKET_GRANT_TAIL = re.compile(r"^([0-9][0-9,_]*)[ \t]*(?:bytes)?[ \t]*\|[ \t]*because:[ \t]*(.*)$", re.IGNORECASE)
+_PACKET_REFUSE_TAIL = re.compile(r"^\|?[ \t]*because:[ \t]*(.*)$", re.IGNORECASE)
+#: A justification or a decision's reason shorter than this says nothing a
+#: reader can check ("needed", "n/a"): form only, never a judgment of merit,
+#: which is the orchestrator's.
+_PACKET_REASON_MIN = 20
+#: Intake requests per task whose send-back spends no correction.
+_PACKET_FREE_REQUESTS = 2
+_PACKET_EMPTY = ("none", "n/a", "na", "-", "needed", "required", "necessary")
+
+
+def _packet_bytes(text: str) -> Optional[int]:
+    try:
+        return int(str(text).replace(",", "").replace("_", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _packet_reason_problem(text: str, what: str) -> str:
+    text = (text or "").strip()
+    if not text or text.lower().strip(" .") in _PACKET_EMPTY:
+        return f"{what} is empty"
+    if len(text) < _PACKET_REASON_MIN:
+        return f"{what} says too little to be checked ({len(text)} characters; at least {_PACKET_REASON_MIN})"
+    return ""
+
+
+def _parse_packet_request(reply: str) -> dict:
+    """A lead's answer to a packet question, read by its markers only:
+    ``kind`` is "request" (``bytes``, ``necessary``, ``why``), "narrow"
+    (``advice``) or "malformed" (``problem``). Prose without the markers is
+    no request, and a reply carrying both forms, or a marker twice with
+    different text, is malformed: nothing is guessed."""
+    text = reply or ""
+    sizes = list(dict.fromkeys(_PACKET_REQUEST_LINE.findall(text)))
+    narrow = list(dict.fromkeys(m.strip() for m in _PACKET_NARROW.findall(text)))
+    if sizes and narrow:
+        return dict(kind="malformed", problem="the reply carries both a PACKET EXTENSION and a PACKET NARROW line")
+    if narrow:
+        if len(narrow) > 1:
+            return dict(kind="malformed", problem="the reply carries PACKET NARROW twice with different text")
+        problem = _packet_reason_problem(narrow[0], "the PACKET NARROW advice")
+        return dict(kind="malformed", problem=problem) if problem else dict(kind="narrow", advice=narrow[0][:1200])
+    if not sizes:
+        return dict(kind="malformed", problem="the reply has no PACKET EXTENSION line")
+    if len(sizes) > 1:
+        return dict(kind="malformed", problem="the reply names more than one PACKET EXTENSION size")
+    size = _packet_bytes(sizes[0])
+    fields = {}
+    for name, pattern, label in (("necessary", _PACKET_NECESSARY, "NECESSARY"),
+                                 ("why", _PACKET_WHY_NOT_SHORTER, "WHY NOT SHORTER")):
+        found = list(dict.fromkeys(m.strip() for m in pattern.findall(text)))
+        if len(found) != 1:
+            return dict(kind="malformed", problem=(f"the reply has no {label} line" if not found else
+                                                   f"the reply carries {label} twice with different text"))
+        problem = _packet_reason_problem(found[0], f"the {label} line")
+        if problem:
+            return dict(kind="malformed", problem=problem)
+        fields[name] = found[0][:1200]
+    if not size:
+        return dict(kind="malformed", problem="the PACKET EXTENSION size is not a positive number of bytes")
+    return dict(kind="request", bytes=size, **fields)
+
+
+_PACKET_NARROW_TEXT = ("Name the task again narrower or split it, or state its scenarios, acceptance conditions and "
+                       "intended result more briefly; every covered requirement keeps its scenario and nothing "
+                       "required is dropped.")
+
+
+def _packet_allowance_record(grant: dict) -> dict:
+    """A granted request as a task's record carries it."""
+    return dict(request=grant.get("id"), origin=grant.get("origin"), granted=grant.get("granted"),
+                default=grant.get("default"), needed=grant.get("needed"), ceiling=grant.get("ceiling"),
+                lead=grant.get("lead"), necessary=grant.get("necessary"), why_not_shorter=grant.get("why_not_shorter"),
+                decided_by=grant.get("decided_by"), reason=grant.get("grant_reason"),
+                decision_artifact=grant.get("decision_artifact"), reply_artifact=grant.get("reply_artifact"))
+
+
+def _read_packet_decisions(spec):
+    """``(decisions, spec)``: the orchestrator's PACKET GRANT and PACKET
+    REFUSE lines, taken out of the task text it named (they decide a request;
+    they are not task text for its lead). Read here only, from the
+    orchestrator's own reply: a lead's justification shown to it is never
+    read as a decision."""
+    text = getattr(spec, "description", "") or ""
+    found = [dict(verb=m.group(1).upper(), id=m.group(2).strip(), rest=m.group(3).strip(), line=m.group(0).strip())
+             for m in _PACKET_DECISION.finditer(text)]
+    if not found:
+        return [], spec
+    kept = "\n".join(line for line in _PACKET_DECISION.sub("", text).splitlines() if line.strip())
+    return found, replace(spec, description=kept)
+
 #: What a UI task's SCOPE capture declares when the harness captures (Run 19:
 #: a favicon task declared a wait on an element visible at load, and the
 #: qualifier rightly rejected the render). Guidance only; the qualifier and
@@ -3941,6 +4061,13 @@ class Session:
         #: Role packets refused for size at intake, before any charge (cycle21):
         #: task, role, measured bytes, the limit and the scope's parts.
         self.packet_refusals: List[dict] = []
+        #: Role packet extension requests and decisions (Davis, 2026-11-09):
+        #: each lead request with its justification, measured size, ceiling
+        #: and state, and the orchestrator's decision lines on it. A granted
+        #: one is the task's allowance (``_packet_allowance``).
+        self.packet_requests: List[dict] = []
+        #: Decision lines that named no request the harness issued.
+        self.packet_decisions_rejected: List[dict] = []
         #: Mandatory judgments that ended without a valid verdict and were not
         #: completed: the obligation view names them (session._judgment_gap).
         self.judgment_gaps: List[dict] = []
@@ -4562,7 +4689,7 @@ class Session:
         # session already knows: no classification call (quadratus.effort).
         context = dict(context, effort_inputs=self._effort_inputs(key, context))
         spec = self._active_spec
-        if (context.get("role") != "closeout" and context.get('origin') != 'worker'
+        if (context.get("role") not in ("closeout", "packet-justification") and context.get('origin') != 'worker'
                 and spec is not None and '## Role packet' not in prompt):
             # design-fix is the task's own lead editing its work (map G11): it
             # carries the lead's packet, like every other editing role.
@@ -5445,6 +5572,11 @@ class Session:
             if body.startswith("WORKER "):
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
                 continue
+            if _PACKET_REQUEST_LINE.match((body.splitlines() or [""])[0]):
+                # The lead's own request for a larger allowance (Davis,
+                # 2026-11-09), decided by the orchestrator.
+                answers.append(self._serve_packet_request(lead, spec, task, body, state))
+                continue
             requests = _parse_consults(body)
             if not requests:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
@@ -5480,6 +5612,96 @@ class Session:
                 task.record("assistant", f"[consult {peer}] {answer}")
                 task.keep(answer, kind=f"consult:{peer}", author=peer)
                 answers.append(f"[{peer}]\n{answer}")
+
+    def _serve_packet_request(self, lead, spec, task, body: str, state: dict) -> str:
+        """A lead's request, during its draft, for a larger role packet
+        allowance for its own task: validated for form, ceiling and budget,
+        then decided by the seated orchestrator in one bounded call whose
+        decision line names the request id. One request per task is served;
+        the answer goes back to the lead either way, and a grant raises only
+        this task's allowance for its later calls (more reference notes, and
+        room for a reviewed scenario correction within it)."""
+        state["packet_asks"] = state.get("packet_asks", 0) + 1
+        task.record("assistant", f"[packet extension request] {body[:1500]}")
+        if state["packet_asks"] > 2:
+            raise TaskFailed("channel", "The lead kept requesting a role packet extension; it is not converging.")
+        if state["packet_asks"] > 1:
+            return ("A role packet extension was already asked for in this task and decided; one request per task "
+                    "is served. Continue with the packet you have, or report exactly what blocks you.")
+        policy = self.config.repository_policy
+        current_spec = self._active_spec if getattr(self._active_spec, "task_id", None) == spec.task_id else spec
+        if policy is None or getattr(current_spec, "scope", None) is None:
+            return ("No repository policy measures this task's role packet, so there is no allowance to extend. "
+                    "Continue with what you have.")
+        default = policy.packet_limit
+        current = self._packet_allowance(current_spec) or default
+        needed = max(policy.packet_needed(current_spec.scope, r) for r in self._packet_roles(current_spec))
+        ceiling, basis = self._packet_ceiling()
+        fingerprint = self._packet_fingerprint(current_spec)
+        rid = f"PX-{spec.task_id}-{sum(1 for r in self.packet_requests if r.get('task') == spec.task_id) + 1}"
+        request = dict(id=rid, task=spec.task_id, origin="lead", fingerprint=fingerprint, role="lead",
+                       roles=list(self._packet_roles(current_spec)), needed=needed, default=default, current=current,
+                       ceiling=ceiling, ceiling_basis=basis, lead=lead, state=None, requested=None, decisions=[],
+                       revisions=[], reply_artifact=self.store.put(body, kind="packet-request", author=lead).id)
+        self.packet_requests.append(request)
+        parsed = _parse_packet_request(body)
+        problem, why = "", "malformed"
+        if parsed["kind"] != "request":
+            problem = parsed.get("problem") or "PACKET NARROW answers an intake question; there is nothing to request"
+        elif parsed["bytes"] <= current:
+            problem = f"it asks for {parsed['bytes']:,} bytes, not more than the task's current allowance of {current:,}"
+        elif parsed["bytes"] > ceiling:
+            problem = f"it asks for {parsed['bytes']:,} bytes, over this run's ceiling of {ceiling:,} ({basis})"
+        else:
+            problem, why = self._packet_budget_problem(parsed["bytes"] - current), "unaffordable"
+        if problem:
+            request.update(state=why, problem=problem[:400], requested=parsed.get("bytes"))
+            self._note(f"task {spec.task_id}: packet request {rid} not sent to the orchestrator: {problem[:160]}")
+            return (f"Your role packet extension request was not sent to the orchestrator: {problem}. The allowance "
+                    f"stays {current:,} bytes; continue with the packet you have, or report exactly what blocks you.")
+        request.update(state="requested", requested=parsed["bytes"], necessary=parsed["necessary"],
+                       why_not_shorter=parsed["why"])
+        prompt = (
+            f"--- ROLE PACKET EXTENSION ({spec.task_id}) ---\n"
+            f"The lead of task {spec.task_id}, {lead}, asks during its work for a larger role packet allowance for "
+            f"this task only, request {rid}: {parsed['bytes']:,} bytes, against the task's current {current:,} (the "
+            f"policy default is {default:,}). The packet's mandatory content measures {needed:,} bytes; the room "
+            "above it carries reference notes (the codebase map's conventions and the repository's instruction "
+            f"files), which are cut at the allowance. This run's ceiling is {ceiling:,} bytes ({basis}).\n\n"
+            f"The lead's justification (verbatim):\nNECESSARY: {parsed['necessary']}\n"
+            f"WHY NOT SHORTER: {parsed['why']}\n\n"
+            "Decide on its merits. Reply with exactly one line:\n"
+            f"PACKET GRANT: {rid} <bytes> | because: <why the justification holds>  (more than {current:,}, at most "
+            f"{parsed['bytes']:,})\n"
+            f"PACKET REFUSE: {rid} | because: <why>\n"
+            "A grant raises this task's allowance only. Nothing else about the task, its reviews or its evidence "
+            "changes.")
+        self._count("packet_decision")
+        try:
+            seat, reply = self._ask_seat(self.seat(), lambda fetched: prompt + ("\n\n" + _render_fetches(fetched)
+                                                                                 if fetched else ""))
+        except FinishReserved as exc:
+            request.update(state="unaffordable", problem=f"the decision call was refused to keep the finish: {exc}"[:400])
+            return (f"Your request {rid} was not decided: the orchestrator's call was refused to keep the run's "
+                    f"finish. The allowance stays {current:,} bytes.")
+        reply = reply if isinstance(reply, str) else ""
+        task.keep(reply, kind="packet-decision-reply", author=seat.key)
+        decisions = [dict(verb=m.group(1).upper(), id=m.group(2).strip(), rest=m.group(3).strip(),
+                          line=m.group(0).strip()) for m in _PACKET_DECISION.finditer(reply)]
+        problems = self._packet_decide(current_spec, fingerprint, needed, decisions, floor=current + 1)
+        if request["state"] == "granted":
+            if self._outcome is not None and getattr(self._outcome, "task_id", None) == spec.task_id:
+                self._outcome.packet_allowance = _packet_allowance_record(request)
+            return (f"The orchestrator granted request {rid}: {int(request['granted']):,} bytes "
+                    f"({request.get('grant_reason')}). From this call on, this task's role packets carry up to "
+                    f"{int(request['granted']):,} bytes. Continue your work.")
+        if request["state"] == "refused":
+            return (f"The orchestrator refused request {rid} ({request.get('refusal_reason') or 'no reason given'}). "
+                    f"The allowance stays {current:,} bytes; continue with the packet you have.")
+        request.update(state="undecided", problem=("; ".join(problems) or "the reply carried no decision line for "
+                                                   "this request")[:400])
+        return (f"The orchestrator made no valid decision on request {rid} ({request['problem']}). The allowance "
+                f"stays {current:,} bytes; continue with the packet you have.")
 
     def _record_selection(self, spec: TaskSpec, model: str, role: str) -> None:
         """Note that a model was chosen for this task. Not that it ran."""
@@ -5755,12 +5977,16 @@ class Session:
             )
         return report
 
-    def _role_packet(self, spec, role):
+    def _role_packet(self, spec, role, *, limit=None):
         notes = (self.config.codebase_map.render(topics=['conventions'])
                  if self.config.codebase_map is not None else '')
         policy = self.config.repository_policy
         if policy is not None:
-            return policy.role_packet(spec.scope, role, notes)
+            # The task's approved allowance, or the policy's default: the
+            # same lookup for every role, call and path that builds a packet.
+            allowance = limit if limit is not None else self._packet_allowance(spec)
+            return policy.role_packet(spec.scope, role, notes,
+                                      **({"limit": allowance} if allowance is not None else {}))
         contract = '## Role packet\n' + (spec.scope.render() if spec.scope else 'Scope: not declared.')
         if len(contract.encode()) > _FALLBACK_PACKET_BYTES:
             raise RunStalled('Task scope exceeds the role packet limit; narrow the task')
@@ -6350,9 +6576,11 @@ class Session:
                                                      exclude=self.config.project_excludes)
         # Every packet this task's calls will carry, built before the first of
         # them: run 20261010T135407Z-f3d33e9d spent its planning calls, then
-        # the lead's packet was refused. Same builder, same 12,000-byte cap.
+        # the lead's packet was refused. Same builder, and the task's own
+        # allowance: the policy's default or what the orchestrator granted.
         for role in self._packet_roles(spec):
             self._role_packet(spec, role)
+        self._packet_record_dispatch(spec)
         self._dispatch_prepared = spec.task_id
 
     def _unmark_not_started(self, spec: TaskSpec, decision: dict, *, why: str) -> None:
@@ -6389,39 +6617,401 @@ class Session:
                 f"policy's own checklists and check configuration already take about {overhead:,} of them, so "
                 f"the rendered scope must stay under about {max(0, limit - overhead):,} bytes. A task whose packet "
                 "would not fit is sent back with its measured size, before anything runs: narrow it or state its "
-                "scenarios more briefly, keeping every covered requirement's scenario.")
+                "scenarios more briefly, keeping every covered requirement's scenario. When the content is "
+                "necessary as declared, its lead is asked once whether a larger allowance for that task is justified, "
+                f"up to this run's ceiling of {self._packet_ceiling()[0]:,} bytes; a justified request comes back to "
+                "you to decide by its request id, and only your own 'PACKET GRANT: <id> <bytes> | because: <reason>' "
+                "line grants it ('PACKET REFUSE: <id> | because: <reason>' refuses it). A grant covers that task's "
+                "scope exactly as measured.")
 
-    def _packet_problem(self, spec: TaskSpec) -> str:
-        """Why a task's required role packets would be refused, or "" (cycle21,
-        run 20261109T195618Z: t8's packet was built only at dispatch, after its
-        slot was charged, and the refusal stopped the run with no correction).
-        The same builder, roles and cap as ``_prepare_dispatch``: the scope as
-        the policy prepares it, then ``_role_packet`` for every role the task
-        carries. Only the typed size refusal is a problem here; every other
-        refusal is left for dispatch, where it stops as before."""
-        from .policy import PacketTooLarge
+    def _packet_problem(self, spec: TaskSpec, decisions=()) -> str:
+        """Why a task cannot start with its role packets, or "" (cycle21, run
+        20261109T195618Z: t8's packet was built only at dispatch, after its
+        slot was charged). Measured with the dispatch builder for every role
+        the task carries; only size is a problem here, every other refusal is
+        left for dispatch, where it stops as before.
+
+        Over the policy's default the task needs an allowance (Davis,
+        2026-11-09). Its lead is asked once, for this exact scope, whether
+        the content is necessary as declared (``_packet_justify``); a
+        justified request goes to the orchestrator, whose PACKET GRANT or
+        PACKET REFUSE line in its next reply decides it (``decisions``,
+        ``_packet_decide``). Nothing here approves anything, and nothing runs
+        under an allowance until the orchestrator granted it. Over the run's
+        ceiling (``_packet_ceiling``) no request is made. Every send-back goes
+        through the bounded correction allowance its caller charges."""
+        self._packet_progress = False
         policy = self.config.repository_policy
         if policy is None or getattr(spec, "scope", None) is None:
+            self._packet_decisions_unused(spec, decisions, "no role packet of this task is measured against a "
+                                                           "repository policy")
             return ""
         prepared = replace(spec, scope=policy.scope(spec.scope))
-        for role in self._packet_roles(prepared):
+        role, needed = None, 0
+        for name in self._packet_roles(prepared):
             try:
-                self._role_packet(prepared, role)
-            except PacketTooLarge as exc:
-                self.packet_refusals.append(dict(task=spec.task_id, role=role, needed=exc.needed, limit=exc.limit,
-                                                 components=dict(exc.components)))
-                parts = exc.components
-                return (f"The {role} role packet for this task would be {exc.needed:,} bytes; the limit is "
-                        f"{exc.limit:,} (the repository policy's role packet limit). Its scope renders "
-                        f"{parts.get('scope', 0):,} bytes: proof scenarios {parts.get('proofs', 0):,}, acceptance "
-                        f"{parts.get('acceptance', 0):,}, intended result {parts.get('intended', 0):,}, the rest of "
-                        f"the scope text {parts.get('other', 0):,}; the policy's own checklists and check "
-                        f"configuration take {parts.get('fixed', 0):,}. Name the task again narrower, or state its "
-                        "scenarios, acceptance conditions and intended result more briefly; every covered "
-                        "requirement keeps its scenario and nothing required is dropped.")
+                size = policy.packet_needed(prepared.scope, name)
             except Exception:  # noqa: BLE001 -- any other refusal is dispatch's to raise
                 return ""
+            if role is None or size > needed:
+                role, needed = name, size
+        default = policy.packet_limit
+        if needed <= default:
+            self._packet_decisions_unused(spec, decisions, "the task's role packets fit the default")
+            return ""
+        fingerprint = self._packet_fingerprint(spec)
+        problems = self._packet_decide(spec, fingerprint, needed, decisions) if decisions else []
+        grant = self._packet_grant_for(spec)
+        if grant is not None and int(grant.get("granted") or 0) >= needed:
+            return ""
+        parts = prepared.scope.component_bytes()
+        components = dict(parts, fixed=needed - parts.get("scope", 0))
+        self.packet_refusals.append(dict(task=spec.task_id, role=role, needed=needed, limit=default,
+                                         components=components))
+        text = (f"The {role} role packet for this task would be {needed:,} bytes; the limit is {default:,} (the "
+                f"repository policy's default role packet limit). Its scope renders {parts.get('scope', 0):,} bytes: "
+                f"proof scenarios {parts.get('proofs', 0):,}, acceptance {parts.get('acceptance', 0):,}, intended "
+                f"result {parts.get('intended', 0):,}, the rest of the scope text {parts.get('other', 0):,}; the "
+                f"policy's own checklists and check configuration take {components['fixed']:,}.")
+        if problems:
+            text += " Your packet decision was not applied: " + "; ".join(problems) + "."
+        ceiling, basis = self._packet_ceiling()
+        if needed > ceiling:
+            self._note(f"task {spec.task_id}: role packet {needed:,} bytes is over this run's ceiling {ceiling:,}")
+            return (text + f" That is over the largest allowance any extension can grant in this run, {ceiling:,} "
+                    f"bytes ({basis}), so no extension can carry it. " + _PACKET_NARROW_TEXT)
+        if self._explicit_tasks is not None:
+            # No orchestrator runs a listed task, so nobody can grant one.
+            return (text + " A listed task has no orchestrator to grant a larger allowance; " + _PACKET_NARROW_TEXT)
+        request = self._packet_current_request(spec.task_id, fingerprint)
+        if request is None:
+            request = self._packet_justify(spec, prepared, fingerprint, role, needed, default, ceiling, basis,
+                                           components)
+            # A new justified request is the protocol's own step, paid by its
+            # call, not a planner error: its send-back spends no correction,
+            # for at most _PACKET_FREE_REQUESTS requests per task (the
+            # correction allowance would otherwise stall a run whose fourth
+            # task is the fourth to need an extension).
+            asked = sum(1 for r in self.packet_requests if r.get("task") == spec.task_id and r.get("origin") == "intake")
+            self._packet_progress = request.get("state") == "requested" and asked <= _PACKET_FREE_REQUESTS
+        return text + " " + self._packet_request_text(request)
+
+    def _packet_default(self) -> int:
+        policy = self.config.repository_policy
+        return policy.packet_limit if policy is not None else _FALLBACK_PACKET_BYTES
+
+    def _packet_ceiling(self) -> Tuple[int, str]:
+        """The largest role packet any grant can allow in this run, and how it
+        was derived (``_PACKET_ROUND_SHARE``). Never below the default; the
+        policy's 24,000-byte clamp on its own default does not bound it."""
+        from .run_budget import TURN_CAP_MARGIN, TURN_CONTEXT_TOKENS, lead_turns_for
+        from .usage import CHARS_PER_TOKEN
+        budget = self._budget()
+        per_call = getattr(getattr(budget, "limits", None), "max_tokens_per_call", None) if budget is not None else None
+        turns = self.config.lead_max_turns or lead_turns_for(per_call)
+        if per_call and turns:
+            round_tokens = per_call * TURN_CAP_MARGIN / int(turns)
+            basis = (f"half of one round of a capped call: the {int(per_call):,}-token per-call threshold times "
+                     f"{TURN_CAP_MARGIN:g} over {int(turns)} rounds is {int(round_tokens):,} tokens a round")
+        else:
+            round_tokens = TURN_CONTEXT_TOKENS
+            basis = f"half of the measured {TURN_CONTEXT_TOKENS:,}-token context of one round"
+        ceiling = int(round_tokens * _PACKET_ROUND_SHARE * CHARS_PER_TOKEN)
+        return max(ceiling, self._packet_default()), basis + f", at about {CHARS_PER_TOKEN:g} bytes a token"
+
+    def _packet_fingerprint(self, spec) -> str:
+        """What a grant approves: the roles and the scope exactly as every
+        packet renders it. A changed scenario, path, acceptance line or
+        intended result is a different request."""
+        policy = self.config.repository_policy
+        scope = policy.scope(spec.scope) if policy is not None else spec.scope
+        text = ",".join(self._packet_roles(spec)) + "\n" + (scope.render() if scope is not None else "")
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def _packet_grant_for(self, spec):
+        """The granted request in force for this task and scope, or None:
+        bound to the task id it was requested for and to the scope it
+        measured, or to a revision of it recorded by a reviewed correction
+        (``_apply_scenario_correction``). The latest grant wins."""
+        task_id = getattr(spec, "task_id", None)
+        granted = [r for r in getattr(self, "packet_requests", ()) or ()
+                   if r.get("state") == "granted" and r.get("task") == task_id]
+        if not granted or getattr(spec, "scope", None) is None:
+            return None
+        fingerprint = self._packet_fingerprint(spec)
+        for request in reversed(granted):
+            if fingerprint == request.get("fingerprint") or any(
+                    fingerprint == r.get("fingerprint") for r in request.get("revisions") or ()):
+                return request
+        return None
+
+    def _packet_allowance(self, spec) -> Optional[int]:
+        """This task's approved role packet allowance in bytes, or None for
+        the policy's default."""
+        grant = self._packet_grant_for(spec)
+        return int(grant["granted"]) if grant is not None else None
+
+    def _packet_current_request(self, task_id, fingerprint):
+        return next((r for r in reversed(self.packet_requests)
+                     if r.get("task") == task_id and r.get("fingerprint") == fingerprint
+                     and r.get("origin") == "intake"), None)
+
+    def _packet_seat_key(self) -> str:
+        try:
+            return self.seat().key
+        except Exception:  # noqa: BLE001 -- the record names what it can
+            return "orchestrator"
+
+    def _packet_budget_problem(self, extra_bytes: int) -> str:
+        """Why an extension cannot be afforded, or "": the request call needs
+        a call and its reserve, and the larger packet is re-sent on every
+        round of the calls that carry it (``_PACKET_CARRYING_CALLS``), all
+        from what is left after the held finish. An estimate for refusing
+        early; the calls are charged what they report."""
+        budget = self._budget()
+        if budget is None or not hasattr(budget, "snapshot"):
+            return ""
+        try:
+            snap = budget.snapshot()
+        except Exception:  # noqa: BLE001 -- a missing estimate refuses nothing
+            return ""
+        from .run_budget import lead_turns_for
+        from .usage import CHARS_PER_TOKEN
+        limits, fin = snap.get("limits") or {}, snap.get("finish_protection") or {}
+        held = len(fin.get("pending") or [])
+        calls = int(limits.get("max_calls") or 0) - int(snap.get("reserved_attempts") or 0) - held
+        if calls < 2:
+            return (f"the job has {max(0, calls)} ordinary call(s) left after the held finish, and a request and "
+                    "the task need at least 2")
+        reserve = int(limits.get("reserve_tokens_per_call") or 0)
+        if not reserve:
+            return ""
+        turns = int(self.config.lead_max_turns or lead_turns_for(limits.get("max_tokens_per_call")) or 1)
+        extra = -(-max(0, int(extra_bytes)) // int(CHARS_PER_TOKEN)) * turns * _PACKET_CARRYING_CALLS
+        tokens = (int(limits.get("max_reported_tokens") or 0) - int(snap.get("reported_tokens") or 0)
+                  - held * reserve)
+        if tokens < reserve + extra:
+            return (f"the job has {max(0, tokens):,} tokens left after the held finish; the request call's reserve "
+                    f"of {reserve:,} and the larger packet's estimated re-send cost of {extra:,} ({extra_bytes:,} "
+                    f"more bytes on each of {turns} rounds of {_PACKET_CARRYING_CALLS} calls) do not fit")
         return ""
+
+    def _packet_lead(self, spec) -> str:
+        """The lead asked to justify: the one dispatch will use (picked once
+        and held for this task id, as the capture check does)."""
+        chosen = getattr(self, "_dispatch_lead", None)
+        if chosen and chosen[0] == spec.task_id:
+            return chosen[1]
+        lead = self._pick_lead(spec)
+        self._dispatch_lead = (spec.task_id, lead)
+        return lead
+
+    def _packet_justify(self, spec, prepared, fingerprint, role, needed, default, ceiling, basis, components):
+        """One bounded call to the task's lead, before anything of the task
+        runs: is the content necessary as declared, and how large must the
+        packet be? It carries the scope as text for judgment, not a role
+        packet: the lead is not working, cannot edit (a source copy, the
+        declaration round cap) and its reply grants nothing. Asked once per
+        task and scope; any failure is a request not made, never a stop."""
+        rid = f"PX-{spec.task_id}-{sum(1 for r in self.packet_requests if r.get('task') == spec.task_id) + 1}"
+        request = dict(id=rid, task=spec.task_id, origin="intake", fingerprint=fingerprint, role=role,
+                       roles=list(self._packet_roles(prepared)), needed=needed, default=default, ceiling=ceiling,
+                       ceiling_basis=basis, components=dict(components), lead=None, state=None, requested=None,
+                       decisions=[], revisions=[])
+        self.packet_requests.append(request)
+        short = self._packet_budget_problem(needed - default)
+        if short:
+            request.update(state="unaffordable", problem=short[:400])
+            return request
+        try:
+            lead = self._packet_lead(spec)
+        except (RunStalled, CapabilityUnavailable) as exc:
+            request.update(state="no_lead", problem=str(exc)[:400])
+            return request
+        request["lead"] = lead
+        prompt = (
+            f"--- ROLE PACKET EXTENSION REQUEST ({spec.task_id}) ---\n"
+            f"You are named to lead this task. Before it starts, the harness measured the role packet its calls "
+            f"would carry: {needed:,} bytes against the repository policy's default of {default:,}. The packet is "
+            f"the task's scope as rendered (below) plus the policy's own checklists and check configuration "
+            f"({components.get('fixed', 0):,} bytes). Required text is never cut, so the task cannot start at the "
+            f"default. Measured parts of the scope: proof scenarios {components.get('proofs', 0):,}, acceptance "
+            f"{components.get('acceptance', 0):,}, intended result {components.get('intended', 0):,}, the rest "
+            f"{components.get('other', 0):,}.\n\n"
+            f"You may ask the orchestrator for a larger allowance for this task only, at most {ceiling:,} bytes "
+            f"({basis}). Ask when the content is necessary as declared: when stating it more briefly or splitting "
+            "the task would lose required context or be counterproductive. When a briefer statement or a split "
+            "would serve the task as well, say so instead. You change nothing in this call and run nothing; read "
+            "the source copy only if you need it to judge what the task needs.\n\n"
+            "## Task (verbatim)\n" + (spec.description or "").strip() + "\n\n"
+            "## Scope as rendered\n" + prepared.scope.render() + "\n\n"
+            "Reply with exactly one of these two forms and nothing else:\n"
+            f"PACKET EXTENSION: <bytes, at least {needed:,} and at most {ceiling:,}>\n"
+            "NECESSARY: <the content the packet must carry and what each part is for>\n"
+            "WHY NOT SHORTER: <why a briefer statement or a split would lose required context or be "
+            "counterproductive>\n\nor\n\n"
+            "PACKET NARROW: <how to state the task more briefly or split it, keeping every covered requirement's "
+            "scenario>\n\n"
+            f"Each line says something checkable (at least {_PACKET_REASON_MIN} characters). The orchestrator "
+            "decides; your reply grants nothing. A reply in neither form is no request.")
+        self._count("packet_justification")
+        self._note(f"task {spec.task_id}: role packet {needed:,} bytes over the default {default:,}; asking "
+                   f"its lead {lead} whether an extension is justified")
+        try:
+            with invocation("packet-request", "packet-justification"):
+                reply = self._invoke_model(lead, prompt)
+        except FinishReserved as exc:
+            request.update(state="unaffordable", problem=f"the request call was refused to keep the finish: {exc}"[:400])
+            return request
+        except TurnLimitReached as exc:
+            if exc.partial_text:
+                request["partial_artifact"] = self.store.put(exc.partial_text, kind="packet-justification-capped",
+                                                             author=lead).id
+            request.update(state="capped", problem=(f"the request call stopped at {exc.turns or 'its'} rounds "
+                                                    "before answering; nothing it wrote is read as a request"))
+            return request
+        except ProviderError as exc:
+            request.update(state="call_failed", problem=f"the request call failed: {str(exc)[:300]}")
+            return request
+        reply = reply if isinstance(reply, str) else ""
+        request["reply_artifact"] = self.store.put(reply, kind="packet-justification", author=lead).id
+        parsed = _parse_packet_request(reply)
+        if parsed["kind"] == "narrow":
+            request.update(state="narrow", advice=parsed["advice"])
+        elif parsed["kind"] == "malformed":
+            request.update(state="malformed", problem=parsed["problem"])
+        elif parsed["bytes"] < needed:
+            request.update(state="malformed", requested=parsed["bytes"],
+                           problem=f"it asks for {parsed['bytes']:,} bytes, below the measured {needed:,}")
+        elif parsed["bytes"] > ceiling:
+            request.update(state="malformed", requested=parsed["bytes"],
+                           problem=f"it asks for {parsed['bytes']:,} bytes, over this run's ceiling of {ceiling:,}")
+        else:
+            request.update(state="requested", requested=parsed["bytes"], necessary=parsed["necessary"],
+                           why_not_shorter=parsed["why"])
+        self._note(f"task {spec.task_id}: packet request {rid} from {lead}: {request['state']}")
+        return request
+
+    def _packet_request_text(self, request: dict) -> str:
+        """What the planner is told about a task's packet request."""
+        state, rid, lead = request.get("state"), request.get("id"), request.get("lead") or "its lead"
+        art = request.get("reply_artifact")
+        where = f" (its whole reply is artifact {art}; FETCH: {art})" if art else ""
+        if state == "requested":
+            needed, requested = int(request["needed"]), int(request["requested"])
+            return (f"Its lead ({lead}) asks for a larger allowance for this task only, request {rid}: "
+                    f"{requested:,} bytes{where}. NECESSARY, in the lead's words: {request.get('necessary')} "
+                    f"WHY NOT SHORTER, in the lead's words: {request.get('why_not_shorter')} "
+                    "Decide on its merits; nothing of the task runs until you do. To approve, name this task again "
+                    f"unchanged and add the line 'PACKET GRANT: {rid} <bytes> | because: <why the justification "
+                    f"holds>', granting at least the measured {needed:,} and at most {requested:,} bytes. To refuse, "
+                    f"add 'PACKET REFUSE: {rid} | because: <why>' and name the task narrower or split. A grant covers "
+                    "this task's scope exactly as measured: any change to it is a new request.")
+        if state == "refused":
+            return (f"You refused request {rid} ({request.get('refusal_reason') or 'no reason given'}); this exact "
+                    "scope is not asked again. " + _PACKET_NARROW_TEXT)
+        if state == "narrow":
+            return (f"Its lead ({lead}) recommends narrowing over an extension{where}: {request.get('advice')} "
+                    + _PACKET_NARROW_TEXT)
+        if state == "granted":
+            return f"Request {rid} was granted {int(request.get('granted') or 0):,} bytes."
+        reason = request.get("problem") or "no reason recorded"
+        if state == "malformed":
+            return (f"Its lead's reply made no valid request{where} ({reason}), so there is nothing to grant. "
+                    + _PACKET_NARROW_TEXT)
+        return f"No extension can be requested for it ({reason}). " + _PACKET_NARROW_TEXT
+
+    def _packet_decide(self, spec, fingerprint, needed: int, decisions, *, floor=None, grants: str = "") -> List[str]:
+        """Apply the orchestrator's decision lines. A line decides only a
+        pending request the harness issued under its id. A refusal applies
+        whatever task the line rides on (it widens nothing; the planner
+        refuses and names a narrower task in one reply). A grant applies only
+        to this task and the scope its request measured, with a size from
+        the measured need to the lead's request, within the ceiling, and a
+        reason; ``grants`` names why no grant can apply here (a task that
+        fits). Every line is recorded; the problems are returned."""
+        problems: List[str] = []
+        ceiling, _ = self._packet_ceiling()
+        seat = self._packet_seat_key()
+        by_id: Dict[str, List[dict]] = {}
+        for line in decisions:
+            by_id.setdefault(line["id"], []).append(line)
+        for rid, lines in by_id.items():
+            record = dict(task=spec.task_id, seat=seat, lines=[line["line"][:400] for line in lines])
+            request = next((r for r in self.packet_requests if r.get("id") == rid), None) if rid else None
+            if request is None:
+                self.packet_decisions_rejected.append(dict(record, id=rid, problem="no request the harness issued "
+                                                                                   "has this id"))
+                problems.append(f"'{rid or '(no id)'}' names no request the harness issued, so it decides nothing")
+                continue
+            if len(lines) > 1:
+                request["decisions"].append(dict(record, outcome="not applied: more than one decision line"))
+                problems.append(f"{rid} carries more than one decision line; one line decides a request")
+                continue
+            line = lines[0]
+            if request.get("state") != "requested":
+                request["decisions"].append(dict(record, outcome=f"not applied: the request is {request.get('state')}"))
+                problems.append(f"{rid} is {request.get('state')}, so there is nothing to decide")
+                continue
+            if line["verb"] == "GRANT" and grants:
+                request["decisions"].append(dict(record, outcome=f"not applied: {grants}"))
+                continue
+            if line["verb"] == "GRANT" and (request.get("task") != spec.task_id
+                                            or request.get("fingerprint") != fingerprint):
+                why = ("another task" if request.get("task") != spec.task_id
+                       else "a different scope than this task now declares")
+                request["decisions"].append(dict(record, outcome=f"not applied: made for {why}"))
+                problems.append(f"{rid} was requested for {why}; a grant covers only the scope its request measured, "
+                                "so a changed task needs its own request")
+                continue
+            artifact = self.store.put(line["line"], kind="packet-decision", author=seat).id
+            if line["verb"] == "REFUSE":
+                match = _PACKET_REFUSE_TAIL.match(line["rest"])
+                reason = (match.group(1) if match else line["rest"]).strip()
+                request.update(state="refused", refusal_reason=reason[:600] or None, decided_by=seat,
+                               decision_artifact=artifact)
+                request["decisions"].append(dict(record, outcome="refused", artifact=artifact))
+                self._note(f"task {spec.task_id}: packet request {rid} refused by {seat}")
+                continue
+            match = _PACKET_GRANT_TAIL.match(line["rest"])
+            size = _packet_bytes(match.group(1)) if match else None
+            reason = match.group(2).strip() if match else ""
+            bad = ("the line is not 'PACKET GRANT: <id> <bytes> | because: <reason>'" if size is None
+                   else _packet_reason_problem(reason, "the grant's reason"))
+            if not bad and size < needed:
+                bad = f"{size:,} bytes is below the measured {needed:,} the packet needs"
+            if not bad and floor is not None and size < floor:
+                bad = f"{size:,} bytes does not raise the task's current allowance ({floor - 1:,})"
+            if not bad and size > int(request.get("requested") or 0):
+                bad = f"{size:,} bytes is more than the lead asked for ({int(request.get('requested') or 0):,})"
+            if not bad and size > ceiling:
+                bad = f"{size:,} bytes is over this run's ceiling of {ceiling:,}"
+            if bad:
+                request["decisions"].append(dict(record, outcome=f"not applied: {bad}", artifact=artifact))
+                problems.append(f"the grant on {rid} was not applied: {bad}")
+                continue
+            request.update(state="granted", granted=size, grant_reason=reason[:600], decided_by=seat,
+                           decision_artifact=artifact)
+            request["decisions"].append(dict(record, outcome="granted", artifact=artifact))
+            self._note(f"task {spec.task_id}: packet request {rid} granted {size:,} bytes by {seat}")
+        return problems
+
+    def _packet_decisions_unused(self, spec, decisions, why: str) -> None:
+        """Decision lines on a task that needs no grant: a refusal still
+        decides its pending request, a grant is recorded and never applied."""
+        if decisions:
+            self._packet_decide(spec, None, 0, decisions, grants=why)
+
+    def _packet_record_dispatch(self, spec) -> None:
+        """The allowance a task starts with, on its own record: the request,
+        the lead's justification, the decision and its reason."""
+        grant = self._packet_grant_for(spec)
+        outcome = getattr(self, "_outcome", None)
+        if grant is None or outcome is None or getattr(outcome, "task_id", None) != spec.task_id:
+            return
+        outcome.packet_allowance = _packet_allowance_record(grant)
+        if spec.task_id not in grant.setdefault("dispatched", []):
+            grant["dispatched"].append(spec.task_id)
 
     def _path_case_problem(self, spec: TaskSpec) -> str:
         """A SCOPE path that differs only in letter case from an existing
@@ -8965,7 +9555,8 @@ class Session:
                                      in {s.task_id for s in batch} else "sent_back",
                                      [s.task_id for s in batch], used,
                                      why=(self._done_refusal or "").strip().splitlines()[-1] if self._done_refusal else "")
-                    self._covers_corrections += 1
+                    if not getattr(self, "_packet_progress", False):
+                        self._covers_corrections += 1
                     if self._covers_corrections > self.config.max_requirement_reopens:
                         raise RunStalled("the orchestrator kept naming parallel batches that were sent back: "
                                          + (self._done_refusal or "").replace("--- BATCH SENT BACK ---", "")
@@ -9069,15 +9660,25 @@ class Session:
                 self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
                 previous_description = None
                 continue
-            problem = self._path_case_problem(spec) or self._packet_problem(spec)
+            # The orchestrator's packet decisions are its own reply's lines,
+            # read before anything else of this task is checked.
+            packet_decisions, spec = _read_packet_decisions(spec)
+            self._packet_progress = False
+            problem = self._path_case_problem(spec)
+            if problem:
+                self._packet_decisions_unused(spec, packet_decisions, "the task was sent back for its paths first")
+            problem = problem or self._packet_problem(spec, packet_decisions)
             if problem:
                 # Before any charge, recovery count, listed-task mark,
-                # admission or call (cycle21): an exact path the planner can
-                # spell, and role packets the dispatch builder would refuse
-                # for size, through the same bounded allowance as COVERS.
+                # admission or task call (cycle21): an exact path the planner
+                # can spell, and role packets over the task's allowance, with
+                # the lead's request and the orchestrator's decision between
+                # (Davis, 2026-11-09), through the same bounded allowance as
+                # COVERS.
                 self._refuse_listed(spec, problem)
                 self._slot_event("sent_back", [spec.task_id], used, why=problem)
-                self._covers_corrections += 1
+                if not getattr(self, "_packet_progress", False):
+                    self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks the dispatch would refuse: {problem}")
                 self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem}"
@@ -10653,11 +11254,13 @@ class Session:
         """
         import concurrent.futures
         import contextlib
+        self._packet_progress = False
 
         from .project import Project
         from .run_budget import RunBudgetExceeded
         parsed = []
         for spec in specs:
+            packet_decisions, spec = _read_packet_decisions(spec)
             continues, spec = _read_continues(spec)
             spec = self._normalize_resolves(spec)
             covers, spec = _read_covers(spec)
@@ -10682,7 +11285,12 @@ class Session:
                 problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
             else:
                 problem = problem or self._capture_problem(spec, None)
-            dispatchable = "" if problem else (self._path_case_problem(spec) or self._packet_problem(spec))
+            dispatchable = "" if problem else self._path_case_problem(spec)
+            if problem or dispatchable:
+                self._packet_decisions_unused(spec, packet_decisions, "the batch was sent back for another problem")
+            else:
+                # Each block's own decision lines decide only its own request.
+                dispatchable = self._packet_problem(spec, packet_decisions)
             if dispatchable:
                 # The serial intake's exact-path and packet checks (cycle21),
                 # before the wave's admission or any child.
@@ -10778,6 +11386,11 @@ class Session:
                 # Record-only: a child's ledger is off, so its COVERS feed its
                 # contract and snapshot without any audit-debt decision.
                 for child, (mine, covers, _) in zip(children, parsed, strict=True):
+                    # Its own task's granted allowance and nothing else: the
+                    # same records, so a correction it applies is the
+                    # parent's record too (no batch sibling can read it).
+                    child.packet_requests = [r for r in self.packet_requests
+                                             if r.get("task") == mine.task_id and r.get("state") == "granted"]
                     child._current_covers = list(covers)
                     child._requirement_texts = dict(self.memory.ledger.requirements)
                     # The parent's approved commands, for the scratch
@@ -10803,6 +11416,9 @@ class Session:
                 changed = sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p))
                 allowed = _literal_paths(spec.scope) or set()
                 outside = [p for p in changed if p.strip("./") not in allowed]
+                known = {id(r) for r in self.packet_requests}
+                self.packet_requests.extend(r for r in child.packet_requests if id(r) not in known)
+                self.packet_decisions_rejected.extend(child.packet_decisions_rejected)
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
@@ -21763,6 +22379,14 @@ class Session:
         if lead is None:
             parts.append("Consults are not available in this task; decide with your own judgment "
                          "or commission a worker.")
+        if self.config.repository_policy is not None:
+            parts.append(
+                "If this task's role packet (the '## Role packet' section) is too small for what the task needs, "
+                "for example its reference notes are cut where you need them, you may ask once for a larger "
+                "allowance for this task. Reply with only these three lines: 'PACKET EXTENSION: <bytes>', "
+                "'NECESSARY: <the content and what it is for>' and 'WHY NOT SHORTER: <why less would lose required "
+                "context>'. The orchestrator decides and its answer comes back to you; your request grants "
+                "nothing, and one request per task is served.")
         if lead is not None:
             consultables = [p for p in self.brain_trust if p != lead]
             names = ", ".join(
@@ -23510,8 +24134,11 @@ class Session:
         trial = replace(spec, scope=replace(scope, proofs=tuple(
             dict(p, **changes) if p["id"] == pid else p for p in scope.proofs)))
         try:
+            # Measured against the task's own allowance: the default, or the
+            # orchestrator's grant this task runs under.
+            allowance = self._packet_allowance(spec)
             for role in self._packet_roles(spec):
-                self._role_packet(trial, role)
+                self._role_packet(trial, role, limit=allowance)
         except Exception as exc:  # noqa: BLE001 -- the packet builder's own refusal, named
             return (f"the corrected text puts this task's role packet over its limit, which the declaration met "
                     f"({str(exc)[:160]})")
@@ -23529,9 +24156,16 @@ class Session:
         are one revision, one lineage entry carrying every field's original
         and replacement."""
         scope = spec.scope
+        grant = self._packet_grant_for(spec)
         proofs = [dict(p, **changes) if p["id"] == pid else p for p in scope.proofs]
         new = next(p for p in proofs if p["id"] == pid)
         spec = replace(spec, scope=replace(scope, proofs=tuple(proofs)))
+        if grant is not None:
+            # The grant follows a reviewed correction it was measured against
+            # (_correction_packet_problem), on the record: never silently.
+            grant.setdefault("revisions", []).append(dict(
+                fingerprint=self._packet_fingerprint(spec), by="scenario correction", proof=pid,
+                findings=list(findings), corrected_by=by))
         if getattr(self._active_spec, "task_id", None) == spec.task_id:
             self._active_spec = spec
         item = f"{pid}: {new['operation']}; given {new['state']}; expect {new['expect']}; in {new['location']}"
