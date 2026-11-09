@@ -318,10 +318,14 @@ def test_at_the_cap_a_known_incomplete_record_skips_the_goal_question(tmp_path, 
     record = H.result_json(replay)
     gates = [g for g in record["done_gates"] if g["site"] == "done"]
     assert [g["audit_asked"] for g in gates] == [False, True], "refused once, then the repeated DONE is audited"
-    # The cap reaches the same declaration route (cycle05 trial t7) and
-    # refuses it for the same reason DONE did: here t1's lead is the auditor.
+    # The cap reaches the same declaration route (cycle05 trial t7). t1's
+    # lead is the auditor, but another independent seat could judge its
+    # restatement (cycle14), so DONE asked it once; it settled nothing, and
+    # the cap does not ask the same state again.
     (cap,) = [g for g in record["done_gates"] if g["site"] == "cap"]
-    assert "is the auditor" in cap["declaration"] and replay.of("proof-binding") == []
+    assert "already asked for its declaration in this exact state" in cap["declaration"]
+    (declared,) = record["done_declarations"]
+    assert declared["held"] == ["O2"] and len(replay.of("proof-binding")) == 1
     assert len(replay.of("orchestrator")) == 4, "no goal question after the cap"
     skipped = record["goal_question_skipped"]
     assert "R1" in skipped["reason"] and skipped["source"] == record["source_fingerprint"]

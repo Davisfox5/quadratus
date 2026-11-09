@@ -3478,6 +3478,47 @@ Key design decisions already settled:
     - It never claims to reconstruct the historical prompt; `state_match`
       lists the mismatches.
     - It refuses a stateless checkpoint.
+- **One execution truth, and a restatement the auditor wrote has a judge**
+  (cycle14, root's reconciliation of the cycle13 run, PR73 6731607762).
+  - *Split truth.* O59, O63 and O64 were path-only NOT RUN items registered
+    while the gate did not name their file. The final `public-pytest`
+    receipt named the file whole, so each item read discharged, yet its
+    typed row kept `runner: null, execution: missing` and lowered R14 to
+    R17. `_refresh_obligations` never asked a runnerless row for a receipt.
+    Such a row now asks the item's own decision (`_obligation_receipt` over
+    `_discharge_record`, read from the recorded checks, never a stored
+    marker). It takes the gate as runner only when that decision is on its
+    own gate, environment and requirement revisions and its own task's
+    item, and it records `runner_basis`; `delivery.discharge` then checks
+    every identity as before. A filtered, failed, skipping, caseless or
+    optional run, another file, a production path, another source, gate,
+    environment or revision, a check before the report, or a marker alone
+    gives no runner.
+  - *Same-author dead end.* O60 was restated by `openai:sol`, the auditor;
+    the old `claude:opus` SUFFICIENT was on an earlier source, and the DONE
+    declaration refused "lead is the auditor". The declaration is now
+    refused for that reason only when no other independent seat is
+    eligible (a scenario row's lead still is, since its sufficiency is the
+    audit's). At DONE, the final check and the cap,
+    `_judge_restatements` offers each executed, unjudged restatement the
+    auditor wrote to `_independent_judge`: a brain-trust seat, recorded
+    judges first, available, not the author, not of its vendor, never a
+    worker. One read-only `recheck` call per judge covers all its items,
+    admitted at the reserve, on the shared judgment allowance
+    (`_complete_judgment`), and its answer is read only after the binding
+    held (the generic recheck hook skips it). Each item's decision (judge,
+    item, cases, source, revisions) is asked once for the job, across
+    resumes and parallel merges (`restatement_judgments`, checkpointed and
+    in `result.json`). No eligible seat, no allowance, a cap, a stop, an
+    INSUFFICIENT line or no line leaves the item held with the reason
+    recorded. Self-judgment stays void, a stale judgment is never reused,
+    the auditor is not rotated, and no seat, task or write grant is added.
+  - *Guidance.* `_REPAIR_OUTCOME_RULE` (in the DONE refusal and the open
+    findings) asks a repair to state the goal's outcome and the class of
+    cause, never a narrower condition one reproduction showed. The review
+    lens asks a seat checking a failure-class mapping to read where the
+    framework or server can refuse that input before the code's own
+    handling, and the forms the goal keeps valid. No new gate.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under

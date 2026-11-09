@@ -2613,7 +2613,21 @@ _ERROR_BOUNDARY_LENS = (
     "relies on can also accept input the requirement calls invalid (a lenient header, number, date or "
     "document reader), not only raise on it: the goal and the requirement decide what is invalid and "
     "what must stay accepted, so check what each layer lets through as well as what it refuses, and "
-    "never treat an input the goal leaves unspecified as one that must be refused.")
+    "never treat an input the goal leaves unspecified as one that must be refused. Where the requirement "
+    "maps a class of failures to one response (a status, an exit code, a message), read the places on the "
+    "path the task reaches where the framework or server itself can refuse that input before the code's "
+    "own handling runs, and the forms the goal keeps valid: a mapping that covers only the code's own "
+    "refusals, or that refuses a form the goal accepts, does not meet the requirement. This is reading "
+    "the reachable code, not an exhaustive search.")
+
+#: What a repair task states (cycle14, from the cycle13 assessment): the
+#: outcome the goal entitles the caller to and the causal class, never the
+#: narrower condition one reproduction showed. Generic by construction.
+_REPAIR_OUTCOME_RULE = (
+    "State each repair as the outcome the goal entitles the caller to and the class of cause behind the "
+    "failure (every input and path that reaches the same cause), never a narrower implementation "
+    "condition that one reproduction happened to show; the audit judges the repaired source against the "
+    "goal, not against the task's wording.")
 
 #: Counterpart entry points (Davis, 2026-11-04, after grok-worker-01: a
 #: review caught a cleanup failure on the CLI path, the fix became its own
@@ -4048,6 +4062,9 @@ class Session:
         #: (cycle10, ``_inherited_not_run``): kept with the standing item they
         #: repeat, never a new obligation of the repeating task.
         self.inherited_not_run: List[dict] = []
+        #: Independent judgments of restatements the auditor wrote (cycle14,
+        #: ``_judge_restatements``): one per judge and decision, with outcome.
+        self.restatement_judgments: List[dict] = []
         #: Reviewers' optional 'BOUNDARY R<n>:' notes (cycle12): the input
         #: layers a seat says it checked, observational, never proof or a gate.
         self.boundary_notes: List[dict] = []
@@ -4334,7 +4351,10 @@ class Session:
         its own outcome."""
         reply = self._invoke_model_watched(key, prompt, allow_writes=allow_writes)
         context = invocation_context.get() or {}
-        if context.get("role") in ("collaborator", "recheck") and context.get("origin", "seat") != "worker":
+        if (context.get("role") in ("collaborator", "recheck") and context.get("origin", "seat") != "worker"
+                and context.get("task") != "restatement-judgment"):
+            # A restatement judgment (cycle14) is read by its caller, only
+            # after the completion's binding held, never here before it.
             # The restating task's reviewer judges its restated NOT RUN items
             # (cycle02): its own lines, never the lead's.
             self._judge_restated(key, reply if isinstance(reply, str) else "", task=context.get("task"))
@@ -10513,6 +10533,7 @@ class Session:
                 self.scope_declarations.extend(dict(d) for d in getattr(child, "scope_declarations", []) or [])
                 self.scope_gate_skips.extend(dict(d) for d in getattr(child, "scope_gate_skips", []) or [])
                 self.done_declarations.extend(dict(d) for d in getattr(child, "done_declarations", []) or [])
+                self.restatement_judgments.extend(dict(d) for d in getattr(child, "restatement_judgments", []) or [])
                 self.boundary_notes.extend(dict(d) for d in getattr(child, "boundary_notes", []) or [])
                 self.deferred_evidence.extend(child.deferred_evidence)
                 self.scenario_corrections.extend(child.scenario_corrections)
@@ -11563,6 +11584,11 @@ class Session:
                                             audit_asked=True, source=source, declaration=declaration,
                                             why=("DONE repeated over the same held requirements on this source"
                                                  if again else "no continuation is admissible")))
+        if self._explicit_tasks is None:
+            # Restated NOT RUN items the auditor cannot judge (it wrote the
+            # restatement) are offered to another eligible independent seat
+            # before the audit (cycle14).
+            self._judge_restatements("final" if final else "done")
         if self._explicit_tasks is not None:
             self._note("requirements no listed task claimed, left unjudged: "
                        + ", ".join(self.explicit["requirements_unclaimed"]))
@@ -11589,7 +11615,7 @@ class Session:
                 + "\nName a task that fixes them with these requirement ids in COVERS (RESOLVES names only "
                 "finding ids, F<n> or RFT<task>-<n>, never a requirement): a repair for a finding on the "
                 "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
-                "independent audit judges the repaired source.")
+                "independent audit judges the repaired source. " + _REPAIR_OUTCOME_RULE)
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
         return True
@@ -16092,6 +16118,30 @@ class Session:
             obligation = delivery.refresh(obligation, current_source=current_source, current_requirements=revisions,
                                           current_gate=current_gate, current_environment=environment)
             receipt = self._obligation_receipt(record) if obligation.runner is not None else None
+            if (receipt is None and obligation.runner is None and record.get("kind") == "not_run"
+                    and (record.get("modality") or "test") == "test"):
+                # A NOT RUN row registered when the gate did not yet name what
+                # it reports gets no runner, while its item can still be
+                # discharged later by the harness's own complete passing run
+                # naming every path whole (cycle13 O59/O63/O64: the items read
+                # discharged, the rows read missing, and the rows lowered
+                # R14-R17). The row asks the same decision the item uses
+                # (``_obligation_receipt`` over ``_discharge_record``,
+                # re-derived from the recorded checks, never a stored marker);
+                # only a decision on the row's own gate, environment and
+                # requirement revisions gives it the gate as runner, and
+                # ``delivery.discharge`` then checks every identity as for
+                # any other row.
+                decided = self._obligation_receipt(record)
+                if (decided is not None and decided.get("runner") == "gate" and decided.get("passed")
+                        and (decided.get("gate") or "") == (current_gate or "")
+                        and (decided.get("environment") or "") == environment
+                        and (decided.get("gate") or "") == (obligation.gate or "")
+                        and all(int(revisions.get(rid, 1)) == int(rev) for rid, rev in obligation.requirements)):
+                    obligation = replace(obligation, runner="gate")
+                    record = dict(record, runner_basis=(f"the harness's own run {decided['run']} in {decided['id']} "
+                                                        "executed what this report names, after it was registered"))
+                    receipt = decided
             # A receipt from a check under a gate or in an environment that
             # is no longer the effective one discharges nothing now, even
             # though it matched the obligation when it ran.
@@ -16677,7 +16727,7 @@ class Session:
         counts = Counter(e.get("oid") for e in self.unexecuted_acceptance if e.get("oid"))
         plan: Dict[str, dict] = {}
 
-        def owner_of(owner: str) -> Tuple[Optional[dict], str]:
+        def owner_of(owner: str, *, rows: bool = False) -> Tuple[Optional[dict], str]:
             if not owner:
                 return None, "an item's owning task is unknown"
             lead = self._owner_lead(owner)
@@ -16685,10 +16735,13 @@ class Session:
                 return None, f"no lead seat is on record for {owner}"
             if not self._available(lead):
                 return None, f"{owner}'s lead {lead} is unavailable"
-            if lead == auditor:
-                # Its restatement could never be judged independently: the
-                # audit ignores a judgment by the restatement's own author.
-                return None, f"{owner}'s lead {lead} is the auditor, so its declaration could not be judged independently"
+            if lead == auditor and (rows or self._independent_judge(lead) is None):
+                # The audit ignores a judgment by the restatement's own
+                # author. A NOT RUN restatement can still be judged by another
+                # eligible independent seat (cycle14, ``_judge_restatements``);
+                # a scenario row's sufficiency is the audit's alone.
+                return None, (f"{owner}'s lead {lead} is the auditor, so its declaration could not be judged "
+                              "independently" + ("" if rows else " and no other independent seat is eligible"))
             # What the task did, as its close-out recorded it (the dispatch
             # text is not kept past the task).
             closed = next((h for h in reversed(self.history) if getattr(h, "task_id", None) == owner), None)
@@ -16726,7 +16779,7 @@ class Session:
                 if (row.get("kind") != "acceptance" or (row.get("modality") or "test") != "test"
                         or not row.get("proof_id")):
                     return {}, f"{row['oid']} is not a declared test scenario"
-                slot, why = owner_of(str(row.get("task") or ""))
+                slot, why = owner_of(str(row.get("task") or ""), rows=True)
                 if slot is None:
                     return {}, why
                 if row["proof_id"] not in slot["pids"]:
@@ -16767,6 +16820,130 @@ class Session:
             attempted.append(owner)
         self._refresh_obligations()
         return attempted, ""
+
+    def _independent_judge(self, author: str, preferred=()) -> Optional[str]:
+        """An eligible independent seat to judge a restatement ``author``
+        wrote, or None (cycle14): a brain-trust seat (the recorded judges in
+        ``preferred`` first), available, not the author and not of the
+        author's vendor. A worker seat is never a judge, and no seat is
+        added."""
+        vendor = str(author or "").partition(":")[0]
+        trust = list(self.brain_trust)
+        for seat in dict.fromkeys([*preferred, *trust]):
+            if seat not in trust or seat == author or str(seat).partition(":")[0] == vendor:
+                continue
+            if self._available(seat):
+                return seat
+        return None
+
+    def _judge_restatements(self, site: str) -> List[dict]:
+        """Restated NOT RUN items executed on the current source that no
+        current independent judgment holds and that the auditor may not
+        judge because it wrote the restatement (cycle13 O33, O60: restated by
+        openai:sol, the auditor; claude:opus judged an earlier source, so
+        nothing current could judge them). Each is offered to the eligible
+        independent seat ``_independent_judge`` names, the item's recorded
+        judges first, in one read-only call per judge for all its items,
+        through the existing completion path on the job's shared judgment
+        allowance (``_complete_judgment``) after an admission at the
+        reserve. Each item's decision (judge, item, cases, source,
+        revisions) is asked once for the job. The answer is read by
+        ``_judge_restated``: SUFFICIENT or INSUFFICIENT per id, never by its
+        author, on exactly the current cases and source. Anything else (no
+        eligible seat, no allowance, refused, capped, void, no line) leaves
+        the item held, with the reason recorded on ``restatement_judgments``."""
+        auditor = self._auditor()
+        pending = [e for e in self._standing_not_run()
+                   if e.get("oid") and e.get("restatements") and not self._restated_judged(e)
+                   and self._discharge_record(e) is not None
+                   and (auditor is None or auditor == (e["restatements"][-1] or {}).get("author"))]
+        if not pending:
+            return []
+        source = self._source_fingerprint() if self.project else None
+        groups: Dict[str, List[dict]] = {}
+        done = []
+        for entry in pending:
+            author = (entry["restatements"][-1] or {}).get("author") or ""
+            history = [h.get("by") for h in reversed(entry.get("judgment_history") or ()) if h.get("by")]
+            judge = self._independent_judge(author, history)
+            if judge is None:
+                held = dict(oids=[entry["oid"]], judge=None, source=source,
+                            outcome=f"no eligible independent seat to judge {author}'s restatement; held")
+                if not any(all(r.get(k) == v for k, v in held.items()) for r in self.restatement_judgments):
+                    self.restatement_judgments.append(dict(held, site=site))
+                    done.append(self.restatement_judgments[-1])
+                continue
+            groups.setdefault(judge, []).append(entry)
+        asked = {k for r in self.restatement_judgments for k in (r.get("keys") or {}).values()}
+        for judge, items in groups.items():
+            # One decision per item (judge, source, item, cases, revisions):
+            # an item asked once is never asked again in a regrouped call.
+            keys = {e["oid"]: hashlib.sha256(json.dumps(dict(
+                judge=judge, source=source, oid=e["oid"], item=e.get("item"), cases=list(e.get("cases") or []),
+                revisions=self._restated_revisions(e)), sort_keys=True).encode()).hexdigest()[:32] for e in items}
+            items = [e for e in items if keys[e["oid"]] not in asked]
+            if not items:
+                continue
+            oids = [e["oid"] for e in items]
+            keys = {oid: keys[oid] for oid in oids}
+            decision = hashlib.sha256(json.dumps(sorted(keys.values())).encode()).hexdigest()[:32]
+            record = dict(site=site, oids=oids, judge=judge, source=source, decision=decision, keys=keys,
+                          outcome="")
+            self.restatement_judgments.append(record)
+            done.append(record)
+            if self._budget() is not None:
+                verdict = self._admit_plan("restatement-judgment",
+                                           [delivery.PlanStage(f"restatement judgment by {judge}", "reserve")],
+                                           scope="restatement-judgment")
+                if not verdict.feasible:
+                    record["outcome"] = f"not attempted: {str(verdict.detail)[:200]}; held"
+                    continue
+            lines = []
+            for e in items:
+                record_ = self._discharge_record(e) or {}
+                lines.append(f"- {e['oid']} (reported by {e['task']}, holds {', '.join(e.get('requirements') or [])}): "
+                             f"NOT RUN: {_display_item(e['item'])[:400]}" + (f" - {e['why'][:200]}" if e.get("why") else "")
+                             + f"; restated by {(e['restatements'][-1] or {}).get('task')}'s lead as "
+                             f"{', '.join(e.get('cases') or [])}; executed and passed on this source in check "
+                             f"{int(record_.get('index', -1)) + 1}")
+            texts = self._requirement_texts_now()
+            held = sorted({r for e in items for r in e.get("requirements") or ()})
+            prompt = ("## Original goal (verbatim)\n\n" + self.memory.goal.strip()
+                      + "\n\n## Requirements these items hold (verbatim)\n\n"
+                      + "\n".join(f"{r}: {texts.get(r, '')}" for r in held)
+                      + "\n\n## NOT RUN items restated as cases that need an independent judgment\n" + "\n".join(lines)
+                      + "\n\nThe project in your working directory is the delivered work. You did not write these "
+                        "restatements. For each item give one line '<O-id>: SUFFICIENT <how these cases exercise "
+                        "the whole reported behaviour>' or '<O-id>: INSUFFICIENT <what they leave unexercised>'. Judge "
+                        "the cases against everything the item reported, not whether they pass: the harness settled "
+                        "execution itself. Nothing else is asked; requirements are the audit's.")
+            spec = SimpleNamespace(task_id="restatement-judgment")
+            try:
+                answer = self._complete_judgment(
+                    spec, judge, "restatement", "", [f"a line for each of {', '.join(oids)}"], role="recheck",
+                    prompt=prompt, context=("You are asked for an independent judgment of restated NOT RUN items; "
+                                            "the seat that wrote them cannot judge them.\n\n"))
+            except ProviderError as exc:
+                record["outcome"] = f"stopped: {type(exc).__name__}; held"
+                continue
+            completion = next((r for r in reversed(self.judgment_completions)
+                               if r.get("task") == "restatement-judgment" and r.get("seat") == judge), {})
+            if answer is None:
+                record["outcome"] = f"{completion.get('outcome') or 'no answer'}; held"
+                continue
+            self._judge_restated(judge, answer)
+            judged = [e["oid"] for e in items if self._restated_judged(e)]
+            adverse = [e["oid"] for e in items if (e.get("restated_judgment") or {}).get("verdict") == "insufficient"
+                       and (e.get("restated_judgment") or {}).get("by") == judge]
+            record.update(outcome="answered", sufficient=judged, insufficient=adverse,
+                          unanswered=[o for o in oids if o not in judged and o not in adverse],
+                          reply_artifact=completion.get("reply_artifact"))
+        for record in done:
+            self._note(f"restatement judgment ({site}) of {', '.join(record['oids'])} by {record.get('judge')}: "
+                       f"{record['outcome']}")
+        if done:
+            self._refresh_obligations()
+        return done
 
     def _declaration_decision(self, owner: str, oids, pids) -> str:
         """What one DONE declaration decides: the owner, the source, gate and
@@ -17148,6 +17325,9 @@ class Session:
         if not blocked:
             return
         declared, why = self._done_declarations(blocked)
+        # A restatement the auditor's own seat wrote is offered to another
+        # independent seat at the cap as at DONE (cycle14); once per decision.
+        self._judge_restatements("cap")
         source = self._source_fingerprint() if self.project else None
         if declared is None:
             if any(g.get("site") == "cap" and g.get("source") == source and g.get("declaration") == why
@@ -19403,7 +19583,8 @@ class Session:
                 "with no overflow and are approved by the cross-vendor design review. A failed-check "
                 "finding resolves when the resolving task's own integration check passes and it "
                 "closes with no new finding; its failed cases and output are under 'Failed checks still "
-                "standing' below, and its output artifact is named on its line.\n" + "\n".join(lines)
+                "standing' below, and its output artifact is named on its line. " + _REPAIR_OUTCOME_RULE
+                + "\n" + "\n".join(lines)
                 + ("\n\n" + self._review_resolves_note(reviews) if reviews else ""))
 
     def _review_resolves_note(self, reviews: List[dict]) -> str:
