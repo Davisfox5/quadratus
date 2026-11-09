@@ -4555,6 +4555,36 @@ Key design decisions already settled:
   - `_close_policy`'s docstring now says what happens: serial capped or
     failed tasks re-plan before it; a batch always reaches it.
 
+- **The owner's standing question reaches the planner and the resolving
+  lead** (cycle16, root's reconciliation of the cycle15 terminal, PR73
+  6737404225). In cycle15, RFT4-11's owner rechecks said which declared
+  scenarios were missing. The planner, the only seat that admits a scenario,
+  saw a 140-character claim, so t7 declared P1 to P9 without them. Its lead
+  could bind only declared scenarios, and the owner was rightly adverse.
+  - `_standing_reason` is the one reading for the owner's recheck, the
+    planner and the lead. It takes only the latest judged history entry,
+    which must be by the finding's own author, UNRESOLVED and non-empty. An
+    older reason is never resurrected past a newer RESOLVED or another
+    seat's entry. It is labelled with the same, an earlier or an unrecorded
+    source.
+  - The planner view's open-review lines carry it, bounded to
+    `_STANDING_REASON_CHARS` (400), attributed and marked "recorded, not a
+    verdict". `_MISSING_SCENARIO_RULE` says a missing-scenario finding is
+    resolved only by a task whose SCOPE declares a scenario per missing
+    behaviour. The planner stays the only admitter and the owner the only
+    closer.
+  - `_resolution_findings_block` shows a lead (draft, revision) exactly its
+    own RESOLVES targets, read from its own dispatch record and never from
+    another task's working state, plus inherited CONTINUES findings, once
+    each, with the reason. A parallel child holds none, since RESOLVES is
+    refused in a batch.
+  - `_record_proves`: a whole, valid one-case line naming an undeclared
+    `P<n>` is recorded as a problem, binds nothing and no longer resets the
+    declared bindings (cycle15 t4's P8 wiped P1 to P7). Every other
+    malformed, scenario-less, non-test or non-case line still fails closed.
+  - A planner may still ignore the context; the owner's adverse verdict
+    still stops `FindingsUnresolved`.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on

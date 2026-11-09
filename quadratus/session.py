@@ -2495,6 +2495,16 @@ _SCENARIO_REPLY = re.compile(r"^[ \t]*SCENARIO[ \t]+(P[0-9]+)[ \t]*:[ \t]*(opera
 _TYPED_HEAD = re.compile(r"^\s*(SCENARIO|EVIDENCE)\s+(P\S*)", re.IGNORECASE)
 
 
+#: A review finding's standing reason, as the planner sees it (cycle16).
+_STANDING_REASON_CHARS = 400
+#: Who admits a scenario a reviewer says is missing (cycle16, cycle15
+#: RFT4-11): only the planner, through the resolving task's SCOPE.
+_MISSING_SCENARIO_RULE = (
+    "A review finding that says declared scenarios are missing is resolved only by a task whose SCOPE declares "
+    "a proof scenario for each missing behaviour, so its lead can bind the existing cases with PROVES; no lead "
+    "or reviewer can add a scenario to a task, and the reviewer who raised the finding still judges whether it "
+    "is resolved.")
+
 _IMPACT_RANK = ("other", "contract", "correctness", "irreversible", "security", "integrity", "data-loss")
 
 
@@ -14614,7 +14624,9 @@ class Session:
         declaration (its cases cleared, execution and sufficiency reset)
         and no earlier valid binding satisfies it; when it names none, the
         whole reply's declaration is invalid and every scenario of the task
-        is reset. A later reply of only well-formed lines restores a
+        is reset. A whole, valid one-case line naming a scenario the task
+        never declared is the one exception (cycle16): it is recorded as a
+        problem, binds nothing and resets nothing else. A later reply of only well-formed lines restores a
         binding; a scenario a reply does not mention keeps its binding. A
         binding is a claim of where the proof lives, never execution or
         sufficiency."""
@@ -14626,6 +14638,7 @@ class Session:
         bound: Dict[str, List[str]] = {}
         invalid: Dict[str, str] = {}
         whole_invalid = []
+        undeclared = []
         for match in _PROVES_ANY.finditer(reply or ""):
             body = match.group(1).strip()
             well = _PROVES_BODY.fullmatch(body)
@@ -14641,7 +14654,16 @@ class Session:
                 continue
             pid, case = well.group(1), well.group(2).strip().strip("`")
             if pid not in mine:
-                whole_invalid.append(f"{pid}: not a scenario of this task")
+                known = _CASE_CITATION.fullmatch(case)
+                if known is not None and is_test_path(known.group(1)):
+                    # A whole, valid one-case line naming a scenario the task
+                    # never declared (cycle16, cycle15 t4's P8): the line is
+                    # refused and binds nothing, and it does not reset the
+                    # declared scenarios it never named. Anything less than a
+                    # valid case keeps the whole-reply reset below.
+                    undeclared.append(f"{pid}: not a scenario of this task; nothing was bound for it")
+                else:
+                    whole_invalid.append(f"{pid}: not a scenario of this task")
                 continue
             cited = _CASE_CITATION.fullmatch(case)
             if cited is None or not is_test_path(cited.group(1)):
@@ -14654,7 +14676,7 @@ class Session:
                 invalid[pid] = f"duplicate PROVES line for {case[:80]}"
                 continue
             bound[pid].append(case)
-        problems = [f"{pid}: {why}" for pid, why in invalid.items()] + whole_invalid
+        problems = [f"{pid}: {why}" for pid, why in invalid.items()] + whole_invalid + undeclared
         reset = set(mine) if whole_invalid else set(invalid)
         for pid in sorted(reset):
             record = mine[pid]
@@ -19206,6 +19228,7 @@ class Session:
                          + f"): {r['claim'][:140]}"
                          + (f" [{self._scope_route_text(r['task'], r['scope_paths'])}]" if r.get("scope_paths")
                             else "")
+                         + self._standing_reason_note(r)
                          for r in open_findings)
         return obligations.View(requirements=requirements, tasks=tuple(tasks), evidence=evidence,
                                 judgments=judgments, capacity=capacity, notes=tuple(notes))
@@ -19646,6 +19669,18 @@ class Session:
                 + "\n" + "\n".join(lines)
                 + ("\n\n" + self._review_resolves_note(reviews) if reviews else ""))
 
+    def _standing_reason_note(self, record: dict) -> str:
+        """The planner's view of an open review finding's standing question
+        (cycle16, cycle15 RFT4-11: t6 and t7 were planned from a 140-character
+        claim while the owner's recheck said which declared scenarios were
+        missing). Data from the record, bounded, attributed and labelled;
+        the owner still judges closure."""
+        reason = self._standing_reason(record, limit=_STANDING_REASON_CHARS)
+        if reason is None:
+            return ""
+        return (f"\n  standing reason, as {reason['author']} last wrote it ({reason['role']}, {reason['where']}; "
+                f"recorded, not a verdict): {reason['why']}")
+
     def _review_resolves_note(self, reviews: List[dict]) -> str:
         """The open review findings RESOLVES may name, by id only: their
         claims, reviewers and states are in the obligations view, so they
@@ -19660,7 +19695,7 @@ class Session:
                 "finding inherits it, and the same recheck follows its clean close without naming it. On a "
                 "survey run a RESOLVES naming a finding raised on a capped, failed or unmerged task is a "
                 "recovery and is charged to the recovery allowance, once with any CONTINUES; naming only "
-                "findings on closed work is ordinary coverage and is not charged."
+                "findings on closed work is ordinary coverage and is not charged. " + _MISSING_SCENARIO_RULE
                 + self._owed_resolves_note(reviews))
 
     def _owed_resolves_note(self, reviews: List[dict]) -> str:
@@ -20226,21 +20261,52 @@ class Session:
                 record["inherited_by"] = inherited + [spec.task_id]
 
     def _inherited_findings_block(self, spec) -> str:
-        """For the lead that continues a task: the open review findings on
-        the work it takes over, by id and as written. They are the
-        predecessor's reviewer's to close, after this task closes clean."""
-        records = self._inherited_review_findings(spec)
+        """For the lead of a task that continues work or resolves review
+        findings: exactly the open review findings this task is to resolve,
+        by id and as written, with the reason each one's own author last
+        kept it open (``_resolution_findings_block``, cycle16)."""
+        return self._resolution_findings_block(spec)
+
+    def _resolution_targets_of(self, spec) -> List[dict]:
+        """The open review findings this task resolves: those its own RESOLVES
+        named, read from its own dispatch record (never another task's
+        working state), and those it inherits by CONTINUES; one per id, in
+        that order. Only findings this session holds open; a parallel child
+        holds none, so it is shown none (RESOLVES is not admitted in a batch)."""
+        reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        named = [reviews[fid] for fid in (getattr(outcome, "resolves", None) or ()) if fid in reviews]
+        out = list(named)
+        for record in self._inherited_review_findings(spec):
+            if all(record["fid"] != r["fid"] for r in out):
+                out.append(record)
+        return out
+
+    def _resolution_findings_block(self, spec) -> str:
+        """The open review findings this task resolves, for its lead (cycle16;
+        before, only a CONTINUES with a capped or failed predecessor showed
+        them, and a RESOLVES lead saw only the planner's description). Each
+        is shown as its reviewer wrote it, with that reviewer's latest
+        standing reason where one stands. Nothing here is the lead's to
+        close."""
+        records = self._resolution_targets_of(spec)
         if not records:
             return ""
-        lines = [f"- {r['fid']} (raised by {r['author']} on {r['task']}): {(r.get('text') or r['claim'])[:600]}"
-                 for r in records]
-        return ("## Open review findings on the work you continue\n" + "\n".join(lines)
-                + "\nThese were raised on the work this task takes over and are still open. Where one is a "
-                "defect of that work inside this task's permitted paths, address it as part of the remaining "
-                "work. A finding that opens with SCENARIO or EVIDENCE is about the plan's scenario text or "
-                "about execution the harness has not shown, not about the code, and is not yours to answer. "
-                "After this task closes clean, the reviewer who raised each finding rechecks it against the "
-                "finished work: do not mark any of them resolved yourself, and do not report one as done.")
+        lines = []
+        for r in records:
+            lines.append(f"- {r['fid']} (raised by {r['author']} on {r['task']}): {(r.get('text') or r['claim'])[:600]}")
+            reason = self._standing_reason(r, limit=600)
+            if reason is not None:
+                lines.append(f"  {r['author']}'s latest judgment ({reason['role']}, {reason['where']}) kept it open: "
+                             f"{reason['why']}")
+        return ("## Open review findings this task resolves\n" + "\n".join(lines)
+                + "\nThese are still open. Where one is a defect inside this task's permitted paths, address it as "
+                "part of this task. Where it says declared scenarios are missing, bind each scenario this task "
+                "declares for it with PROVES lines; you cannot add a scenario. A finding that opens with SCENARIO "
+                "or EVIDENCE is about the plan's scenario text or about execution the harness has not shown, not "
+                "about the code, and is not yours to answer. After this task closes clean, the reviewer who raised "
+                "each finding rechecks it against the finished work: do not mark any of them resolved yourself, "
+                "and do not report one as done.")
 
     def _review_resolution_targets(self, spec) -> Tuple[List[str], List[dict]]:
         """``(named, inherited)``: the open review finding ids this task's
@@ -20930,9 +20996,9 @@ class Session:
         if record:
             blocks.append(_handoff_note(record))
             paths.extend(record.get("changed") or [])
-            inherited = self._inherited_findings_block(spec)
-            if inherited:
-                blocks.append(inherited)
+        resolving = self._resolution_findings_block(spec)
+        if resolving:
+            blocks.append(resolving)
         taken = self._discharges_block(spec)
         if taken:
             blocks.append(taken)
@@ -21759,11 +21825,13 @@ class Session:
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
         joined = "\n\n".join(notes)
+        resolving = self._resolution_findings_block(spec)
         return (
             f"Task: {spec.description}\n\n"
             f"Your draft:\n{draft}\n\n"
             f"Independent reviews of it:\n{joined}\n\n"
-            "Revise your work. Address every finding explicitly: fix it, or "
+            + (resolving + "\n\n" if resolving else "")
+            + "Revise your work. Address every finding explicitly: fix it, or "
             "rebut it with a reason -- silence is not a response. A finding "
             "you cannot decide goes to the record as an open question, not "
             "into the void." + _COUNTERPART_FIX + " "
@@ -21906,6 +21974,26 @@ class Session:
             out.append(record)
         return out
 
+    def _standing_reason(self, record: dict, *, limit: int) -> Optional[dict]:
+        """The reason a review finding's own author last gave for keeping it
+        open, or None: the one reading the owner's recheck, the planner and
+        the resolving lead all use (cycle16, PR73 6737404225). Only the
+        latest judged entry is read; an older reason is never resurrected
+        past a newer RESOLVED, another seat's entry or any other state. It is
+        kept as written, bounded to ``limit`` characters, with its role and
+        whether it was given on this source, an earlier one or an unrecorded
+        one; it is that author's question as it stood, never a verdict."""
+        latest = next((h for h in reversed(record.get("history") or ()) if h.get("state") != "unjudged"), None)
+        if not (latest and latest.get("state") == delivery.UNRESOLVED and latest.get("author") == record.get("author")
+                and str(latest.get("why") or "").strip()):
+            return None
+        current = self._source_fingerprint() if self.project else None
+        digest = str(latest.get("source_digest") or "")
+        where = ("on this same source" if current and digest == current else
+                 "on an earlier source" if digest else "on an unrecorded source")
+        return dict(author=record.get("author"), role=latest.get("role"), where=where,
+                    why=str(latest["why"]).strip()[:limit])
+
     def _finding_lines(self, records: List[dict]) -> str:
         """Each finding by id, in the reviewer's own words (the whole line as
         written, basis and impact segments included), and, where its author's
@@ -21917,17 +22005,12 @@ class Session:
         it on a generic citation). Which answer suffices stays the
         reviewer's; the harness only keeps the question in front of it."""
         lines, standing = [], False
-        current = self._source_fingerprint() if self.project else None
         for r in records:
             lines.append(f"- {r['fid']}: {r.get('text') or r['claim']}")
-            latest = next((h for h in reversed(r.get("history") or ()) if h.get("state") != "unjudged"), None)
-            if (latest and latest.get("state") == delivery.UNRESOLVED and latest.get("author") == r.get("author")
-                    and str(latest.get("why") or "").strip()):
-                digest = str(latest.get("source_digest") or "")
-                where = ("on this same source" if current and digest == current else
-                         "on an earlier source" if digest else "on an unrecorded source")
-                lines.append(f"  your latest judgment ({latest.get('role')}, {where}) kept it open: "
-                             f"{str(latest['why']).strip()[:1200]}")
+            reason = self._standing_reason(r, limit=1200)
+            if reason is not None:
+                lines.append(f"  your latest judgment ({reason['role']}, {reason['where']}) kept it open: "
+                             f"{reason['why']}")
                 standing = True
         if standing:
             lines.append("Where your latest judgment kept a finding open with a reason, that reason is the question "
