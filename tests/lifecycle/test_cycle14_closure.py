@@ -373,3 +373,41 @@ def test_repair_tasks_state_the_goal_outcome_and_the_causal_class_and_reviews_re
     assert "not an exhaustive search" in lens
     for word in ("505", "HTTP/", "version", "http.server", "BaseHTTPRequestHandler"):
         assert word not in lens and word not in rule, word
+
+
+# -- A1 lifecycle: row, lowering, result.json and the outside checker agree ------------------------
+
+NAMED_GATE = H.GATE.replace(" -m pytest -q ", " -m pytest -q tests/test_app.py ")
+PATH_ONLY = "NOT RUN: tests/test_app.py - I did not run it before closing"
+
+
+@pytest.mark.parametrize("gate, ran", [(NAMED_GATE, True), (H.GATE, False)], ids=["named-file", "discovery"])
+def test_a_path_only_report_the_effective_gate_ran_whole_agrees_everywhere(tmp_path, monkeypatch, gate, ran):
+    """cycle13 O59/O63/O64: registration read the gate as not naming the
+    file (``_gate_can_run`` False here, standing for the reading that
+    differed from the later effective gate). A gate naming the file whole
+    then ran it complete and passing: the item, its typed row, the audit's
+    lowering, result.json and tools/truth_check agree it ran. A discovery
+    gate names no file, so the same report stays truthful debt everywhere."""
+    from tests.lifecycle.test_done_declarations import PLAN1
+    from tools.truth_check import _not_run_cleared
+    monkeypatch.setattr(Session, "_gate_can_run", lambda self, paths: False)
+    script = _script(Seen(), collaborator=lambda c, r: CLEAN, orchestrator=_then_done(PLAN1),
+                     lead=_lead(note=PATH_ONLY), auditor=_answering)
+    replay = H.run(_at(tmp_path, f"path-only-{ran}"), monkeypatch, script, files=FILES, check=gate,
+                   record_complete=False, max_tasks=1)
+    record = H.result_json(replay)
+    (entry,) = [e for e in record["unexecuted_acceptance"] if e["item"] == "tests/test_app.py"]
+    (row,) = [o for o in record["evidence_obligations"] if o.get("oid") == entry["oid"]]
+    status = record["requirements"]["status"]["R1"]
+    if ran:
+        assert entry["discharge_state"] == "discharged" and entry["discharged_cases"] == []
+        assert row["runner"] == "gate" and row["execution"] == "ran" and row["runner_basis"], row
+        assert status == "met (audited)", status
+        assert _not_run_cleared(entry, record["checks"], record)
+        assert replay.result.completed, replay.result.error
+    else:
+        assert entry["discharge_state"] == "standing" and row["runner"] is None and row["execution"] != "ran"
+        assert "runner_basis" not in row and status.startswith("NOT MET"), status
+        assert not _not_run_cleared(entry, record["checks"], record)
+        assert not replay.result.completed
