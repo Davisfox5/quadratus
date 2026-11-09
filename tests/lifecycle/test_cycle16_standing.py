@@ -255,3 +255,38 @@ def test_everything_short_of_a_valid_undeclared_line_keeps_failing_closed(tmp_pa
             assert binding.startswith("invalid declaration") and cases == [], (pid, binding)
         else:
             assert (binding, cases) == BOUND, pid
+
+
+# -- root review of b592380: the inherited half reads the task's own recorded CONTINUES -----------
+
+def _continuation_session(tmp_path):
+    first = _finding("RFT1-1", task="t1", history=[_h("unresolved", why="t1's question")])
+    fifth = _finding("RFT5-1", task="t5", history=[_h("unresolved", why="t5's question")])
+    return _session(tmp_path, [first, fifth],
+                    outcomes=[("t1", [], ""), ("t5", [], ""), ("t2", [], ""), ("t3", [], "t1")])
+
+
+@pytest.mark.parametrize("task, working, expected", [
+    ("t2", "t1", []),                    # own outcome continues nothing; another task's working state says t1
+    ("t9", "t1", []),                    # no outcome at all
+    ("t3", "t5", ["RFT1-1"]),            # own continuation t1 wins over the working t5
+    ("t3", None, ["RFT1-1"]),            # the actual continuation, unchanged
+], ids=["empty-own-continuation", "absent-outcome", "own-differs-from-working", "own-continuation"])
+def test_the_inherited_findings_come_from_the_tasks_own_recorded_continuation(tmp_path, task, working, expected):
+    session = _continuation_session(tmp_path)
+    session._continues = working
+    spec = SimpleNamespace(task_id=task, description="Repair add.")
+    assert [r["fid"] for r in session._resolution_targets_of(spec)] == expected
+    block = session._resolution_findings_block(spec)
+    revision = session._revision_prompt(spec, "the draft", ["[Reviewer A]\nNO FINDINGS"])
+    for fid, why in (("RFT1-1", "t1's question"), ("RFT5-1", "t5's question")):
+        shown = fid in expected
+        assert (fid in block) == shown and (why in block) == shown, (fid, block)
+        assert (fid in revision) == shown, "the revision prompt reads the same selection"
+
+
+def test_the_draft_context_reads_the_same_selection(tmp_path):
+    session = _continuation_session(tmp_path)
+    session._continues = "t1"
+    spec = SimpleNamespace(task_id="t2", description="Repair add.", scope=None)
+    assert not any("RFT1-1" in block for block in session._lead_context(spec))

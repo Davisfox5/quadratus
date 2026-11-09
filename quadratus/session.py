@@ -20269,15 +20269,22 @@ class Session:
 
     def _resolution_targets_of(self, spec) -> List[dict]:
         """The open review findings this task resolves: those its own RESOLVES
-        named, read from its own dispatch record (never another task's
-        working state), and those it inherits by CONTINUES; one per id, in
-        that order. Only findings this session holds open; a parallel child
+        named and those it inherits by the CONTINUES its own dispatch record
+        holds (never another task's working state, and nothing for a task
+        with no record); one per id, in that order. Only findings this session holds open; a parallel child
         holds none, so it is shown none (RESOLVES is not admitted in a batch)."""
-        reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
         outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        if outcome is None:
+            # No dispatch record for this task: nothing is its to resolve.
+            return []
+        reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
         named = [reviews[fid] for fid in (getattr(outcome, "resolves", None) or ()) if fid in reviews]
         out = list(named)
-        for record in self._inherited_review_findings(spec):
+        # Its own recorded CONTINUES only, "" when it continues nothing: the
+        # helper would otherwise fall back to the session's working
+        # ``_continues``, which may be another task's (root review of
+        # b592380). Settlement and admission keep their own reading.
+        for record in self._inherited_review_findings(spec, getattr(outcome, "continues", "") or ""):
             if all(record["fid"] != r["fid"] for r in out):
                 out.append(record)
         return out
