@@ -411,3 +411,75 @@ def test_a_path_only_report_the_effective_gate_ran_whole_agrees_everywhere(tmp_p
         assert "runner_basis" not in row and status.startswith("NOT MET"), status
         assert not _not_run_cleared(entry, record["checks"], record)
         assert not replay.result.completed
+
+
+# -- A2 correction (root review of c69fb36): a current adverse judgment is a decision ----------------
+
+ADVERSE_LINE = "INSUFFICIENT the cases omit a required path"
+
+
+def test_a_current_independent_insufficient_is_kept_held_and_never_asked_again(tmp_path):
+    """Root's reproduction: an ordinary independent reviewer's current
+    INSUFFICIENT read as missing, the route asked again and the scripted
+    SUFFICIENT replaced it."""
+    session, calls = _a2(tmp_path)
+    session._judge_restated("claude:opus", f"O2: {ADVERSE_LINE}")
+    before = dict(session.unexecuted_acceptance[0]["restated_judgment"])
+    assert before["verdict"] == "insufficient" and before["by"] == "claude:opus"
+    (record,) = session._judge_restatements("done")
+    assert calls == [], "no judgment call on the same decision"
+    assert session.unexecuted_acceptance[0]["restated_judgment"] == before, "the adverse judgment stands"
+    assert not session._restated_judged(session.unexecuted_acceptance[0]), "held, never counted as sufficient"
+    assert record["judge"] == "claude:opus" and "current INSUFFICIENT stands" in record["outcome"]
+    assert session._judge_restatements("final") == [] and calls == [], "recorded once"
+    state = checkpoint.capture_state(session)
+    resumed, calls = _a2(tmp_path / "resumed")
+    checkpoint.restore_state(resumed, state)
+    assert resumed._judge_restatements("done") == [] and calls == [], "the same across a resume"
+
+
+@pytest.mark.parametrize("stale", [dict(source="S0"), dict(cases=["tests/test_app.py::test_old"]),
+                                   dict(revisions={"R1": 0})], ids=["source", "cases", "revisions"])
+def test_a_stale_adverse_judgment_stays_eligible_for_a_fresh_one(tmp_path, stale):
+    session, calls = _a2(tmp_path)
+    session._judge_restated("claude:opus", f"O2: {ADVERSE_LINE}")
+    session.unexecuted_acceptance[0]["restated_judgment"].update(stale)
+    (record,) = session._judge_restatements("done")
+    assert len(calls) == 1 and record["outcome"] == "answered", record
+    assert session.unexecuted_acceptance[0]["restated_judgment"]["source"] == "S"
+
+
+def test_an_adverse_line_by_the_author_is_no_judgment_and_the_item_stays_eligible(tmp_path):
+    session, calls = _a2(tmp_path)
+    session.unexecuted_acceptance[0]["restated_judgment"] = dict(
+        by="openai:sol", verdict="insufficient", cases=[CASE], source="S", revisions={"R1": 1})
+    (record,) = session._judge_restatements("done")
+    assert len(calls) == 1 and calls[0][0] != "openai:sol" and record["outcome"] == "answered"
+
+
+def test_an_ordinary_reviewers_current_insufficient_ends_the_run_held_with_no_extra_call(tmp_path, monkeypatch):
+    """Lifecycle: Sol (the auditor's seat) leads; Opus's review finds a
+    defect, Sol's revision restates the item, and Opus's recheck judges the
+    restatement INSUFFICIENT on that source. DONE buys no second judgment."""
+    from tests.lifecycle.replies import recheck_reply
+    from tests.lifecycle.test_reachable_evidence import CODE, MET, _judging, _restating
+    asked = []
+
+    def recheck(call, replay):
+        if call.task == "restatement-judgment":
+            asked.append(call)
+            return f"{ASKED.findall(call.prompt)[0]}: {SUFFICIENT}"
+        return _judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED handled"), ADVERSE_LINE)(call, replay)
+    script = _script(Seen(), collaborator=lambda c, r: CODE + MET, orchestrator=_then_done(), lead=_lead(),
+                     revision=_restating(), recheck=recheck, auditor=_answering)
+    replay = H.run(_at(tmp_path, "adverse-review"), monkeypatch, script, files=FILES, record_complete=False,
+                   max_tasks=1)
+    record = H.result_json(replay)
+    entry = _item(replay)
+    assert entry["restatements"][-1]["author"] == "openai:sol"
+    judged = entry["restated_judgment"]
+    assert judged["by"] == "claude:opus" and judged["verdict"] == "insufficient"
+    assert judged["source"] == record["source_fingerprint"], "current"
+    assert asked == [], "no judgment call on the decided item"
+    assert any("current INSUFFICIENT stands" in r["outcome"] for r in record["restatement_judgments"])
+    assert [c.task for c in replay.of("lead")] == ["t1"] and not replay.result.completed

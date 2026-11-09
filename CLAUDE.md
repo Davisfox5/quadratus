@@ -3513,6 +3513,11 @@ Key design decisions already settled:
     INSUFFICIENT line or no line leaves the item held with the reason
     recorded. Self-judgment stays void, a stale judgment is never reused,
     the auditor is not rotated, and no seat, task or write grant is added.
+    A current independent INSUFFICIENT (`_restated_current`: same cases,
+    source and revisions, not the author) is the decision: it stays held,
+    is recorded once and is never asked again (root review of c69fb36: the
+    route read it as missing and a new call could replace it). Only a
+    missing or stale judgment is eligible.
   - *Guidance.* `_REPAIR_OUTCOME_RULE` (in the DONE refusal and the open
     findings) asks a repair to state the goal's outcome and the class of
     cause, never a narrower condition one reproduction showed. The review

@@ -15794,6 +15794,22 @@ class Session:
         revisions = self._requirement_revisions()
         return {rid: int(revisions.get(rid, 1)) for rid in sorted(entry.get("requirements") or [])}
 
+    def _restated_current(self, entry: dict) -> bool:
+        """Whether a restated item's recorded judgment, of either verdict,
+        is current and independent: on exactly its current cases, by a seat
+        that did not write the restatement, on the current source and under
+        the current revisions (the identity ``_restated_judged`` requires,
+        without its verdict). A current INSUFFICIENT is a decision already
+        made, never a missing one (root review of c69fb36)."""
+        judged = entry.get("restated_judgment") or {}
+        last = (entry.get("restatements") or [{}])[-1]
+        current = self._source_fingerprint() if self.project else None
+        return bool(judged.get("verdict") in ("sufficient", "insufficient")
+                    and list(judged.get("cases") or []) == list(entry.get("cases") or [])
+                    and judged.get("by") and judged.get("by") != last.get("author")
+                    and current and judged.get("source") == current
+                    and dict(judged.get("revisions") or {}) == self._restated_revisions(entry))
+
     def _restated_judged(self, entry: dict) -> bool:
         """A restated item's independent judgment as it stands now:
         SUFFICIENT, on exactly its current cases, by a seat that did not write
@@ -16851,7 +16867,10 @@ class Session:
         ``_judge_restated``: SUFFICIENT or INSUFFICIENT per id, never by its
         author, on exactly the current cases and source. Anything else (no
         eligible seat, no allowance, refused, capped, void, no line) leaves
-        the item held, with the reason recorded on ``restatement_judgments``."""
+        the item held, with the reason recorded on ``restatement_judgments``.
+        A current independent judgment of either verdict is never asked
+        again: only a missing or stale one (another source, cases or
+        revisions) is eligible."""
         auditor = self._auditor()
         pending = [e for e in self._standing_not_run()
                    if e.get("oid") and e.get("restatements") and not self._restated_judged(e)
@@ -16862,6 +16881,21 @@ class Session:
         source = self._source_fingerprint() if self.project else None
         groups: Dict[str, List[dict]] = {}
         done = []
+        for entry in [e for e in pending if self._restated_current(e)]:
+            # A current independent INSUFFICIENT on these exact cases, source
+            # and revisions is the decision: it stands as held debt and is
+            # never asked again (root review of c69fb36). Recorded once.
+            judged = entry["restated_judgment"]
+            held = dict(oids=[entry["oid"]], judge=judged.get("by"), source=source,
+                        outcome=f"held: {judged.get('by')}'s current INSUFFICIENT stands; not asked again")
+            said = any(all(r.get(k) == v for k, v in held.items()) for r in self.restatement_judgments)
+            # This route's own answered INSUFFICIENT already records it.
+            answered = any(entry["oid"] in (r.get("insufficient") or ()) and r.get("judge") == held["judge"]
+                           and r.get("source") == source for r in self.restatement_judgments)
+            if not (said or answered):
+                self.restatement_judgments.append(dict(held, site=site))
+                done.append(self.restatement_judgments[-1])
+        pending = [e for e in pending if not self._restated_current(e)]
         for entry in pending:
             author = (entry["restatements"][-1] or {}).get("author") or ""
             history = [h.get("by") for h in reversed(entry.get("judgment_history") or ()) if h.get("by")]
