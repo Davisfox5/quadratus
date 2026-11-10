@@ -29,6 +29,7 @@ from quadratus.delegation import (
     InvocationEvent,
     bounded_stderr,
     bounded_tool_failures,
+    invocation_context,
 )
 from quadratus.runtime import Fleet
 from quadratus.scope import TaskScope
@@ -149,10 +150,14 @@ def test_a_security_lead_can_commission_a_worker(tmp_path):
     filed the request as the draft, and the verifier rejected 'a dispatch, not
     a result'. The excursion now serves the worker channel like any lead."""
     calls = []
+    worker_calls = []
 
     def invoke(key, prompt, *, allow_writes=False):
         calls.append((key, prompt))
-        if "change line 29" in prompt and "You are leading" not in prompt:
+        # Closeout evidence retains the worker request too. Its words do not
+        # identify a fresh dispatch; the invocation's recorded origin does.
+        if (invocation_context.get() or {}).get("origin") == "worker":
+            worker_calls.append((key, prompt, allow_writes))
             return "patched: line 29 now checks the tenant"
         if "The task is finished" in prompt:
             return "SUMMARY: fixed\nREASONING: worker evidence"
@@ -166,8 +171,12 @@ def test_a_security_lead_can_commission_a_worker(tmp_path):
     session = _security_session(tmp_path, invoke)
     result = session.run_task(SECURITY_TASK)
     assert result.author == SOL
-    worker = [k for k, p in calls if "change line 29" in p and "You are leading" not in p]
-    assert worker == ["claude:haiku"]
+    assert len(worker_calls) == 1
+    key, prompt, allow_writes = worker_calls[0]
+    assert key == "claude:haiku"
+    assert "change line 29 to check the tenant" in prompt
+    assert allow_writes is True
+    assert result.summary == "fixed" and result.reasoning == "worker evidence"
     drafts = [p for k, p in calls if "You are leading" in p]
     assert any("patched: line 29" in p for p in drafts)
     assert any("Applied the tenant check" in p for k, p in calls if "verifying security work" in p)

@@ -2248,7 +2248,8 @@
         "quadratus/cli.py",
         "tools/truth_check.py",
         "tests",
-        "docs/PROJECT_WORKFLOW.md"
+        "docs/PROJECT_WORKFLOW.md",
+        "tests/test_canary_evidence.py"
       ],
       "author": "codex",
       "reviewer": "independent-codex",
@@ -2259,7 +2260,10 @@
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "codex: Compatible release backport of all four authorized fixes. Adapted existing main lifecycle/channel protocols only, preserving old default behavior and all original checks for unrelated files. Narrow independent reviews found no regression; provider-free positive/negative controls passed per area. Final connected regression and exact-head CI evidence belongs in stage-b/human-coherence-fixes-20261109/pending.json. No engine milestone advancement or new live run."
+        "codex: Compatible release backport of all four authorized fixes. Adapted existing main lifecycle/channel protocols only, preserving old default behavior and all original checks for unrelated files. Narrow independent reviews found no regression; provider-free positive/negative controls passed per area. Final connected regression and exact-head CI evidence belongs in stage-b/human-coherence-fixes-20261109/pending.json. No engine milestone advancement or new live run.",
+        "codex: scope extended to tests/test_canary_evidence.py",
+        "codex: Exact-head main5487561223e97b9390116aeeb22f4c6dff160c85 CI42749539129 Python3.11 job129609621588 failed only the security-worker canary (3885 passed,63 skipped). The intentional preserved WORKER history reached the existing Sol closeout; the old prompt-substring spy misclassified that summary as another worker and returned a worker answer. Corrected only the canary to route/count actual invocation origin, assert exactly one Haiku dispatch with the requested instruction and writable grant, and assert the distinct closeout summary/reasoning. No runtime edits. The failed case reproduced once; canary plus context-review controls pass52, Ruff and diff check clean. Development39fba6e6d35e27a7bbdf079908527bcdc498d232 already passed both CI42749544843/42749544322 and has mechanical closeout. Owner notified before correction, frozen round22 source/results and next-run pause preserved. Exact corrective commit and CI outcomes will be recorded externally in stage-b/human-coherence-fixes-20261109/pending.json; no milestone advancement or new live acceptance.",
+        "codex: Independent current-diff review by audit_interfaces_tools cleared the focused canary correction: actual invocation origin pins one Haiku worker with intended instruction/write grant; lead consumption and verifier assertions remain, and summary/reasoning assertions catch closeout misrouting. Review ran no duplicate tests or provider calls. Runtime source is unchanged."
       ]
     }
   ],
