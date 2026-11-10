@@ -81,7 +81,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
-                decider_labels="unstated", repair_tests=(), resume_from=None):
+                decider_labels="unstated", repair_tests=(), test_changes=None, resume_from=None):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``resume_from`` is the run folder of an interrupted run of the same job
@@ -114,6 +114,11 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     (quadratus.readiness): a JSON path or list, validated here and run once
     before the first model call. A failing probe stops the run as an
     operator handoff; a passing one proves readiness, never acceptance.
+
+    ``test_changes`` is an operator-authored JSON envelope, or its file path,
+    binding intentional existing-test changes to this goal, original bytes
+    and exact cases. A planned migration still needs approval of its concrete
+    resulting diff unless its exact current_sha256 was approved in advance.
     """
     from .runtime import Fleet, new_session
 
@@ -140,6 +145,23 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     project.exclude.add(state)
 
     repair_tests = _repair_tests(project.root, repair_tests, forbid)
+    test_originals = None
+    if resume_from is not None and test_changes:
+        # Read only the digest-verified original bytes here. These are the
+        # baseline the operator's approval names, not the already edited
+        # project. _run still validates the whole checkpoint, current source,
+        # authority and workflow before restoring or granting anything.
+        from . import checkpoint
+        parent = _resume_parent(state, resume_from)
+        body = checkpoint.load(parent)
+        try:
+            test_originals = checkpoint._decode(body['state']['_original_tests'])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise checkpoint.CheckpointRefused('the checkpoint has no readable original-test baseline') from exc
+        if not isinstance(test_originals, dict) or any(
+                not isinstance(k, str) or not isinstance(v, bytes) for k, v in test_originals.items()):
+            raise checkpoint.CheckpointRefused('the checkpoint has no readable original-test baseline')
+    test_changes = _test_changes(project.root, test_changes, goal=goal, forbid=forbid, originals=test_originals)
     policy = load_policy(project.root, forbid=forbid)
     if declared_paths:
         from .scope import TaskScope
@@ -166,7 +188,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
-                    decider_labels=decider_labels, repair_tests=repair_tests,
+                    decider_labels=decider_labels, repair_tests=repair_tests, test_changes=test_changes,
                     resume_from=resume_from)
 
 
@@ -206,6 +228,18 @@ def _repair_tests(root, paths, forbid=()):
             raise ValueError(f'Test repair names a path the operator forbade: {name}')
         names.append(name)
     return tuple(dict.fromkeys(names))
+
+
+def _test_changes(root, raw, *, goal, forbid=(), originals=None):
+    """Load and validate the operator's exact, goal-bound test migrations."""
+    from .integration import test_change_authorizations
+    if isinstance(raw, (str, Path)):
+        path = Path(raw).expanduser()
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f'Test changes file {path} could not be read as JSON: {exc}') from exc
+    return test_change_authorizations(raw, goal=goal, root=root, forbid=forbid, originals=originals)
 
 
 def _packet_floor(policy, scope):
@@ -354,7 +388,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
-         decider=None, decider_labels="unstated", repair_tests=(), resume_from=None):
+         decider=None, decider_labels="unstated", repair_tests=(), test_changes=(), resume_from=None):
     parent = _resume_parent(state, resume_from) if resume_from is not None else None
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
@@ -408,7 +442,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                     capture_profile=capture_profile, readiness=list(readiness or ()),
                     security_verdict_json=security_verdict_json, repair_tests=list(repair_tests or ()),
                     explicit_tasks=list(tasks) if tasks is not None else None,
-                    plan_gate=plan_gate is not None, ask_operator=ask_operator is not None))
+                    plan_gate=plan_gate is not None, ask_operator=ask_operator is not None,
+                    **({'test_changes': list(test_changes)} if test_changes else {})))
     lineage = dict(root=run_dir.name, parent=None, episode=1)
     carried = None
     if parent is not None:
@@ -488,6 +523,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         decider=decider,
         decider_labels=decider_labels,
         repair_tests=tuple(repair_tests),
+        test_changes=tuple(test_changes),
         job_store=job_store,
     )
 
@@ -722,6 +758,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                      'NOT shown kept and executed') + '. Its assertions are not independently checked; '
                   'retained case names do not prove they were not weakened. Review the repaired file '
                   'against the kept original before relying on it.', '']
+    for decision in (getattr(session, 'test_change_decisions', None) or []) if session else []:
+        lines += [f"Test change {decision['status']}: {decision['path']} "
+                  f"(operator decision {decision['id']}; original {decision['original_sha256'][:12]}, "
+                  f"delivered {decision['current_sha256'][:12]}). "
+                  "The original bytes remain recorded; approval covers this goal and these test bytes.", '']
     for handoff in (getattr(session, 'verification_handoffs', None) or []) if session else []:
         lines += [f"Verification task {handoff['task']} was not dispatched: the harness had already verified "
                   f"source {handoff['source'][:12]} with its own runs. {', '.join(handoff['covers']) or 'Nothing'} "
@@ -860,6 +901,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # Harness runs of the task gate seats were shown; never task checks.
         'review_checks': list(getattr(session, 'review_checks', []) or []) if session else [],
         'test_repairs': list(getattr(session, 'test_repairs', []) or []) if session else [],
+        'test_change_decisions': list(getattr(session, 'test_change_decisions', []) or []) if session else [],
+        'test_change_authorizations': list(getattr(getattr(session, 'config', None), 'test_changes', ()) or ()),
         'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
         # Readings an editing call could not make, routed to its review

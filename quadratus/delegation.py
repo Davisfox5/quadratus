@@ -117,8 +117,12 @@ def record_invocation(ledger, event):
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
                evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None, authority=None,
-               effort_inputs=None):
+               effort_inputs=None, review_source=None):
     context = dict(task=task, role=role, origin=origin)
+    if review_source is not None:
+        # The task-start bytes for an independent audit's first read. This
+        # private handoff is not an editing grant or a persisted call field.
+        context["review_source"] = dict(review_source)
     if effort_inputs:
         # The task facts the effort policy reads at dispatch (quadratus.effort):
         # complexity, kind, work class, security, fix cycle, recheck impact.

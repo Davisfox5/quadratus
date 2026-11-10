@@ -115,6 +115,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 decider_labels=getattr(args, "decider_labels", "unstated"),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 **({"repair_tests": tuple(args.repair_tests)} if getattr(args, "repair_tests", None) else {}),
+                **({"test_changes": args.test_changes} if getattr(args, "test_changes", None) else {}),
                 max_tasks=args.max_tasks, mode=args.mode,
                 **({"resume_from": args.resume} if getattr(args, "resume", None) else {}),
                 security_verdict_json=getattr(args, "security_verdict_json", False),
@@ -506,6 +507,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     engine.add_argument("--repair-test", dest="repair_tests", action="append", default=[],
                         help="An existing test file this run may repair (exact path). Its original cases must "
                              "still run unskipped; every other original test is restored. Repeat as needed.")
+    engine.add_argument("--test-changes", metavar="FILE",
+                        help="Operator JSON approval for exact existing test cases intentionally replaced or retired "
+                             "under this goal. Planned changes still require approval of the resulting diff "
+                             "unless its exact current_sha256 is preapproved.")
     watch = parser.add_argument_group(
         "monitor",
         "Read what the engine is doing from the run directory and exit. "
@@ -576,6 +581,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ("--allow-writes", args.allow_writes), ("--check", args.check),
         ("--extra-check", args.extra_check), ("--capture-profile", args.capture_profile),
         ("--readiness", args.readiness), ("--repair-test", args.repair_tests),
+        ("--test-changes", args.test_changes),
         ("--tasks", args.tasks), ("--rulings", args.rulings),
         ("--resume", args.resume),
         ("--survey-recovery", args.survey_recovery is not None),

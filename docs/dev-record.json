@@ -3325,6 +3325,37 @@
         "codex: User authorized commit only after current run ends. Cycle20 has exact job/worker terminal receipts, no surviving owned processes, released awake assertion and no live launcher/worker. This main-compatible source is byte-identical to the audited code validated by3806passing/63skipped full tests plus82regression cases; Ruff and whitespace clean. Newest development reconciliation is e64f6f82a63c1d87517eb17238441bbdddf62b76 and retains newer Claude provider recovery and authority behavior. Main does not receive the entire unfinished PR73. CI still pending; no live acceptance claimed."
       ],
       "acknowledged_at": "2026-11-09T20:50:00Z"
+    },
+    {
+      "id": "T-human-coherence-fixes-20261109",
+      "purpose": "Davis explicitly authorized fixing all four reviewed human-coherence inconsistencies: task context continuity, authorized behavior/test supersession, self-captured design continuation, and blind REVIEW first reads. Isolated from frozen run22 and its acceptance/closeout; no milestone advancement.",
+      "base": "9d28125781379afd63d14186c8c0feca5fff4ca2",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/memory.py",
+        "quadratus/outcome.py",
+        "quadratus/contract.py",
+        "quadratus/integration.py",
+        "quadratus/project_run.py",
+        "quadratus/cli.py",
+        "quadratus/gui.py",
+        "quadratus/checkpoint.py",
+        "tools/truth_check.py",
+        "tests",
+        "docs/PROJECT_WORKFLOW.md",
+        "README.md"
+      ],
+      "author": "codex",
+      "reviewer": "independent-codex",
+      "state": "claimed",
+      "claimed_at": "2026-11-10T02:51:18Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "codex: All four fixes implemented on current development base9d28125 with provider-free positive/negative controls and independent review of affected boundaries. The main release receives compatible adapted counterparts; no unfinished PR73 architecture is merged to main. Final connected regression/CI evidence is recorded externally in stage-b/human-coherence-fixes-20261109/pending.json. Frozen round22 evidence, its successful original-head result, owner closeout and pause remain unchanged; these fixes have no live acceptance claim."
+      ]
     }
   ],
   "receipts": [

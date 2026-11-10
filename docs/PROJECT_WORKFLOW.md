@@ -76,6 +76,61 @@ they are not an OS security boundary against arbitrary absolute paths or
 malicious commands. Local vendor permissions and trusted project/check commands
 still matter. The GUI is localhost-only, including on API configurations.
 
+## Intentional changes to existing tests
+
+Existing tests protect behavior that the change should preserve. When the
+goal deliberately changes that behavior, the operator can authorize specific
+cases to be replaced or retired. The engine keeps the original test as
+evidence and checks the approved replacement cases on the delivered source.
+Other cases retain their original checks. An approval does not authorize
+writes outside the task scope or an operator exclusion.
+
+A model may propose the exact migration and reason. If it has not already
+been approved, the terminal or GUI asks the operator to approve the concrete
+test diff. Only the exact approval response shown in that question accepts
+it; a model's claim, a broad goal, or an unrelated standing ruling cannot
+waive the original test. The approval is recorded against the goal, original
+test bytes and resulting bytes. A later change needs a new approval.
+
+For unattended runs, `--test-changes FILE` accepts an operator-authored JSON
+envelope:
+
+```json
+{
+  "schema_version": 1,
+  "goal": "Change the default limit from 5 to 10",
+  "changes": [
+    {
+      "path": "tests/test_defaults.py",
+      "original_sha256": "<SHA-256 of the original test file>",
+      "reason": "The requested default is now 10 rather than 5",
+      "cases": [
+        {
+          "case": "test_default_is_five",
+          "action": "replace",
+          "replacements": [
+            {"path": "tests/test_defaults.py", "case": "test_default_is_ten"}
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+The `goal` must match the run's goal. Paths and original case names are exact;
+globs and missing original cases are refused before the run starts. An
+intentional retirement uses `"action": "retire"` with an empty
+`"replacements": []` and a reason. Each replacement names the test file and
+case that must execute successfully. To preapprove the completed test diff,
+also include `"current_sha256"` for its exact resulting bytes; without that
+field, the envelope authorizes the plan and the operator still approves the
+concrete diff through the question channel.
+
+`--repair-test FILE` remains available for repairs that retain every original
+case name and execute those cases without skips. Use the case-specific
+migration above when an old case itself must change identity or be retired.
+
 ## Other review corrections
 
 - KIND-prefixed ASK and FETCH remain control messages. An unanswered request

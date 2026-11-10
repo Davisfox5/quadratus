@@ -29,6 +29,7 @@ import argparse
 import ast
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -1203,6 +1204,193 @@ def _generated_test_problems(record: dict) -> list:
     return out
 
 
+def _approved_test_cases(name, data, *, unique=True):
+    """Literal case identities, independently of the workflow's parser.
+
+    Python retains bodies for unchanged-case checks. JavaScript names need
+    literal, unique declarations: computed names and escaped strings are not
+    evidence of a runner's displayed identity.
+    """
+    text = data.decode('utf-8')
+    if name.endswith('.py'):
+        nodes = [n for n in ast.walk(ast.parse(text))
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith('test_')]
+        names = [n.name for n in nodes]
+        bodies = {n.name: ast.dump(n, include_attributes=False) for n in nodes}
+    elif re.search(r'\.(?:test|spec)\.[cm]?[jt]sx?$', name):
+        # Comments and unrelated strings cannot declare cases. Keep string
+        # tokens so the argument following test/it can be checked literally.
+        token = re.compile(r'''//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|[^\s]''')
+        tokens = [m.group() for m in token.finditer(text) if not m.group().startswith(('//', '/*'))]
+        names = []
+        for index, item in enumerate(tokens):
+            if item not in ('test', 'it') or (index and tokens[index - 1] in ('.', '?.')):
+                continue
+            tail = tokens[index + 1: index + 4]
+            if tail and tail[0] == '.':
+                raise ValueError('modified JavaScript test declarations need independent inspection')
+            if not tail or tail[0] != '(':
+                continue
+            if (len(tail) != 3 or tail[1][:1] not in ('"', "'") or '\\' in tail[1]
+                    or tail[2] not in (',', ')')):
+                raise ValueError('JavaScript test names must be literal')
+            names.append(tail[1][1:-1])
+        bodies = dict.fromkeys(names)
+    else:
+        raise ValueError('unsupported test file')
+    if (unique and len(names) != len(set(names))) or any(not name for name in names):
+        raise ValueError('test case identities are ambiguous')
+    return bodies
+
+
+def _approval_project_tests(project):
+    """Current case names for attribution of file-less JS runner output."""
+    result = {}
+
+    def unreadable(error):
+        raise error
+
+    for base, folders, files in os.walk(project, followlinks=False, onerror=unreadable):
+        folders[:] = [n for n in folders if n not in
+                      ('.git', '.quadratus', '.venv', 'venv', 'node_modules', '__pycache__')
+                      and not (Path(base) / n).is_symlink()]
+        for name in files:
+            if not re.search(r'(?:^test_.*\.py$|_test\.py$|\.(?:test|spec)\.[cm]?[jt]sx?$)', name):
+                continue
+            path = Path(base) / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('test source is not a regular project file')
+            result[path.relative_to(project).as_posix()] = _approved_test_cases(name, path.read_bytes(), unique=False)
+    return result
+
+
+def _test_change_approvals(record, run_dir, project):
+    """Independently validate exact human decisions, retained bytes and execution.
+
+    A historical original-test failure is superseded only by this evidence,
+    never merely by the engine's 'approved' label.
+    """
+    if not record.get('test_change_decisions'):
+        return {}, []
+
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    valid, problems, history = {}, [], []
+    entries = record.get('test_change_decisions') or []
+    latest = {e.get('path'): e for e in entries if isinstance(e, dict) and e.get('status') == 'approved'}
+    fields = ('goal', 'path', 'original_sha256', 'current_sha256', 'reason', 'cases')
+    last = (record.get('checks') or [{}])[-1]
+    if not isinstance(last, dict):
+        return {}, ['test changes have no readable final check']
+    pools = [last, *(last.get('receipts') or [])]
+    executed, skipped, failed = set(), set(), set()
+    for row in pools:
+        if not isinstance(row, dict):
+            continue
+        cases = row.get('cases') or {}
+        if not isinstance(cases, dict):
+            cases = {}
+        skipped.update(k for k, n in (cases.get('skipped') or {}).items() if n)
+        failed.update(k for k, n in (cases.get('failed') or {}).items() if n)
+        if (row.get('passed') is True or row.get('status') == 'passed') and row.get('required') is not False:
+            executed.update(k for k, n in (cases.get('executed') or {}).items()
+                            if isinstance(k, str) and type(n) is int and n > 0)
+            report = row.get('report') or {}
+            counts = report.get('counts') if isinstance(report, dict) else None
+            passed = report.get('passed_cases') if isinstance(report, dict) else None
+            if (isinstance(report, dict) and report.get('state') == 'parsed'
+                    and type(report.get('exitstatus')) is int and report['exitstatus'] == 0
+                    and report.get('passed_truncated') is False and report.get('truncated') is False
+                    and report.get('collect_errors') == 0 and isinstance(counts, dict)
+                    and all(type(counts.get(k)) is int and counts[k] == 0 for k in ('failed', 'errors', 'skipped'))
+                    and isinstance(passed, list) and all(isinstance(k, str) and k for k in passed)
+                    and type(counts.get('passed')) is int
+                    and len(passed) == len(set(passed)) == counts.get('passed')):
+                executed.update(passed)
+    for entry in record.get('test_change_decisions') or []:
+        if not isinstance(entry, dict) or entry.get('status') != 'approved':
+            continue
+        name = str(entry.get('path') or '')
+        try:
+            proposal = {k: entry[k] for k in fields}
+            digest = hashlib.sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest()
+            require(entry.get('id') == digest and proposal['goal'] == record.get('goal'), 'missing or inconsistent evidence')
+            require(proposal['reason'] and isinstance(proposal['cases'], list) and proposal['cases'], 'missing or inconsistent evidence')
+            if entry.get('approval') == 'operator reply':
+                require(str(entry.get('answer', '')).strip() == f'APPROVE TEST CHANGE {digest}', 'missing or inconsistent evidence')
+                require(f"Test change {digest} for {name}: {entry['answer']}" in ((record.get('requirements') or {}).get('operator_rulings') or []), 'missing or inconsistent evidence')
+            else:
+                require(entry.get('approval') == 'operator exact bytes', 'missing or inconsistent evidence')
+                require(proposal in (record.get('test_change_authorizations') or []), 'missing or inconsistent evidence')
+            bodies = {}
+            for label in ('original', 'delivered'):
+                aid = entry.get(label + '_artifact')
+                require(isinstance(aid, str) and re.fullmatch('[0-9a-f]{12}', aid), 'missing or inconsistent evidence')
+                path = Path(run_dir) / 'artifacts' / (aid + '.txt')
+                require(not path.parent.is_symlink() and (not path.is_symlink()) and path.is_file(), 'missing or inconsistent evidence')
+                bodies[label] = path.read_bytes()
+                key = 'original_sha256' if label == 'original' else 'current_sha256'
+                require(hashlib.sha256(bodies[label]).hexdigest() == proposal[key], 'missing or inconsistent evidence')
+            old = _approved_test_cases(name, bodies['original'])
+            new = _approved_test_cases(name, bodies['delivered'])
+            changes = {c['case']: c for c in proposal['cases']}
+            require(old and set(changes) <= set(old) and (len(changes) == len(proposal['cases'])), 'missing or inconsistent evidence')
+            if entry is not latest[name]:
+                history.append((digest, name, proposal['original_sha256']))
+                continue
+            require(last.get('passed') and last.get('source') == record.get('source_fingerprint'), 'missing or inconsistent evidence')
+            require(entry.get('checked_source') == record.get('source_fingerprint'), 'missing or inconsistent evidence')
+            if project is not None:
+                require(not name.startswith('/') and '..' not in Path(name).parts, 'missing or inconsistent evidence')
+                target = Path(project) / name
+                require(not target.is_symlink() and hashlib.sha256(target.read_bytes()).hexdigest() == proposal['current_sha256'], 'missing or inconsistent evidence')
+            wanted = set()
+            for case, body in old.items():
+                change = changes.get(case)
+                if change is None:
+                    require(new.get(case) == body, 'missing or inconsistent evidence')
+                    wanted.add((name, case))
+                elif change['action'] == 'retire':
+                    require(case not in new and change['replacements'] == [], 'missing or inconsistent evidence')
+                else:
+                    require(change['action'] == 'replace' and change['replacements'], 'missing or inconsistent evidence')
+                    wanted.update((r['path'], r['case']) for r in change['replacements'])
+            for path, case in wanted:
+                require(isinstance(path, str) and not path.startswith('/') and '..' not in Path(path).parts,
+                        'replacement test path is not project relative')
+                declared = new if path == name else None
+                if project is not None:
+                    target = Path(project)
+                    for part in Path(path).parts:
+                        target /= part
+                        require(not target.is_symlink(), 'replacement test path is a symlink')
+                    require(target.resolve().is_relative_to(Path(project).resolve()), 'replacement is outside project')
+                    declared = _approved_test_cases(path, target.read_bytes())
+                require(declared is not None and case in declared, 'replacement test declaration is not established')
+                js = not path.endswith('.py')
+                if js and project is not None:
+                    all_cases = _approval_project_tests(Path(project))
+                    require(sum(case in cases for cases in all_cases.values()) == 1,
+                            'JavaScript test name is ambiguous in the project')
+                def matches(key, p=path, c=case, js=js):
+                    if js:
+                        return key == f'{p}::{c}' or (key == c and project is not None)
+                    return key.split('::')[0] == p and key.split('::')[-1].split('[', 1)[0] == c
+                require(any((matches(k) for k in executed))
+                        and not any((matches(k) for k in skipped | failed)), 'missing or inconsistent evidence')
+            valid[digest] = name
+        except (AssertionError, KeyError, TypeError, ValueError, OSError, SyntaxError) as exc:
+            problems.append(f'authorized test change {name}: approval, bytes or current execution not established'
+                            + (f' ({exc})' if str(exc) else ''))
+    for digest, name, original in history:
+        current = latest[name]
+        if current.get('id') in valid and current.get('original_sha256') == original:
+            valid[digest] = name
+    return valid, problems
+
+
 def judge(run_dir, project=None) -> dict:
     run_dir = Path(run_dir)
     failed, unshown = [], []
@@ -1260,8 +1448,18 @@ def judge(run_dir, project=None) -> dict:
                                f"{str(receipt.get('reason'))[:120]}")
             elif receipt.get("required", True) and receipt.get("tests") == 0:
                 unshown.append(f"required check {receipt.get('id')} ran zero tests")
-    for run in record.get("original_test_runs") or []:
+    migrations, migration_problems = _test_change_approvals(record, run_dir, project)
+    unshown.extend(migration_problems)
+    original_runs = record.get("original_test_runs") or []
+    for index, run in enumerate(original_runs):
         if run.get("passed") is not True:
+            superseded = run.get('superseded_tests') or {}
+            approved = {name for name, rid in superseded.items() if migrations.get(rid) == name}
+            remaining = set(run.get('changed') or []) - approved
+            if approved and (not remaining or any(later.get('passed') is True
+                                                  and remaining <= set(later.get('changed') or [])
+                                                  for later in original_runs[index + 1:])):
+                continue
             unshown.append(f"task {run.get('task')}: the run-start tests did not pass "
                            f"({str(run.get('problem') or run.get('passed'))[:120]})")
     if not listed:
@@ -1327,6 +1525,8 @@ def judge(run_dir, project=None) -> dict:
     unshown.extend(_generated_test_problems(record))
     unshown.extend(_resolution_problems(record))
     for repair in record.get("test_repairs") or []:
+        if repair.get("path") in migrations.values():
+            continue
         # Kept case names and executed cases do not show a repaired test's
         # assertions were not weakened; only an independent review can.
         if repair.get("assertions_verified") is not True:
