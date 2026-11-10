@@ -35,11 +35,11 @@ def packet_session(tmp_path):
 def test_every_role_gets_scope_checklist_and_conventions_without_peer_history(packet_session):
     session, spec, seen = packet_session
     prompts = [session._lead_prompt(spec),
-               session._collaborator_prompt(spec, 'draft', 'openai:gpt-5.6-sol'),
-               session._consult_prompt(spec, 'question', 'openai:gpt-5.6-sol'),
-               session._verifier_prompt(spec, 'draft', 'openai:gpt-5.6-sol')]
+               session._collaborator_prompt(spec, 'draft', 'openai:sol'),
+               session._consult_prompt(spec, 'question', 'openai:sol'),
+               session._verifier_prompt(spec, 'draft', 'openai:sol')]
     task = TaskMemory(spec.description, session.store)
-    session._recheck_blocking(spec, [('openai:gpt-5.6-sol', 'BLOCKING: first-private'),
+    session._recheck_blocking(spec, [('openai:sol', 'BLOCKING: first-private'),
                                    ('claude:opus', 'BLOCKING: second-private')], 'revision', task)
     prompts += seen
     for prompt in prompts:

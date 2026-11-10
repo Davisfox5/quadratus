@@ -11,6 +11,8 @@ import json
 import math
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +20,76 @@ from pathlib import Path
 
 class RunBudgetExceeded(RuntimeError):
     """Terminal run control, deliberately not a recoverable ProviderError."""
+
+
+class _Deferred(Exception):
+    """Internal to ``RunBudget.reserve``: only calls in flight keep this one
+    from fitting beside the held finish."""
+
+    def __init__(self, behind):
+        super().__init__("deferred behind calls in flight")
+        self.behind = list(behind)
+
+
+class FinishReserved(RunBudgetExceeded):
+    """An ordinary call refused before it started because it would spend the
+    capacity held for the run's finishing judgments (``FINISH_STAGES``).
+
+    Not latched: nothing about the run's own allowance is exhausted, so the
+    finishing calls themselves may still start. Every later ordinary call is
+    refused the same way (spend and attempts only grow), and the work it
+    would have done stays undone and on the record: a refused review is not
+    a review, a refused recheck resolves nothing."""
+
+
+#: The run's finishing judgments, in order (Davis, 2026-10-16): the task
+#: cap's goal question, then the independent requirements audit when the
+#: goal answer permits it. Each is held one call and the operator's full
+#: per-call reserve from ordinary work; neither takes a smaller shape.
+FINISH_STAGES = ("goal", "audit")
+
+#: Unknown-usage causes kept per run, each once (bounded record).
+UNKNOWN_OPS_KEPT = 50
+
+#: The versioned wall-time policy for the finish (strategy reset, 2026-10-16):
+#: 120 s held for the cap's goal question and 120 s for the audit, inside the
+#: run's unchanged wall_seconds (RunLimits.finish_wall_seconds).
+FINISH_WALL_POLICY = "finish-wall/1"
+
+#: The finishing stage the current call belongs to (Session sets it around
+#: the goal question and the audit). None is ordinary work.
+finish_stage: ContextVar = ContextVar("finish_stage", default=None)
+
+
+#: How the current call is admitted against the held finish (Fleet sets it
+#: around each seat call): ``editing`` when the call holds the operator's
+#: write grant on the project, ``may_wait`` when no call it depends on is in
+#: flight (a worker served inside its lead's call never waits: the lead it
+#: would wait on is its own parent). Outside a Fleet call: neither.
+admission: ContextVar = ContextVar("budget_admission", default=None)
+
+
+@contextmanager
+def admitted_as(*, editing: bool, may_wait: bool):
+    """Mark the calls made inside as editing (or not) and as free to wait
+    for in-flight calls to settle (or not)."""
+    token = admission.set(dict(editing=bool(editing), may_wait=bool(may_wait)))
+    try:
+        yield
+    finally:
+        admission.reset(token)
+
+
+@contextmanager
+def finishing(stage):
+    """Mark the calls made inside as ``stage`` of the finish."""
+    if stage not in FINISH_STAGES:
+        raise ValueError(f"unknown finishing stage {stage!r}")
+    token = finish_stage.set(stage)
+    try:
+        yield
+    finally:
+        finish_stage.reset(token)
 
 
 @dataclass(frozen=True)
@@ -107,6 +179,12 @@ class RunLimits:
     #: reports more than this stops the run with ``call_token_ceiling``.
     #: None is no ceiling. It cannot cut a call short; it says which one.
     max_tokens_per_call: int | None = None
+    #: Wall seconds held for each pending finishing stage (``FINISH_STAGES``)
+    #: while it is pending, inside ``wall_seconds`` (policy
+    #: ``FINISH_WALL_POLICY``). An ordinary call's time is what remains after
+    #: every pending stage's hold; the goal question's leaves the audit's.
+    #: 0 holds no wall time.
+    finish_wall_seconds: float = 120.0
 
     def __post_init__(self):
         if self.max_cost_usd is not None and (
@@ -129,6 +207,9 @@ class RunLimits:
         if self.max_tokens_per_call is not None and (
                 type(self.max_tokens_per_call) is not int or self.max_tokens_per_call < 1):
             raise ValueError('max_tokens_per_call must be a positive integer or None')
+        if (isinstance(self.finish_wall_seconds, bool) or not isinstance(self.finish_wall_seconds, (int, float))
+                or not math.isfinite(self.finish_wall_seconds) or self.finish_wall_seconds < 0):
+            raise ValueError('finish_wall_seconds must be a finite non-negative number')
         if (isinstance(self.wall_seconds, bool)
                 or not isinstance(self.wall_seconds, (int, float))
                 or not math.isfinite(self.wall_seconds) or self.wall_seconds <= 0):
@@ -184,22 +265,73 @@ def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_s
 
 
 class RunBudget:
-    def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic):
+    def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic, carried=None, store=None):
+        """``carried`` is what earlier episodes of the same job spent
+        (quadratus.checkpoint.consumed): the allowance is the job's, so a
+        resumed episode starts from it and never from zero (step 2).
+        ``store`` is the run's durable job store (quadratus.jobstore): when
+        given, every mutation publishes the budget record as one generation
+        there before ``path`` is written as a compatibility export, and a
+        publication that fails stops the run as a failed write always did."""
         self.limits = limits
         self.path = Path(path) if path else None
+        self.store = store
         self._clock = clock
-        self._started = clock()
+        carried = dict(carried or {})
+        self._carried = carried
+        self._started = clock() - float(carried.get('elapsed_seconds') or 0.0)
         self._lock = threading.Lock()
-        self._calls = 0
+        #: Signalled whenever a call settles or a held stage is released: a
+        #: call deferred behind in-flight commitments re-evaluates then.
+        self._settled = threading.Condition(self._lock)
+        self._calls = int(carried.get('calls') or 0)
         self._active = {}
         self._rates = {r.model: r for r in limits.api_cost_rates}
-        self._api_cost = Decimal(0)
+        self._api_cost = Decimal(str(carried.get('api_cost_usd') or 0))
         self._unknown_cost = 0
-        self._input = self._output = self._unknown = 0
+        self._input = int(carried.get('input_tokens') or 0)
+        self._output = int(carried.get('output_tokens') or 0)
+        self._unknown = 0
+        #: Each operation whose settlement carried no usage (the latch's
+        #: cause), by its own identity: ids and names only, never text.
+        #: Carried for the record; the latch itself is this episode's.
+        self._unknown_ops = [dict(o) for o in (carried.get('unknown_usage_operations') or [])
+                             if isinstance(o, dict)][:UNKNOWN_OPS_KEPT]
         self._reason = ''
         self._responses = []
         self._oversized = []
         self._shaped = 0
+        #: Finishing stages still held from ordinary work, stages already
+        #: started, and every ordinary call refused to keep them.
+        self._finish_pending = []
+        self._finish_started = []
+        self._finish_released = []
+        self._finish_refusals = []
+        self._finish_deferrals = []
+        #: Finishing stages held again after they were started and consumed
+        #: (a repair admitted after a NOT MET final audit makes a second
+        #: audit necessary), bounded by the caller's allowance; and each
+        #: renewal refused at that bound.
+        self._finish_renewals = []
+        self._renewal_refusals = []
+        #: Same-seat judgment completions the job has claimed (carried), and
+        #: what each was for (session._complete_judgment).
+        self._judgments = int(carried.get('judgment_completions') or 0)
+        self._judgment_records = []
+        #: One operation record per reservation (delivery.OperationRecord
+        #: states): started while the ticket is active, settled with the
+        #: digest of what came back, uncertain never written here (a
+        #: resumed episode reads the started ones that never settled).
+        self._operations = {}
+        self._settled_operations = []
+        self._export_failures = 0
+        if self.path or self.store:
+            # Written before any call, so an episode that ends before its
+            # first call still leaves the job's record (and what it carried).
+            try:
+                self._persist()
+            except RunBudgetExceeded:
+                pass   # _reason is latched: the first reserve stops the run
 
     def _snapshot(self):
         return {
@@ -212,6 +344,7 @@ class RunBudget:
             'output_tokens': self._output,
             'reported_tokens': self._input + self._output,
             'unknown_usage_attempts': self._unknown, 'stop_reason': self._reason,
+            'unknown_usage_operations': [dict(o) for o in self._unknown_ops],
             'preserved_responses': list(self._responses),
             'elapsed_seconds': max(0, self._clock() - self._started),
             'token_boundary': 'post-return threshold; in-flight calls can overshoot',
@@ -220,6 +353,18 @@ class RunBudget:
                                  'max_tokens_per_call stops the run after it returns'),
             'oversized_calls': list(self._oversized),
             'shaped_reservations': self._shaped,
+            # Claimed before each call and never refunded: carried into a
+            # resumed episode, shared by parallel children (one budget).
+            'judgment_completions': self._judgments,
+            'judgment_completion_records': [dict(r) for r in self._judgment_records],
+            # Every reservation as an operation record: the started ones are
+            # the calls in flight; a settled one carries the digest of its
+            # reply. Published with the admission, before the call.
+            'operations': {'started': [dict(o) for o in self._operations.values()],
+                           'settled': [dict(o) for o in self._settled_operations]},
+            'export_failures': self._export_failures,
+            # Included in every total above: spent by earlier episodes.
+            'carried_from_earlier_episodes': dict(self._carried),
             'shape_boundary': ('a summary-only call whose CLI argv enforces one model turn reserves '
                                'min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS), a measured '
                                'allowance (largest saved close-out 24,006 reported tokens), not a hard '
@@ -227,6 +372,31 @@ class RunBudget:
                                'including a summary call on a CLI with no turn flag, reserves '
                                'reserve_tokens_per_call in full'),
             'input_boundary': 'normalized provider input includes cached input; do not add it again',
+            'finish_protection': {
+                'pending': list(self._finish_pending), 'started': list(self._finish_started),
+                'released': list(self._finish_released), 'refusals': list(self._finish_refusals),
+                'deferrals': [dict(d) for d in self._finish_deferrals],
+                'renewals': [dict(r) for r in self._finish_renewals],
+                'renewal_refusals': [dict(r) for r in self._renewal_refusals],
+                'wall_policy': FINISH_WALL_POLICY,
+                'wall_seconds_per_stage': self.limits.finish_wall_seconds,
+                'held_wall_seconds': self._held_wall(None),
+                'editing_exposure': self._editing_exposure(),
+                'boundary': ('an admission policy, not a guarantee about reported usage: while a finishing '
+                             'stage is pending, an ordinary call starts only if the attempts after it and '
+                             'the reported tokens left after its own exposure and the exposure of every '
+                             'call in flight still fit one full per-call reserve per pending stage. A call '
+                             'holding the write grant is exposed at the post-return per-call ceiling '
+                             '(max_tokens_per_call), the most it can report without stopping the run; '
+                             'any other call at its reserve, an estimate. With no ceiling an editing '
+                             'call is exposed at its reserve and the hold does not bound it. A call that '
+                             'only calls in flight keep out waits, unadmitted and without a ticket, until '
+                             'one settles, then is evaluated again; a call that cannot fit even with '
+                             'nothing in flight is refused, recorded, and latches nothing. Each pending '
+                             'stage also holds finish_wall_seconds of wall time: an ordinary call gets the '
+                             'time left after every pending hold and is refused when none is left; the goal '
+                             'question gets the time left after the audit\'s hold'),
+            },
             'wall_boundary': 'attempt timeout plus required external process supervisor',
         }
 
@@ -234,16 +404,54 @@ class RunBudget:
         with self._lock:
             return self._snapshot()
 
+    def persist(self):
+        """Write the budget record now and return the snapshot written: the
+        quiescent checkpoint and an interrupted run's record then carry the
+        same spend, time included (root review of aaa06a6: a record written
+        only at reserve and finish under-counted the time between calls)."""
+        with self._lock:
+            return self._write(latch=False)
+
     def _persist(self):
+        """Under the lock already: every caller holds it."""
+        self._write(latch=True)
+
+    def _write(self, *, latch: bool):
+        """The one write path. The job store's generation is the authority:
+        published first, with the active tickets as unsettled operations and
+        their reserves as unfinished, and with the raw receipt of a call that
+        just settled; a failed publication stops the run (latched when
+        ``latch``). The compatibility export at ``path`` is written after it;
+        an export failure is counted and never a reason to act on the export
+        (readers prefer the manifest)."""
+        snapshot = self._snapshot()
+        if self.store is not None:
+            updates = {'budget': snapshot}
+            receipt = getattr(self, '_pending_receipt', None)
+            if receipt is not None:
+                updates[receipt['opid'].lower().replace('o-', 'receipt-o-', 1)] = receipt
+            try:
+                self.store.publish(updates,
+                                   budget_unsettled=[o['opid'] for o in self._operations.values()],
+                                   reserved_unfinished=sum(a[2] or 0 for a in self._active.values()))
+                self._pending_receipt = None
+            except Exception as exc:  # noqa: BLE001 -- any store failure is a stop
+                if latch:
+                    self._reason = self._reason or 'budget_state_unavailable'
+                raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
         if self.path:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = self.path.with_suffix('.tmp')
-                temporary.write_text(json.dumps(self._snapshot(), indent=2) + '\n')
+                temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
                 temporary.replace(self.path)
             except OSError as exc:
-                self._reason = self._reason or 'budget_state_unavailable'
-                raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
+                if self.store is None:
+                    if latch:
+                        self._reason = self._reason or 'budget_state_unavailable'
+                    raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
+                self._export_failures += 1
+        return snapshot
 
     def _remaining(self):
         return self.limits.wall_seconds - (self._clock() - self._started)
@@ -255,8 +463,117 @@ class RunBudget:
             self._persist()
             raise RunBudgetExceeded(f'Run stopped: {self._reason}')
 
-    def reserve(self, *, transport="cli", price_key="", expected_tokens=None):
+    def protect_finish(self, stages):
+        """Hold ``stages`` (a subset of ``FINISH_STAGES``) from ordinary work.
+
+        Idempotent and never additive: the held set is replaced, so a resumed
+        episode that names the same pending stages holds them once, and a
+        stage this budget saw start is never held again unless a renewal
+        owes it (``_owed``). Holding grants nothing: the finishing calls
+        still meet every limit."""
+        with self._lock:
+            wanted = [s for s in FINISH_STAGES if s in set(stages or ())]
+            self._finish_pending = [s for s in wanted if self._owed(s)]
+            self._persist()
+
+    def _owed(self, stage) -> bool:
+        """Whether ``stage`` may be held now: never started in this budget,
+        or renewed (``renew_finish``) as many times as it has started, so
+        the renewed call has not started yet. A renewed stage that a later
+        ``protect_finish`` names stays held, with its reserved capacity
+        (root, independent reproduction on the recovered head: the filter
+        on historical starts dropped the renewed audit and freed its
+        capacity to an ordinary call); once the renewed call starts, the
+        starts outnumber the renewals and nothing re-holds it. Read from the
+        started history and the renewals as recorded: nothing is reset and
+        no allowance is added."""
+        starts = self._finish_started.count(stage)
+        renewed = sum(1 for r in self._finish_renewals if r.get('stage') == stage)
+        return starts <= renewed
+
+    def renew_finish(self, stage, *, why, limit):
+        """Hold ``stage`` again after this budget saw it start and settle: a
+        repair admitted after a NOT MET final audit makes a second audit
+        necessary, and ordinary work must keep its capacity from here on
+        (root's correction on 0c5c6f1, C1; addenda 6537675374 and
+        6538203622). Bounded by ``limit`` renewals of that stage in this
+        episode, the same allowance that bounds the DONE reopens that make
+        them necessary. Nothing spent is reset, the started history is
+        kept, and no allowance grows: the held capacity comes from what is
+        left. Returns True when the stage is pending after the call (held
+        now, or still pending from before); False when the bound refuses
+        it, which the caller treats as a refusal of the work."""
+        with self._lock:
+            if stage not in FINISH_STAGES:
+                raise ValueError(f'unknown finishing stage {stage!r}')
+            if stage in self._finish_pending:
+                return True
+            renewals = [r for r in self._finish_renewals if r.get('stage') == stage]
+            if len(renewals) >= max(0, int(limit)):
+                self._renewal_refusals.append(dict(stage=stage, why=str(why)[:300], at_attempt=self._calls,
+                                                   renewals=len(renewals), limit=int(limit)))
+                self._persist()
+                return False
+            self._finish_pending.append(stage)
+            self._finish_pending.sort(key=FINISH_STAGES.index)
+            self._finish_renewals.append(dict(stage=stage, why=str(why)[:300], at_attempt=self._calls,
+                                              renewal=len(renewals) + 1, previously_started=stage in self._finish_started))
+            self._settled.notify_all()
+            self._persist()
+            return True
+
+    def claim_judgment_completion(self, limit, record):
+        """Take one of the job's same-seat judgment completions, written to
+        the budget record before the call is made; False when ``limit`` is
+        spent. A claim is never refunded, so a completion that may have
+        started is never offered again, in this episode or a resumed one."""
+        with self._lock:
+            if self._judgments >= int(limit):
+                return False
+            self._judgments += 1
+            self._judgment_records.append(dict(record, claim=self._judgments, after_attempts=self._calls))
+            self._persist()
+            return True
+
+    def _held_wall(self, stage):
+        return len(self._held(stage)) * float(self.limits.finish_wall_seconds or 0)
+
+    def release_finish(self, stage, why):
+        """Stop holding ``stage``: the run will not ask it (recorded)."""
+        with self._lock:
+            if stage in self._finish_pending:
+                self._finish_pending.remove(stage)
+                self._finish_released.append(dict(stage=stage, why=str(why)[:300]))
+                self._settled.notify_all()
+                self._persist()
+
+    def finish_pending(self):
+        with self._lock:
+            return list(self._finish_pending)
+
+    def _editing_exposure(self):
+        """What the hold counts for a call holding the write grant: the
+        post-return per-call ceiling, never below the reserve; None when no
+        ceiling is set (then the reserve, an estimate, and said so)."""
+        ceiling = self.limits.max_tokens_per_call
+        if ceiling is None:
+            return None
+        return max(ceiling, self.limits.reserve_tokens_per_call)
+
+    def _held(self, stage):
+        """The pending stages a call of ``stage`` must leave room for: all of
+        them for ordinary work, only the later ones for a finishing call."""
+        if stage is None:
+            return list(self._finish_pending)
+        later = FINISH_STAGES[FINISH_STAGES.index(stage) + 1:]
+        return [s for s in self._finish_pending if s in later]
+
+    def reserve(self, *, transport="cli", price_key="", expected_tokens=None, identity=None):
         """Atomically authorize one attempt and return its ID and time remaining.
+
+        ``identity`` names what the attempt is (seat, task, role, prompt
+        digest); it is published on the operation record with the admission,
+        and the raw receipt settles against it.
 
         ``expected_tokens`` names a measured allowance for a call the transport
         holds to one model turn (a summary-only close-out on a CLI whose argv
@@ -265,47 +582,176 @@ class RunBudget:
         hard size bound. It never raises the reserve, and the post-return
         threshold is unchanged.
         """
+        shape = admission.get() or {}
+        deferral = None
         with self._lock:
+            while True:
+                try:
+                    ticket = self._admit(transport, price_key, expected_tokens, shape, deferral,
+                                         identity=identity)
+                except _Deferred as wait:
+                    if deferral is None:
+                        deferral = dict(attempt=self._calls + 1, editing=bool(shape.get('editing')),
+                                        behind=wait.behind, waited_seconds=0.0, outcome='waiting')
+                        self._finish_deferrals.append(deferral)
+                        self._persist()
+                    started = self._clock()
+                    # Unadmitted: no ticket, no attempt, nothing sent. The
+                    # wall still runs and is never reset by waiting.
+                    self._settled.wait(timeout=max(self._remaining(), 0.0))
+                    deferral['waited_seconds'] = round(deferral['waited_seconds'] + self._clock() - started, 3)
+                    continue
+                except RunBudgetExceeded as exc:
+                    if deferral is not None:
+                        deferral['outcome'] = ('refused' if isinstance(exc, FinishReserved)
+                                               else f'stopped: {self._reason or exc}')
+                        try:
+                            self._persist()
+                        except RunBudgetExceeded:
+                            pass
+                    raise
+                # The call's own time: what remains after the wall held for
+                # the finishing stages still pending after it.
+                return ticket, self._remaining() - self._held_wall(finish_stage.get())
+
+    def _admit(self, transport, price_key, expected_tokens, shape, deferral, identity=None):
+        """One admission decision, under the lock: a ticket, or a raise.
+        ``_Deferred`` means only calls in flight stand in the way."""
+        self._check()
+        if transport not in ('api', 'cli'):
+            raise ValueError('Unknown budget transport')
+        if self.limits.max_cost_usd is not None and transport == 'api' and price_key not in self._rates:
+            self._reason = 'api_price_unavailable'
             self._check()
-            if transport not in ('api', 'cli'):
-                raise ValueError('Unknown budget transport')
-            if self.limits.max_cost_usd is not None and transport == 'api' and price_key not in self._rates:
-                self._reason = 'api_price_unavailable'
-                self._check()
-            if self._calls >= self.limits.max_calls:
-                self._reason = 'call_limit'
-                self._check()
-            reserve = self.limits.reserve_tokens_per_call
-            if reserve and expected_tokens and 0 < expected_tokens < reserve:
-                reserve = int(expected_tokens)
-                self._shaped += 1
-            if reserve and self.limits.max_reported_tokens - (self._input + self._output) < reserve:
-                # Refused before the call: the budget left could not hold a
-                # call of the size the operator said to expect.
-                self._reason = 'reported_token_reserve'
-                self._check()
-            self._calls += 1
-            ticket = self._calls
-            self._active[ticket] = (transport, price_key)
-            try:
+        if self._calls >= self.limits.max_calls:
+            self._reason = 'call_limit'
+            self._check()
+        stage = finish_stage.get()
+        if stage is not None and stage not in FINISH_STAGES:
+            raise ValueError('Unknown finishing stage')
+        full = self.limits.reserve_tokens_per_call
+        reserve = full
+        shaped = bool(reserve and expected_tokens and 0 < expected_tokens < reserve and stage is None)
+        if shaped:
+            # A finishing judgment never takes the summary shape.
+            reserve = int(expected_tokens)
+        left = self.limits.max_reported_tokens - (self._input + self._output)
+        if reserve and left < reserve:
+            # Refused before the call: the budget left could not hold a
+            # call of the size the operator said to expect.
+            self._reason = 'reported_token_reserve'
+            self._check()
+        held = self._held(stage)
+        exposure = reserve
+        if shape.get('editing') and stage is None:
+            exposure = max(reserve, self._editing_exposure() or 0)
+        if held:
+            in_flight = sum(a[3] for a in self._active.values())
+            calls_after = self.limits.max_calls - (self._calls + 1)
+            tokens_after = left - exposure - in_flight
+            if calls_after < len(held) or (full and tokens_after < len(held) * full):
+                if (shape.get('may_wait') and self._active and calls_after >= len(held)
+                        and left - exposure >= len(held) * full):
+                    # Only commitments in flight keep it out, and they
+                    # settle: wait for one, unadmitted, then decide again.
+                    raise _Deferred(sorted(self._active))
+                # Ordinary work may not spend what the finish needs. Not
+                # latched: the finishing calls are still admissible.
+                self._finish_refusals.append(dict(
+                    attempt=self._calls + 1, stage=stage, held=list(held),
+                    calls_after=calls_after, tokens_after=tokens_after,
+                    held_tokens=len(held) * full, in_flight=len(self._active),
+                    exposure=exposure, in_flight_exposure=in_flight,
+                    deferred=deferral is not None))
                 self._persist()
-            except RunBudgetExceeded:
-                self._active.pop(ticket)
-                self._calls -= 1
-                raise
-            return ticket, self._remaining()
+                raise FinishReserved(
+                    f"Ordinary call refused to keep the finish: {', '.join(held)} "
+                    f"need{'s' if len(held) == 1 else ''} {len(held)} call(s)"
+                    + (f" and {len(held) * full:,} reported tokens" if full else "")
+                    + f"; {calls_after} call(s) and {max(tokens_after, 0):,} tokens would remain")
+            wall = self._held_wall(stage)
+            if wall and self._remaining() - wall <= 0:
+                # The time the pending finish needs: the call would have none
+                # of its own. Not latched, like the token and call holds.
+                self._finish_refusals.append(dict(
+                    attempt=self._calls + 1, stage=stage, held=list(held), held_wall_seconds=wall,
+                    wall_after=round(self._remaining() - wall, 3), in_flight=len(self._active)))
+                self._persist()
+                raise FinishReserved(
+                    f"Ordinary call refused to keep the finish: {', '.join(held)} "
+                    f"need{'s' if len(held) == 1 else ''} {wall:g} s of wall time; "
+                    f"{max(self._remaining(), 0):.1f} s remain")
+        started = stage is not None and stage in self._finish_pending
+        if started:
+            self._finish_pending.remove(stage)
+            self._finish_started.append(stage)
+        self._shaped += int(shaped)
+        self._calls += 1
+        ticket = self._calls
+        self._active[ticket] = (transport, price_key, reserve, exposure)
+        self._operations[ticket] = dict(
+            opid=f'O-{ticket}', purpose='model call', status='started', reservation=ticket,
+            transport=transport, stage=stage, editing=bool(shape.get('editing')), reserve=reserve,
+            exposure=exposure, shaped=shaped, started_at=round(max(0.0, self._clock() - self._started), 3),
+            identity=dict(identity or {}, price_key=price_key))
+        if deferral is not None:
+            # Recorded in the same write as the admission: a deferred call is
+            # admitted only if this record is durable (root on cf8cd2b).
+            deferral['outcome'] = 'admitted'
+            deferral['admitted_as'] = ticket
+        try:
+            self._persist()
+        except RunBudgetExceeded:
+            # Never invoked: no ticket, no attempt, nothing in flight, the stage
+            # still pending; the latched stop refuses every later call.
+            self._active.pop(ticket)
+            self._operations.pop(ticket, None)
+            self._calls -= 1
+            self._shaped -= int(shaped)
+            if started:
+                self._finish_started.remove(stage)
+                self._finish_pending.append(stage)
+                self._finish_pending.sort(key=FINISH_STAGES.index)
+            if deferral is not None:
+                deferral.pop('admitted_as', None)
+            raise
+        return ticket
 
     def finish(self, ticket, usage, *, native_children=(), reply='', price_key=None):
         """Account once, latch terminal conditions and reject further calls."""
         with self._lock:
             if ticket not in self._active:
                 raise RuntimeError('Unknown or already-finished budget reservation')
-            transport, reserved_key = self._active.pop(ticket)
+            transport, reserved_key, _, _ = self._active.pop(ticket)
+            operation = self._operations.pop(ticket, None)
+            receipt = None
+            if operation is not None:
+                import hashlib
+                operation.update(status='settled', result_digest=hashlib.sha256((reply or '').encode()).hexdigest(),
+                                 settled_at=round(max(0.0, self._clock() - self._started), 3),
+                                 receipt=f'receipt-o-{ticket}',
+                                 usage_known=isinstance(usage, dict) and all(
+                                     type(usage.get(k)) is int and usage.get(k) >= 0
+                                     for k in ('input_tokens', 'output_tokens')))
+                self._settled_operations.append(operation)
+                # The raw receipt: the exact reply, its usage and the
+                # identity it answered, published in the same generation as
+                # the settlement so neither exists without the other.
+                receipt = dict(opid=operation['opid'], reply=reply or '', usage=dict(usage) if isinstance(usage, dict)
+                               else None, identity=dict(operation.get('identity') or {}),
+                               native_children=list(native_children or ()), settled_at=operation['settled_at'])
+            self._settled.notify_all()
             usage = usage if isinstance(usage, dict) else {}
             counts = [usage.get('input_tokens'), usage.get('output_tokens')]
             if any(type(n) is not int or n < 0 for n in counts):
                 self._unknown += 1
                 self._reason = self._reason or 'unknown_usage'
+                if operation is not None and len(self._unknown_ops) < UNKNOWN_OPS_KEPT:
+                    who = operation.get('identity') or {}
+                    self._unknown_ops.append(dict(
+                        opid=operation['opid'], task=str(who.get('task') or ''), role=str(who.get('role') or ''),
+                        seat=str(who.get('seat') or ''), editing=bool(operation.get('editing')),
+                        settled_at=operation.get('settled_at')))
             else:
                 # Provider normalization already folds in cache where needed.
                 self._input += counts[0]
@@ -333,6 +779,7 @@ class RunBudget:
                 self._reason = self._reason or 'uncontrolled_native_delegation'
             if self._remaining() <= 0:
                 self._reason = self._reason or 'wall_deadline'
+            self._pending_receipt = receipt
             if self._reason and reply and self.path:
                 folder = self.path.parent / 'budget-responses'
                 try:

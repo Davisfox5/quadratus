@@ -11,8 +11,8 @@ from __future__ import annotations
 from quadratus.registry import MODE_ROSTERS, resolve
 from quadratus.task_kinds import (
     DIFFICULTY_LADDER,
-    MAX_TASK_LINES,
     ROUTING,
+    TASK_SIZE_GUIDE,
     Confidence,
     KindPolicy,
     TaskKind,
@@ -23,7 +23,7 @@ from quadratus.task_kinds import (
 
 TRUST = MODE_ROSTERS["adversarial"]["peers"]
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 GROK = "grok:default"
 GROK_WORKER = "grok:worker"
 FABLE = "claude:fable"
@@ -140,25 +140,22 @@ def test_the_ladder_spans_every_subscription():
     assert providers == set(VENDORS)
 
 
-def test_the_doubled_vendor_is_the_least_contended_one():
-    """Four rungs across three vendors means somebody takes two. It should be
-    the vendor that is not also carrying an orchestrator seat or the pinned
-    kinds."""
-    from collections import Counter
+def test_xai_holds_only_the_bounded_worker_rung():
+    """Since 2026-11-01 (operator directive) xAI's one rung is ROTE, called
+    as the restricted worker; SIMPLE names Sol, where the ladder's upward
+    rule already sent it whenever the Grok rung was out."""
+    from quadratus.registry import ORCHESTRATOR_CHAIN, resolve
 
-    from quadratus.registry import ORCHESTRATOR_CHAIN
-
-    counts = Counter(k.split(":")[0] for k in DIFFICULTY_LADDER.values())
-    doubled = [vendor for vendor, n in counts.items() if n > 1]
-    seat_vendors = {k.split(":")[0] for k in ORCHESTRATOR_CHAIN}
-    assert doubled == ["grok"]
-    assert "grok" not in seat_vendors
+    grok_rungs = {d: k for d, k in DIFFICULTY_LADDER.items() if k.startswith("grok:")}
+    assert grok_rungs == {"rote": GROK_WORKER} and resolve(GROK_WORKER).restricted
+    assert DIFFICULTY_LADDER["simple"] == SOL
+    assert "grok" not in {k.split(":")[0] for k in ORCHESTRATOR_CHAIN}
 
 
 def test_each_difficulty_maps_to_its_rung():
     assert route(TaskKind.BACKEND, default=GROK, difficulty="complex") == OPUS
     assert route(TaskKind.BACKEND, default=GROK, difficulty="standard") == SOL
-    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple") == GROK
+    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple") == SOL
     assert route(TaskKind.BACKEND, default=OPUS, difficulty="rote") == GROK_WORKER
 
 
@@ -229,8 +226,10 @@ def test_a_kind_with_no_hazards_carries_no_guidance():
     assert guidance_for(TaskKind.GENERAL) == []
 
 
-def test_decomposition_carries_the_size_ceiling():
-    assert str(MAX_TASK_LINES) in policy_for(TaskKind.DECOMPOSE).gate
+def test_decomposition_carries_the_size_guide_as_a_guide():
+    gate = policy_for(TaskKind.DECOMPOSE).gate
+    assert str(TASK_SIZE_GUIDE) in gate and "not a limit" in gate
+    assert "never split a requirement from the tests" in gate and "No task may" not in gate
 
 
 # -- the findings that outrank the per-model preferences ---------------------
@@ -258,3 +257,20 @@ def test_no_per_language_routing_exists():
 
 def test_a_bare_policy_rotates():
     assert not KindPolicy().pins_a_model
+
+
+def test_the_concurrency_gate_tells_an_invariant_proof_from_a_defect_fix():
+    """Root on 113f4e1 (6549956979 item 1): a task proving behaviour that
+    already holds was told to show a test failing before the fix, which
+    asks for an invented bug. Both cases still need a test that really
+    interleaves and runs in an approved check; only a demonstrated defect
+    needs the failing-first run, and an invariant proof that fails has
+    found the defect."""
+    gate = policy_for(TaskKind.CONCURRENCY).gate
+    assert "actually interleaves" in gate and "runs in an approved check" in gate
+    assert "Concurrent code is not accepted on inspection" in gate
+    assert "corrects a demonstrated defect" in gate and "failing on the code before the fix" in gate
+    assert "do not invent a defect" in gate and "pass on the delivered code" in gate
+    assert "adversarially" in gate and "that failure is the defect" in gate
+    assert "failing before the fix and passing after" not in gate.replace(
+        "failing on the code before the fix and passing after", ""), "no unconditional failing-first rule"

@@ -120,6 +120,7 @@ def test_stderr_tail_and_tool_failures_surface(tmp_path):
     rewrite_rows(run, blocked)
     notes = series.summarise_run(run)["cli_evidence"]
     assert len(notes) == 1
+    # The fixture rows are a recorded history: their legacy version key is kept as written.
     assert notes[0]["role"] == "lead" and notes[0]["model"] == "openai:gpt-5.6-sol"
     assert notes[0]["stderr_tail"].startswith("bwrap: No permissions")
     assert len(notes[0]["stderr_tail"]) == 200

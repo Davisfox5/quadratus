@@ -16,7 +16,7 @@ from quadratus.artifacts import ArtifactStore
 from quadratus.design_evidence import MAX_SELECTOR_CHARS, MAX_STEPS
 from quadratus.scope import TaskScope
 from quadratus.session import Session, SessionConfig, TaskSpec
-from quadratus.task_kinds import MAX_TASK_LINES
+from quadratus.task_kinds import TASK_SIZE_GUIDE
 from quadratus.taskmeta import MAX_PREFACE_LINES, MAX_REQUEST_PREFACE_LINES
 
 
@@ -49,9 +49,12 @@ def test_the_scope_line_form_and_path_rules_are_stated():
     assert "no description after its labels is refused" in text
     for rule in ("backslashes", "leading ~", ".quadratus path", "surrounding whitespace"):
         assert rule in text
-    assert f"no greater than {MAX_TASK_LINES}" in text and '"max_lines": ' + str(MAX_TASK_LINES) in text
+    assert '"max_lines": ' + str(TASK_SIZE_GUIDE) in text and "never squeezed" in text
+    assert "no greater than" not in text and "an overrun stops the task" not in text
     assert "one correction" in text and "not DONE, ASK or FETCH" in text
-    assert "20,000 bytes" in text
+    # The size bound is the role packet's, stated per run (cycle21,
+    # tests/lifecycle/test_cycle21_dispatch_intake.py); no fixed number here.
+    assert "20,000 bytes" not in text
 
 
 def test_the_capture_rules_are_stated_from_the_validator_constants():
@@ -88,10 +91,12 @@ def test_the_ask_limit_and_decide_scope_are_stated():
 def test_the_parallel_request_carries_the_configured_limit_and_the_exclusions(tmp_path):
     text = S._parallel_request(4)
     assert "two to 4 tasks" in text
-    assert "RESOLVES a finding, and a task the harness captures, are named alone" in text
+    assert ("RESOLVES a finding, a task that CONTINUES an unfinished one, and a task the harness "
+            "captures, are named alone") in text
     assert "its first block runs alone" in text
     import inspect
-    assert "_parallel_request(self.config.max_parallel_tasks)" in inspect.getsource(S.Session.next_task)
+    # next_task wraps one planning decision (cycle03); the prompt is built in it.
+    assert "_parallel_request(self.config.max_parallel_tasks)" in inspect.getsource(S.Session._next_task_decision)
 
 
 def test_the_first_decomposition_asks_for_covers_with_the_requirements(tmp_path):
@@ -228,8 +233,8 @@ def test_the_json_verdict_instruction_states_every_structured_rule(tmp_path):
     prompts = []
     session._invoke_model = lambda key, prompt, **kw: prompts.append(prompt) or "not json"
     spec = TaskSpec("t1", "harden it", scope=TaskScope(["a.py"], acceptance=["no secrets logged"]))
-    session._verify_security_json(spec, TaskMemory("t1", "openai:gpt-5.6-sol", session.store), "draft",
-                                  "openai:gpt-5.6-sol", "claude:opus")
+    session._verify_security_json(spec, TaskMemory("t1", "openai:sol", session.store), "draft",
+                                  "openai:sol", "claude:opus")
     text = prompts[0]
     for rule in ("This JSON replaces the BLOCKING: lines", "echoes the hash below exactly", "copied verbatim",
                  "A reject must name a blocking finding or a failed criterion", "no duplicate keys",
@@ -283,3 +288,16 @@ def test_the_bounded_editor_role_does_not_offer_lead_channels():
         else inspect.getsource(runtime)
     assert "may be returned alone before the patch" not in source
     assert "cannot hire, consult or fetch" in source
+
+
+def test_the_early_rejection_scenario_is_stated_in_the_scenario_grammar_the_parser_reads(tmp_path):
+    """Cycle18 (PR73 6742757517, 5b): guidance only, in the planner's
+    scenario declaration, worded in the keys the proof parser accepts."""
+    from quadratus.scope import PROOF_KEYS
+    rule = S._EARLY_REJECTION_SCENARIO_RULE
+    assert rule in S._SCOPE_REQUEST
+    for key in ("operation", "expect"):
+        assert key in PROOF_KEYS and f"whose {key} is" in rule
+    with_writes = _orchestrator_prompt(tmp_path / "w", project=str(tmp_path), allow_writes=True)
+    assert rule in with_writes
+    assert rule not in _orchestrator_prompt(tmp_path / "r"), "no scenarios are declared without a SCOPE request"

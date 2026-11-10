@@ -100,7 +100,7 @@ def test_an_unparsed_request_fails_the_task_and_keeps_the_reply(tmp_path, monkey
         if call.task == "t1":
             return "I need more context.\nWORKER {not json"
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_then_continue_then_done, lead=lead),
                    files=FILES, max_tasks=3)
     t1 = _task(replay, "t1")
@@ -116,7 +116,7 @@ def test_a_lead_that_never_stops_asking_fails_its_task_only(tmp_path, monkeypatc
         if call.task == "t1":
             return "CONSULT Sol: what should add return?"
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_then_continue_then_done, lead=lead,
                                                  consultant=lambda call, replay: "The sum."),
                    files=FILES, max_tasks=3)
@@ -148,6 +148,7 @@ def test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop(tmp_path, 
 
 
 def test_a_cap_then_a_failure_is_the_same_breaker(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})

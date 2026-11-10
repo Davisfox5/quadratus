@@ -38,6 +38,8 @@ PRECEDENCE = ("refusal", "security", "integrity", "denial", "operator", "budget"
 #: handoff, never a product repair.
 _EXCEPTION_CLASS = {
     "ProviderRefusal": "refusal",
+    #: A tool call a headless CLI could not get approved (cycle15).
+    "PermissionBlocked": "denial",
     "PartialWorkStopped": "integrity",
     "PartialWorkSuspected": "integrity",
     "DependencyTreeChanged": "integrity",
@@ -160,10 +162,16 @@ class TaskOutcome:
     #: {"from", "to", "reason", "failure"}. The contract's owner never changes;
     #: the last "to" is the owner actually invoked.
     owner_changes: List[dict] = field(default_factory=list)
+    #: The role packet allowance the task ran under when it was not the
+    #: policy's default (Davis, 2026-11-09): the lead's request and
+    #: justification, the orchestrator's grant and reason, and the sizes.
+    packet_allowance: Optional[dict] = None
     #: Places where a legacy applicability decision disagreed with the
     #: contract's derived requirement. Recorded, never acted on (phase 2).
     mismatches: List[str] = field(default_factory=list)
-    #: Legacy mirror: "closed", "turn_limited", "failed" or "stopped:<Exception>".
+    #: Legacy mirror: "closed", "turn_limited", "failed", "not_started" (a
+    #: serial task whose first editing call was refused to keep the finish,
+    #: nothing written) or "stopped:<Exception>".
     #: Temporary; removed in phase 3 when history reads outcomes.
     closed_as: str = "open"
 
@@ -473,6 +481,11 @@ def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] =
         tid = task.task_id
         if task.closed_as == "open":
             blockers.append(f"{tid} never closed")
+            continue
+        if task.closed_as == "not_started":
+            # Its first editing call was refused to keep the finish: the
+            # work the plan asked for was never done (session._settle_not_started).
+            blockers.append(f"{tid} NOT RUN: not started, its first editing call refused to keep the finish")
             continue
         blockers += [f"record {m}" for m in missing_facts(task)]
         blockers += [f"{tid}.{fact.kind}: {fact.detail[:120]}" for fact in task.active if fact.terminal]

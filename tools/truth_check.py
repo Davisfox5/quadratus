@@ -170,28 +170,1038 @@ def _executed_keys(check):
     return keys
 
 
-def _not_run_cleared(entry, checks) -> bool:
-    """Cleared only by a later passing check that names the execution: every
-    reported file as the file of an executed case, or every skipped case as
-    executed. A command line that mentions a path, or the engine's own
-    discharge mark, is not execution (Codex review of 47bfbfd)."""
-    if entry.get("kind") == "skipped":
-        wanted = list(entry.get("cases") or [])
-        files = []
-    else:
-        wanted = []
-        files = [p[2:] if p.startswith("./") else p for p in _PATH.findall(entry.get("item") or "")]
-    if not wanted and not files:
+_CASE_ID = re.compile(r"^[\w./-]+\.\w+::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])?$")
+_SCENARIO_ID = re.compile(r"^P[0-9]+$")
+#: Read whole, as the engine reads them: a bracketed parameter kept entire
+#: and an id that must end at a boundary, so a prefix never stands in.
+_ID_END = r"(?=$|[\s,;)\]\"'`]|[.:](?:\s|$))"
+_EXPLICIT_ID = re.compile(r"([\w./-]+\.[A-Za-z]\w*::(?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]]*\])?)" + _ID_END)
+_NAMED_CASE = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^\]]*\])?)(?![\w/\[:-])"
+                         r"(?!\.(?!\s|$))")
+_SCENARIO_REF = re.compile(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])")
+_SOURCE_FILE = re.compile(r"\.(?:py|pyi|js|mjs|cjs|ts|tsx|jsx|rb|go|rs|java|kt|cs|php|sh|feature)$")
+
+
+def _claim(item: str) -> str:
+    """What a NOT RUN item claims, read from its whole text: ``identity``
+    (a scenario, an explicit id, a class or bare case name, or anything
+    shaped like a case id the reader cannot take whole), ``paths`` (only
+    path operands) or ``none``. The claim, never a stored kind, decides
+    which route may clear it."""
+    if _SCENARIO_REF.search(item) or _EXPLICIT_ID.search(item):
+        return "identity"
+    rest = _EXPLICIT_ID.sub(" ", item)
+    if _NAMED_CASE.search(rest) or "::" in rest or "[" in rest or "]" in rest:
+        return "identity"
+    if any(re.search(r"\btest\w*", tok) for tok in rest.split() if "/" not in tok and not _SOURCE_FILE.search(tok)):
+        return "identity"
+    return "paths" if _PATH.findall(item) else "none"
+
+
+def _row_item(row) -> str:
+    """The item a typed row is about, as the engine wrote it: the entry's
+    item, else the row's behavior (an older row shape). One reading for
+    every consumer, so the row a verdict is judged on is the row the
+    clearance compares (workflow refutation of this batch: the two halves
+    read the record with different keys and a behavior-only row was
+    cleared on identity alone)."""
+    return str((row.get("entry") or {}).get("item") or row.get("behavior") or "")
+
+
+def _typed_not_run_rows(entry, record) -> list:
+    """Every live typed obligation the engine registered for this NOT RUN
+    entry (kind ``not_run``, same task and item, not superseded), read
+    from the saved record; [] for a record written before typed rows
+    existed. The engine can hold more than one live row per (task, item)
+    (an item re-reported after its first row read ran), and a decoy row is
+    a forgery shape, so every live row is returned and a clearance must
+    hold against each. The engine supersedes acceptance rows only, never a
+    ``not_run`` one, so a superseded ``not_run`` row is not engine-written:
+    when every matching row reads superseded they still bind (fail closed),
+    rather than leaving the entry to its route's identity alone."""
+    rows = [row for row in (record or {}).get("evidence_obligations") or []
+            if isinstance(row, dict) and row.get("kind") == "not_run"
+            and str(row.get("task")) == str(entry.get("task")) and _row_item(row) == str(entry.get("item") or "")]
+    live = [row for row in rows if not row.get("superseded_by")]
+    return live or rows
+
+
+def _revision(value):
+    """An integer requirement revision, or None for anything else (a
+    bool, a null, text): a revision the record does not state as a whole
+    number is no revision."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _revisions_match(typed, check) -> bool:
+    """Whether a check's recorded requirement revisions are exactly the
+    revisions the typed row is bound to (root's correction on 0c5c6f1, E1):
+    the check must record a revision map, the row must bind at least one
+    whole-number revision, every bound id must be in the map with a
+    whole-number revision, and each must be equal. Read from the record
+    alone; a map the check does not carry, a row that binds none, a null
+    or non-integer revision on either side never matches (no guessed
+    approval from missing metadata; a null that equalled a missing map
+    entry was the refuted shape)."""
+    revisions = check.get("requirements") if isinstance(check.get("requirements"), dict) else None
+    refs = list(typed.get("requirements") or ())
+    if revisions is None or not refs:
         return False
+    # Every bound reference must be an (id, revision) pair: a malformed one
+    # refuses the match rather than being dropped while _met_over_debt still
+    # reads its id (root's independent review of the recovered head:
+    # [["R1", 1], ["R2"]] matched a check carrying R1 alone).
+    if any(not (isinstance(r, (list, tuple)) and len(r) == 2) for r in refs):
+        return False
+    for ref in refs:
+        rid, rev = str(ref[0]), _revision(ref[1])
+        if rev is None or rid not in revisions or _revision(revisions[rid]) != rev:
+            return False
+    return True
+
+
+def _bound_to_row(entry, check, record) -> bool:
+    """The typed-row half of a NOT RUN clearance: where the record carries
+    the entry's typed row(s), the clearing check must have run under
+    exactly the requirement revisions each live row binds, read from the
+    check's own map (a check that carries none, or a row bound to none,
+    never matches: missing metadata is no approval). A record with no
+    typed row for the entry (one written before typed rows existed, or a
+    bare record) is read by its route's identity alone, as before:
+    nothing is guessed either way."""
+    rows = _typed_not_run_rows(entry, record)
+    if not rows:
+        return True
+    return all(_revisions_match(row, check) for row in rows)
+
+
+def _identity_ok(entry, check, record) -> bool:
+    """The check-level identity every route demands: a passing check on
+    the final source, under the entry's own gate and environment where the
+    entry records them (a record without them is held to the source
+    alone), and under the requirement revisions the entry's typed row binds
+    (``_bound_to_row``). The per-command facts are read per row (``_row_ok``)."""
+    if not (check.get("passed") and check.get("source") and check.get("source") == record.get("source_fingerprint")):
+        return False
+    for key in ("gate", "environment"):
+        if key in entry and (not isinstance(entry.get(key), str) or check.get(key) != entry[key]):
+            return False
+    return _bound_to_row(entry, check, record)
+
+
+def _paths_cleared(entry, checks, record) -> bool:
+    """A path-only item: cleared by a later check of the right identity
+    whose command names every path as a whole operand and whose own
+    passed cases include a case of each file. Never an identity claim."""
+    if _claim(str(entry.get("item") or "")) != "paths":
+        return False
+    import shlex
+    files = [p[2:] if p.startswith("./") else p for p in _PATH.findall(str(entry.get("item") or ""))]
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None or not files:
+        return False
+    for check in checks[start:]:
+        if not _identity_ok(entry, check, record):
+            continue
+        for row in _rows(check):
+            if not _row_ok(row):
+                continue
+            try:
+                operands = [a[2:] if a.startswith("./") else a for a in shlex.split(row["command"])]
+            except ValueError:
+                continue
+            modules = _unittest_modules(_python_args(row["command"]))
+            if modules:
+                # A whole module is its file, as the engine reads it.
+                operands = [m.replace(".", "/") + ".py" for m in modules]
+            passed_files = {c.split("::", 1)[0] for c in _row_passed_cases(row) if "::" in c}
+            if all(f in operands and f in passed_files for f in files):
+                return True
+    return False
+
+
+def _filtered(command: str) -> bool:
+    """Whether a command line selects cases: ``-k``, a pytest ``-m`` marker
+    (not the interpreter's ``-m module``), ``--deselect``, ``--lf``,
+    ``--ff``, or a ``::`` node-id operand (a selection inside a file, as
+    the engine reads it). Unparsable is filtered (fail closed)."""
+    import shlex
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return True
+    if not argv:
+        return True
+    rest = argv[1:]
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", Path(argv[0]).name) and rest[:1] == ["-m"]:
+        rest = rest[2:]
+    return any(a in ("-k", "-m", "--deselect", "--lf", "--ff") or a.startswith(("-k", "--deselect=")) or "::" in a
+               for a in rest)
+
+
+def _rows(check):
+    """A check's command records in one shape, read from the record alone:
+    with ``receipts`` (a gate suite: the aggregate command is the literal
+    ``gate suite`` and the aggregate report is None), one row per receipt
+    with its own status, required flag, command, cwd, selection, report
+    and count; without them (a single-command gate), one row from the
+    check's own fields. Nothing is fabricated across the two shapes."""
+    receipts = check.get("receipts") or []
+    if receipts:
+        rows = []
+        for r in receipts:
+            if not isinstance(r, dict):
+                continue
+            selection = str(r.get("selection") or "")
+            if r.get("id") in ("check", "original-tests:check") and check.get("selection"):
+                selection = "; ".join(x for x in (selection, str(check.get("selection"))) if x)
+            rows.append(dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
+                             command=str(r.get("command") or ""), cwd=str(r.get("cwd") or check.get("command_cwd") or "."),
+                             selection=selection, report=r.get("report"), tests=r.get("tests"),
+                             interpreter=r.get("interpreter")))
+        return rows
+    return [dict(id="check", passed=bool(check.get("passed")), required=True,
+                 command=str(check.get("command") or ""), cwd=str(check.get("command_cwd") or "."),
+                 selection=str(check.get("selection") or ""), report=check.get("report"), tests=None,
+                 interpreter=check.get("interpreter"))]
+
+
+def _row_ok(row) -> bool:
+    """One command record that shows a whole successful run: passed,
+    required, no selection, no argv filter, from the project root, a parsed
+    report whose counts are known with zero skipped, zero failed, zero
+    errors and at least one passed. Unknown is a refusal (fail closed)."""
+    if not (row["passed"] and row["required"]) or row["selection"] or _filtered(row["command"]):
+        return False
+    if row["cwd"] not in ("", "."):
+        return False
+    report = row["report"]
+    if not isinstance(report, dict) or report.get("state") != "parsed":
+        # A report that did not parse (or says it is invalid, truncated or
+        # anything but parsed) carries no counts and no cases the reader
+        # may credit, whatever fields it still holds.
+        return False
+    counts = report.get("counts")
+    if not isinstance(counts, dict):
+        return False
+    for key in ("skipped", "failed", "errors", "passed"):
+        if not isinstance(counts.get(key), int) or isinstance(counts.get(key), bool):
+            return False
+    if counts["skipped"] or counts["failed"] or counts["errors"] or counts["passed"] <= 0:
+        return False
+    return bool(report.get("passed_cases"))
+
+
+def _row_passed_cases(row):
+    """The case ids a row's own report shows passed, each with and without
+    its parametrization."""
+    out = set()
+    report = row["report"]
+    for name in (report.get("passed_cases") or ()) if isinstance(report, dict) else ():
+        name = str(name)
+        out.add(name)
+        out.add(name.split("[", 1)[0])
+    return out
+
+
+def _bound_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item the engine bound to scenario or case identities
+    (``binding``, ``cases``), validated here from the saved record alone and
+    never from an engine mark: the binding's provenance (a declared scenario
+    of the same task whose acceptance row binds exactly these cases, or an
+    item that itself names each bound case), then a later check on the final
+    source, under the entry's own gate and environment, required and passed
+    from the project root with no filter and no skip, whose own report shows
+    every bound case passed. Anything missing, malformed, mismatched or on
+    another identity is not cleared (Codex's consumer inventory, 2026-10-29)."""
+    binding = entry.get("binding")
+    cases = entry.get("cases")
+    if not isinstance(binding, dict) or not isinstance(cases, list) or not cases:
+        return False
+    if not all(isinstance(c, str) and _CASE_ID.match(c) for c in cases):
+        return False
+    task, item = entry.get("task"), str(entry.get("item") or "")
+    kind = binding.get("kind")
+    if kind not in ("scenario", "case", "mixed"):
+        return False
+    named = re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", item)
+    declared = [x.strip() for x in str(binding.get("scenario") or "").split(",") if x.strip()]
+    if kind == "case" and (named or declared):
+        return False
+    if kind != "case" and (not named or sorted(set(named)) != sorted(set(declared))):
+        return False
+    from_scenarios = set()
+    for scenario in dict.fromkeys(named):
+        if not _SCENARIO_ID.match(scenario):
+            return False
+        rows = [o for o in record.get("evidence_obligations") or []
+                if isinstance(o, dict) and o.get("task") == task and o.get("kind") == "acceptance"
+                and o.get("proof_id") == scenario and not o.get("superseded_by")]
+        if not rows or not rows[-1].get("cases"):
+            return False
+        from_scenarios |= {str(c) for c in rows[-1]["cases"]}
+    if not from_scenarios <= set(cases):
+        return False
+    # Every bound case outside the scenarios' own must be spelled by the item
+    # itself (an explicit id, Class.test, Class::test or a bare name with the
+    # same parameter), so a forged case list never rides a genuine item.
+    for case in set(cases) - from_scenarios:
+        base, bracket, param = case.partition("[")
+        file, _, tail = base.partition("::")
+        parts = tail.split("::")
+        suffix = bracket + param
+        forms = [case, f"{parts[-1]}{suffix}"]
+        if len(parts) >= 2:
+            forms += [f"{parts[-2]}.{parts[-1]}{suffix}", f"{parts[-2]}::{parts[-1]}{suffix}"]
+        if not any(re.search(r"(?<![\w/.:-])" + re.escape(form) + r"(?![\w/.:-])", item) for form in forms):
+            return False
+    if kind == "scenario" and set(cases) != from_scenarios:
+        return False
+    # And the other direction: every case the item itself spells (an explicit
+    # id, Class.test, Class::test or a bare name) must be among the bound
+    # cases, so a mixed claim bound on one grammar alone is rejected.
+    stripped = _EXPLICIT_ID.sub(" ", item)
+    spelled = [m.group(1) for m in _EXPLICIT_ID.finditer(item)]
+    spelled += [m.group(1) for m in _NAMED_CASE.finditer(stripped)]
+    if kind == "scenario" and spelled:
+        return False
+    for name in spelled:
+        base, bracket, param = name.partition("[")
+        suffix = bracket + param
+        if "::" in base and ("/" in base.split("::")[0] or "." in base.split("::")[0]):
+            if name not in cases:
+                return False
+            continue
+        tail = "::".join(base.replace("::", ".").split("."))
+        if not any(c == f"{c.split('::')[0]}::{tail}{suffix}" or c.endswith(f"::{tail}{suffix}") for c in cases):
+            return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    if not isinstance(gate, str) or not isinstance(environment, str):
+        return False
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
+            continue
+        for row in _rows(check):
+            if _row_ok(row) and set(cases) <= _row_passed_cases(row):
+                return True
+    return False
+
+
+def _restated_judgment_revisions_ok(entry, judged, record) -> bool:
+    """Whether a restated item's saved judgment names the complete
+    requirement identity the item's typed rows bind (root review of
+    bae3830, item 3): a revision map whose keys are exactly each live row's
+    requirement ids and whose values are the same whole-number revisions
+    (``_revision``: a bool, null or text is no revision), every row pair
+    well formed. An empty, partial or extra map, or one any row disagrees
+    with, is no judgment of this item. A record written before typed rows
+    existed has none to compare: its judgment is held to source and cases
+    alone, by intent (older-record compatibility)."""
+    rows = _typed_not_run_rows(entry, record)
+    if not rows:
+        return True
+    revisions = judged.get("revisions")
+    if not isinstance(revisions, dict) or not revisions:
+        return False
+    stated = {}
+    for rid, rev in revisions.items():
+        if _revision(rev) is None:
+            return False
+        stated[str(rid)] = rev
+    for row in rows:
+        pairs = row.get("requirements")
+        if not isinstance(pairs, list) or not pairs:
+            return False
+        bound = {}
+        for pair in pairs:
+            if not (isinstance(pair, (list, tuple)) and len(pair) == 2) or _revision(pair[1]) is None:
+                return False
+            bound[str(pair[0])] = pair[1]
+        if bound != stated:
+            return False
+    return True
+
+
+def _restated_executed(entry, checks, record) -> bool:
+    """The execution half of a restated item's clearance, from the saved
+    record alone: its exact cases, a valid restatement by an owner, and a
+    later passing check on the final source, under the entry's own gate and
+    environment, bound to its typed rows, that shows every case passed.
+    Says nothing about the judgment."""
+    restatements = entry.get("restatements")
+    cases = entry.get("cases")
+    binding = entry.get("binding")
+    if not isinstance(restatements, list) or not restatements or not isinstance(restatements[-1], dict):
+        return False
+    last = restatements[-1]
+    if not isinstance(cases, list) or not cases or not all(isinstance(c, str) and _CASE_ID.match(c) for c in cases):
+        return False
+    if list(last.get("cases") or []) != cases or not isinstance(binding, dict) or binding.get("kind") != "case" \
+            or list(binding.get("cases") or []) != cases:
+        return False
+    owners = {entry.get("task")} | {t.get("task") for t in entry.get("taken_over_by") or [] if isinstance(t, dict)}
+    if last.get("task") not in owners or not isinstance(last.get("author"), str) or not last.get("author"):
+        return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if not isinstance(gate, str) or not isinstance(environment, str) or start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
+            continue
+        for row in _rows(check):
+            if _row_ok(row) and set(cases) <= _row_passed_cases(row):
+                return True
+    return False
+
+
+def _restated_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item its owning lead restated as exact cases (cycle02),
+    validated from the saved record alone: the item was executed as
+    restated (``_restated_executed``), and an independent seat (not the
+    restatement's author) judged exactly those cases SUFFICIENT on the final
+    source and under the complete requirement identity the item's typed
+    rows bind (``_restated_judgment_revisions_ok``). Anything missing or
+    mismatched is not cleared."""
+    if not _restated_executed(entry, checks, record):
+        return False
+    last = entry["restatements"][-1]
+    cases = entry["cases"]
+    judged = entry.get("restated_judgment")
+    if not (isinstance(judged, dict) and judged.get("verdict") == "sufficient"
+            and list(judged.get("cases") or []) == cases and isinstance(judged.get("by"), str)
+            and judged.get("by") and judged.get("by") != last.get("author")):
+        return False
+    # The judgment is of the final source and the requirement revisions the
+    # item's typed row binds; a judgment of an earlier source or revision is
+    # stale, whatever passed since (root review of 7a141e3, item 1).
+    if not (judged.get("source") and judged.get("source") == record.get("source_fingerprint")):
+        return False
+    return _restated_judgment_revisions_ok(entry, judged, record)
+
+
+def _historical_paths_cleared(entry, checks, record) -> bool:
+    """A path-only record written before bindings existed (no ``binding``
+    key): the older reading, a later passing check whose executed case
+    names (its printed ``cases.executed`` or a row's own parsed report)
+    include a case of every reported file, held to the final source
+    wherever the check records one. An identity claim never comes here."""
+    files = [p[2:] if p.startswith("./") else p for p in _PATH.findall(str(entry.get("item") or ""))]
     start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else 0
+    if not files:
+        return False
     for check in checks[start:]:
         if not check.get("passed"):
             continue
+        if check.get("source") and check.get("source") != record.get("source_fingerprint"):
+            continue
+        if any(key in entry and check.get(key) != entry.get(key) for key in ("gate", "environment")):
+            continue
+        # A typed row the record carries binds this older entry too
+        # (workflow refutation of this batch: stripping the binding key
+        # turned the mismatched-revision record into verified).
+        if not _bound_to_row(entry, check, record):
+            continue
         keys = _executed_keys(check)
+        for row in _rows(check):
+            if _row_ok(row):
+                keys |= _row_passed_cases(row)
         ran_files = {k.split("::", 1)[0] for k in keys if "::" in k}
-        if all(c in keys for c in wanted) and all(f in ran_files for f in files):
+        if all(f in ran_files for f in files):
             return True
     return False
+
+
+_PYTHON_HEAD = re.compile(r"python(\d+(\.\d+)*)?")
+_UNITTEST_FLAGS = frozenset({"-v", "--verbose", "-q", "--quiet", "-b", "--buffer", "-f", "--failfast", "-c", "--catch"})
+_MODULE_NAME = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
+
+
+def _python_args(command: str):
+    """The arguments after a python interpreter head, the engine's report
+    token left out; None for anything else."""
+    import shlex
+    try:
+        argv = shlex.split(str(command or ""))
+    except ValueError:
+        return None
+    if not argv or not _PYTHON_HEAD.fullmatch(Path(argv[0]).name):
+        return None
+    return [a for a in argv[1:] if not a.startswith("--quadratus-report")]
+
+
+def _unittest_modules(args):
+    """The modules of a plain ``-m unittest <module>...`` argument list (the
+    runner's plain flags and the engine's report token aside), or None for
+    any other form: the same reading the engine makes."""
+    if not isinstance(args, list) or args[:2] != ["-m", "unittest"]:
+        return None
+    modules = []
+    for token in args[2:]:
+        if token in _UNITTEST_FLAGS or token.startswith("--quadratus-report"):
+            continue
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            return None
+        modules.append(token)
+    return modules or None
+
+
+_CLASS_ID = re.compile(r"^[\w./-]+\.py::(?!test)[A-Za-z_]\w*$")
+_CLASS_MEMBER = re.compile(r"^test\w*(?:\[.*\])?$")
+def _report_consistent_command(command: str, passed_cases) -> bool:
+    """The engine's cheap command/report consistency rule, read here from
+    the command text and the report alone: a runner with a producer
+    (pytest, or ``python -m unittest``), and no dotted unittest operand
+    extending the module of a case the report names. Never membership."""
+    import shlex
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    head = Path(argv[0]).name
+    is_python = bool(_PYTHON_HEAD.fullmatch(head))
+    if head in ("pytest", "py.test") or (is_python and argv[1:3] == ["-m", "pytest"]):
+        return True
+    if not (is_python and argv[1:3] == ["-m", "unittest"]):
+        return False
+    modules = {str(c).split("::", 1)[0][:-3].replace("/", ".") for c in passed_cases or ()
+               if str(c).split("::", 1)[0].endswith(".py")}
+    for token in argv[3:]:
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            continue
+        if any(token.startswith(module + ".") for module in modules):
+            return False
+    return True
+
+
+def _class_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item the engine bound to a whole test class
+    (``binding.kind == "class"``), validated from the saved record alone
+    and never from an engine mark: the item is exactly ``file::Class``
+    and the binding names that file and class; the declared floor is a
+    non-empty list of case ids directly under the class and the typed
+    cases are exactly that floor (a subset is a forgery); then a later
+    check on the final source under the entry's own gate and environment
+    holds a whole successful row from the project root whose parsed report
+    says its passed list and its class list are complete, attests this
+    class's membership (``classes``: the ``test*`` members the runner read
+    from the live class, inherited and dynamic ones included, written by
+    the harness producer inside the run), and whose passed cases include
+    every attested member and every declared one directly under the
+    class. Nothing is read from the command text, a configuration file or
+    the module source: a run whose report attests nothing for the class,
+    or whose attestation names a member the passed list lacks (a
+    ``load_tests`` hook or a configured pattern left it out), never clears
+    it, nor does a truncated report, a case under a longer class name, a
+    nested class or a missing declared method (class-claim batch and root's
+    review of 93536ab, 2026-10-30)."""
+    binding = entry.get("binding")
+    if not isinstance(binding, dict) or binding.get("kind") != "class":
+        return False
+    file, class_name = binding.get("file"), binding.get("class_name")
+    if not isinstance(file, str) or not isinstance(class_name, str) or not file or not class_name:
+        return False
+    class_id = f"{file}::{class_name}"
+    if not _CLASS_ID.match(class_id) or binding.get("class_id") != class_id:
+        return False
+    item = str(entry.get("item") or "").strip()
+    if (item[2:] if item.startswith("./") else item) != class_id:
+        return False
+    declared, cases = binding.get("declared"), entry.get("cases")
+    if not isinstance(declared, list) or not declared or not isinstance(cases, list) or sorted(cases) != sorted(declared):
+        return False
+    prefix = class_id + "::"
+    for case in declared:
+        if not isinstance(case, str) or not case.startswith(prefix) or not _CASE_ID.match(case):
+            return False
+        member = case[len(prefix):]
+        if "::" in member or "[" in member or not _CLASS_MEMBER.match(member):
+            return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    if not isinstance(gate, str) or not isinstance(environment, str):
+        return False
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
+            continue
+        for row in _rows(check):
+            if not _row_ok(row) or row["report"].get("passed_truncated") is not False:
+                continue
+            if row["report"].get("classes_truncated") is not False or not isinstance(row["report"].get("classes"), list):
+                continue
+            if not _report_consistent_command(row["command"], row["report"].get("passed_cases") or ()):
+                continue
+            attested = [c for c in row["report"]["classes"]
+                        if isinstance(c, dict) and c.get("id") == class_id and isinstance(c.get("members"), list)]
+            if len(attested) != 1 or not attested[0]["members"] or not all(
+                    isinstance(m, str) and _CLASS_MEMBER.match(m) and "[" not in m for m in attested[0]["members"]):
+                continue
+            shown = set()
+            for name in row["report"].get("passed_cases") or ():
+                name = str(name)
+                if not name.startswith(prefix):
+                    continue
+                member = name[len(prefix):]
+                if "::" in member or not _CLASS_MEMBER.match(member):
+                    continue
+                shown.add(f"{prefix}{member.split('[', 1)[0]}")
+            members = {f"{prefix}{m}" for m in attested[0]["members"]}
+            if shown and members <= shown and set(declared) <= shown:
+                return True
+    return False
+
+
+def _command_not_run_cleared(entry, checks, record) -> bool:
+    """A NOT RUN item the engine bound to a ``python -m unittest <module>``
+    command (``binding.kind == "command"``), validated from the saved record
+    alone: the item is that command (plain runner flags only), every named
+    module is one of the binding's files, every bound case is a case id in
+    one of those files, and a later check on the final source under the
+    entry's own gate and environment holds a whole successful row of exactly
+    that command, from the project root, whose own report shows every bound
+    case passed. The same cases under another command never clear it
+    (completion workflow, 2026-10-30)."""
+    binding = entry.get("binding")
+    cases = entry.get("cases")
+    if not isinstance(binding, dict) or binding.get("kind") != "command":
+        return False
+    if not isinstance(cases, list) or not cases or not all(isinstance(c, str) and _CASE_ID.match(c) for c in cases):
+        return False
+    files = binding.get("files")
+    if not isinstance(files, list) or not files or not all(isinstance(f, str) and f.endswith(".py") for f in files):
+        return False
+    args = _python_args(str(entry.get("item") or ""))
+    declared = _python_args(str(binding.get("command") or ""))
+    if args is None or declared is None or args != declared:
+        return False
+    modules = _unittest_modules(args)
+    if not modules or sorted(m.replace(".", "/") + ".py" for m in modules) != sorted(files):
+        return False
+    # The interpreter the engine resolved when it bound the item; a row
+    # matches only with the same resolved interpreter recorded when it ran
+    # (never a basename).
+    interpreter = binding.get("interpreter")
+    if not isinstance(interpreter, str) or not interpreter:
+        return False
+    if any(c.split("::", 1)[0] not in files for c in cases):
+        return False
+    gate, environment = entry.get("gate"), entry.get("environment")
+    if not isinstance(gate, str) or not isinstance(environment, str):
+        return False
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else None
+    if start is None:
+        return False
+    current = record.get("source_fingerprint")
+    for check in checks[start:]:
+        if not (check.get("passed") and check.get("source") and check.get("source") == current
+                and check.get("gate") == gate and check.get("environment") == environment
+                and _bound_to_row(entry, check, record)):
+            continue
+        for row in _rows(check):
+            if (_row_ok(row) and _python_args(row["command"]) == declared and row.get("interpreter") == interpreter
+                    and set(cases) <= _row_passed_cases(row)):
+                return True
+    return False
+
+
+def _not_run_cleared(entry, checks, record=None) -> bool:
+    """Cleared only by a later passing check that names the execution. The
+    item's whole text decides the route (``_claim``): an identity claim (a
+    scenario, an explicit id, a class or bare case name, or anything shaped
+    like a case id) is cleared only by ``_bound_not_run_cleared`` on the
+    engine's saved binding, so a record with the key missing, empty or
+    reading ``paths`` never rides file execution (root's controls on
+    d88d8c0); a path-only item is cleared by ``_paths_cleared`` with every
+    identity check; a skip fact by the older executed-case route. A command
+    line that mentions a path, or the engine's own discharge mark, is not
+    execution (Codex review of 47bfbfd)."""
+    if entry.get("kind") != "skipped":
+        if record is None:
+            return False
+        binding = entry.get("binding")
+        if entry.get("restatements") is not None:
+            # A restated item (cycle02) is cleared only by its own route.
+            return _restated_not_run_cleared(entry, checks, record)
+        if isinstance(binding, dict) and binding.get("kind") == "command":
+            # The engine's command binding is validated whole by its own
+            # route; the item's text alone never decides it.
+            return _command_not_run_cleared(entry, checks, record)
+        if isinstance(binding, dict) and binding.get("kind") == "class":
+            return _class_not_run_cleared(entry, checks, record)
+        claim = _claim(str(entry.get("item") or ""))
+        if claim == "identity":
+            if not isinstance(binding, dict) or binding.get("kind") not in ("scenario", "case", "mixed"):
+                return False
+            return _bound_not_run_cleared(entry, checks, record)
+        if claim == "paths":
+            if "binding" not in entry:
+                return _historical_paths_cleared(entry, checks, record)
+            if not (isinstance(binding, dict) and binding.get("kind") == "paths"):
+                return False
+            return _paths_cleared(entry, checks, record)
+        return False
+    if entry.get("kind") == "skipped":
+        return _skipped_cleared(entry, checks, record)
+    return False
+
+
+def _typed_skip_row(entry, record):
+    """The typed obligation the engine registered for this skip fact (kind
+    ``skipped``, same task and item), read from the saved record; None for
+    a record written before typed rows existed."""
+    for row in (record or {}).get("evidence_obligations") or []:
+        if (isinstance(row, dict) and row.get("kind") == "skipped" and row.get("task") == entry.get("task")
+                and (row.get("entry") or {}).get("item") == entry.get("item")):
+            return row
+    return None
+
+
+def _count(value):
+    """A counter the record may be trusted with: a non-negative int that is
+    not a bool; anything else is None (malformed)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _skipped_tally(row):
+    """The skipped total the runner itself reported for a command, read
+    independently of the case record: the parsed report's integer count,
+    else the runner's own summary line (node ``# skipped N`` or
+    ``ℹ skipped N``, pytest ``N skipped``, unittest ``skipped=N``), else
+    None (unknown, never zero)."""
+    report = row.get("report")
+    if isinstance(report, dict) and report.get("state") == "parsed":
+        counts = report.get("counts")
+        return _count(counts.get("skipped")) if isinstance(counts, dict) else None
+    output = str(row.get("output") or "")
+    node = re.findall(r"(?m)^(?:#|\u2139)\s*(?:skipped|skip) (\d+)\s*$", output)
+    if node:
+        return int(node[-1])
+    for line in reversed(output.splitlines()):
+        found = re.findall(r"\b(\d+) (passed|failed|skipped|deselected|errors?)\b", line)
+        if found:
+            return sum(int(n) for n, kind in found if kind == "skipped")
+    unittest = re.findall(r"skipped=(\d+)", output)
+    return int(unittest[-1]) if unittest else None
+
+
+def _complete_cases(row):
+    """The command's whole case record, or None when it cannot be trusted
+    to be complete: ``cases`` must be a mapping with ``executed`` and
+    ``skipped`` mappings whose every counter is a non-negative int (no
+    bool, no negative, no text), and the skipped counters must account
+    for exactly the skipped total the runner reported (an unknown total
+    is unknown). A record that lists fewer skips than the runner counted
+    cannot show that a named case was not among the missing ones (root's
+    control on 5ce8ebc: ``cases.skipped`` emptied under a raw ``skipped
+    1`` cleared the fact)."""
+    cases = row.get("cases")
+    if not isinstance(cases, dict):
+        return None
+    executed, skipped = cases.get("executed"), cases.get("skipped")
+    if not isinstance(executed, dict) or not isinstance(skipped, dict):
+        return None
+    other = cases.get("other") if cases.get("other") is not None else {}
+    if not isinstance(other, dict):
+        return None
+    for mapping in (executed, skipped, other):
+        for name, value in mapping.items():
+            if not isinstance(name, str) or _count(value) is None:
+                return None
+    tally = _skipped_tally(row)
+    if tally is None or sum(skipped.values()) != tally:
+        return None
+    return dict(executed=executed, skipped=skipped)
+
+
+def _counts_executed(cases, wanted) -> bool:
+    """Every wanted name executed at least as many times as the fact names
+    it (the validated record's counters, never a set of keys) and skipped
+    zero times; the record itself must be complete (``_complete_cases``)."""
+    from collections import Counter
+    if cases is None:
+        return False
+    for name, times in Counter(wanted).items():
+        if cases["executed"].get(name, 0) < times or cases["skipped"].get(name, 0) > 0:
+            return False
+    return True
+
+
+def _skipped_cleared(entry, checks, record) -> bool:
+    """A skip fact (the harness's own record of a required command that
+    passed with named cases skipped) is cleared only by a later run of the
+    same command (the receipt id the fact names) that passed, was required,
+    selected nothing, and whose own printed case counters show every named
+    case executed as many times as the fact names it and skipped zero
+    times. A fact with a typed row in the record is held to that row's
+    current identity, read independently: the check must record the final
+    source, the row's gate and environment, and the row's requirement
+    revisions. A record written before typed rows existed (no typed row,
+    no identity keys on the entry) is the separate historical rule: the
+    same command's counters on the final source wherever the check
+    records one. Another command's run, a name printed elsewhere, a fact
+    without names, or a count the record does not carry never clears
+    (root's review of e1d9c01: counters were read as sets and the typed
+    identity was not enforced)."""
+    wanted = list(entry.get("cases") or [])
+    receipt_id = entry.get("receipt")
+    if not wanted or not receipt_id:
+        return False
+    typed = _typed_skip_row(entry, record)
+    historical = typed is None and "gate" not in entry and "environment" not in entry
+    if typed is None and not historical:
+        return False
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else 0
+    final = (record or {}).get("source_fingerprint")
+    for check in checks[start:]:
+        if not check.get("passed"):
+            continue
+        if historical:
+            if check.get("source") and final and check.get("source") != final:
+                continue
+        else:
+            if not (final and check.get("source") == final):
+                continue
+            if check.get("gate") != typed.get("gate") or check.get("environment") != typed.get("environment"):
+                continue
+            if not _revisions_match(typed, check):
+                continue
+        receipts = check.get("receipts") or []
+        if receipts:
+            rows = [r for r in receipts if isinstance(r, dict) and r.get("id") == receipt_id]
+        else:
+            rows = [dict(status="passed" if check.get("passed") else "failed", required=True,
+                         command=check.get("command"), selection=check.get("selection"),
+                         cases=check.get("cases"), output=check.get("output"),
+                         report=check.get("report"))] if receipt_id == "check" else []
+        for row in rows:
+            if row.get("status") != "passed" or not row.get("required", True) or row.get("selection"):
+                continue
+            if _filtered(str(row.get("command") or "")):
+                continue
+            if _counts_executed(_complete_cases(row), wanted):
+                return True
+    return False
+
+
+_SUFFICIENCY_CITE = re.compile(r"\b(O\d+): sufficiency (?:insufficient|unjudged)\b")
+
+
+def _row_purpose(row: dict) -> str:
+    """The purpose an obligation row is read with, from the record alone
+    and fail closed (the same reading as the engine's, written here
+    independently): ``execution`` for a not_run or skipped row with no
+    contradicting declaration, a test modality and no scenario;
+    ``acceptance`` for an acceptance row; ``unknown`` otherwise."""
+    kind = row.get("kind")
+    derived = "execution" if kind in ("not_run", "skipped") else "acceptance" if kind == "acceptance" else None
+    declared = row.get("purpose")
+    if derived is None or declared not in (None, "", derived):
+        return "unknown"
+    if derived == "execution" and ((row.get("modality") or "test") != "test" or row.get("proof_id")
+                                   or row.get("scenario")):
+        return "unknown"
+    return derived
+
+
+def _debt_lowering(entry: dict, record: dict) -> list:
+    """The ids of rows that are not acceptance evidence (execution debt the
+    record shows executed, or a row of unknown purpose) whose judged
+    sufficiency ``entry`` (a final-audit lowering) cites; [] otherwise. A
+    sufficiency judgment is asked of acceptance evidence only, so such a
+    citation is a record disagreeing with itself."""
+    reason = str(entry.get("reason") or "")
+    if not reason.startswith("acceptance predicate:"):
+        return []
+    rows = {str(o.get("oid")): o for o in record.get("evidence_obligations") or [] if isinstance(o, dict)}
+    cited = []
+    for oid in _SUFFICIENCY_CITE.findall(reason):
+        row = rows.get(oid)
+        if row is None or row.get("superseded_by"):
+            continue
+        purpose = _row_purpose(row)
+        if purpose == "unknown" or (purpose == "execution" and row.get("execution") == "ran" and row.get("runner")):
+            cited.append(oid)
+    return cited
+
+
+def _met_over_debt(record: dict) -> list:
+    """Requirements the record marks met while an execution-debt row bound
+    to them is not shown executed, or a row of unknown purpose binds them:
+    each is a line for the reader, never a verdict change upward."""
+    status = (record.get("requirements") or {}).get("status") or {}
+    entries = {(str(e.get("task")), str(e.get("item"))): e
+               for e in record.get("unexecuted_acceptance") or [] if isinstance(e, dict)}
+    checks = record.get("checks") or []
+    out = []
+    for row in record.get("evidence_obligations") or []:
+        if not isinstance(row, dict) or row.get("superseded_by"):
+            continue
+        purpose = _row_purpose(row)
+        if purpose == "acceptance":
+            continue
+        entry = entries.get((str(row.get("task")), _row_item(row)))
+        backed = entry is not None
+        # The engine's ``execution == ran`` is its own claim; the record's
+        # independent reconstruction (the entry's clearance under the row's
+        # revisions, gate, environment and the final source) must agree.
+        cleared = backed and _not_run_cleared(entry, checks, record)
+        for ref in row.get("requirements") or []:
+            rid = ref[0] if isinstance(ref, (list, tuple)) and ref else None
+            if rid is None or not str(status.get(rid, "")).lower().startswith("met"):
+                continue
+            if purpose == "unknown":
+                out.append(f"{rid} is met while obligation {row.get('oid')} has an unknown purpose")
+            elif row.get("execution") != "ran" or not row.get("runner"):
+                out.append(f"{rid} is met while execution-debt row {row.get('oid')} reads execution "
+                           f"{row.get('execution')}" + ("" if row.get("runner") else " with no authorized runner"))
+            elif not backed:
+                # The engine writes an unexecuted_acceptance entry for every
+                # NOT RUN or skip row; a typed row that reads ran with no
+                # entry behind it is the engine's word alone.
+                out.append(f"{rid} is met on execution-debt row {row.get('oid')} that no NOT RUN or skip entry backs")
+            elif not cleared:
+                out.append(f"{rid} is met on execution-debt row {row.get('oid')} that reads ran while the record "
+                           "does not show its entry cleared under the row's requirement revisions, gate, "
+                           "environment and the final source")
+    return out
+
+
+def _inspection_problems(record: dict, project=None) -> list:
+    """Readings an editing call reported it could not make (the engine's
+    ``inspection_gaps``): each is shown only by an attestation of exactly
+    those files. With ``project`` the attested digests are compared with the
+    files as they are; without it the attestation must have been made on
+    the final source. Unattested, stale or unreadable is a line for the
+    reader, never a pass (Davis, 2026-11-06, turn-tracking-01 O10)."""
+    import hashlib
+    out = []
+    for gap in record.get("inspection_gaps") or []:
+        if not isinstance(gap, dict):
+            out.append("an inspection gap record is not an object")
+            continue
+        files = [str(f) for f in gap.get("files") or []]
+        where = f"task {gap.get('task')}: reading of {', '.join(files) or 'no files'}"
+        attested = gap.get("attested")
+        if not isinstance(attested, dict) or not files:
+            out.append(f"{where} is not attested by a completed review's READ judgment")
+            continue
+        digests = attested.get("files") if isinstance(attested.get("files"), dict) else {}
+        if sorted(digests) != sorted(files) or any(not isinstance(v, str) or not v for v in digests.values()):
+            out.append(f"{where}: the attestation does not name exactly these files")
+            continue
+        # The same authority the engine requires (root review of a3de6d6,
+        # item 6): a named seat's READ judgment in a completed review or
+        # recheck, on a hand-off of exactly these bytes to that seat and
+        # stage. Anything missing is unverified, never a pass.
+        by, stage, judgment = attested.get("by"), attested.get("stage"), attested.get("judgment")
+        handed = [h for h in gap.get("handed") or [] if isinstance(h, dict)]
+        if not (isinstance(by, str) and by and stage in ("review", "recheck")
+                and isinstance(judgment, str) and judgment.strip()):
+            out.append(f"{where}: the attestation names no reviewer, stage or READ judgment")
+            continue
+        if not any(h.get("peer") == by and h.get("stage") == stage and h.get("consumed") is True
+                   and h.get("files") == digests and h.get("source") == attested.get("source")
+                   and (attested.get("task") is None or h.get("task") == attested.get("task"))
+                   for h in handed):
+            out.append(f"{where}: no hand-off of these bytes to {by}'s {stage} is on record")
+            continue
+        if project:
+            for rel in files:
+                try:
+                    now = hashlib.sha256((Path(project) / rel).read_bytes()).hexdigest()
+                except OSError:
+                    now = None
+                if now != digests[rel]:
+                    out.append(f"{where}: {rel} is not the file the review attested")
+                    break
+        elif not attested.get("source") or attested.get("source") != record.get("source_fingerprint"):
+            out.append(f"{where} was attested on another source than the final one")
+    return out
+
+
+def _resolution_problems(record: dict) -> list:
+    """RESOLVES settlements the saved record shows were not established
+    (cycle01, PR73 6702597850), each named by what happened, so a recheck
+    never asked is never read as the owner's adverse verdict and neither is
+    read as settled: ``adverse`` (the owner rechecked and did not accept),
+    ``owed`` (capped, refused or no verdict), ``unavailable`` and
+    ``not_attempted``. A row a later owner settlement established
+    (``settled_later_by``) with every named finding closed is not listed."""
+    out = []
+    closed = {f.get("fid") for f in record.get("review_findings") or [] if isinstance(f, dict) and f.get("closed")}
+    for row in record.get("review_resolutions") or []:
+        if not isinstance(row, dict):
+            out.append("a review resolution record is not an object")
+            continue
+        outcomes = row.get("outcomes") if isinstance(row.get("outcomes"), dict) else {}
+        for fid in row.get("named") or []:
+            if fid in closed:
+                continue
+            what = str(outcomes.get(fid) or "not recorded")
+            out.append(f"task {row.get('task')}: RESOLVES {fid} not established ({what}"
+                       + (f"; {str(row.get('refused'))[:120]}" if row.get("refused") else "") + ")")
+    return out
+
+
+def _generated_test_problems(record: dict) -> list:
+    """Generated tests a gate repair changed or removed (the engine's
+    ``generated_test_repairs``): shown only by the task's original reviewer
+    calling the change intact. Weakened, unreviewed or malformed is a line
+    for the reader, never a pass (PR73 6693873055)."""
+    out = []
+    for entry in record.get("generated_test_repairs") or []:
+        if not isinstance(entry, dict):
+            out.append("a generated test repair record is not an object")
+            continue
+        where = f"task {entry.get('task')}: the repair {'removed' if entry.get('removed') else 'changed'} " \
+                f"generated test {entry.get('path')}"
+        verdict = entry.get("verdict")
+        judgment = entry.get("judgment") if isinstance(entry.get("judgment"), dict) else {}
+        reviewer = entry.get("reviewer")
+        line = re.match(r"^[ \t]*(?:[-*+][ \t]+)?TEST[ \t]+(INTACT|WEAKENED)[ \t]+(\S+)[ \t]+-[ \t]*([^\n]*)$",
+                        str(judgment.get("line") or "").strip("\n"), re.IGNORECASE)
+        verified = (verdict == "intact" and entry.get("complete") is True and isinstance(reviewer, str) and reviewer
+                    and judgment.get("by") == reviewer and isinstance(judgment.get("reply_artifact"), str)
+                    and bool(judgment.get("reply_artifact")) and line is not None
+                    and line.group(1).upper() == "INTACT" and line.group(2).strip("`") == entry.get("path")
+                    and bool(line.group(3).strip())
+                    and judgment.get("after_sha256") == entry.get("after_sha256")
+                    and judgment.get("before_sha256") == entry.get("before_sha256")
+                    and (entry.get("removed") or isinstance(entry.get("after_sha256"), str)))
+        if verified:
+            continue
+        if verdict == "weakened" and entry.get("finding_id"):
+            # The ordinary correction route reached its end: the finding its
+            # reviewer raised is closed, last judged RESOLVED (or retracted by
+            # a reasoned INVALIDATED) by that author.
+            finding = next((f for f in record.get("review_findings") or []
+                            if isinstance(f, dict) and f.get("fid") == entry["finding_id"]), None)
+            history = (finding or {}).get("history") or []
+            last = history[-1] if history and isinstance(history[-1], dict) else {}
+            if finding and finding.get("closed") and last.get("state") in ("resolved", "invalidated") \
+                    and last.get("author") == reviewer:
+                continue
+        out.append(f"{where}; " + ("its reviewer found it weakened" if verdict == "weakened"
+                                    else "an intact verdict without the reviewer's own judgment of these bytes"
+                                    if verdict == "intact" else "no reviewer called it intact")
+                   + (f" ({str(entry.get('why'))[:120]})" if entry.get("why") else ""))
+    return out
 
 
 def _approved_test_cases(name, data, *, unique=True):
@@ -381,7 +1391,6 @@ def _test_change_approvals(record, run_dir, project):
     return valid, problems
 
 
-
 def judge(run_dir, project=None) -> dict:
     run_dir = Path(run_dir)
     failed, unshown = [], []
@@ -457,6 +1466,21 @@ def judge(run_dir, project=None) -> dict:
         unshown.append("no requirements were recorded, so none was audited")
     audits = [a for a in requirements.get("audits") or [] if isinstance(a.get("verdicts"), dict)]
     final = audits[-1]["verdicts"] if audits else {}
+    for entry in (audits[-1].get("lowered") or []) if audits else []:
+        # A requirement lowered on the sufficiency of an execution-debt row
+        # that the record shows executed (quality/completion batch,
+        # 2026-10-31; P12 lowered six METs this way). Read from the record
+        # alone: a NOT RUN or skipped row asks whether its cases ran, and a
+        # row that ran holds nothing, so a lowering that cites its judged
+        # sufficiency is a record disagreeing with itself. Reported as
+        # unshown, never as the requirement met: a forged or mixed row (a
+        # declared purpose other than execution, or a modality that is not a
+        # test run) is not read this way.
+        for oid in _debt_lowering(entry, record):
+            unshown.append(f"{entry.get('requirement')}: lowered on the judged sufficiency of {oid}, a row that is "
+                           "not acceptance evidence (execution debt the record shows executed, or an unknown "
+                           "purpose); the lowering is not established")
+    unshown.extend(_met_over_debt(record))
     for rid in sorted(listed):
         verdict = final.get(rid) or {}
         if not str(status.get(rid, "")).lower().startswith("met"):
@@ -465,9 +1489,41 @@ def judge(run_dir, project=None) -> dict:
         elif verdict.get("met") is not True:
             unshown.append(f"{rid} has no independent audit verdict of met")
     for entry in record.get("unexecuted_acceptance") or []:
-        if not _not_run_cleared(entry, checks):
+        cleared = _not_run_cleared(entry, checks, record)
+        if entry.get("kind") != "skipped" and entry.get("discharge_display") == "bound/1":
+            # The engine's own display of the discharge must say what this
+            # reading of the record says (completion workflow, 2026-10-30);
+            # a mark the record does not justify, or a clearance the display
+            # does not show, is a record that disagrees with itself.
+            marked = entry.get("discharged_at") is not None
+            if marked != cleared:
+                unshown.append(f"task {entry.get('task')}: the engine shows the NOT RUN item "
+                               f"{'discharged' if marked else 'not discharged'} but the record "
+                               f"{'does not show it ran' if marked else 'shows it ran'}: {str(entry.get('item'))[:120]}")
+            state = entry.get("discharge_state")
+            if state is not None and entry.get("restatements") is not None:
+                # A restated item's state names the half that holds: run and
+                # judged, run and awaiting judgment, or neither (root review
+                # of bae3830, item 1). An older record has no state.
+                expected = ("discharged" if cleared else "executed, awaiting judgment"
+                            if _restated_executed(entry, checks, record) else "standing")
+                if state != expected:
+                    unshown.append(f"task {entry.get('task')}: the engine shows the restated NOT RUN item as "
+                                   f"{str(state)[:40]} but the record shows {expected}: "
+                                   f"{str(entry.get('item'))[:120]}")
+        if not cleared and entry.get("kind") != "skipped" and entry.get("restatements") is not None \
+                and _restated_executed(entry, checks, record):
+            # Ran as restated, but no independent judgment holds for the
+            # final source and requirement identity: executed, awaiting
+            # judgment, never "did not run" (root review of bae3830, item 1).
+            unshown.append(f"task {entry.get('task')} reported NOT RUN; its restated cases ran but no independent "
+                           f"SUFFICIENT judgment holds for the final source: {str(entry.get('item'))[:120]}")
+        elif not cleared:
             unshown.append(f"task {entry.get('task')} reported NOT RUN and no later check shows it ran: "
                            f"{str(entry.get('item'))[:120]}")
+    unshown.extend(_inspection_problems(record, project))
+    unshown.extend(_generated_test_problems(record))
+    unshown.extend(_resolution_problems(record))
     for repair in record.get("test_repairs") or []:
         if repair.get("path") in migrations.values():
             continue
@@ -478,7 +1534,11 @@ def judge(run_dir, project=None) -> dict:
                            "checked against the kept original")
     for finding in record.get("findings") or []:
         if finding.get("status") == "open":
-            unshown.append(f"open finding {finding.get('id')}: {str(finding.get('message'))[:120]}")
+            unsettled = finding.get("unsettled") if isinstance(finding.get("unsettled"), dict) else {}
+            # The engine's persisted cause (cycle04) is shown beside the
+            # finding; it never settles it: a passing check is not acceptance.
+            unshown.append(f"open finding {finding.get('id')}: {str(finding.get('message'))[:120]}"
+                           + (f" (not settled: {str(unsettled.get('why'))[:300]})" if unsettled.get("why") else ""))
     designs = record.get("design_checks") or []
     for design in designs:
         task = design.get("task")

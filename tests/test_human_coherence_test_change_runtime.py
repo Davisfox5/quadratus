@@ -7,6 +7,7 @@ import re
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import CLOSEOUT, Script
 from tools import truth_check
 
@@ -24,7 +25,9 @@ def _run(tmp_path, monkeypatch, *, approve=True, renamed=False, drift=False, unr
     files = {"app.py": "def default():\n    return 5\n", "tests/test_defaults.py": OLD,
              "tests/test_unrelated.py": SENTINEL}
     scope = dict(permitted_paths=list(files), intended_result="default is 10", max_lines=60,
-                 acceptance=["default returns 10"])
+                 acceptance=["default returns 10"],
+                 proofs=H.proofs_for("R1", "tests/test_defaults.py", operation="call default()",
+                                     expect="default returns 10"))
     declaration = ("REQUIREMENTS:\nR1: the default returns 10\nKIND: backend standard\nSCOPE: "
                    + json.dumps(scope) + "\nChange the default to 10.\nCOVERS: R1")
     plan = [declaration]
@@ -54,8 +57,11 @@ def _run(tmp_path, monkeypatch, *, approve=True, renamed=False, drift=False, unr
     script = Script(orchestrator=lambda c, r: plan.pop(0) if plan else "DONE", lead=lead,
                     closeout=lambda c, r: CLOSEOUT,
                     **{"requirements-review": lambda c, r: "COMPLETE",
-                       "auditor": lambda c, r: f"R1: MET - tests/test_defaults.py::{case} shows default returns 10"})
-    replay = H.run(tmp_path, monkeypatch, script, files=files, check=H.GATE.replace(" -q ", " -v "), max_tasks=2,
+                       "auditor": judging_scenarios(
+                           lambda c, r: f"R1: MET - tests/test_defaults.py::{case} shows default returns 10",
+                           scope["proofs"][0],
+                           basis=f"tests/test_defaults.py::{case} passed on the delivered source")})
+    replay = H.run(tmp_path, monkeypatch, script, files=files, check=H.GATE, max_tasks=2,
                    goal=GOAL, record_complete=not drift)
     return replay, questions, json.loads((replay.result.run_dir / "result.json").read_text())
 

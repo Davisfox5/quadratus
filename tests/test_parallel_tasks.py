@@ -7,12 +7,17 @@ from pathlib import Path
 
 from quadratus.artifacts import ArtifactStore
 from quadratus.session import Session, SessionConfig, _parallel_blocks
+from tests.lifecycle import harness as H
+from tests.lifecycle.test_lifecycle_matrix import covered_met
 
 
-def _block(path, text="work"):
-    scope = json.dumps({"permitted_paths": [path], "intended_result": f"{path} written",
-                        "acceptance": [f"{path} exists"], "max_lines": 20})
-    return f"KIND: backend simple\nSCOPE: {scope}\n{text} in {path}"
+def _block(path, text="work", covers=None):
+    scope = {"permitted_paths": [path], "intended_result": f"{path} written",
+             "acceptance": [f"{path} exists"], "max_lines": 20}
+    if covers:
+        scope["proofs"] = H.proofs_for(covers, path)
+    scope = json.dumps(scope)
+    return f"KIND: backend simple\nSCOPE: {scope}\n{text} in {path}" + (f"\nCOVERS: {covers}" if covers else "")
 
 
 BATCH = "PARALLEL\n" + _block("a.py") + "\n---\n" + _block("b.py")
@@ -22,10 +27,12 @@ class Orchestrated:
     """Scripted orchestrator + leads. Leads write the file their task names,
     in whichever directory their fork is bound to, and record overlap."""
 
-    def __init__(self, plan, *, lead_delay=0.3, rogue=None):
+    def __init__(self, plan, *, lead_delay=0.3, rogue=None, crash=None):
         self.plan = list(plan)
         self.lead_delay = lead_delay
         self.rogue = rogue
+        #: A lead whose call stops on an uninspectable tree (integrity).
+        self.crash = crash
         self.active = 0
         self.max_active = 0
         self.lock = threading.Lock()
@@ -43,13 +50,18 @@ class Orchestrated:
                     self.max_active = max(self.max_active, self.active)
                 time.sleep(self.lead_delay)
                 target = "a.py" if " in a.py" in prompt else "b.py"
+                if self.crash and target == self.crash:
+                    from quadratus.session import PartialWorkStopped
+                    with self.lock:
+                        self.active -= 1
+                    raise PartialWorkStopped("the tree could not be inspected")
                 (Path(root) / target).write_text(f"# {target} by {model}\n")
                 if self.rogue and target == self.rogue:
                     (Path(root) / "shared.py").write_text("# not in scope\n")
                 with self.lock:
                     self.active -= 1
                 return f'Wrote it\nCHANGED: ["{target}"]'
-            return "NO FINDINGS"
+            return "NO FINDINGS\n" + covered_met(prompt)
         return invoke
 
 
@@ -86,12 +98,15 @@ def test_two_independent_tasks_run_at_once_and_merge(tmp_path):
 
 
 def test_a_change_outside_a_tasks_scope_is_not_merged(tmp_path):
+    """Step 2: an out-of-scope child is a failed, unmerged task the planner
+    may continue, not an integrity stop. Nothing it wrote reaches the project."""
     script = Orchestrated([BATCH, "DONE"], rogue="b.py")
     session, project = _session(tmp_path, script)
     session.run(max_tasks=4)
     assert (project / "a.py").exists()
     assert not (project / "b.py").exists() and not (project / "shared.py").exists()
-    assert any("t2 was not merged" in f for f in session.open_findings)
+    assert session.failed == ["t2"] and session.failed_records["t2"]["cause"] == "scope"
+    assert "not merged" in session.failed_records["t2"]["error"]
     assert not session.completed
 
 
@@ -133,7 +148,7 @@ def test_a_parallel_batch_does_not_cover_a_requirement_owed_to_an_open_finding(t
     """Codex review of e47c7ed: a disjoint batch marked R1 covered while F1 was open."""
     import pytest
     reqs = "REQUIREMENTS:\nR1: a works\nR2: b works\n"
-    batch = ("PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py") + "\nCOVERS: R2")
+    batch = ("PARALLEL\n" + _block("a.py", covers="R1") + "\n---\n" + _block("b.py", covers="R2"))
     script = Orchestrated([reqs + batch, "DONE"])
     session, project = _session(tmp_path, script, requirements_ledger=True, max_requirement_reopens=0)
     session.findings.append(dict(id="F1", task="t0", requirements=["R1"], status="open", view="mobile",

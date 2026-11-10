@@ -83,7 +83,7 @@ from `6382cf2`.
 | --- | --- | --- | --- |
 | Provider refusal | `ProviderRefusal` | preserved and stops; close-out refusal gets a harness record | never retried or rerouted (Fleet disables the fallback) |
 | Relevant permission denial | `CapabilityUnavailable` from runtime | stop after the one call, even at the cap | above the cap |
-| Scope overrun | `TaskFailed("scope")` | the task fails, work preserved, the orchestrator re-plans with CONTINUES (2026-09-28: two live runs ended on the first such fault) | `failed`, below cap |
+| Scope path breach | `TaskFailed("scope")` | the task fails, work preserved, the orchestrator re-plans with CONTINUES (2026-09-28: two live runs ended on the first such fault). A size overrun is advisory since 2026-10-20: measured, reported to the reviewers and the planner, never a stop | `failed`, below cap |
 | Unmeasurable scope (tree not inspectable) | `PartialWorkStopped` | stop, work preserved | integrity |
 | Lead channel did not converge (fetch or consult budget, malformed WORKER, request after the channel closed, unresolved request as a draft) | `TaskFailed("channel")` | the task fails, the run continues | `failed` |
 | Task scope invalid twice (orchestrator) | `RunStalled` after one correction | stop; the correction now carries the scope and capture rules in full (a6c9576 rerun stalled on a rule it was never shown). Since the 2026-09-28 parity batch every reply rule the harness enforces is stated in the eliciting prompt, with the bounds quoted from the parser constants (`tests/test_prompt_rule_parity.py`) | operator |
@@ -95,7 +95,7 @@ from `6382cf2`.
 | Transport error | retried by `_retryable` (at most 4, backoff), then `ProviderError` | lead gets one recovery on a fresh lead if the tree is unchanged | below cap |
 | Window exhausted | `WindowExhausted` | one re-seat for the orchestrator; stops for others | |
 | Run budget | `RunBudgetExceeded` (latched) | stop; responses kept | |
-| Gate failed (any cause) | receipt `failed` / `error` / `blocked` | **always** a gate-fix, the same prompt for every cause | none: environment and product look alike |
+| Gate failed (any cause) | receipt `failed` / `error` / `blocked` | the bounded gate-fix with the harness diagnosis (`integration.attribute`, now a diagnostic record), unless `integration.repair_route` names a blocker no project edit can change: a blocked or skipped receipt (the runner or working folder unavailable or not configured, the launch itself failed), the source changed during the gate, leftover processes whose stop was not confirmed, or a report from another invocation; a blocker is `CheckUnattributable` with no repair call (PR73 6693873055; before it, only an attributable assertion bought a gate-fix, and before P3.2 every cause did) | `operator` on a blocker; a surviving failure stays cause-unestablished |
 | Gate still failing after the fix round | `check.failed` finding on the task's COVERS (2026-09-30, `_record_check_debt`) | requirement debt; the orchestrator names a RESOLVES task, settled when that task's own check passes and it closes clean; needs the ledger and a COVERS line, else `CheckFailing` as before | `product` fact recovered on resolution |
 | Capture failed | `capture_task` string / `integrity` record | one design-fix, whatever the cause | none |
 | Product overflow in an audit | `product.overflow` | audit debt `F<n>` | |
@@ -211,9 +211,13 @@ review.
 
 - A check declares its report format: JUnit XML for pytest (`--junitxml`) or a
   TAP/JSON reporter for node, written to a harness-owned path.
-- Only a parsed, attributable assertion failure with valid setup and no
-  dominating signal routes to product repair.
-- Everything else routes to operator handoff with bounded diagnostics.
+- Historical (phase 3): only a parsed, attributable assertion failure routed
+  to product repair, and everything else to operator handoff.
+- Current (PR73 6693873055): any failure gets the task's bounded repair with
+  the harness's diagnosis unless no project edit can change it (runner or
+  cwd unavailable or unconfigured, exit 126/127, the source changed under
+  the gate, a report from another invocation, leftover processes not
+  confirmed stopped); see `integration.repair_route`.
 
 ## 6. Gaps found while mapping (each becomes a journey)
 
@@ -274,9 +278,9 @@ review.
 | J1 | Clean completion: draft, review, gate, close-out, DONE, audit met | completed | `clean`; completed | P1 |
 | J2 | Product repair succeeds: structured assertion failure, gate-fix, gate passes | gate-fix, then pass | `clean`; repair attempt recorded | P1 (P3 requires the structured report) |
 | J3 | Product repair fails: gate still failing after the allowance | open failure, incomplete, `error ""` | `product`, unresolved; stop names it | P3 (G9) |
-| J4 | Runner crashes before any test (exit ≠ 0, no summary) | gate-fix sent to the app | operator handoff, **no gate-fix** | P3 |
-| J5 | Runner has no structured report and fails | gate-fix | operator handoff with diagnostics | P3 |
-| J6 | Capability lost mid-suite (some tests ran, then the browser died) | gate-fix | operator handoff | P3 |
+| J4 | Runner crashes before any test (exit ≠ 0, no summary) | gate-fix sent to the app | one gate-fix told the harness diagnosis (structured report missing); cause stays unestablished, and a failure that survives is the operator's, never a product fact (PR73 6693873055; P3.2 handed it off with no gate-fix) | P3 |
+| J5 | Runner has no structured report and fails | gate-fix | one gate-fix told the harness diagnosis (structured report undeclared); a failure that survives is the operator's (PR73 6693873055; P3.2 handed it off) | P3 |
+| J6 | Capability lost mid-suite (some tests ran, then the browser died) | gate-fix | one gate-fix told the harness diagnosis (a setup error, or a non-assertion exception in a test body); a failure that survives is the operator's (PR73 6693873055; P3.2 handed it off) | P3 |
 | J7 | Preflight capability probe fails | no probe exists | stop before any model call | P2 |
 | J8 | Evidence invalid, source and capability fine: recapture intended state | one design-fix | `invalid proof`, bounded recapture | P1, then P3 |
 | J9a | Evidence missing, stale or invalid | design-fix, then unverified | `invalid proof`, then unverified; never approved | P1 |
@@ -285,8 +289,9 @@ review.
 | J11 | Harness capture after an earlier task's failed check (G4) | capture skipped wrongly | scoped to this task | P3 |
 | J12 | Audit finds overflow, becomes debt `F<n>` | debt recorded | same, typed | P1 |
 | J13 | Repair resolves `F<n>` with verified, approved renders | resolved | same, typed | P1 |
-| J14 | Repair fails to resolve | FindingsUnresolved | same | P1 |
-| J15 | Scope overrun | PartialWorkStopped | `failed`, preserved, the run continues; two in a row trip the breaker | P1, revised 2026-09-28 |
+| J14 | Repair fails to resolve | FindingsUnresolved | FindingsUnresolved on the owner's adverse recheck, or the same finding left without a verdict again in an unchanged decision state; a recheck never asked is held pending work for the planner (cycle01, PR73 6702597850) | P1 |
+| J39 | Held NOT RUN item no check can run; a bound case removed later; DONE over held requirements | permanent hold; stale row until the audit; audit bought first | RUNS restatement or DISCHARGES takeover judged by an independent seat; stale at the first check that shows it, redeclaration route named; DONE sent back before the audit once while a continuation is admissible; no cap goal question after a current-source audit with blockers no step can settle (cycle02, PR73 6705254133) | P3 |
+| J15 | Scope path breach | PartialWorkStopped | `failed`, preserved, the run continues; two in a row trip the breaker. Size past the estimate is telemetry, not a stop (2026-10-20) | P1, revised 2026-09-28 and 2026-10-20 |
 | J16 | Dependency tree changed or unavailable | DependencyTreeChanged | `integrity`, above cap and product | P1 |
 | J17 | Provider refusal (lead, fix, close-out) | stop or harness record | `refusal`, never rerouted | P1 |
 | J18 | Relevant denial at the cap | CapabilityUnavailable | `denial`, above cap | P1 |
@@ -304,7 +309,7 @@ review.
 | J30 | Worker errand: optional failure vs required failure | error-as-result | optional recorded; required fails its edge | P2 |
 | J31 | Design-fix role packet (G11) | reviewer packet | lead packet | P3 |
 | J32 | Preflight passes, then the source or dependency tree changes, or the identity becomes unavailable | dependency stop | `integrity` above everything but refusal and security | P1 (dependency), P2 (preflight) |
-| J33 | Compound: product assertion failure plus a setup failure, denial or latched budget | gate-fix, or the stop | the dominating stop; **no repair call** | P3 |
+| J33 | Compound: product assertion failure plus a setup failure, denial or latched budget | gate-fix, or the stop | a denial or latched budget dominates; a mixed assertion and setup or runtime failure gets the bounded repair (PR73 6693873055) | P3 |
 | J34 | CONTINUES carries unresolved requirement and finding ids | ids re-listed | carried once, never double-counted or settled early | P2 |
 | J35 | Parallel child debt | child finding kept open | the merge gate cannot close unresolved child debt | P1, then P3 |
 | J36 | CHANGED report mismatch | PartialWorkStopped | recorded as a non-terminal `unverified` fact, reply kept, run continues on the measured diff; an unparsed request line with no CHANGED line still stops | P1, revised after the phase-4 run |
@@ -521,7 +526,9 @@ is a blocker. Any blocker turns completion into `CompletionUnproven` (typed
 `unverified`) with no model call.
 
 **P3.2, gate attribution (0a4ae0d, privacy f2b664d).** Retires "generic gate-fix for any
-failure" (section 8) and closes J4, J5, J6 and J33 (G10).
+failure" (section 8) and closes J4, J5, J6 and J33 (G10). J4 to J6 have since moved from an operator handoff to one diagnosed
+gate-fix (PR73 6693873055; the selectors end `gets_one_diagnosed_gate_fix`); J33's
+unavailable runner is still handed off with no repair.
 
 - The only supported report producer is harness-owned:
   `quadratus/_gate_producer/quadratus_gate_report.py`, a pytest plugin that
@@ -537,12 +544,14 @@ failure" (section 8) and closes J4, J5, J6 and J33 (G10).
   required check exited 1 with reason `nonzero exit`, its report is this
   invocation's (nonce, producer), exit status 1, no collection or
   setup/teardown error, a consistent and untruncated record, and every
-  failure is `when=call` with `assertion` true. Anything else raises
-  `CheckUnattributable` (operator) with the reasons, the returncode and the
-  output artifact, and makes no repair call.
-- A check with no declared report is never repaired. Other runners have no
-  producer yet, so their failures are always handoffs. The operator
-  profile's checks are P4 work.
+  failure is `when=call` with `assertion` true. (Superseded for repair eligibility by PR73 6693873055: attribution is now a diagnostic record; `integration.repair_route` decides.)
+  `CheckUnattributable` (operator), with the reasons, the returncode and the
+  output artifact and no repair call, is now raised only on the blockers
+  `repair_route` names.
+- A check with no declared report gets the bounded repair with its output;
+  what the repair achieved is judged by the next check, the restored
+  original tests, scope, scenarios and the original reviewer's comparison
+  of any generated test it changed.
 - `redact_command_paths` now also redacts the relative and bare spellings of
   a gate's command files, which pytest prints for a grader outside the
   project. It matches only the private file's own trailing path components,

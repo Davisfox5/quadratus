@@ -22,12 +22,6 @@ SOL, OPUS = "openai:sol", "claude:opus"
 
 class SourceView:
     restricted = False
-    model = "scripted"
-    max_tokens = 1000
-    timeout = 1.0
-
-    def for_seat(self, *args, **kwargs):
-        return self
 
     def in_directory(self, directory, *, allow_writes, disposable=False):
         return SimpleNamespace(workdir=Path(directory), allow_writes=allow_writes,
@@ -41,7 +35,8 @@ def source_fleet(project, monkeypatch, generate):
     return fleet
 
 
-def test_fetched_reference_and_visible_decisions_survive_consult_and_reply_handoffs(tmp_path):
+@pytest.mark.parametrize("last_channel", ["write-worker", "packet"])
+def test_fetched_reference_and_visible_decisions_survive_consult_and_reply_handoffs(tmp_path, last_channel):
     project = tmp_path / "project"
     project.mkdir()
     store = ArtifactStore(tmp_path / "artifacts")
@@ -51,7 +46,10 @@ def test_fetched_reference_and_visible_decisions_survive_consult_and_reply_hando
     consult = "CONSULT claude:opus: Does the old parser cover quoted identifiers?"
     request = ("THIRD_DECISION: retain the helper's existing behavior.\nWORKER "
                + json.dumps(dict(errand="code", instruction="Propose a patch for the parser helper",
-                                 needs=["patch"], write=True)))
+                                 needs=["patch"], write=True))
+               if last_channel == "write-worker" else
+               "PACKET EXTENSION: 20000\nNECESSARY: retain parser compatibility context\n"
+               "WHY NOT SHORTER: the legacy rule needs its exact examples")
     lead_prompts, worker_grants = [], []
 
     def invoke(model, prompt, **kwargs):
@@ -86,7 +84,7 @@ def test_fetched_reference_and_visible_decisions_survive_consult_and_reply_hando
     with invocation(spec.task_id, "lead"):
         result = session._draft_with_channels(SOL, spec, task)
     assert result.startswith("The implementation") and len(lead_prompts) == 4
-    assert worker_grants == [True]
+    assert worker_grants == ([True] if last_channel == "write-worker" else [])
     assert any(store.get(ref) == decision + f"\nFETCH: {reference.id}"
                for ref in task.refs if ref.kind == "lead-handoff")
     reviewer_prompt = session._collaborator_prompt(spec, result, OPUS)
@@ -117,18 +115,13 @@ def test_retained_context_has_explicit_bounds_and_exact_archive_references(tmp_p
 
     final = prompts[-1]
     assert "FIRST_REFERENCE_BODY" not in final and "SECOND_REFERENCE_BODY" in final
-    assert f"FETCH: {first.id}" in final
-    assert "Earlier fetched artifacts retained by reference" in final
+    assert f"FETCH: {first.id} FROM 0" in final
+    assert "Earlier fetched artifact windows retained by reference" in final
     assert rationale not in final and "Earlier replies not inlined" in final
     archived = next(ref for ref in task.refs if ref.kind == "lead-handoff"
                     and store.get(ref).startswith(rationale))
     assert f"FETCH: {archived.id}" in final
     assert session.memory.fetch(archived.id) == rationale + f"\nFETCH: {first.id}"
-
-    pieces = [ref for ref in task.refs if ref.kind == "lead-handoff-part"]
-    assert "".join(store.get(ref) for ref in pieces).startswith(rationale + f"\nFETCH: {first.id}")
-    assert all(len(store.get(ref)) <= 120 for ref in pieces)
-    assert all(" FROM " not in prompt for prompt in prompts)
 
     # The next task receives neither the old context nor its private index.
     session._draft_with_channels(SOL, TaskSpec("t2", "another task"), TaskMemory("t2", SOL, store))
@@ -161,43 +154,24 @@ def test_review_counterpart_first_read_is_blind_and_reconciliation_keeps_both_re
     assert any("Independent reviews of it:" in prompt for _, prompt in calls)
 
 
-def test_long_reference_remains_exactly_fetchable_with_main_id_only_protocol(tmp_path, monkeypatch):
-    monkeypatch.setattr("quadratus.session._FETCH_CHAR_CAP", 80)
-    store = ArtifactStore(tmp_path / "artifacts")
-    content = "A" * 80 + "REFERENCE_BEYOND_FIRST_WINDOW " + "B" * 160
-    reference = store.put(content, kind="reference", author="harness")
-    task = TaskMemory("t1", SOL, store)
-    prompts = []
-
-    def invoke(model, prompt, **kwargs):
-        prompts.append(prompt)
-        assert " FROM " not in prompt
-        if len(prompts) == 1:
-            return f"FETCH: {reference.id}"
-        if len(prompts) == 2:
-            return 'WORKER {"errand":"read","instruction":"Confirm the reference format"}'
-        if len(prompts) == 3:
-            pieces = [ref for ref in task.refs if ref.kind == "fetched-reference-part"]
-            assert "".join(store.get(ref) for ref in pieces) == content
-            assert all(len(store.get(ref)) <= 80 for ref in pieces)
-            assert all(f"FETCH: {ref.id}" in prompt for ref in pieces)
-            return f"FETCH: {pieces[1].id}"
-        assert "REFERENCE_BEYOND_FIRST_WINDOW" in prompt
-        return "done"
-
-    session = Session("Use the full reference", store, invoke, config=SessionConfig(
-        max_fetches=1, in_session_workers=False, requirements_ledger=False))
-    session.workers = WorkerPool(store=store, run=lambda *a, **k: "Reference format confirmed.")
-    assert session._draft_with_channels(SOL, TaskSpec("t1", "Keep the full reference"), task) == "done"
-    assert len(prompts) == 4
-
-
 def test_ordinary_implementation_review_still_receives_the_delivered_draft(tmp_path):
     session = Session("Implement the parser", ArtifactStore(tmp_path), lambda *args, **kwargs: "unused")
     prompt = session._collaborator_prompt(TaskSpec("t1", "Implement quoting", kind=TaskKind.GLUE),
                                           "DELIVERED_IMPLEMENTATION: parser code and explanation", OPUS)
     assert "DELIVERED_IMPLEMENTATION" in prompt and "Current work:" in prompt
     assert "blind review" not in prompt
+
+
+def test_later_merged_review_judges_the_supplied_report_on_current_source(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    session = Session("Audit", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "unused",
+                      config=SessionConfig(project=project, requirements_ledger=False))
+    prompt = session._collaborator_prompt(TaskSpec("merged", "Review merged audit", kind=TaskKind.REVIEW),
+                                          "MERGED_REVIEW_REPORT", OPUS)
+    assert "Current work:\nMERGED_REVIEW_REPORT" in prompt
+    assert "Judge the supplied report against the source" in prompt
+    assert "blind first read" not in prompt and "withheld lead report" not in prompt
 
 
 def test_in_session_worker_answer_survives_a_later_consult_handoff(tmp_path, monkeypatch):
@@ -239,7 +213,9 @@ def test_in_session_worker_answer_survives_a_later_consult_handoff(tmp_path, mon
     assert len(prompts) == 2
 
 
-def test_written_audit_does_not_contaminate_counterpart_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize("unfinished", [False, True])
+def test_written_audit_does_not_contaminate_counterpart_source_or_its_completion(tmp_path, monkeypatch,
+                                                                              unfinished):
     project = tmp_path / "project"
     project.mkdir()
     (project / "parser.py").write_text("ORIGINAL_PARSER = True\n")
@@ -266,6 +242,8 @@ def test_written_audit_does_not_contaminate_counterpart_source(tmp_path, monkeyp
             assert "Review the parser source" in prompt and "Audit the parser" in prompt
             assert not context.get("probe") and not context.get("harness_checks")
             assert not context.get("evidence_files")
+            if unfinished and len(reviews) == 1:
+                return "I inspected the original parser but did not finish the verdict."
             return counterpart
         if context["role"] == "revision":
             revisions.append(prompt)
@@ -280,14 +258,15 @@ def test_written_audit_does_not_contaminate_counterpart_source(tmp_path, monkeyp
                       config=SessionConfig(project=project, allow_writes=True, requirements_ledger=False,
                                            in_session_workers=False))
     # All of these describe the lead's current work, not the starting source.
-    for helper in ("_changed_originals_note",):
+    for helper in ("_changed_originals_note", "_proof_rows", "_restated_review_block", "_sibling_note",
+                   "_inspection_note"):
         monkeypatch.setattr(session, helper, lambda *a, **k: "POSTLEAD_FINDINGS_OR_PROOF")
     monkeypatch.setattr(session, "_harness_facts", lambda **kwargs: "POSTLEAD_CHECK_RECEIPT")
     session._review_evidence = ["POSTLEAD_DESIGN_ARTIFACT"]
     session.run_task(TaskSpec("t1", "Review the parser source", Complexity.SIMPLE,
                               kind=TaskKind.REVIEW, lead=SOL,
                               scope=TaskScope(permitted_paths=("audit.md", "parser.py"))))
-    assert reviews and revisions
+    assert len(reviews) == (2 if unfinished else 1) and revisions
     assert all(not directory.exists() for directory in reviews)
     assert (project / "parser.py").read_text() == "PARSER_CHANGED_DURING_LEAD_READ = True\n"
 

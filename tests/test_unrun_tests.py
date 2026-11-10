@@ -80,3 +80,22 @@ def test_a_new_test_file_a_run_test_invokes_is_not_claimed(tmp_path):
     gate = SimpleNamespace(commands=(GateCommand(id="check", argv=PYTEST), GateCommand(id="extra-1", argv=NODE)))
     session._note_unrun_tests(SimpleNamespace(task_id="t5"), TaskMemory("t5", "x", session.store), gate)
     assert session.open_findings == []
+
+
+def test_the_lead_is_told_the_same_coverage_rule_uncovered_tests_applies():
+    """Root on 113f4e1 (6549956979 item 1): the role packet said a new test
+    belongs in a file a listed command names, while a listed command that
+    names a folder or discovers tests covers a new file there, and
+    ``uncovered_tests`` already reads it that way. One rule now."""
+    import inspect
+
+    from quadratus import runtime
+    from quadratus.integration import uncovered_tests
+    source = " ".join(inspect.getsource(runtime).split())
+    assert "names it, names a folder that holds it, or discovers it" in source.replace('" "', "")
+    folder = [["python", "-m", "pytest", "-q", "tests/"], ["node", "--test", "tests/ui/a.test.js"]]
+    assert uncovered_tests(["tests/test_new.py"], folder) == []
+    discovers = [["python", "-m", "pytest", "-q"], ["python", "-m", "pytest", "-q", "tests/test_app.py"]]
+    assert uncovered_tests(["tests/test_new.py"], discovers) == []
+    named = [["python", "-m", "pytest", "-q", "tests/test_app.py"]]
+    assert uncovered_tests(["tests/test_new.py"], named) == ["tests/test_new.py"], "still unnamed when only files"

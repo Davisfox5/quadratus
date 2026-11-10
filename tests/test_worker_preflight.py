@@ -23,9 +23,9 @@ def test_attempt_three_never_dispatches_or_reserves_worker(tmp_path, monkeypatch
     reserve = RunBudget.reserve
     commission = WorkerPool.commission
 
-    def observed_reserve(self):
+    def observed_reserve(self, **kwargs):
         reservations.append(invocation_context.get())
-        return reserve(self)
+        return reserve(self, **kwargs)
 
     def observed_commission(self, **kwargs):
         dispatches.append(kwargs)

@@ -106,7 +106,7 @@ def test_codex_rollout_commands_patches_and_rejections(tmp_path):
         {"type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "c2",
                                               "output": "Rejected by policy"}},
     ])
-    ledger = _ledger(tmp_path, [{"invoked": True, "requested_model": "openai:gpt-5.6-sol",
+    ledger = _ledger(tmp_path, [{"invoked": True, "requested_model": "openai:sol",
                                  "session_id": tid, "task": "T2", "role": "lead"}])
     r = trace.build_traces(tmp_path / "run", ledger, "/work/proj", roots=roots)[0]
     assert [c["outcome"] for c in r["tool_calls"]] == ["error", "denied"]

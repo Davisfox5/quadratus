@@ -51,7 +51,7 @@
    "clip1.webm"
   ],
   "error_contains": [
-   "tests: error: source changed during gate",
+   "tests: the source changed while the check ran",
    "No repair call was made"
   ]
  }

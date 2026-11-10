@@ -11,6 +11,7 @@ import contextvars
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -52,6 +53,65 @@ def cleanup_owned_scratch(home):
             or not path.is_absolute() or not path.name.startswith('qw-native-')):
         raise ValueError('Scratch creation identity changed; refuse deletion')
     shutil.rmtree(path)
+
+
+def _one_clause(line):
+    """The line is exactly one balanced clause, then at most a comment: a
+    second clause after the first would escape the per-line check."""
+    depth, quoted, escaped = 0, False, False
+    for index, char in enumerate(line):
+        if quoted:
+            escaped, quoted = (not escaped and char == "\\"), quoted and (escaped or char != '"')
+            continue
+        if char == '"':
+            quoted = True
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                rest = line[index + 1:].strip()
+                return not rest or rest.startswith(";")
+    return False
+
+
+def protected_gate_argv(argv, outer_profile, *, cwd):
+    """One macOS sandbox applies both the answer and scratch-copy policies.
+
+    A nested sandbox refuses to start. Only the engine's restrictive scratch
+    profile shape is composable; ordinary gate argv keep their old boundary.
+    Copy-write exceptions come before the parent's private denies; scratch
+    read denies come last, so neither policy's exceptions weaken the other.
+    """
+    argv = list(argv)
+    if argv[:2] != ["/usr/bin/sandbox-exec", "-p"]:
+        return ["/usr/bin/sandbox-exec", "-f", str(outer_profile), *argv]
+    if len(argv) < 4 or not isinstance(argv[2], str):
+        raise ValueError("Incomplete scratch sandbox argv")
+    lines = argv[2].splitlines()
+    expected = ["(version 1)", "(allow default)", "(deny network*)", "(deny file-write*)"]
+    if lines[:4] != expected or len(lines) not in (5, 6):
+        raise ValueError("Unexpected scratch sandbox policy")
+    match = re.fullmatch(
+        r'\(allow file-write\* \(subpath ("(?:[^"\\]|\\.)*")\) '
+        r'\(literal "/dev/null"\) \(literal "/dev/tty"\)\)', lines[4])
+    copy = Path(json.loads(match[1])) if match else None
+    if copy is None or not copy.is_absolute() or not Path(cwd).resolve().is_relative_to(copy.resolve()):
+        raise ValueError("Scratch sandbox does not hold this working directory")
+    hidden = lines[5:]
+    if hidden and not hidden[0].startswith("(deny file-read* "):
+        raise ValueError("Unexpected scratch read policy")
+    parent = [line for line in Path(outer_profile).read_text().splitlines()
+              if line.strip() not in ("(version 1)", "(allow default)")]
+    for line in parent:
+        if not line.strip() or line.lstrip().startswith(";"):
+            continue
+        operation = re.match(r"\((allow|deny)\s+([^\s()]+)", line.strip())
+        if operation is None or (operation[1] == "allow" and not operation[2].startswith("file-read")) \
+                or not _one_clause(line.strip()):
+            raise ValueError("Parent policy could expand scratch authority")
+    profile = "\n".join([*expected, lines[4], *parent, *hidden]) + "\n"
+    return ["/usr/bin/sandbox-exec", "-p", profile, *argv[3:]]
 
 
 class NativeExecution:
@@ -236,6 +296,8 @@ class NativeExecution:
                          'QUADRATUS_MVP_OWNERSHIP')
             child_env = {k: v for k, v in (env or {}).items() if k in permitted}
             child_env['CODEX_HOME'] = str(state['home'])
+            from tools.native_call_diagnostics import LOG_FILTER, transport_facts
+            child_env['RUST_LOG'] = LOG_FILTER
             child_env['TMPDIR'] = str(state['scratch'])
             home = state['home']
             (home / 'native-input.txt').write_text(input or '')
@@ -245,21 +307,33 @@ class NativeExecution:
                     value = value.decode(errors='replace')
                 with (home / name).open('x') as stream:
                     stream.write(value or '')
+            def diagnose(errors, outcome):
+                if isinstance(errors, bytes):
+                    errors = errors.decode(errors='replace')
+                facts, clean = transport_facts(errors or '')
+                facts.update(outcome=outcome, deadline_seconds=timeout,
+                             elapsed_seconds=time.monotonic() - started)
+                save('native-transport.json', json.dumps(facts, indent=2) + '\n')
+                return clean
             try:
                 result = launch(argv, input=input, timeout=timeout, cwd=cwd, env=child_env)
             except subprocess.TimeoutExpired as exc:
                 save('native-output.jsonl', exc.output)
+                exc.stderr = diagnose(exc.stderr, 'local_deadline')
                 save('native-stderr.log', exc.stderr)
                 raise
             else:
                 save('native-output.jsonl', getattr(result, 'stdout', ''))
-                save('native-stderr.log', getattr(result, 'stderr', ''))
+                clean = diagnose(getattr(result, 'stderr', ''), 'process_exit')
+                if hasattr(result, 'stderr'):
+                    result.stderr = clean
+                save('native-stderr.log', clean)
                 return result
             finally:
                 state['native_seconds'] = time.monotonic() - started
 
         def bounded_gate(argv, *, cwd, timeout, env):
-            return gate(['/usr/bin/sandbox-exec', '-f', str(self.outer_profile), *argv],
+            return gate(protected_gate_argv(argv, self.outer_profile, cwd=cwd),
                         cwd=cwd, timeout=timeout, env=env)
 
         def root_for(root):

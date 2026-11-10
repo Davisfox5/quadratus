@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -32,14 +33,17 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
            "CheckUnattributable", "attribute", "read_report", "model_facing"]
 
 #: The argv token a check uses to declare the harness's structured report.
-#: The only supported producer is the harness-owned pytest plugin
-#: (``_gate_producer``), declared as ``--quadratus-report={report}``. The
-#: harness replaces the token with a path it owns, outside the project, loads
-#: the plugin for that one invocation, and removes the path after reading it
-#: (phase 3, #25). Other runners have no producer: their failures are never
-#: attributable, so never repaired.
+#: Its producers are the harness-owned ones in ``_gate_producer`` (the pytest
+#: plugin, the node:test reporter and the unittest runner module), each
+#: declared as ``--quadratus-report={report}``. The harness replaces the token
+#: with a path it owns, outside the project, loads the producer for that one
+#: invocation, and removes the path after reading it (phase 3, #25). Other
+#: runners have no producer: their failures are never attributable, so never
+#: repaired.
 REPORT_TOKEN = "{report}"
-PRODUCER = "quadratus-pytest/4"
+#: How a command declares the harness report in its argv.
+REPORT_TOKEN_PREFIX = "--quadratus-report"
+PRODUCER = "quadratus-pytest/7"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
 #: passing, because a node check had no producer and so no fix call). A
@@ -48,15 +52,30 @@ PRODUCER = "quadratus-pytest/4"
 #: reporter beside TAP on stdout, so the text output the count reader needs
 #: is unchanged.
 PRODUCER_NODE = "quadratus-node/1"
-PRODUCERS = (PRODUCER, PRODUCER_NODE)
+#: The unittest producer (R21: a required ``python -m unittest discover``
+#: check failed with no report of its own, so a plain test-body assertion
+#: could not reach a repair). A ``python -m unittest ...`` check declares
+#: ``--quadratus-report={report}``; the harness runs the same arguments under
+#: the same interpreter through the shipped runner module, which is
+#: ``unittest.main(module=None)`` with a recording result class, and writes
+#: this invocation's own report. Undeclared, unittest stays unattributable.
+PRODUCER_UNITTEST = "quadratus-unittest/3"
+PRODUCERS = (PRODUCER, PRODUCER_NODE, PRODUCER_UNITTEST)
 _PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
 _NODE_PRODUCER_FILE = _PRODUCER_FILE.with_suffix(".mjs")
+_UNITTEST_PRODUCER_FILE = _PRODUCER_FILE.with_name("quadratus_unittest_report.py")
 #: Kept for the install-layout proof: where the shipped producer lives.
 _PRODUCER_DIR = str(_PRODUCER_FILE.parent)
 _REPORT_FAILURES = 200
 _WHEN = ("setup", "call", "teardown")
 _COUNTS = ("passed", "failed", "errors", "skipped")
 _REPORT_MAX_BYTES = 1024 * 1024
+#: The producers' bound on named passed cases (MAX_PASSED in each).
+_REPORT_PASSED = 3000
+#: The producers' bounds on attested classes and members (MAX_CLASSES,
+#: MAX_CLASS_MEMBERS in each).
+_REPORT_CLASSES = 1000
+_REPORT_CLASS_MEMBERS = 1000
 
 
 #: How much command output a failed gate carries back. The tail, because test
@@ -90,12 +109,33 @@ def _report_slot(argv, env):
     owned = tempfile.mkdtemp(prefix="quadratus-report-")
     nonce = secrets.token_hex(16)
     path = os.path.join(owned, "report.json")
+    if _is_unittest(argv):
+        module = f"quadratus_unittest_report_{secrets.token_hex(8)}"
+        source = _UNITTEST_PRODUCER_FILE.read_bytes()
+        copy = os.path.join(owned, module + ".py")
+        with open(copy, "wb") as out:
+            out.write(source)
+        expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER_UNITTEST,
+                        module_sha256=hashlib.sha256(source).hexdigest())
+        # The same interpreter and the same unittest arguments, with only
+        # the declaring argument removed; the owned directory goes after
+        # the working directory ``-m`` puts first, so no project module is
+        # shadowed and none can take the nonce name.
+        rest = [a for a in argv if REPORT_TOKEN not in a]
+        argv = [rest[0], "-m", module] + rest[3:]
+        env = dict(env, QUADRATUS_GATE_NONCE=nonce, QUADRATUS_GATE_REPORT=path,
+                   PYTHONPATH=os.pathsep.join([owned] + [p for p in [env.get("PYTHONPATH")] if p]))
+        try:
+            yield argv, env, path, expected
+        finally:
+            shutil.rmtree(owned, ignore_errors=True)
+        return
     if _is_node_test(argv):
         source = _NODE_PRODUCER_FILE.read_bytes()
         copy = os.path.join(owned, f"quadratus_gate_report_{secrets.token_hex(8)}.mjs")
         with open(copy, "wb") as out:
             out.write(source)
-        expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+        expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER_NODE,
                         module_sha256=hashlib.sha256(source).hexdigest())
         # The declaring argument is replaced, never kept: node pairs each
         # --test-reporter with the next destination, so the runner's own TAP
@@ -118,7 +158,7 @@ def _report_slot(argv, env):
     copy = os.path.join(owned, module + ".py")
     with open(copy, "wb") as out:
         out.write(source)
-    expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+    expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER,
                     module_sha256=hashlib.sha256(source).hexdigest())
     plugins = [p for p in env.get("PYTEST_PLUGINS", "").split(",") if p.strip()]
     env = dict(env, QUADRATUS_GATE_NONCE=nonce, PYTEST_PLUGINS=",".join(plugins + [module]),
@@ -129,11 +169,64 @@ def _report_slot(argv, env):
         shutil.rmtree(owned, ignore_errors=True)
 
 
+def _declared_producer(argv) -> Path:
+    """The shipped producer file ``_report_slot`` copies for ``argv``."""
+    argv = [str(a) for a in argv]
+    if _is_unittest(argv):
+        return _UNITTEST_PRODUCER_FILE
+    return _NODE_PRODUCER_FILE if _is_node_test(argv) else _PRODUCER_FILE
+
+
+def _is_unittest(argv) -> bool:
+    """``python -m unittest ...`` under a plain ``python``/``pythonX[.Y]``
+    interpreter, the only unittest form with a producer; any other runner,
+    wrapper or custom script is not one."""
+    head = Path(argv[0]).name if argv else ""
+    return bool(re.fullmatch(r"python(\d+(\.\d+)*)?", head)) and list(argv[1:3]) == ["-m", "unittest"]
+
+
+def report_consistent_command(argv, passed_cases) -> bool:
+    """Whether a recorded command could have produced a harness report
+    naming ``passed_cases``, read cheaply from the argv and the report
+    alone, never from disk and never as membership: the command starts a
+    runner with a producer (pytest, or ``python -m unittest``), and no
+    dotted unittest operand extends the module of a case the report names
+    (``tests.test_sample.Target.test_first`` beside a case in
+    ``tests/test_sample.py`` is a selection inside that module, whatever
+    the report attests). A contradictory saved record, a command edited
+    after a true receipt, clears nothing (root's record-consistency
+    controls on 55e07d4)."""
+    argv = [str(a) for a in argv]
+    if _is_pytest(argv):
+        return True
+    if not _is_unittest(argv):
+        return False
+    modules = set()
+    for case in passed_cases or ():
+        file = str(case).split("::", 1)[0]
+        if file.endswith(".py"):
+            modules.add(file[:-3].replace("/", "."))
+    for token in argv[3:]:
+        if token.startswith("-") or token == "discover" or not _MODULE_NAME.match(token):
+            continue
+        if any(token.startswith(module + ".") for module in modules):
+            return False
+    return True
+
+
 def _is_node_test(argv) -> bool:
     """A ``node --test`` invocation (the runner is node and ``--test`` is an
     argument of its own), the only non-pytest runner with a producer."""
     head = Path(argv[0]).name if argv else ""
     return head in ("node", "nodejs") and "--test" in argv[1:]
+
+
+def checks_digest(commands) -> str:
+    """A digest of the approved commands as they are configured (argv, cwd,
+    timeout, required, minimum, skip): what a scratch proof was run with."""
+    from dataclasses import is_dataclass
+    body = [asdict(c) if is_dataclass(c) else repr(c) for c in commands or ()]
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
 
 
 def model_facing(argv):
@@ -212,6 +305,39 @@ def _malformed(data) -> str:
         return "failure records do not match the counts"
     if data["truncated"] and len(failures) != _REPORT_FAILURES:
         return "truncation flag without a full record"
+    if data.get("producer") in (PRODUCER, PRODUCER_UNITTEST):
+        # Named passed cases (root review of 5ca254c): one per counted pass,
+        # each distinct, or a full bounded list flagged truncated.
+        named, cut = data.get("passed_cases"), data.get("passed_truncated")
+        if (not isinstance(named, list) or type(cut) is not bool or len(named) > _REPORT_PASSED
+                or not all(isinstance(n, str) and 0 < len(n) <= 300 for n in named)
+                or len(set(named)) != len(named)):
+            return "passed cases"
+        if (len(named) != counts["passed"]) if not cut else (len(named) != _REPORT_PASSED
+                                                              or counts["passed"] <= _REPORT_PASSED):
+            return "passed cases do not match the counts"
+        if "classes" in data or "classes_truncated" in data:
+            # Attested class membership (class-claim correction, 2026-10-30):
+            # distinct class ids, each with a distinct non-empty bounded list
+            # of ``test*`` member names; a report that states the field
+            # states it whole or flags it truncated.
+            # A truncated list may be any length: the producer drops the
+            # whole field when it would cost the core report its byte bound.
+            classes, cut = data.get("classes"), data.get("classes_truncated")
+            if not isinstance(classes, list) or type(cut) is not bool or len(classes) > _REPORT_CLASSES:
+                return "classes"
+            ids = []
+            for record in classes:
+                members = record.get("members") if isinstance(record, dict) else None
+                if (not isinstance(record, dict) or not isinstance(record.get("id"), str)
+                        or not 0 < len(record["id"]) <= 300 or "::" not in record["id"]
+                        or not isinstance(members, list) or not 0 < len(members) <= _REPORT_CLASS_MEMBERS
+                        or not all(isinstance(m, str) and m.startswith("test") and 0 < len(m) <= 300 for m in members)
+                        or len(set(members)) != len(members)):
+                    return "a class record"
+                ids.append(record["id"])
+            if len(set(ids)) != len(ids):
+                return "duplicate class records"
     return ""
 
 
@@ -231,7 +357,8 @@ def read_report(path, expected) -> dict:
     if not isinstance(data, dict):
         return dict(state="unparsable", detail="not an object")
     expected = expected or {}
-    if (data.get("producer") not in PRODUCERS or data.get("nonce") != expected.get("nonce")
+    if (data.get("producer") not in PRODUCERS or data.get("producer") != expected.get("producer", data.get("producer"))
+            or data.get("nonce") != expected.get("nonce")
             or data.get("module_file") != expected.get("module_file")
             or data.get("module_sha256") != expected.get("module_sha256")):
         return dict(state="foreign", detail=f"producer {str(data.get('producer'))[:40]!r}, module "
@@ -242,9 +369,20 @@ def read_report(path, expected) -> dict:
     return dict(state="parsed", exitstatus=data["exitstatus"], collected=data["collected"],
                 collect_errors=data["collect_errors"], counts={k: data["counts"][k] for k in _COUNTS},
                 failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
-                               assertion=f["assertion"], body=f.get("body"))
+                               assertion=f["assertion"], body=f.get("body"),
+                               # The failure's own identity (cycle04 R2): its
+                               # crash site and a message digest, when the
+                               # producer recorded them; anything else is none.
+                               site=f["site"][:300] if isinstance(f.get("site"), str) else None,
+                               message_sha=(f["message_sha"][:64] if isinstance(f.get("message_sha"), str)
+                                            else None))
                           for f in data["failures"]],
-                truncated=data["truncated"])
+                truncated=data["truncated"],
+                **({"passed_cases": list(data["passed_cases"]), "passed_truncated": data["passed_truncated"]}
+                   if "passed_cases" in data and data.get("producer") in (PRODUCER, PRODUCER_UNITTEST) else {}),
+                **({"classes": [dict(id=c["id"], members=list(c["members"])) for c in data["classes"]],
+                    "classes_truncated": data["classes_truncated"]}
+                   if "classes" in data and data.get("producer") in (PRODUCER, PRODUCER_UNITTEST) else {}))
 
 
 def _report_reasons(gid, status, reason, returncode, report) -> list:
@@ -303,6 +441,52 @@ def attribute(result) -> dict:
     for entry in failing:
         reasons += _report_reasons(*entry)
     return dict(product=not reasons, reasons=reasons)
+
+
+def repair_route(result) -> dict:
+    """Whether a failed gate may buy the task's bounded repair (Davis,
+    2026-11-06, PR73 6693873055, replacing assertion-only eligibility).
+
+    A repair is an attempt, not a verdict: the existing protections decide
+    what it achieved (run-start test restoration, the dependency-tree
+    watch, scope measurement, declared scenarios bound to executed cases,
+    the original reviewer's comparison of any generated test it changed,
+    and the next check). So a raw exception, a broken generated fixture, a
+    collection error, a timeout whose processes were all stopped, an exit
+    other than 1, or a mix of these with assertion failures is repairable:
+    an edit to the project can cause and can fix each. What is not is a
+    fact no project edit can change or a state nobody can vouch for: a
+    runner or working folder that is unavailable or not configured (the
+    launch itself failed: not found, not permitted), a source that changed
+    while the gate ran, a report from another invocation or producer, and
+    leftover processes whose stop was not confirmed. An exit status alone,
+    126 and 127 included, names no cause: project code can exit with it
+    (root review of b49a0cb, R1). ``attribute`` stays as
+    the diagnostic record of what kind of failure it was.
+
+    Returns ``repairable`` and ``blockers``, plus ``attribution``."""
+    attribution = attribute(result)
+    if result.passed:
+        return dict(repairable=False, blockers=[], attribution=attribution)
+    blockers = []
+    if result.receipts:
+        for r in result.receipts:
+            if not r.required or r.status == "passed":
+                continue
+            if r.status in ("blocked", "skipped"):
+                blockers.append(f"{r.id}: {r.status}: {r.reason}")
+            elif r.status == "error" and r.reason == "source changed during gate":
+                blockers.append(f"{r.id}: the source changed while the check ran")
+            elif r.cleanup_complete is False:
+                blockers.append(f"{r.id}: left processes whose stop was not confirmed")
+            elif (r.report or {}).get("state") == "foreign":
+                blockers.append(f"{r.id}: the structured report is not this invocation's")
+    else:
+        if getattr(result, "blocker", ""):
+            blockers.append(f"check: {result.blocker}")
+        elif (result.report or {}).get("state") == "foreign":
+            blockers.append("check: the structured report is not this invocation's")
+    return dict(repairable=not blockers, blockers=blockers, attribution=attribution)
 
 
 #: Seconds a gate command's own processes get to exit after SIGTERM, then
@@ -443,6 +627,12 @@ def _run_owned(argv, *, cwd, timeout, env):
     return returncode, output, cleanup
 
 
+def _cleanup_confirmed(cleanup) -> bool:
+    """Whether a command's leftover processes were all confirmed stopped."""
+    return (not cleanup) or bool(cleanup.get("complete") and not cleanup.get("unreadable")
+                                 and not cleanup.get("remaining"))
+
+
 def _cleanup_note(cleanup) -> str:
     if not cleanup:
         return ''
@@ -496,6 +686,9 @@ class GateResult:
     #: Case names read from the whole output before the tail is kept
     #: (case_record); a suite carries one per receipt instead.
     cases: Optional[dict] = None
+    #: A fact no edit to the project can change, for the single-command
+    #: gate (``repair_route``); a suite carries its facts per receipt.
+    blocker: str = ""
 
     def render(self) -> str:
         """The operator's view: the exact command, for the run record."""
@@ -608,7 +801,7 @@ class IntegrationGate:
         except FileNotFoundError as exc:
             return GateResult(
                 passed=False, command=shown, returncode=None,
-                output=f"(command not found: {exc})",
+                output=f"(command not found: {exc})", blocker=f"runner unavailable: {exc}",
             )
         if returncode is None:
             # The partial output is kept: a hang must name what it was doing.
@@ -616,9 +809,16 @@ class IntegrationGate:
                 passed=False, command=shown, returncode=None,
                 output=(f"(timed out after {self.timeout}s) {_cleanup_note(cleanup)}\n"
                         + combined[-_TAIL_CHARS:]).strip(),
+                blocker="" if _cleanup_confirmed(cleanup) else
+                        "the timed-out command left processes whose stop was not confirmed",
             )
         if cleanup:
             combined = (combined + "\n" + _cleanup_note(cleanup)).strip()
+            if not _cleanup_confirmed(cleanup):
+                return GateResult(passed=False, command=shown, returncode=returncode,
+                                  output=combined[-_TAIL_CHARS:], report=report,
+                                  cases=case_record(combined, runner_of(self.command)),
+                                  blocker="the command left processes whose stop was not confirmed")
         passed = returncode == 0
         if passed and self.minimum_tests is not None:
             count = _test_count(combined)
@@ -648,6 +848,69 @@ def _test_family(path: str):
         return None
     folder = path.rsplit('/', 1)[0] if '/' in path else ''
     return folder, (match.group(1) or 'py')
+
+
+#: Flags a discovering command may carry and still be shown to a review
+#: seat for a scratch run: output verbosity only. Anything else, a
+#: selection, a plugin, a config or a path-bearing option, is refused.
+_DISCOVERY_PYTEST_FLAGS = frozenset({"-q", "-qq", "-v", "-vv", "-rA", "-ra"})
+_DISCOVERY_UNITTEST_FLAGS = frozenset({"-v", "-q", "--verbose", "--quiet"})
+
+
+def _local_dir(operand: str, root) -> bool:
+    """A project-relative directory: no absolute path, no traversal, no home
+    or variable expansion, and, when ``root`` is given, an existing directory
+    inside it."""
+    path = PurePosixPath(operand)
+    if (not operand or path.is_absolute() or ".." in path.parts or operand.startswith("~")
+            or any(c in operand for c in "$`*?[]{}:")):
+        return False
+    if root is None:
+        return True
+    target = (Path(root) / operand)
+    try:
+        return target.is_dir() and target.resolve().is_relative_to(Path(root).resolve())
+    except OSError:
+        return False
+
+
+def discovers_added_tests(argv, root=None) -> bool:
+    """Whether a command would also run a test file added inside ``root``:
+    pytest, or ``python -m unittest discover``, whose only options are
+    output verbosity and whose only operands are project-relative
+    directories (for unittest, ``-s``/``-t`` values). An explicit file, a
+    node id, a filter, any other flag, an absolute or outside path, or an
+    unknown form is refused, so nothing private or outside the copy is ever
+    named (root reviews of b24b6db and 2d9be52). The interpreter is the
+    approved one, left as it is."""
+    argv = [str(a) for a in argv]
+    if not argv or is_filtered(argv):
+        return False
+    head = Path(argv[0]).name
+    if head in _PYTEST_NAMES:
+        rest = argv[1:]
+    elif head.startswith("python") and argv[1:3] == ["-m", "pytest"]:
+        rest = argv[3:]
+    elif head.startswith("python") and argv[1:4] == ["-m", "unittest", "discover"]:
+        rest, i = argv[4:], 0
+        while i < len(rest):
+            arg = rest[i]
+            if arg in _DISCOVERY_UNITTEST_FLAGS:
+                i += 1
+            elif arg in ("-s", "-t") and i + 1 < len(rest) and _local_dir(rest[i + 1], root):
+                i += 2
+            else:
+                return False
+        return True
+    else:
+        return False
+    for arg in rest:
+        if arg.startswith("-"):
+            if arg not in _DISCOVERY_PYTEST_FLAGS:
+                return False
+        elif _test_family(arg) or not _local_dir(arg, root):
+            return False
+    return True
 
 
 def uncovered_tests(changed, argvs) -> List[str]:
@@ -752,6 +1015,9 @@ class GateReceipt:
     #: (case_record), None past its bound (Codex review of 67c9fad, S1: the
     #: 2,000-character tail lost the names that told two skips apart).
     cases: Optional[dict] = None
+    #: Whether the command's own leftover processes were confirmed stopped;
+    #: None when it left none. False is an unknown external effect.
+    cleanup_complete: Optional[bool] = None
 
 
 def _test_count(output):
@@ -801,9 +1067,15 @@ class GateSuite:
     entries live for this runner instance and only successful receipts are kept.
     """
 
-    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=()):
+    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=(), report_env=None, isolation=()):
         from .project import Project
 
+        #: Reporting-only environment for the runner (scratch_receipt's case
+        #: lines); never selection, never a different command.
+        self.report_env = dict(report_env or {})
+        #: An OS sandbox launcher put in front of each command, for a scratch
+        #: run of a reviewer's test only (runtime._scratch_isolation).
+        self.isolation = tuple(isolation)
         self.cwd = Path(cwd).resolve()
         self.project = Project(self.cwd, exclude=exclude)
         self.commands = tuple(commands)
@@ -819,7 +1091,8 @@ class GateSuite:
 
     def cheap(self):
         view = GateSuite([c for c in self.commands if c.cheap], cwd=self.cwd,
-                         exclude=self.project.exclude)
+                         exclude=self.project.exclude, report_env=self.report_env,
+                         isolation=self.isolation)
         view._cache = self._cache
         return view
 
@@ -829,6 +1102,9 @@ class GateSuite:
         if path is None:
             return ''
         files = [Path(__file__), Path(path)]
+        # The shipped producer a declared report selects is part of the
+        # runner: changed bytes must miss the cache (root review of f0b4827).
+        files += [_declared_producer(command.argv)] if any(REPORT_TOKEN in a for a in command.argv) else []
         # Include explicit runner scripts outside the project as well.
         files += [cwd / a for a in command.argv[1:] if (cwd / a).is_file()]
         digest = hashlib.sha256()
@@ -864,13 +1140,16 @@ class GateSuite:
                 if command.cacheable and runner and key in self._cache:
                     receipts.append(replace(self._cache[key], cached=True))
                     continue
-                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, fresh) as (argv, env, path, expected):
-                    returncode, output, cleanup = _run_owned(argv, cwd=cwd, timeout=command.timeout, env=env)
+                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, dict(fresh, **self.report_env)) \
+                        as (argv, env, path, expected):
+                    returncode, output, cleanup = _run_owned([*self.isolation, *argv], cwd=cwd,
+                                                             timeout=command.timeout, env=env)
                     report = read_report(path, expected) if returncode is not None else None
                 if returncode is None:
                     raise _GateTimeout(output, cleanup)
                 if cleanup:
                     output = (output + '\n' + _cleanup_note(cleanup)).strip()
+                    base['cleanup_complete'] = _cleanup_confirmed(cleanup)
                 count = _test_count(output)
                 status, reason = ('passed', 'exit 0') if returncode == 0 else ('failed', 'nonzero exit')
                 if count == 0:
@@ -880,6 +1159,11 @@ class GateSuite:
                         status, reason = 'blocked', 'test count unavailable'
                     elif count < command.minimum_tests:
                         status, reason = 'failed', 'fewer tests than required'
+                if base.get('cleanup_complete') is False:
+                    # Whatever the exit said: processes the command left
+                    # behind were not confirmed stopped, an unknown effect,
+                    # never a pass (root review of b49a0cb, R5).
+                    status, reason = 'error', 'left processes whose stop was not confirmed'
                 receipt = GateReceipt(**base, status=status, reason=reason,
                                       returncode=returncode, output=output[-_TAIL_CHARS:], tests=count,
                                       report=report, cases=case_record(output, runner_of(command.argv)))
@@ -887,7 +1171,9 @@ class GateSuite:
                 # Still an error, never a product failure: what was printed
                 # before the deadline is kept so the hang can be diagnosed.
                 receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s',
-                                      output=((_cleanup_note(exc.cleanup) + '\n' + exc.output).strip())[-_TAIL_CHARS:])
+                                      output=((_cleanup_note(exc.cleanup) + '\n' + exc.output).strip())[-_TAIL_CHARS:],
+                                      cleanup_complete=(None if not exc.cleanup
+                                                        else _cleanup_confirmed(exc.cleanup)))
             except OSError as exc:
                 receipt = GateReceipt(**base, status='blocked', reason=f'runner unavailable: {exc}')
             if self.project.fingerprint() != source:
@@ -1009,9 +1295,21 @@ def operand_paths(argv, root=None, cwd='.') -> List[str]:
     read from the command's ``cwd`` (R5)."""
     import posixpath
     out = []
+    modules = unittest_modules(argv, root, cwd)
+    if modules is not None:
+        # A whole module is its file: ``tests.test_app`` names
+        # tests/test_app.py (root review of d48014d, 2026-10-30).
+        return [_module_file(m, root, cwd) if root is not None else m.replace('.', '/') + '.py' for m in modules]
+    unittest = _is_unittest([str(a) for a in argv])
     for arg in _runner_args(argv):
         arg = str(arg)
         if arg.startswith('-') or '::' in arg:
+            continue
+        if unittest and _MODULE_NAME.match(arg):
+            # A dotted unittest token that did not read as a whole module
+            # above is a selection inside one (``pkg.module.Class.test``) or a
+            # module this project does not hold: it names no file whole
+            # (root's counterexample on 6527479725, 2026-10-30).
             continue
         if root is not None and arg.startswith(str(root).rstrip('/') + '/'):
             arg = arg[len(str(root).rstrip('/')) + 1:]
@@ -1081,6 +1379,67 @@ def _config_addopts(path: Path) -> Optional[str]:
         return None
 
 
+#: The selection ``config_selection`` records for a command whose runner
+#: ``runner_of`` cannot name: what it selects is unknown, so no whole-file
+#: reading is ever granted from it. Matched whole, never as a substring.
+RUNNER_UNKNOWN = 'test runner not recognised from argv; selection not established'
+
+#: The value options ``unittest_discover_command`` admits, by spelling.
+_DISCOVER_VALUE_OPTIONS = {'-s': '-s', '--start-directory': '-s', '-p': '-p', '--pattern': '-p',
+                           '-t': '-t', '--top-level-directory': '-t'}
+
+
+def unittest_discover_command(argv) -> bool:
+    """Whether ``argv`` is a whole ``python -m unittest discover`` command in
+    the strict shape the harness can name as a command (cycle17, cycle16
+    R21: the exact required discover command passed with 66 cases and was
+    refused because no runner could be told from it).
+
+    The interpreter's basename is ``python``, ``pythonN`` or ``pythonN.M``
+    (the same grammar ``_is_unittest`` reads); then exactly ``-m unittest
+    discover``; then only the plain runner flags (``-v``, ``--verbose``,
+    ``-q``, ``--quiet``, ``-b``, ``--buffer``, ``-f``, ``--failfast``, ``-c``,
+    ``--catch``), the harness's report annotation, and each of the start
+    directory, pattern and top-level directory at most once, spelled
+    ``-s DIR``, ``--start-directory DIR`` or ``--start-directory=DIR`` (and
+    likewise ``-p``/``--pattern``, ``-t``/``--top-level-directory``), with a
+    non-empty value that does not start with ``-``. Anything else is not
+    this shape: ``-k``, an attached short value (``-stests``), a missing or
+    empty value, a repeated option, an unknown option, a positional argument,
+    a wrapper or ``-c`` code.
+
+    A command shape only: it names no runner for ``runner_of``, no file for
+    ``operand_paths`` and no case. A ``-t`` command is recognised here but
+    still carries ``-t``, which ``is_filtered`` reads as a selection flag,
+    so a command citation still refuses it (a narrow false negative)."""
+    argv = [str(a) for a in argv or ()]
+    if len(argv) < 4 or not _is_unittest(argv) or argv[3] != 'discover':
+        return False
+    seen = set()
+    rest = argv[4:]
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token.startswith(REPORT_TOKEN_PREFIX) or token in _UNITTEST_PLAIN_FLAGS:
+            i += 1
+            continue
+        name, eq, value = token.partition('=')
+        if name in _DISCOVER_VALUE_OPTIONS and (eq == '' or name.startswith('--')):
+            if not eq:
+                if i + 1 >= len(rest):
+                    return False
+                value = rest[i + 1]
+                i += 1
+            option = _DISCOVER_VALUE_OPTIONS[name]
+            if option in seen or not value or value.startswith('-'):
+                return False
+            seen.add(option)
+            i += 1
+            continue
+        return False
+    return True
+
+
 def config_selection(argv, cwd, root) -> str:
     """Test selection a command takes from outside its argv: ``addopts`` in
     pytest's configuration files from ``cwd`` up to ``root`` and
@@ -1096,8 +1455,8 @@ def config_selection(argv, cwd, root) -> str:
     # wrapper around python still loads conftest hooks, and none of the pytest
     # checks below apply to it. Its selection is unknown, never empty (Codex
     # review of 0d834bd, Y1).
-    if runner_of(argv) is None:
-        found.append('test runner not recognised from argv; selection not established')
+    if runner_of(argv, root, cwd) is None:
+        found.append(RUNNER_UNKNOWN)
     names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
     # Plugins named in PYTEST_PLUGINS load into every pytest the gate starts
     # and can drop collected tests silently (Codex review of d157378, T3).
@@ -1229,14 +1588,78 @@ def case_key(name: str) -> str:
     return f"{name[:200]}\u2026sha256:{hashlib.sha256(name.encode('utf-8', 'surrogatepass')).hexdigest()}"
 
 
-def runner_of(argv) -> Optional[str]:
+_UNITTEST_PLAIN_FLAGS = frozenset({'-v', '--verbose', '-q', '--quiet', '-b', '--buffer', '-f', '--failfast',
+                                   '-c', '--catch'})
+_MODULE_NAME = re.compile(r'^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$')
+
+
+def _module_file(module: str, root, cwd='.') -> Optional[str]:
+    """The project-relative ``.py`` file a dotted unittest token names when
+    that file exists under ``root`` (read from the command's ``cwd``), else
+    None: a package, a missing module or a ``module.Class.test`` selection
+    resolves to no file. Read only; nothing is imported."""
+    import posixpath
+    if root is None:
+        return None
+    cwd = str(cwd or '.')
+    try:
+        base = Path(root).resolve()
+        if posixpath.isabs(cwd):
+            here = Path(cwd).resolve()
+            rel_cwd = here.relative_to(base).as_posix() if here.is_relative_to(base) else None
+        else:
+            rel_cwd = posixpath.normpath(cwd)
+        if rel_cwd is None:
+            return None
+        rel = posixpath.normpath(posixpath.join(rel_cwd, module.replace('.', '/') + '.py'))
+        if rel.startswith('..'):
+            return None
+        return rel if (base / rel).is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def unittest_modules(argv, root=None, cwd='.') -> Optional[List[str]]:
+    """The modules a plain ``python -m unittest <module>...`` command runs
+    whole (only the runner's plain flags and the harness report token
+    beside them), or None for any other unittest form (``discover``, a
+    file path, a selection inside a module, a filter): the one unittest
+    form whose selection the harness can establish, so a declared report
+    of it can discharge what names those modules (root review of d48014d,
+    2026-10-30). With ``root``, a dotted token is a module only when it
+    resolves to an existing ``.py`` file under the project from the
+    command's ``cwd``: ``tests.test_sample.Target.test_own`` is a selection
+    inside a module and read as one, so a run of it is never a whole-module
+    run (root's counterexample on 6527479725, 2026-10-30). Without a root
+    the token's shape alone is read, as before."""
+    argv = [str(a) for a in argv]
+    if not _is_unittest(argv):
+        return None
+    modules = []
+    for token in argv[3:]:
+        if token in _UNITTEST_PLAIN_FLAGS or token.startswith(REPORT_TOKEN_PREFIX):
+            continue
+        if token.startswith('-') or token == 'discover' or not _MODULE_NAME.match(token):
+            return None
+        if root is not None and _module_file(token, root, cwd) is None:
+            return None
+        modules.append(token)
+    return modules or None
+
+
+def runner_of(argv, root=None, cwd='.') -> Optional[str]:
     """Which test runner a command starts: 'pytest', 'node' (``node
-    --test``) or None when neither can be told from its argv."""
+    --test``), 'unittest' (the plain module form ``python -m unittest
+    <module>...``, whose selection is its modules whole; with ``root`` the
+    modules must resolve to files) or None when none can be told from its
+    argv."""
     argv = [str(a) for a in argv]
     if _is_pytest(argv):
         return 'pytest'
     if argv and Path(argv[0]).name.startswith('node') and '--test' in argv:
         return 'node'
+    if unittest_modules(argv, root, cwd) is not None:
+        return 'unittest'
     return None
 
 
@@ -1305,7 +1728,32 @@ def case_record(output: str, runner: Optional[str] = None) -> Optional[dict]:
             qualified.add(key)
     # Keys a pytest verbose line printed: only these carry their file (V1).
     record['qualified'] = sorted(qualified)
+    # Executed cases the runner printed as failed (scratch_receipt): a
+    # subset of ``executed``, so a reader of the other keys is unaffected.
+    record['failed'] = _failed_cases(output, runner)
     return record
+
+
+def _failed_cases(output: str, runner: Optional[str] = None) -> dict:
+    """``case_key``-to-count of the executed case lines that report a
+    failure: pytest FAILED or ERROR, TAP ``not ok``, spec \u2716."""
+    failed = {}
+    node_lines, pytest_lines = runner in (None, 'node'), runner in (None, 'pytest')
+    for line in (output or '').splitlines():
+        spec = _SPEC_CASE.match(line) if node_lines else None
+        tap = None if spec or not node_lines else _TAP_CASE.match(line)
+        case = None if spec or tap or not pytest_lines else _PYTEST_CASE.match(line)
+        if spec and spec.group(1) == '\u2716' and not (spec.group(3) or ''):
+            name = spec.group(2)
+        elif tap and tap.group(1).lower() == 'not ok' and not tap.group(3):
+            name = tap.group(2)
+        elif case and case.group(2) in ('FAILED', 'ERROR'):
+            name = case.group(1)
+        else:
+            continue
+        key = case_key(name)
+        failed[key] = failed.get(key, 0) + 1
+    return failed
 
 
 def skipped_cases(receipt):
@@ -1572,7 +2020,6 @@ def test_change_problems(record, original, current, receipts):
     return problems
 
 
-
 test_change_authorizations.__test__ = False
 test_change_problems.__test__ = False
 
@@ -1696,6 +2143,112 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
     return GateResult(passed, 'original tests', 0 if passed else 1, output, receipts), ''
 
 
+def scratch_report_env(argv) -> dict:
+    """The reporting-only environment under which a pytest command prints
+    one ``path::name OUTCOME`` line per case whatever ``-q`` its argv
+    carries, so the harness can name the scratch cases it executed. Empty
+    for any other runner, whose case lines already carry names."""
+    if runner_of(argv) != 'pytest':
+        return {}
+    level = 0
+    for arg in (str(a) for a in argv):
+        if arg in ('--verbose',):
+            level += 1
+        elif arg in ('--quiet',):
+            level -= 1
+        elif re.fullmatch(r'-v+', arg):
+            level += len(arg) - 1
+        elif re.fullmatch(r'-q+', arg):
+            level -= len(arg) - 1
+    if level >= 1:
+        return {}
+    extra = '-' + 'v' * (1 - level)
+    inherited = os.environ.get('PYTEST_ADDOPTS', '')
+    return {'PYTEST_ADDOPTS': f'{inherited} {extra}'.strip()}
+
+
+def scratch_receipt(results, scratch: dict, others: dict) -> dict:
+    """Whether the harness's own runs of approved commands executed every
+    case each scratch test file declares, and each passed (r09 root
+    decision on 40b2133: a new file name alone is not execution).
+
+    ``results`` are GateResults from the disposable copy; ``scratch`` and
+    ``others`` map copy-relative test paths to bytes, the scratch files and
+    the handed test files. A case counts only by identity: a pytest line
+    naming the scratch file, or a node case name the scratch file declares
+    and no handed test file does. Each instance a runner printed is kept
+    with its own id and count (root review of 1c14ea9: a parametrized case
+    whose True instance passed and False instance skipped was collapsed to
+    its function and passed). A declared case is passed only when it has at
+    least one instance and every instance executed and passed; one failed
+    instance makes it failed, and a skipped or otherwise unexecuted one
+    makes it not executed. ``status`` is ``passed`` only when every declared
+    case passed, ``failed`` when any failed, ``not run`` otherwise. Nothing
+    here is a verdict on a requirement. No command text or path outside the
+    copy is returned."""
+    out = dict(files=sorted(scratch), cases=[], receipts=[])
+    declared = {}
+    for path, data in sorted(scratch.items()):
+        names = declared_cases(path, data)
+        if not names:
+            return dict(out, status='not run', reason=f'{path}: its case names could not all be read')
+        declared[path] = set(names)
+    taken = set()
+    for path, data in others.items():
+        taken |= set(declared_cases(path, data) or ())
+    instances = {}
+    for result in results:
+        for receipt in result.receipts:
+            out['receipts'].append(dict(id=receipt.id, status=receipt.status, reason=receipt.reason,
+                                        tests=receipt.tests, source_hash=receipt.source_hash))
+            if receipt.status in ('blocked', 'error', 'skipped') or not isinstance(receipt.cases, dict):
+                continue
+            cases = receipt.cases
+            bad = cases.get('failed') or {}
+            qualified = set(cases.get('qualified') or ())
+            for kind in ('executed', 'skipped', 'other'):
+                for key, count in (cases.get(kind) or {}).items():
+                    if key in qualified:
+                        file, _, rest = key.partition('::')
+                        name = rest.split('::')[-1].split('[', 1)[0]
+                        paths = [p for p in declared
+                                 if p in (file, posixpath.normpath(posixpath.join(receipt.cwd, file)))]
+                    else:
+                        name = key
+                        paths = [p for p in declared if key in declared[p]] if key not in taken else []
+                    if len(paths) != 1 or name not in declared[paths[0]]:
+                        continue
+                    seen = instances.setdefault((paths[0], name), {})
+                    if kind == 'executed':
+                        failed = min(int(bad.get(key, 0)), int(count))
+                        outcomes = ['failed'] * failed + ['passed'] * (int(count) - failed)
+                    else:
+                        outcomes = ['skipped' if kind == 'skipped' else 'not executed'] * int(count)
+                    seen.setdefault(key, []).extend(outcomes)
+    verdicts = {}
+    rows = []
+    for path, names in declared.items():
+        for name in names:
+            seen = instances.get((path, name), {})
+            outcomes = [o for runs in seen.values() for o in runs]
+            verdicts[(path, name)] = ('failed' if 'failed' in outcomes
+                                      else 'passed' if outcomes and set(outcomes) == {'passed'}
+                                      else 'not executed')
+            if not seen:
+                rows.append(f'{path}::{name}: not executed')
+            for key, runs in seen.items():
+                label = key if '::' in key else f'{path}::{key}'
+                rows.extend(f'{label}: {o}' for o in runs)
+    out['cases'] = sorted(rows)
+    if 'failed' in verdicts.values():
+        return dict(out, status='failed', reason='a scratch case instance executed and failed')
+    missing = [k for k, v in verdicts.items() if v != 'passed']
+    if missing:
+        return dict(out, status='not run',
+                    reason=f'{len(missing)} declared scratch case(s) with an instance not shown executed and passed')
+    return dict(out, status='passed', reason='every instance of every declared scratch case executed and passed')
+
+
 def _relative(cwd: str, operand: str, copy: Path) -> str:
     """``operand`` as a project-relative path, for a command run in ``cwd``."""
     path = Path(operand)
@@ -1712,8 +2265,13 @@ def skipped_count(receipt) -> Optional[int]:
     """Cases a check skipped: the structured report's count when it parsed,
     else the runner's own summary line, else None (unknown, never zero)."""
     report = getattr(receipt, 'report', None) or {}
-    if report.get('state') == 'parsed':
-        return int(report['counts']['skipped'])
+    if isinstance(report, dict) and report.get('state') == 'parsed':
+        counts = report.get('counts')
+        value = counts.get('skipped') if isinstance(counts, dict) else None
+        # A parsed report that lost its count is an incomplete record:
+        # unknown (None), never zero and never a crash in a consumer that
+        # is deciding whether to refuse it (root's control on d88d8c0).
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
     output = getattr(receipt, 'output', '') or ''
     node = re.findall(r'(?m)^(?:#|\u2139)\s*(?:skipped|skip) (\d+)\s*$', output)
     if node:

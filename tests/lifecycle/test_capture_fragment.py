@@ -13,12 +13,14 @@ replies are routing proof, not judgement.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from quadratus.session import Session
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_audit_findings import REPAIR_SCOPE
-from tests.lifecycle.test_harness_capture import _decl, _profile, _run, browser
+from tests.lifecycle.test_harness_capture import _decl, _observed, _profile, _run, browser
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -39,13 +41,34 @@ PAGE = ("<html><head><link rel=icon href='data:,'></head><body><div class=toolba
         "</script></body></html>\n")
 
 
+#: This task's own scenarios: what Clear does at the prescribed fragment,
+#: one per covered requirement. The inherited REPAIR_SCOPE proof is about an
+#: Import toolbar this page never has, and a verdict about it would describe
+#: nothing of the Clear behaviour the capture reaches.
+CLEAR_PROOFS = [
+    dict(id="P1", requirements=["R1"], operation="Clear is clicked with the field filled from the fragment",
+         state="the field holds Alpha and Clear is enabled", expect="the field is empty and Clear is disabled",
+         location="templates/index.html", evidence="capture"),
+    dict(id="P2", requirements=["R2"], operation="the capture loads /#q=Alpha and runs the declared steps",
+         state="the page is loaded with the fragment",
+         expect="an enabled Clear is reached and clicked and the final wait reaches Clear disabled",
+         location="templates/index.html", evidence="capture"),
+]
+#: The scripted reviewer's observations of the renders the capture produced.
+CLEAR_OBSERVED = {
+    "R1": "SUFFICIENT the renders after the Clear click show the search field empty and the Clear button disabled",
+    "R2": "SUFFICIENT the capture target ends in #q=Alpha and the final wait reached #clear:disabled after the click",
+}
+
+
 def _build(call, replay):
     H.write(call, {"templates/index.html": PAGE})
     return 'Clear follows the field.\nCHANGED: ["templates/index.html"]'
 
 
 def _task(capture):
-    return _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=capture), "Disable Clear when empty.")
+    return _decl("KIND: frontend standard", dict(REPAIR_SCOPE, proofs=CLEAR_PROOFS, capture=capture),
+                 "Disable Clear when empty.")
 
 
 def _redeclare(capture):
@@ -62,7 +85,8 @@ def _summary(replay):
 def test_a_dropped_fragment_is_redeclared_from_the_goal_and_captured_as_written(tmp_path, monkeypatch):
     profile, _ = _profile(tmp_path)
     replay = _run(tmp_path, monkeypatch, [REQS + _task(DROPPED)], {"t1": _build}, profile=profile,
-                  goal=GOAL, roles={"capture-redeclare": _redeclare(PRESCRIBED)})
+                  goal=GOAL, roles={"capture-redeclare": _redeclare(PRESCRIBED),
+                                    "design-review": _observed(CLEAR_OBSERVED)})
     [redeclare] = replay.of("capture-redeclare")
     assert f"## Goal (verbatim)\n\n{GOAL}" in redeclare.prompt
     assert "R2: the capture loads /#q=Alpha and reaches the disabled Clear" in redeclare.prompt
@@ -73,18 +97,40 @@ def test_a_dropped_fragment_is_redeclared_from_the_goal_and_captured_as_written(
     assert record["recapture"]["capture"] == PRESCRIBED and record["recapture"]["verified"] is True
     assert _summary(replay)["target"].endswith("/#q=Alpha")
     assert replay.result.completed, replay.result.error
+    # The rows, the capture and the shown review context are one state
+    # (root's recapture identity gap on c9a665b): each capture row claims
+    # the effective declaration, keeps the dispatched one as lineage, and
+    # was measured and judged afresh by the review that saw that state.
+    effective = Session._capture_context(SimpleNamespace(capture=PRESCRIBED))
+    dispatched = Session._capture_context(SimpleNamespace(capture=DROPPED))
+    rows = {o["oid"]: o for o in H.result_json(replay)["evidence_obligations"]
+            if o["task"] == "t1" and o["modality"] == "capture"}
+    assert len(rows) == 2 and record["rebound_rows"] == sorted(rows) and record["declared_capture"] == DROPPED
+    assert record["capture"] == PRESCRIBED and not record["review_stale"] and record["authority_ok"]
+    for oid, o in rows.items():
+        assert dict(o["scenario"])["capture"] == effective and o["capture_declared"] == dispatched
+        assert [entry["capture"] for entry in o["capture_lineage"]] == [dispatched]
+        assert o["capture_lineage"][0]["sufficiency"] == "unjudged" and "the capture" in o["capture_lineage"][0]["why"]
+        assert record["review_context"]["rows"][oid]["scenario"] == o["scenario"]
+        assert o["execution"] == "ran" and o["receipts"][0].startswith("capture:t1:")
+        assert o["sufficiency"] == "sufficient" and o["judged_by"] == record["final_review"]["reviewer"]
+    shown = replay.of("design-review")[-1].prompt
+    assert "R2 (revision 1): the capture loads /#q=Alpha and reaches the disabled Clear" in shown
 
 
 @browser
 def test_the_prescribed_fragment_declared_at_dispatch_needs_no_redeclaration(tmp_path, monkeypatch):
     profile, _ = _profile(tmp_path)
-    replay = _run(tmp_path, monkeypatch, [REQS + _task(PRESCRIBED)], {"t1": _build}, profile=profile, goal=GOAL)
+    replay = _run(tmp_path, monkeypatch, [REQS + _task(PRESCRIBED)], {"t1": _build}, profile=profile, goal=GOAL,
+                  roles={"design-review": _observed(CLEAR_OBSERVED)})
     first = replay.of("orchestrator")[0].prompt
     assert "It may end in a #fragment (for example /#q=Alpha)" in first
     assert "The harness adds nothing to the path" in first
     assert replay.of("capture-redeclare") == []
     assert _summary(replay)["target"].endswith("/#q=Alpha")
     assert replay.result.completed, replay.result.error
+    rows = [o for o in H.result_json(replay)["evidence_obligations"] if o["task"] == "t1" and o["modality"] == "capture"]
+    assert rows and not any(o.get("capture_lineage") or o.get("capture_declared") for o in rows), "nothing was redeclared"
 
 
 @browser

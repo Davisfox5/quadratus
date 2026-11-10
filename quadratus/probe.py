@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .config import Settings
-from .latest import alias_env_var, record_resolution
+from .latest import alias_env_var, record_resolution, resolve_model
 from .registry import MODE_ROSTERS, ORCHESTRATOR_CHAIN, ROSTER, VENDORS, resolve
 from .runtime import Fleet, _looks_exhausted
 
@@ -155,17 +155,24 @@ def probe_models(
                 # all, and what does it say it is" is the question that
                 # matters for this row.
                 candidates = [""]
-            elif spec.floating:
-                candidates = list(spec.alias_chain)
             else:
-                candidates = [spec.alias]
+                # The family's resolution for this machine (the installed
+                # client's catalogue, or the alias the CLI resolves): the one
+                # string the run would send. A family that resolves to
+                # nothing is reported with the reason and never guessed at.
+                found = resolve_model(key, installed_client=getattr(
+                    active._vendor_provider(spec.provider), "client_version", None))
+                if not found.available:
+                    results.append(ProbeResult(key, "", False, detail=f"unavailable: {found.reason}"))
+                    continue
+                candidates = [found.wire or ""]
             rejected: List[str] = []
             for alias in candidates:
                 if on_progress:
                     on_progress(f"{key} -> {alias}")
                 started = time.monotonic()
                 try:
-                    reply = active.provider_for(key).for_model(alias).generate(
+                    reply = active.provider_for(key).for_seat(alias, effort="low").generate(
                         PROBE_PROMPT, system="Answer in as few words as possible."
                     )
                 except Exception as exc:  # noqa: BLE001 -- the probe reports, never raises

@@ -17,6 +17,7 @@ from .monitor import (
     _read_json,
     _read_regular,
     _tail_jsonl,
+    render_breakdown_html,
     render_markdown,
 )
 
@@ -182,6 +183,8 @@ def _activity_line(event, work=None, reply_text=None, check_text=None):
             return f'{_step(failed[1])}: tests failed; planning a correction'
         if 'RunBudgetExceeded' in message and message.startswith('call ended:'):
             return 'Usage limit reached; the run is stopping'
+        if 'FinishReserved' in message and message.startswith('call ended:'):
+            return 'Ordinary work stopped to keep room for the goal check and audit'
     return None
 
 
@@ -480,10 +483,15 @@ def render_story(status):
     result, events, replies = None, [], []
     if run_dir:
         result, _ = _read_json(run_dir / 'result.json')
+        if result is None:
+            # Absent or unreadable export: the committed terminal decides.
+            from .monitor import _terminal_result
+            result, _ = _terminal_result(run_dir)
         events, _ = _tail_jsonl(run_dir / 'activity.jsonl')
         replies = _read_replies(run_dir)
     work = _task_work(events, result)
-    budget, _ = _read_json(run_dir / 'budget.json') if run_dir else (None, None)
+    from .jobstore import read_budget
+    budget, _ = read_budget(run_dir) if run_dir else (None, None)
     budget = budget or {}
     preserved = _preserved_reply(run_dir, budget) if run_dir and status.get('finished') is True else None
     if preserved:
@@ -661,6 +669,7 @@ def render_story(status):
                    + ('<p class="qm-note">Shown up to 6,000 characters; the whole reply is in the saved run '
                       'files.</p>' if reply['truncated'] else '') + '</details></article>')
     out.append('</div></section>')
+    out.append(render_breakdown_html(status.get('breakdown')))
     out.append('<details><summary>Run records and full report</summary>'
                '<p class="qm-note">Activity shows the last saved update. Team replies describe what agents reported; '
                'the Tests box shows results saved by the test runner. Tokens include cached input; actual cost is not shown.</p><pre>'

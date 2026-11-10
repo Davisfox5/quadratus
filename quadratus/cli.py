@@ -117,6 +117,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 **({"repair_tests": tuple(args.repair_tests)} if getattr(args, "repair_tests", None) else {}),
                 **({"test_changes": args.test_changes} if getattr(args, "test_changes", None) else {}),
                 max_tasks=args.max_tasks, mode=args.mode,
+                **({"resume_from": args.resume} if getattr(args, "resume", None) else {}),
                 security_verdict_json=getattr(args, "security_verdict_json", False),
                 survey=(SurveyConfig(recovery_tasks=args.survey_recovery)
                         if getattr(args, "survey_recovery", None) else None),
@@ -259,7 +260,7 @@ def _run_monitor(args: argparse.Namespace) -> int:
     project = status.get("project")
     history = run_history(project, state_dir=args.state_dir, limit=args.history) \
         if project and project != "unknown" else []
-    print(render_text(status, history))
+    print(render_text(status, history, calls=bool(getattr(args, "calls", False))))
     return 0
 
 
@@ -349,6 +350,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--session",
         action="store_true",
         help="Run the session engine instead of the collaboration pipeline.",
+    )
+    engine.add_argument(
+        "--resume",
+        metavar="RUN",
+        help=("Resume an interrupted run of the same job (a folder under the state "
+              "directory's runs) as its next episode: its record, lineage and spent "
+              "allowance carry over. Refused before any call when the run is sealed, "
+              "already resumed, ended with a call in flight or unknown usage, or when "
+              "the source, goal, policy, limits, settings, gates or dependency trees differ."),
     )
     engine.add_argument(
         "--max-tasks",
@@ -498,7 +508,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="An existing test file this run may repair (exact path). Its original cases must "
                              "still run unskipped; every other original test is restored. Repeat as needed.")
     engine.add_argument("--test-changes", metavar="FILE",
-                        help="Operator-authored exact goal-bound test replacements/retirements as JSON.")
+                        help="Operator JSON approval for exact existing test cases intentionally replaced or retired "
+                             "under this goal. Planned changes still require approval of the resulting diff "
+                             "unless its exact current_sha256 is preapproved.")
     watch = parser.add_argument_group(
         "monitor",
         "Read what the engine is doing from the run directory and exit. "
@@ -519,6 +531,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "A Stage B series directory (manifest.json and run.lock). Supplies the "
             "running cell's project and the packet's token limits to --monitor."
+        ),
+    )
+    watch.add_argument(
+        "--calls",
+        action="store_true",
+        help=(
+            "With --monitor: also print every call of the run (task, role, seat, input, output, "
+            "cached input, model turns, tool steps, input per turn, seconds) under the by-role summary."
         ),
     )
     watch.add_argument(
@@ -549,8 +569,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    if (args.series or args.serve is not None) and not args.monitor:
-        parser.error("--series and --serve are only used with --monitor")
+    if (args.series or args.serve is not None or args.calls) and not args.monitor:
+        parser.error("--series, --serve and --calls are only used with --monitor")
     if args.monitor:
         if args.prompt or args.probe or args.probe_all or args.status or args.policy_preview:
             parser.error("--monitor takes no prompt and cannot be combined with probe, status or policy preview")
@@ -563,6 +583,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ("--readiness", args.readiness), ("--repair-test", args.repair_tests),
         ("--test-changes", args.test_changes),
         ("--tasks", args.tasks), ("--rulings", args.rulings),
+        ("--resume", args.resume),
         ("--survey-recovery", args.survey_recovery is not None),
         ("--direct-tier", args.direct_tier),
     ]

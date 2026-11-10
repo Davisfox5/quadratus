@@ -138,19 +138,23 @@ def self_capture_state(task_id: str, *, goal: str, requirements, scope: dict,
     The URL is not known before a self-capturing lead runs. The subject is
     therefore the goal and covered requirement texts, with any declared
     visual state. Without numbered requirements, the scope's result and
-    acceptance define that claim. Permitted paths, size estimates and test
-    bindings may change in a continuation; a different visual claim may not.
+    acceptance define that claim. Permitted paths, size estimates and test bindings
+    may change in a continuation; a different visual claim may not.
 
     Only an explicit continuation of a recorded, versioned self-capture
     contract inherits its lineage. A legacy None carries no identity to
     inherit, and harness-capture contracts keep their existing state rules.
     """
     claims = sorted((str(rid), str(text)) for rid, text in requirements)
+    captures = [{k: p.get(k) for k in ("operation", "state", "expect", "location", "requirements")}
+                for p in scope.get("proofs") or () if p.get("evidence") == "capture"]
     subject = dict(goal=hashlib.sha256(goal.encode()).hexdigest(), requirements=claims,
-                   capture=scope.get("capture"))
+                   capture=scope.get("capture"),
+                   scenarios=sorted(captures, key=lambda p: json.dumps(p, sort_keys=True)))
     if not claims:
         subject["declared"] = dict(result=scope.get("intended_result"),
                                    acceptance=scope.get("acceptance") or [])
+    # Use JSON's own shape on both sides, including after checkpoint restore.
     subject = json.loads(canonical(subject))
     previous = (predecessor or {}).get("intended_state")
     required = (predecessor or {}).get("required") or {}

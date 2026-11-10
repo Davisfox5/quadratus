@@ -54,7 +54,14 @@ def test_a_task_scope_that_overflows_its_packet_is_refused_before_the_lead_call(
     assert replay.of("orchestrator"), "the run itself was admitted"
     assert not replay.of("lead") and not replay.of("collaborator")
     assert not replay.result.completed
-    assert "Required role packet exceeds 12000 bytes" in replay.result.error
+    # Cycle21: refused at intake and sent back measured, before any charge,
+    # admission or call (it used to stop the run at dispatch, after the
+    # charge). This script names no smaller task, so the run ends unmet.
+    data = _result(replay)
+    (refused,) = data["packet_refusals"]
+    assert refused["limit"] == 12_000 and refused["needed"] > 12_000
+    assert any("role packet for this task would be" in c.prompt for c in replay.of("orchestrator"))
+    assert not data.get("task_admissions") and not [e for e in data["slot_ledger"] if e["event"] == "charged"]
     assert H.gate_results(replay) == []
 
 

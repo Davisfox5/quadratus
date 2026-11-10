@@ -171,11 +171,34 @@ def fake_launch(replay: Replay):
                     prompt, str(cwd or ""), list(argv))
         replay.calls.append(call)
         answer = replay.responder(call, replay)
+        if isinstance(answer, subprocess.CompletedProcess):
+            # A scripted process result: its own exit status and stderr
+            # (cycle15: a CLI's headless-approval line arrives on stderr).
+            call.reply = answer.stdout
+            return subprocess.CompletedProcess(argv, answer.returncode, answer.stdout, answer.stderr)
         stdout = answer if isinstance(answer, str) and answer.lstrip().startswith("{") else \
             ENVELOPE[vendor](answer if isinstance(answer, str) else str(answer))
         call.reply = stdout
         return subprocess.CompletedProcess(argv, 0, stdout, "")
     return launch
+
+
+def grok_lead_routing(monkeypatch, *, trust: bool = False) -> None:
+    """Select grok:default explicitly for a case that fault-injects a Grok
+    lead (or, with ``trust``, a Grok peer). Product routing keeps it off the
+    SIMPLE rung, the escalation order and the brain trust since 2026-11-01
+    (operator directive); a case whose scenario is a Grok call puts it back
+    here, by name, exactly as routing stood before, instead of relying on
+    the route. Vendor-generic cases do not call this and run the current
+    route."""
+    from quadratus import registry, task_kinds
+    monkeypatch.setitem(task_kinds.DIFFICULTY_LADDER, "simple", "grok:default")
+    monkeypatch.setattr(task_kinds, "_LADDER_ORDER", ("grok:worker", "grok:default", "openai:sol", "claude:opus"))
+    if trust:
+        adversarial = registry.MODE_ROSTERS["adversarial"]
+        for role in ("peers", "planners"):
+            if "grok:default" not in adversarial[role]:
+                monkeypatch.setitem(adversarial, role, [*adversarial[role], "grok:default"])
 
 
 def write(call: Call, files: Dict[str, str]) -> None:
@@ -200,6 +223,45 @@ def ended_at_cap(replay, cap: int) -> bool:
             and stop.get("kind") == "cap" and stop.get("legacy") == "GoalUnconfirmedAtCap")
 
 
+def proofs_for(covers, location: str, *, operation=None, state="the project as delivered",
+               expect=None, evidence=None) -> list:
+    """An opt-in builder for a scripted planner's SCOPE ``proofs`` (proof/1):
+    one declared scenario per covered requirement, in the test file the
+    fixture's own checks execute. Fixture code calls it where its planner
+    is asked for the mapping; nothing supplies it for a planner that omits
+    it, and no lead's PROVES line, trim verdict or sufficiency is ever
+    synthesized here. ``evidence`` is the modality the fixture's planner
+    declares (``"reading"`` for a documentation scenario); omitted, the
+    scenario declares none and the product's default (test) applies: the
+    builder never infers one from the location."""
+    rids = [r.strip() for r in (covers.split(",") if isinstance(covers, str) else covers) if r.strip()]
+    return [dict(id=f"P{i}", requirements=[rid], operation=operation or f"{location} exercises {rid}",
+                 state=state, expect=expect or f"{rid} holds on the delivered source", location=location,
+                 **({"evidence": evidence} if evidence else {}))
+            for i, rid in enumerate(rids, 1)]
+
+
+_OBLIGATION_ROW = re.compile(r"^- (O\d+) \((\S+); ([^)]*)\): .*?; evidence (\w+);", re.MULTILINE)
+
+
+def obligation_ids(prompt: str, *, task=None, modality=None, requirement=None) -> list:
+    """The evidence obligation ids a judging prompt lists, filtered by task,
+    declared modality and requirement. A scripted auditor uses this to
+    address its own explicit per-obligation line to the right id; the
+    verdict text and the decision to judge stay in the fixture, and nothing
+    here approves anything."""
+    out = []
+    for oid, t, rids, mod in _OBLIGATION_ROW.findall(prompt or ""):
+        if task is not None and t != task:
+            continue
+        if modality is not None and mod != modality:
+            continue
+        if requirement is not None and requirement not in [r.strip() for r in rids.split(",")]:
+            continue
+        out.append(oid)
+    return out
+
+
 def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None, extra_checks=(), lead_runs_commands=True,
         capture_profile=None, readiness=None, record_complete=True, survey=None,
@@ -220,6 +282,12 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         monkeypatch.delenv(f"QUADRATUS_CLI_ARGS_{vendor}", raising=False)
     monkeypatch.delenv("QUADRATUS_CONTAINED", raising=False)
     monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    # These synthetic projects use pytest's built-ins and explicitly declared
+    # plugins only. Every real gate uses a fresh bytecode prefix, so automatic
+    # discovery otherwise reimports/recompiles unrelated installed plugins on
+    # every controller round. PYTEST_PLUGINS and project conftest hooks still
+    # load normally, including the real attribution producer.
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     monkeypatch.setattr(cli_providers, "_launch", fake_launch(replay))
     monkeypatch.setattr(cli_providers.CLIProvider, "available", lambda self: True)
     if lead_runs_commands:

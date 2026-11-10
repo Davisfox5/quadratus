@@ -63,7 +63,7 @@ def _pool(tmp_path, run):
 
 
 def _task(tmp_path, task_id='t1'):
-    return TaskMemory(task_id, 'openai:gpt-5.6-sol', ArtifactStore(tmp_path / '.quadratus'))
+    return TaskMemory(task_id, 'openai:sol', ArtifactStore(tmp_path / '.quadratus'))
 
 
 # -- what a worker can actually do ---------------------------------------
@@ -131,7 +131,7 @@ def test_a_mismatched_errand_costs_no_call_and_no_budget(tmp_path):
     pool = _pool(tmp_path, lambda key, prompt, **kw: calls.append(prompt) or 'done')
     task = _task(tmp_path)
     with pytest.raises(ErrandToolMismatch, match='write:true'):
-        pool.commission(task=task, parent_key='openai:gpt-5.6-sol', prompt=IMPLEMENT,
+        pool.commission(task=task, parent_key='openai:sol', prompt=IMPLEMENT,
                         label='code-1', errand='code', needs=[Need.PATCH], allow_writes=False)
     assert calls == []
     assert pool.spawned('t1') == 0
@@ -254,8 +254,8 @@ def test_the_lead_gets_the_refusal_back_without_a_worker_call(tmp_path, monkeypa
 
 def test_a_codex_worker_is_told_it_reads_through_the_shell():
     """GameTape 2026-09-25: told 'no shell', Luna answered NEED TOOL without reading."""
-    text = capability_preamble(False, "openai:gpt-5.6-luna")
+    text = capability_preamble(False, "openai:luna")
     assert "read-only shell commands" in text and "no shell" not in text
     assert "do not run tests" in text
-    assert "PATCH:" in capability_preamble(True, "openai:gpt-5.6-luna")
+    assert "PATCH:" in capability_preamble(True, "openai:luna")
     assert "no shell" in capability_preamble(False, "claude:haiku")

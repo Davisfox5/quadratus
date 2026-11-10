@@ -29,7 +29,7 @@ from quadratus.task_kinds import (
 )
 
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 GROK = "grok:default"
 GROK_WORKER = "grok:worker"
 FABLE = "claude:fable"
@@ -182,7 +182,7 @@ def test_rote_work_without_needs_still_lands_on_the_worker():
 def test_rote_work_that_must_run_commands_climbs_past_the_worker():
     """The 2026-09-14 route, with the need visible: the same rung, one seat up."""
     got = route(TaskKind.DOCS, default=OPUS, difficulty="rote", needs={Need.EXECUTE})
-    assert got == GROK
+    assert got == SOL, "grok:default is off the ladder since 2026-11-01; the next agentic seat is Sol"
 
 
 def test_rote_work_that_only_needs_a_patch_keeps_the_cheap_rung():
@@ -226,7 +226,7 @@ def test_a_pinned_kind_is_checked_for_capability_too():
 
 
 def test_escalation_from_the_worker_is_the_agentic_seat_above_it():
-    assert escalate_from(GROK_WORKER, needs={Need.EXECUTE}) == GROK
+    assert escalate_from(GROK_WORKER, needs={Need.EXECUTE}) == SOL
 
 
 def test_escalation_skips_an_unavailable_seat():
@@ -241,3 +241,51 @@ def test_escalation_is_strictly_upward_and_ends_at_the_top():
 def test_escalation_from_a_seat_off_the_ladder_is_none():
     assert escalate_from(FABLE, needs={Need.EXECUTE}) is None
     assert escalate_from("nobody:nothing") is None
+
+
+def test_no_routing_path_seats_grok_default_as_a_lead():
+    """Davis, 2026-11-01: Grok is off the brain trust and kept as a worker.
+    Every kind, every rung, every need set, with any one or two trust seats
+    down and either rotation default: the router never hands back the full
+    Grok agent, and escalation never climbs into it. When both trust seats
+    are down, a patch-only task degrades to the restricted worker and a task
+    that must run something has no seat (a visible stop, never the agent)."""
+    from itertools import combinations
+
+    from quadratus.registry import MODE_ROSTERS
+    from quadratus.task_kinds import DIFFICULTY_LADDER
+
+    trust = MODE_ROSTERS["adversarial"]["peers"]
+    kinds = [v for k, v in vars(TaskKind).items() if not k.startswith("_") and isinstance(v, str)]
+    assert len(kinds) > 10, kinds
+    need_sets = [frozenset(), frozenset({Need.PATCH}), frozenset({Need.EXECUTE}),
+                 frozenset({Need.DIRECT_WRITE, Need.PATCH})]
+    downs = [()] + [(k,) for k in trust] + list(combinations(trust, 2))
+    for kind in kinds:
+        for difficulty in list(DIFFICULTY_LADDER) + [None]:
+            for needs in need_sets:
+                for down in downs:
+                    for default in trust:
+                        try:
+                            got = route(kind, default=default, difficulty=difficulty, candidates=trust,
+                                        needs=needs, available=lambda k, d=down: k not in d)
+                        except NoCapableSeat:
+                            continue
+                        assert got != GROK, (kind, difficulty, sorted(needs), down)
+    for key in (GROK_WORKER, SOL, OPUS):
+        for needs in need_sets:
+            assert escalate_from(key, needs=needs) != GROK
+    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple", candidates=trust, needs={Need.PATCH},
+                 available=lambda k: k not in trust) == GROK_WORKER
+    with pytest.raises(NoCapableSeat):
+        route(TaskKind.BACKEND, default=OPUS, difficulty="simple", candidates=trust, needs={Need.EXECUTE},
+              available=lambda k: k not in trust)
+
+
+def test_grok_stays_the_lookup_worker_and_the_rote_rung_with_its_own_escalation():
+    from quadratus.workers import WORKER_ESCALATION, WORKER_TREE, pick_worker
+    assert WORKER_TREE["lookup"] == GROK_WORKER and pick_worker("lookup") == GROK_WORKER
+    assert WORKER_ESCALATION[GROK_WORKER] == "grok:expert"
+    assert pick_worker("lookup", demanding=True) == "grok:expert"
+    assert route(TaskKind.DOCS, default=OPUS, difficulty="rote") == GROK_WORKER
+    assert not seat_capabilities(GROK_WORKER) - {Need.PATCH}, "the worker stays tool-restricted"

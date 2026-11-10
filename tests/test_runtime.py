@@ -18,7 +18,7 @@ from quadratus.usage import UsageMeter
 
 FABLE = "claude:fable"
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 GROK = "grok:default"
 
 
@@ -89,14 +89,22 @@ def test_one_provider_serves_every_model_from_its_vendor(fleet, built):
 
 def test_each_call_is_bound_to_the_alias_the_key_resolves_to(fleet, built):
     fleet.invoke(SOL, "hello")
-    assert built["openai"].calls[0]["model"] == "gpt-5.6-sol"
+    # The family's latest release in the installed client's catalogue (the
+    # fixture catalogue lists Sol 6.1 above 6 and 5.6), never a compiled-in edition.
+    assert built["openai"].calls[0]["model"] == "gpt-6.1-sol"
 
 
-def test_api_roster_models_do_not_collapse_to_one_provider_model(built):
+def test_api_roster_models_do_not_collapse_to_one_provider_model(built, monkeypatch):
+    """An API takes dated ids: the configured OpenAI model stands for Sol,
+    every other family needs its own explicit id (as the Claude seats do)."""
+    monkeypatch.setenv("QUADRATUS_API_MODEL_OPENAI_LUNA", "luna-api-id")
     fleet = Fleet(Settings(backend='api'))
-    fleet.invoke('openai:gpt-5.6-sol', 'hello')
-    fleet.invoke('openai:gpt-5.6-luna', 'hello')
-    assert [c['model'] for c in built['openai'].calls] == ['gpt-5.6-sol', 'gpt-5.6-luna']
+    fleet.invoke('openai:sol', 'hello')
+    fleet.invoke('openai:luna', 'hello')
+    assert [c['model'] for c in built['openai'].calls] == ['gpt-5.6-sol', 'luna-api-id']
+    monkeypatch.delenv("QUADRATUS_API_MODEL_OPENAI_LUNA")
+    with pytest.raises(UnknownModel):
+        Fleet(Settings(backend='api')).invoke('openai:terra', 'hello')
 
 
 def test_api_claude_seats_require_explicit_ids_except_configured_opus(built, monkeypatch):
@@ -338,7 +346,7 @@ def test_new_session_reads_liveness_from_the_fleet(monkeypatch, tmp_path):
     seat = session.seat()
     # A missing binary takes the whole vendor out, which is the one failure
     # the same-vendor deputy cannot cover -- so the seat crosses vendors.
-    assert seat.key == "openai:gpt-6-astra"
+    assert seat.key == "openai:astra"
     assert seat.reason == SeatReason.FALLBACK_UNAVAILABLE
 
 

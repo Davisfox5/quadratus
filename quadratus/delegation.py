@@ -116,12 +116,22 @@ def record_invocation(ledger, event):
 
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
-               evidence_sha256=None, harness_checks=None, review_source=None):
+               evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None, authority=None,
+               effort_inputs=None, review_source=None):
     context = dict(task=task, role=role, origin=origin)
     if review_source is not None:
-        # A private byte snapshot for an audit's independent first read.
-        # It is neither an editing grant nor a persisted invocation field.
+        # The task-start bytes for an independent audit's first read. This
+        # private handoff is not an editing grant or a persisted call field.
         context["review_source"] = dict(review_source)
+    if effort_inputs:
+        # The task facts the effort policy reads at dispatch (quadratus.effort):
+        # complexity, kind, work class, security, fix cycle, recheck impact.
+        # Fleet decides the level against the resolved model's ladder.
+        context["effort_inputs"] = dict(effort_inputs)
+    if authority:
+        # The committed approval authority (requirements, rulings, decisions)
+        # the call runs under; the provider names it on the reservation.
+        context["authority"] = str(authority)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
     if worker_tool:
@@ -140,6 +150,15 @@ def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None
         # The harness's own check records for exactly the source a read-only
         # review copy holds; Fleet states them in place of the command list.
         context["harness_checks"] = str(harness_checks)
+    if probe:
+        # A review asked for a scratch demonstration; Fleet names the approved
+        # command that may run it (runtime._probe_exception).
+        context["probe"] = True
+    if probe and probe_checks:
+        # The approved gate commands (integration.GateCommand, cwd relative
+        # to the project) Fleet runs itself in the copy when the call left a
+        # new test file there (runtime._scratch_proof).
+        context["probe_checks"] = tuple(probe_checks)
     token = invocation_context.set(context)
     try:
         yield
@@ -204,6 +223,9 @@ class InvocationEvent:
     fresh_input_tokens: Optional[int] = None
     #: Model turns the call ran, from the vendor envelope.
     model_turns: Optional[int] = None
+    #: Tool steps the call ran, counted from the vendor's event stream where
+    #: it reports no turn count (codex). None is not measured, never zero.
+    tool_steps: Optional[int] = None
     #: The turn limit sent with the call, if any, and whether it was hit.
     max_turns: Optional[int] = None
     turn_limited: bool = False
@@ -233,6 +255,16 @@ class InvocationEvent:
     #: anyone reading the record. Older records lack these and read as empty.
     stderr_tail: str = ""
     tool_failures: list = field(default_factory=list)
+    #: The reasoning effort the call was made at, why, and under which
+    #: policy version (quadratus.effort); where the wire model came from
+    #: (quadratus.latest). Explicit on every row; never the CLI's default.
+    effort: Optional[str] = None
+    effort_reasons: list = field(default_factory=list)
+    effort_policy: str = ""
+    resolution_source: str = ""
+    #: The run budget's operation id for this call (``O-<n>``), the key an
+    #: unknown-usage latch names its cause by. Older records lack it.
+    operation: Optional[str] = None
 
     @property
     def tokens_known(self) -> bool:
@@ -280,6 +312,9 @@ def safe_diagnostics(value) -> dict:
     count = value.get('model_calls')
     if type(count) is int and 0 <= count <= 1_000_000:
         result['model_calls'] = count
+    steps = value.get('tool_steps')
+    if type(steps) is int and 0 <= steps <= 1_000_000:
+        result['tool_steps'] = steps
     # Accept the older extractor spelling while keeping one stable ledger key.
     names = value.get('attempted_tools', value.get('tools_attempted'))
     if isinstance(names, list):
@@ -313,6 +348,37 @@ def safe_diagnostics(value) -> dict:
     seat = value.get('seat_tokens')
     if type(seat) is int and 0 <= seat <= 1_000_000_000:
         result['seat_tokens'] = seat
+    # The installed client that answered, and how a failed turn ended as
+    # that client reports it (terminal reason via stop_reason, HTTP status):
+    # bounded facts for reading a row against the client's known behaviour.
+    # The failure message itself is not carried; it is vendor free text.
+    client = value.get('client_version')
+    if isinstance(client, str) and re.fullmatch(r"\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[0-9A-Za-z.]{1,32})?", client):
+        result['client_version'] = client
+    status = value.get('status')
+    if type(status) is int and 100 <= status <= 599:
+        result['status'] = status
+    # The wait before a re-sent attempt and why (providers.TransientOverload).
+    wait = value.get('retry_wait_seconds')
+    if type(wait) in (int, float) and 0 <= wait <= 86_400:
+        result['retry_wait_seconds'] = float(wait)
+    if value.get('retry_cause') == 'overloaded':
+        result['retry_cause'] = 'overloaded'
+    failure_class = value.get('failure_class')
+    if failure_class in ('cap', 'auth', 'rate_limited', 'unavailable'):
+        result['failure_class'] = failure_class
+    # The CLI's own headless-approval refusal (cycle15): tool, target scheme
+    # and a target digest only; the raw target stays in the private stderr.
+    block = value.get('permission_block')
+    if isinstance(block, dict) and block.get('headless_approval') is True:
+        tool, scheme, digest = block.get('tool'), block.get('scheme'), block.get('target_digest')
+        if (isinstance(tool, str) and atom.fullmatch(tool) and isinstance(scheme, str)
+                and re.fullmatch(r"[a-z][a-z0-9+.-]{0,15}", scheme) and isinstance(digest, str)
+                and re.fullmatch(r"[0-9a-f]{16}", digest)):
+            lines = block.get('lines')
+            result['permission_block'] = dict(tool=tool, scheme=scheme, headless_approval=True,
+                                              target_digest=digest,
+                                              lines=lines if type(lines) is int and 0 < lines <= 200 else 1)
     # How much of this call's input the model was being handed again. An agent
     # re-sends its whole conversation on every step, so a long loop's reported
     # total is mostly text it has already seen -- 402,816 of attempt 9's
@@ -323,6 +389,25 @@ def safe_diagnostics(value) -> dict:
     reread = value.get('cached_input_tokens')
     if type(reread) is int and 0 <= reread <= 1_000_000_000:
         result['cached_input_tokens'] = reread
+    # Root's usage account (2026-10-21): whether the call's completed parent
+    # turns account for it in full, how many there were, and the observed
+    # lower bound an incomplete call leaves (never a total, never zero by
+    # default). The codex rollout's integer floor keeps its older spelling.
+    completeness = value.get('usage_completeness')
+    if completeness in ('complete', 'unresolved'):
+        result['usage_completeness'] = completeness
+    turns = value.get('completed_turns')
+    if type(turns) is int and 0 <= turns <= 1_000_000:
+        result['completed_turns'] = turns
+    bound = value.get('usage_lower_bound')
+    if type(bound) is int and 0 <= bound <= 1_000_000_000:
+        result['usage_lower_bound'] = bound
+    elif isinstance(bound, dict):
+        kept = {k: bound[k] for k in ('input_tokens', 'output_tokens')
+                if type(bound.get(k)) is int and 0 <= bound[k] <= 1_000_000_000}
+        source = bound.get('usage_source')
+        if kept and isinstance(source, str) and re.fullmatch(r"[A-Za-z0-9_ ;,.:-]{1,80}", source):
+            result['usage_lower_bound'] = dict(kept, usage_source=source)
     # What the vendor itself says this call cost, where it says. Kept beside
     # our own API-price counterfactual rather than replacing it: the two
     # answer different questions, and on attempt 8's lead they differed 7.4x
