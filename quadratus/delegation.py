@@ -116,8 +116,12 @@ def record_invocation(ledger, event):
 
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
-               evidence_sha256=None, harness_checks=None):
+               evidence_sha256=None, harness_checks=None, review_source=None):
     context = dict(task=task, role=role, origin=origin)
+    if review_source is not None:
+        # A private byte snapshot for an audit's independent first read.
+        # It is neither an editing grant nor a persisted invocation field.
+        context["review_source"] = dict(review_source)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
     if worker_tool:

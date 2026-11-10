@@ -560,6 +560,7 @@ class SessionConfig:
     #: start still executes, unskipped (integration.repair_problems). Every
     #: other original is restored as before.
     repair_tests: tuple = ()
+    test_changes: tuple = ()
 
 
 _SCOPE_REQUEST = (
@@ -2200,6 +2201,7 @@ class Session:
         #: One record per authorized repair: the run-start bytes kept as
         #: evidence, and each check of the repaired file.
         self.test_repairs: List[dict] = []
+        self.test_change_decisions: List[dict] = []
         #: What the gate's commands skipped on the run-start source, measured
         #: once when a check first skips cases (Session._skip_baseline).
         self.skip_baselines: List[dict] = []
@@ -2304,7 +2306,8 @@ class Session:
             import time as _time
             edit_started = _time.time()
             source_before = self._source_fingerprint()
-        self._active_call = dict(context, model=key, allow_writes=allow_writes)
+        self._active_call = dict({k: v for k, v in context.items() if k != "review_source"},
+                                 model=key, allow_writes=allow_writes)
         spec = self._active_spec
         if (context.get("role") != "closeout" and context.get('origin') != 'worker'
                 and spec is not None and '## Role packet' not in prompt):
@@ -2322,13 +2325,15 @@ class Session:
                 prompt += "\nOperator limits (also binding):\n" + limit.render()
         if context.get("role") == "lead" and getattr(self, "_worker_tool", None):
             context = dict(context, worker_tool=self._worker_tool)
-        if (not allow_writes and context.get("role") in ("collaborator", "recheck", "design-review")
+        blind_source = context.get("review_source") is not None
+        if (not blind_source and not allow_writes
+                and context.get("role") in ("collaborator", "recheck", "design-review")
                 and getattr(self, "_review_evidence", None)):
             context = dict(context, evidence_files=tuple(self._review_evidence))
             if context.get("role") == "design-review" and self._review_evidence_hashes:
                 context = dict(context, evidence_sha256=dict(self._review_evidence_hashes))
         from .runtime import REVIEW_CAPPED_ROLES
-        if not allow_writes and context.get("role") in REVIEW_CAPPED_ROLES:
+        if not blind_source and not allow_writes and context.get("role") in REVIEW_CAPPED_ROLES:
             facts = self._harness_facts(current_only=True)
             if facts:
                 context = dict(context, harness_checks=facts)
@@ -2714,7 +2719,8 @@ class Session:
             return fresh, self._invoke_with_fetches(fresh.key, build, task=task)
 
     # -- request channels ----------------------------------------------------
-    def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None, editing=False) -> str:
+    def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None, editing=False,
+                             remember_request=None) -> str:
         """Invoke, serving artifact requests until a real answer arrives.
 
         ``build_prompt`` takes the fetched (id, content) pairs gathered so far
@@ -2735,6 +2741,8 @@ class Session:
             except KeyError:
                 content = f"(no artifact {artifact_id!r} exists -- check the id)"
             fetched.append((artifact_id, content))
+            if remember_request is not None:
+                remember_request(reply)
             if task is not None:
                 task.record("assistant", f"[fetched artifact {artifact_id}]")
             reply = call(model_key, build_prompt(fetched))
@@ -2825,6 +2833,10 @@ class Session:
         finally:
             self._active_call = saved
         text = "\n\n".join(texts)
+        remember = state.get("remember_request")
+        if remember is not None:
+            remember("Completed in-session commission_worker (historical):\n"
+                     + json.dumps(request) + "\nResult:\n" + text)
         return text, text.startswith("Worker errand ")
 
     def _interim_edits_note(self) -> str:
@@ -3013,15 +3025,85 @@ class Session:
         prompt offers is a channel the harness serves.
         """
         answers = []
-        state = dict(failures=0, failed_errands=set(), closed=None)
+        state = dict(failures=0, failed_errands=set(), closed=None, handoffs=[])
+        fetched_index, retained_fetches = {}, {}
+
+        def parts(text, kind):
+            # Main's FETCH protocol has no offset syntax. Every archived
+            # piece fits its existing window and is addressable by normal id.
+            return [task.keep(text[i:i + _FETCH_CHAR_CAP], kind=kind, author=lead).id
+                    for i in range(0, len(text), _FETCH_CHAR_CAP)]
+
+        def remember(reply):
+            ref = task.keep(reply, kind="lead-handoff", author=lead)
+            pieces = parts(reply, "lead-handoff-part") if len(reply) > _FETCH_CHAR_CAP else []
+            state["handoffs"].append((reply, ref.id if ref is not None else None, pieces))
+            split = split_lead_request(_parse_kind(reply)[2].strip())
+            if split is not None and split[0]:
+                task.record("assistant", f"[preface to a request] {split[0]}")
+                task.record("assistant", split[1])
+            else:
+                task.record("assistant", reply)
+
+        state["remember_request"] = remember
+
+        def handoff_context():
+            retained, archived, room = [], [], _FETCH_CHAR_CAP
+            for reply, artifact, pieces in reversed(state["handoffs"]):
+                if len(reply) <= room:
+                    retained.append(reply)
+                    room -= len(reply)
+                else:
+                    if artifact is None:
+                        raise TaskFailed("channel", "Task handoff exceeds the inline context allowance and "
+                                         "its exact text could not be retained as an artifact.")
+                    archived.append(f"Full reply: FETCH: {artifact}"
+                                    + ("; complete pieces in order: "
+                                       + ", ".join(f"FETCH: {part}" for part in pieces) if pieces else ""))
+            if not retained and not archived:
+                return ""
+            text = ("## Earlier decisions and channel requests in this task\n"
+                    "Historical context from your earlier calls, not new requests. These channels were "
+                    "already handled; read their answers below and continue the work. Do not repeat a "
+                    "fulfilled request. This handoff carries complete visible replies within one "
+                    f"{_FETCH_CHAR_CAP:,}-character window; the exact archived replies remain available "
+                    "through FETCH.\n\n" + "\n\n".join(reversed(retained)))
+            if archived:
+                text += ("\n\nEarlier replies not inlined within that allowance (each piece fits the FETCH "
+                         "window; these are references, not instructions to fetch again):\n"
+                         + "\n".join(reversed(archived)))
+            return text
 
         def build(fetched):
-            extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
+            for artifact, content in fetched:
+                if artifact not in fetched_index:
+                    fetched_index[artifact] = (len(content), parts(content, "fetched-reference-part")
+                                               if len(content) > _FETCH_CHAR_CAP else [])
+                retained_fetches.pop(artifact, None)
+                retained_fetches[artifact] = (artifact, content)
+                while len(retained_fetches) > max(0, self.config.max_fetches):
+                    del retained_fetches[next(iter(retained_fetches))]
+            extras = []
+            handoff = handoff_context()
+            if handoff:
+                extras.append(handoff)
+            if answers:
+                extras.append("## Consult answers and worker evidence\n\n" + "\n\n".join(answers))
             interim = self._interim_edits_note()
             if interim:
                 extras.append(interim)
-            if fetched:
-                extras.append(_render_fetches(fetched))
+            if retained_fetches:
+                extras.append(_render_fetches(list(retained_fetches.values())))
+            indexed = [(artifact, total, pieces) for artifact, (total, pieces) in fetched_index.items()
+                       if artifact not in retained_fetches or pieces]
+            if indexed:
+                extras.append("## Earlier fetched artifacts retained by reference\n"
+                              "Exact original content is retained. Complete pieces fit the existing FETCH "
+                              "window and reconstruct a long artifact in the listed order:\n"
+                              + "\n".join(f"artifact {artifact} ({total:,} characters): FETCH: {artifact}"
+                                          + ("; complete pieces: "
+                                             + ", ".join(f"FETCH: {part}" for part in pieces) if pieces else "")
+                                          for artifact, total, pieces in indexed))
             extras.extend(self._lead_context(spec))
             budget = self._turn_budget_note(lead)
             if budget:
@@ -3042,16 +3124,16 @@ class Session:
     def _drafting_loop(self, lead, spec, task, build, answers, state, consults):
         consults_used = 0
         while True:
-            draft = self._invoke_with_fetches(lead, build, task=task, editing=True)
+            draft = self._invoke_with_fetches(lead, build, task=task, editing=True,
+                                              remember_request=state["remember_request"])
             if state.get("closed") is not None:
                 raise state["closed"]
             body = _parse_kind(draft)[2].strip()
             split = split_lead_request(body)
             if split is not None:
-                preface, body = split
-                if preface:
-                    task.record("assistant", f"[preface to a request] {preface[:1500]}")
+                body = split[1]
             if body.startswith("WORKER "):
+                state["remember_request"](draft)
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
                 continue
             requests = _parse_consults(body)
@@ -3059,6 +3141,7 @@ class Session:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
                     raise TaskFailed("channel", "An unresolved request cannot be accepted as a draft.")
                 return draft
+            state["remember_request"](draft)
             if not consults:
                 # A refusal is charged against the same allowance a served
                 # consult would be, so a lead that keeps asking stalls the run
@@ -3527,6 +3610,15 @@ class Session:
                     open_at_close=before.open_at_close,
                     changed=(before.partial or {}).get("changed"),
                     closed_as=before.closed_as)
+        if evidence == "self":
+            from .contract import self_capture_state
+            intended = self_capture_state(
+                spec.task_id, goal=self.memory.goal,
+                requirements=[(rid, self.memory.ledger.requirements.get(rid, "")) for rid in outcome.covers],
+                scope=scope.to_dict() if scope is not None else {},
+                predecessor=before.contract if outcome.continues and before is not None else None)
+            if outcome.resolves:
+                intended = dict(intended, findings=measured)
         passed = tuple(r["id"] for r in self.run_outcome.readiness if r.get("passed"))
         authority = (("write_grant", "operator" if editing else "none"),
                      ("edits", "none" if is_review_only(spec) else
@@ -3756,8 +3848,8 @@ class Session:
         self._gate_fixes_used = 0
         self._active_spec = spec
         self._task_before = self._capture_source()
-        if self.project and self.config.allow_writes and self._task_before is None:
-            raise RunStalled("Cannot capture source to measure this editing task.")
+        if self.project and self._task_before is None and (self.config.allow_writes or spec.kind == TaskKind.REVIEW):
+            raise RunStalled("Cannot capture source to measure this editing task or bind independent audit reads.")
         self.in_flight = {}
         try:
             try:
@@ -3940,8 +4032,9 @@ class Session:
             self._stage("review")
         capped: set = set()
         for peer in collaborators:
+            review_source = self._task_before if spec.kind == TaskKind.REVIEW and self.project else None
             try:
-                with invocation(spec.task_id, "collaborator"):
+                with invocation(spec.task_id, "collaborator", review_source=review_source):
                     note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
             except TurnLimitReached as exc:
                 # The cap is a transport fact kept here, never read back from
@@ -8056,10 +8149,16 @@ class Session:
 
     def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str) -> str:
         label = resolve(peer)
+        blind = spec.kind == TaskKind.REVIEW
+        work = ("This is your first, blind review of the task's source and goal. Another seat's findings "
+                "are withheld until your independent read is complete. Inspect the source yourself; "
+                "report your own findings rather than reviewing or validating another review. The lead "
+                "will receive both reads afterward to reconcile them.\n\n"
+                if blind else f"Current work:\n{draft}\n\n")
         return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task: {spec.description}\n\n"
-            f"Current work:\n{draft}\n\n"
-            f"You are {label.label if label else peer}, contributing an independent "
+            + work
+            + f"You are {label.label if label else peer}, contributing an independent "
             "read. Report everything you find with a severity and a confidence; do "
             "not filter to only the important ones. Filtering happens downstream, "
             "and a reviewer told to be selective suppresses its own findings. "
@@ -8071,9 +8170,10 @@ class Session:
             "read the whole work and reported everything. A reply with no BLOCKING finding and "
             "no such line is recorded as an unfinished review."
             + _review_subject_note(spec)
-            + (_DESIGN_REVIEW_LENS + (self._design_note or "")
-               if self._collaboration_applicable(spec) else "")
-            + self._changed_originals_note()
+            + (("\n\n## Original goal (verbatim)\n\n" + self.memory.goal.strip()) if blind else "")
+            + ((_DESIGN_REVIEW_LENS + (self._design_note or "")
+                if self._collaboration_applicable(spec) else "") + self._changed_originals_note()
+               if not blind else "")
             + self._review_turn_budget_note(peer)
         )
 
@@ -8602,6 +8702,116 @@ class Session:
         result = self._join_original_tests(gate, result, current)
         return self._skip_baseline(gate, result, current)
 
+    def _test_migrations(self, names, current: dict, receipts, *, request=False) -> Dict[str, dict]:
+        """Exact, human-approved test changes whose replacement cases ran.
+
+        A passing edited suite does not authorize replacing its old tests.
+        A concrete approval binds the goal, original bytes and delivered bytes;
+        changing the file again requires a new decision. No model can approve.
+        """
+        from .design_evidence import EvidenceIdentityMismatch
+        from .integration import declared_cases, test_change_authorizations, test_change_problems
+        from .project import Project
+        owner = getattr(self, "_authority_parent", None) or self
+        decisions = owner.test_change_decisions
+        approved = {}
+        for name in names:
+            original, delivered = (self._original_tests or {}).get(name), current.get(name)
+            if original is None or delivered is None:
+                continue
+            digest = hashlib.sha256(delivered).hexdigest()
+            original_digest = hashlib.sha256(original).hexdigest()
+            existing = next((d for d in reversed(decisions)
+                             if d.get("path") == name and d.get("current_sha256") == digest
+                             and d.get("original_sha256") == original_digest
+                             and d.get("goal") == self.memory.goal), None)
+            if existing is not None:
+                if existing.get("status") == "approved" and not test_change_problems(
+                        existing, original, current, receipts):
+                    existing["checked_source"] = self._source_fingerprint()
+                    approved[name] = existing
+                continue
+            configured = next((dict(d) for d in getattr(self.config, "test_changes", ())
+                               if d["path"] == name), None)
+            proposal = configured
+            if proposal is None and request and self.config.ask_operator is not None:
+                old_cases = declared_cases(name, original)
+                new_cases = declared_cases(name, delivered)
+                if new_cases is None and name.endswith(".py"):
+                    import ast
+                    try:
+                        tree = ast.parse(delivered)
+                        if not any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                   and n.name.startswith("test_") for n in ast.walk(tree)):
+                            new_cases = []
+                    except (SyntaxError, ValueError):
+                        pass
+                if not old_cases or new_cases is None:
+                    continue
+                proposal = dict(goal=self.memory.goal, path=name, original_sha256=original_digest,
+                                current_sha256=digest,
+                                reason="Operator review of a test change against the verbatim goal",
+                                cases=[dict(case=c, action="replace" if new_cases else "retire",
+                                            replacements=[dict(path=name, case=c)] if c in new_cases else
+                                            [dict(path=name, case=n) for n in new_cases]) for c in old_cases])
+            if proposal is None or proposal["original_sha256"] != original_digest:
+                continue
+            if proposal.get("current_sha256") not in (None, digest):
+                continue
+            proposal["current_sha256"] = digest
+            envelope = dict(schema_version=1, goal=self.memory.goal,
+                            changes=[{k: v for k, v in proposal.items() if k != "goal"}])
+            try:
+                proposal = dict(test_change_authorizations(envelope, goal=self.memory.goal, root=self.project,
+                                                          originals=self._original_tests)[0])
+            except ValueError:
+                continue
+            problems = test_change_problems(proposal, original, current, receipts)
+            if problems:
+                continue
+            preapproved = bool(configured and configured.get("current_sha256") == digest)
+            if not preapproved and (not request or self.config.ask_operator is None):
+                continue
+            request_id = hashlib.sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest()
+            answer = "exact delivered bytes supplied by the operator"
+            if not preapproved:
+                import difflib
+                diff = "".join(difflib.unified_diff(original.decode("utf-8", errors="replace").splitlines(True),
+                                                    delivered.decode("utf-8", errors="replace").splitlines(True),
+                                                    fromfile=f"original/{name}", tofile=f"delivered/{name}"))
+                # Never ask a human to approve a silently truncated change.
+                if len(diff.encode()) > 64_000:
+                    self._note(f"Test change {name} needs an exact --test-changes authorization; "
+                               "its full diff exceeds the interactive review limit.")
+                    continue
+                question = (f"The edited tests pass, but run-start tests conflict with the delivered code. "
+                            f"Approve this exact test change only if it implements your requested behavior. "
+                            f"Other files' original checks remain required.\n\nGoal (verbatim):\n{self.memory.goal}"
+                            f"\n\nProposed case changes:\n{json.dumps(proposal, indent=2)}\n\nFull diff:\n{diff}"
+                            f"\nReply exactly APPROVE TEST CHANGE {request_id} to authorize these bytes; "
+                            "any other answer declines the change.")
+                answer = str(self.config.ask_operator(question))
+                owner.memory.ledger.rulings.append(f"Test change {request_id} for {name}: {answer}")
+                # The approval never applies to bytes that moved while the question was open.
+                if Project(self.project, exclude=self.config.project_excludes).contents() != current:
+                    raise EvidenceIdentityMismatch("Project changed during test-change approval; approval not applied.")
+            accepted = preapproved or answer.strip() == f"APPROVE TEST CHANGE {request_id}"
+            original_artifact = self.store.put(original.decode("utf-8", errors="replace"),
+                                               kind="test-change-original", author="harness").id
+            delivered_artifact = self.store.put(delivered.decode("utf-8", errors="replace"),
+                                                kind="test-change-delivered", author="harness").id
+            decision = dict(proposal, id=request_id, status="approved" if accepted else "declined",
+                            approval="operator exact bytes" if preapproved else "operator reply",
+                            answer=answer, original_artifact=original_artifact, delivered_artifact=delivered_artifact,
+                            checked_source=self._source_fingerprint())
+            decisions.append(decision)
+            if hasattr(owner, "_publish_authority"):
+                owner._publish_authority()
+            if accepted:
+                approved[name] = decision
+        return approved
+
+
     def _command_keys(self, gate) -> dict:
         """Receipt id to the command's identity (id, argv, cwd), so a baseline
         measured once serves every gate object that runs the same command (a
@@ -8658,6 +8868,10 @@ class Session:
         if not changed:
             return result
         repaired = self._repaired(changed, current)
+        migration_receipts = result.receipts or (dict(status="passed" if result.passed else "failed",
+                                                     required=True, cases=result.cases, report=result.report),)
+        migrated = self._test_migrations(changed, current, migration_receipts) if result.passed else {}
+        repaired = [n for n in repaired if n not in migrated]
         # A failing check stays an ordinary failure with its own attribution;
         # the repaired cases are judged on a check that passed.
         if repaired and result.passed:
@@ -8671,14 +8885,14 @@ class Session:
                                output=f"{result.output}\n\n{text}"[-8_000:], receipts=tuple(result.receipts) + (
                                    GateReceipt(id="repair-check", status="failed", reason="; ".join(problems)[:300],
                                                required=True),))
-        if repaired:
-            changed = [n for n in changed if n not in repaired]
+        if repaired or migrated:
+            changed = [n for n in changed if n not in repaired and n not in migrated]
             if not changed:
                 if result.passed:
-                    self._note(f"task {task}: authorized repair(s) {', '.join(repaired)} keep their original "
-                               "cases, executed; no other run-start test file changed")
+                    self._note(f"task {task}: authorized test changes in {', '.join([*repaired, *migrated])}; "
+                               "their required cases executed; no other run-start test file changed")
                 return result
-        baseline, problem = run_original_tests(gate, self.project, originals, current, keep=repaired)
+        baseline, problem = run_original_tests(gate, self.project, originals, current, keep=[*repaired, *migrated])
         self._verify_dependencies(f"during original tests ({task})")
         drift = self._source_drift(current)
         if drift:
@@ -8691,6 +8905,11 @@ class Session:
             task=task, changed=changed, added=added, passed=None if baseline is None else baseline.passed,
             problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)
                                        for r in (baseline.receipts if baseline else ())]))
+        if baseline is not None and not baseline.passed and result.passed and not skipped:
+            approved = self._test_migrations(changed, current, migration_receipts, request=True)
+            if approved:
+                self.original_test_runs[-1]["superseded_tests"] = {n: d["id"] for n, d in approved.items()}
+                return self._join_original_tests(gate, result, current)
         for receipt in skipped:
             self._unverified_once(f"Task {task}: {receipt.id} did not run against the run-start "
                                              f"test files: {receipt.reason}")
@@ -8756,6 +8975,14 @@ class Session:
         if not changed:
             return ""
         repaired = self._repaired(changed, current)
+        last = self.checks[-1] if self.checks else {}
+        migrated = (self._test_migrations(changed, current, last.get("receipts") or (dict(
+            status="passed", required=True, cases=last.get("cases") or {}, report=last.get("report")),))
+                    if last.get("passed") and last.get("source") == self._source_fingerprint() else {})
+        repaired = [n for n in repaired if n not in migrated]
+        changed = [n for n in changed if n not in migrated]
+        if not changed:
+            return ""
         if repaired:
             # The delivered bytes of each repaired file must be bytes a check
             # already showed keeping every original case, executed.
@@ -8777,7 +9004,7 @@ class Session:
         cached = getattr(self, "_done_original_tests", None)
         if cached and cached[0] == key:
             return cached[1]
-        refusal = self._run_original_tests_at_done(current, changed, keep=tuple(repaired))
+        refusal = self._run_original_tests_at_done(current, changed, keep=tuple([*repaired, *migrated]))
         self._done_original_tests = (key, refusal)
         return refusal
 
@@ -9033,25 +9260,16 @@ def _closeout_excerpt(text: str, limit: int) -> str:
 
 
 def _review_subject_note(spec: TaskSpec) -> str:
-    """Keep "this review is wrong" apart from "the thing reviewed is wrong".
-
-    When the task *is* a review, the work under critique is a review document,
-    and its correct conclusion may well be that its subject is not ready. A
-    reviewer that marks the subject's defects BLOCKING turns a finished review
-    into a revision obligation it can never discharge -- the defects are in
-    something this task is not allowed to touch, and in a read-only run is not
-    permitted to touch either. The 2026-09-13 probe came out right anyway, and
-    that outcome is worth protecting deliberately rather than by luck.
-    """
+    """A counterpart's blind findings feed the combined review report."""
     if spec.kind != TaskKind.REVIEW:
         return ""
     return (
-        " This task is itself a review. BLOCKING means a defect in the review "
-        "-- a missed problem, a wrong claim, unsupported evidence. A defect the "
-        "review correctly reports in the thing it reviewed is not a blocker "
-        "here: a review that concludes its subject is not ready is a complete "
-        "and successful review, not an unfinished one. Do not ask for the "
-        "subject to be fixed."
+        " This task delivers a review report. In this blind first read, report the subject's defects "
+        "as findings to include in the combined report; do not judge claims or omissions in the "
+        "withheld lead report. BLOCKING here means something prevents completing this review "
+        "adequately, such as essential source or evidence being unavailable. A review that concludes "
+        "its subject is not ready is a complete and successful review, not an unfinished one. "
+        "Do not ask for the subject to be fixed."
     )
 
 

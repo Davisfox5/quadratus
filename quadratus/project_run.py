@@ -58,7 +58,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
-                decider_labels="unstated", repair_tests=()):
+                decider_labels="unstated", repair_tests=(), test_changes=None):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``tasks`` is an operator-written task list (explicit-task entry): each
@@ -113,6 +113,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     project.exclude.add(state)
 
     repair_tests = _repair_tests(project.root, repair_tests, forbid)
+    test_changes = _test_changes(project.root, test_changes, goal=goal, forbid=forbid)
     policy = load_policy(project.root, forbid=forbid)
     if declared_paths:
         from .scope import TaskScope
@@ -139,7 +140,20 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
-                    decider_labels=decider_labels, repair_tests=repair_tests)
+                    decider_labels=decider_labels, repair_tests=repair_tests, test_changes=test_changes)
+
+
+def _test_changes(root, raw, *, goal, forbid=(), originals=None):
+    """Load and validate the operator's exact, goal-bound test migrations."""
+    from .integration import test_change_authorizations
+    if isinstance(raw, (str, Path)):
+        path = Path(raw).expanduser()
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f'Test changes file {path} could not be read as JSON: {exc}') from exc
+    return test_change_authorizations(raw, goal=goal, root=root, forbid=forbid, originals=originals)
+
 
 
 def _repair_tests(root, paths, forbid=()):
@@ -314,7 +328,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
-         decider=None, decider_labels="unstated", repair_tests=()):
+         decider=None, decider_labels="unstated", repair_tests=(), test_changes=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -383,7 +397,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         direct_tier=direct_tier,
         decider=decider,
         decider_labels=decider_labels,
-        repair_tests=tuple(repair_tests),
+        repair_tests=tuple(repair_tests), test_changes=tuple(test_changes or ()),
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -496,6 +510,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                      'NOT shown kept and executed') + '. Its assertions are not independently checked; '
                   'retained case names do not prove they were not weakened. Review the repaired file '
                   'against the kept original before relying on it.', '']
+    for decision in (getattr(session, 'test_change_decisions', None) or []) if session else []:
+        lines += [f"Test change {decision['status']}: {decision['path']} "
+                  f"(operator decision {decision['id']}; original {decision['original_sha256'][:12]}, "
+                  f"delivered {decision['current_sha256'][:12]}). "
+                  "The original bytes remain recorded; approval covers this goal and these test bytes.", '']
     for handoff in (getattr(session, 'verification_handoffs', None) or []) if session else []:
         lines += [f"Verification task {handoff['task']} was not dispatched: the harness had already verified "
                   f"source {handoff['source'][:12]} with its own runs. {', '.join(handoff['covers']) or 'Nothing'} "
@@ -553,6 +572,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # Harness runs of the task gate seats were shown; never task checks.
         'review_checks': list(getattr(session, 'review_checks', []) or []) if session else [],
         'test_repairs': list(getattr(session, 'test_repairs', []) or []) if session else [],
+        'test_change_decisions': list(getattr(session, 'test_change_decisions', []) or []) if session else [],
+        'test_change_authorizations': list(getattr(getattr(session, 'config', None), 'test_changes', ()) or ()),
         'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,
