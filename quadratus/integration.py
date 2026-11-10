@@ -1043,6 +1043,11 @@ def _test_count(output):
     if unittest:
         skipped = re.findall(r'skipped=(\d+)', output)
         return max(0, int(unittest[-1]) - (int(skipped[-1]) if skipped else 0))
+    # Cargo emits one summary per test binary, then often an empty doc-test
+    # suite. The last summary alone would erase the cases already executed.
+    rust = re.findall(r'(?m)^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;', output)
+    if rust:
+        return sum(int(passed) + int(failed) for passed, failed in rust)
     # Pytest (and compact JS summaries) can report failed executions alongside
     # passes. Use one final summary line, excluding cases whose body did not run.
     for line in reversed(output.splitlines()):
@@ -1374,6 +1379,67 @@ def _config_addopts(path: Path) -> Optional[str]:
         return None
 
 
+#: The selection ``config_selection`` records for a command whose runner
+#: ``runner_of`` cannot name: what it selects is unknown, so no whole-file
+#: reading is ever granted from it. Matched whole, never as a substring.
+RUNNER_UNKNOWN = 'test runner not recognised from argv; selection not established'
+
+#: The value options ``unittest_discover_command`` admits, by spelling.
+_DISCOVER_VALUE_OPTIONS = {'-s': '-s', '--start-directory': '-s', '-p': '-p', '--pattern': '-p',
+                           '-t': '-t', '--top-level-directory': '-t'}
+
+
+def unittest_discover_command(argv) -> bool:
+    """Whether ``argv`` is a whole ``python -m unittest discover`` command in
+    the strict shape the harness can name as a command (cycle17, cycle16
+    R21: the exact required discover command passed with 66 cases and was
+    refused because no runner could be told from it).
+
+    The interpreter's basename is ``python``, ``pythonN`` or ``pythonN.M``
+    (the same grammar ``_is_unittest`` reads); then exactly ``-m unittest
+    discover``; then only the plain runner flags (``-v``, ``--verbose``,
+    ``-q``, ``--quiet``, ``-b``, ``--buffer``, ``-f``, ``--failfast``, ``-c``,
+    ``--catch``), the harness's report annotation, and each of the start
+    directory, pattern and top-level directory at most once, spelled
+    ``-s DIR``, ``--start-directory DIR`` or ``--start-directory=DIR`` (and
+    likewise ``-p``/``--pattern``, ``-t``/``--top-level-directory``), with a
+    non-empty value that does not start with ``-``. Anything else is not
+    this shape: ``-k``, an attached short value (``-stests``), a missing or
+    empty value, a repeated option, an unknown option, a positional argument,
+    a wrapper or ``-c`` code.
+
+    A command shape only: it names no runner for ``runner_of``, no file for
+    ``operand_paths`` and no case. A ``-t`` command is recognised here but
+    still carries ``-t``, which ``is_filtered`` reads as a selection flag,
+    so a command citation still refuses it (a narrow false negative)."""
+    argv = [str(a) for a in argv or ()]
+    if len(argv) < 4 or not _is_unittest(argv) or argv[3] != 'discover':
+        return False
+    seen = set()
+    rest = argv[4:]
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token.startswith(REPORT_TOKEN_PREFIX) or token in _UNITTEST_PLAIN_FLAGS:
+            i += 1
+            continue
+        name, eq, value = token.partition('=')
+        if name in _DISCOVER_VALUE_OPTIONS and (eq == '' or name.startswith('--')):
+            if not eq:
+                if i + 1 >= len(rest):
+                    return False
+                value = rest[i + 1]
+                i += 1
+            option = _DISCOVER_VALUE_OPTIONS[name]
+            if option in seen or not value or value.startswith('-'):
+                return False
+            seen.add(option)
+            i += 1
+            continue
+        return False
+    return True
+
+
 def config_selection(argv, cwd, root) -> str:
     """Test selection a command takes from outside its argv: ``addopts`` in
     pytest's configuration files from ``cwd`` up to ``root`` and
@@ -1390,7 +1456,7 @@ def config_selection(argv, cwd, root) -> str:
     # checks below apply to it. Its selection is unknown, never empty (Codex
     # review of 0d834bd, Y1).
     if runner_of(argv, root, cwd) is None:
-        found.append('test runner not recognised from argv; selection not established')
+        found.append(RUNNER_UNKNOWN)
     names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
     # Plugins named in PYTEST_PLUGINS load into every pytest the gate starts
     # and can drop collected tests silently (Codex review of d157378, T3).
@@ -1761,6 +1827,201 @@ def declared_cases(name: str, data: bytes) -> Optional[List[str]]:
             return None
         names = [m.group(2) for m in _JS_CASE.finditer(text)]
     return names or None
+
+
+def _test_change_path(value, root, forbid, *, existing=False):
+    from .scope import _matches
+    if (not isinstance(value, str) or not value or value != value.strip()
+            or value.startswith(('/', '~')) or any(c in value for c in '\\*?[]\0\n\r\t')
+            or any(p in ('', '.', '..') for p in value.split('/')) or _test_family(value) is None):
+        raise ValueError('Test changes must name one exact project-relative test file')
+    if any(_matches(value, pattern) for pattern in forbid or ()):
+        raise ValueError(f'Test changes name a path the operator forbade: {value}')
+    current = Path(root).resolve()
+    for part in PurePosixPath(value).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f'Test changes cannot go through a symlink: {value}')
+    if not current.resolve().is_relative_to(Path(root).resolve()):
+        raise ValueError(f'Test changes name a path outside the project: {value}')
+    if existing and not current.is_file():
+        raise ValueError(f'Test changes name no existing test file: {value}')
+    return value
+
+
+def test_change_authorizations(raw, *, goal, root, forbid=(), originals=None):
+    """Validate operator-authored migrations against exact run-start tests.
+
+    ``originals`` is the harness's captured baseline for approval requested
+    after editing. Without it the current project is the run-start baseline.
+    A missing current digest authorizes a plan, never its eventual bytes.
+    """
+    if raw is None or raw == () or raw == []:
+        return ()
+    if (not isinstance(raw, dict) or set(raw) != {'schema_version', 'goal', 'changes'}
+            or type(raw['schema_version']) is not int or raw['schema_version'] != 1):
+        raise ValueError('Test changes must contain schema_version 1, goal and changes')
+    if not isinstance(raw['goal'], str) or not raw['goal'].strip() or raw['goal'] != goal:
+        raise ValueError('Test changes goal does not match this run')
+    if not isinstance(raw['changes'], list) or not raw['changes']:
+        raise ValueError('Test changes must name at least one exact test migration')
+    records, seen = [], set()
+    for change in raw['changes']:
+        fields = {'path', 'original_sha256', 'reason', 'cases'}
+        if (not isinstance(change, dict) or not fields <= set(change)
+                or set(change) - fields - {'current_sha256'}):
+            raise ValueError('Each test change must name path, original_sha256, reason and cases')
+        name = _test_change_path(change['path'], root, forbid, existing=True)
+        if name in seen:
+            raise ValueError(f'Test changes repeat a file: {name}')
+        seen.add(name)
+        data = originals.get(name) if originals is not None else (Path(root) / name).read_bytes()
+        if not isinstance(data, bytes):
+            raise ValueError(f'Test changes name no run-start test file: {name}')
+        digest = change['original_sha256']
+        if (not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)
+                or hashlib.sha256(data).hexdigest() != digest):
+            raise ValueError(f'Test changes original_sha256 does not match run-start bytes: {name}')
+        current_digest = change.get('current_sha256')
+        if current_digest is not None and (
+                not isinstance(current_digest, str) or not re.fullmatch(r'[0-9a-f]{64}', current_digest)):
+            raise ValueError(f'Test changes current_sha256 must be a SHA-256 digest: {name}')
+        reason = change['reason']
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f'Test changes need an operator reason: {name}')
+        known = declared_cases(name, data)
+        if not known or len(known) != len(set(known)):
+            raise ValueError(f'Test changes need unambiguous literal run-start case names: {name}')
+        if not isinstance(change['cases'], list) or not change['cases']:
+            raise ValueError(f'Test changes must name the cases being replaced or retired: {name}')
+        cases, named = [], set()
+        for case in change['cases']:
+            if (not isinstance(case, dict) or set(case) != {'case', 'action', 'replacements'}
+                    or not isinstance(case['case'], str) or case['case'] not in known
+                    or case['case'] in named or case['action'] not in ('replace', 'retire')
+                    or not isinstance(case['replacements'], list)):
+                raise ValueError(f'Test changes name an invalid or repeated original case: {name}')
+            named.add(case['case'])
+            if bool(case['replacements']) != (case['action'] == 'replace'):
+                raise ValueError('A replacement needs replacement cases; a retirement must name none')
+            replacements, targets = [], set()
+            for target in case['replacements']:
+                if (not isinstance(target, dict) or set(target) != {'path', 'case'}
+                        or not isinstance(target['case'], str) or not target['case'].strip()
+                        or any(c in target['case'] for c in '\0\n\r')):
+                    raise ValueError('A replacement must name an exact test path and literal case')
+                path = _test_change_path(target['path'], root, forbid)
+                identity = (path, target['case'])
+                if identity in targets:
+                    raise ValueError('Test changes repeat a replacement case')
+                targets.add(identity)
+                replacements.append(dict(path=path, case=target['case']))
+            cases.append(dict(case=case['case'], action=case['action'], replacements=replacements))
+        records.append(dict(goal=goal, path=name, original_sha256=digest, current_sha256=current_digest,
+                            reason=reason.strip(), cases=cases))
+    return tuple(records)
+
+
+def _python_test_bodies(data):
+    import ast
+    try:
+        tree = ast.parse(data.decode('utf-8'))
+    except (UnicodeError, SyntaxError):
+        return None
+    return {node.name: ast.dump(node, include_attributes=False) for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_')}
+
+
+def test_change_problems(record, original, current, receipts):
+    """Whether approved case migrations preserve and execute all owed tests.
+
+    This checks evidence, not approval provenance. The caller must separately
+    establish operator approval of the exact resulting file bytes.
+    """
+    name = record['path']
+    data = current.get(name)
+    if data is None:
+        return [f'{name}: whole test-file deletion is not authorized; retire exact cases inside the file']
+    if hashlib.sha256(original).hexdigest() != record['original_sha256']:
+        return [f'{name}: approval does not bind these run-start test bytes']
+    if record.get('current_sha256') and hashlib.sha256(data).hexdigest() != record['current_sha256']:
+        return [f'{name}: approval does not bind these resulting test bytes']
+    old, now = declared_cases(name, original) or [], declared_cases(name, data) or []
+    if not old or len(now) != len(set(now)):
+        return [f'{name}: literal test-case identities cannot be established']
+    changes = {c['case']: c for c in record['cases']}
+    problems, wanted = [], set()
+    before_bodies = _python_test_bodies(original) if _test_family(name)[1] == 'py' else None
+    after_bodies = _python_test_bodies(data) if before_bodies is not None else None
+    for case in old:
+        change = changes.get(case)
+        if change is None:
+            if case not in now:
+                problems.append(f'{name}: unapproved original case "{case}" was removed')
+            elif before_bodies is not None and (
+                    after_bodies is None or before_bodies.get(case) != after_bodies.get(case)):
+                problems.append(f'{name}: unapproved original case "{case}" changed')
+            wanted.add((name, case))
+        elif change['action'] == 'retire':
+            if case in now:
+                problems.append(f'{name}: retired original case "{case}" is still declared')
+        else:
+            wanted.update((r['path'], r['case']) for r in change['replacements'])
+    executed, skipped, failed = set(), set(), set()
+    for receipt in receipts:
+        get = ((lambda k, r=receipt: r.get(k)) if isinstance(receipt, dict)
+               else (lambda k, r=receipt: getattr(r, k, None)))
+        cases = get('cases') or {}
+        if not isinstance(cases, dict):
+            cases = {}
+        for key, pool in (('skipped', skipped), ('failed', failed), ('executed', executed)):
+            if key == 'executed' and (get('status') != 'passed' or get('required') is False):
+                continue
+            counts = cases.get(key)
+            if isinstance(counts, dict):
+                pool.update(k for k, count in counts.items()
+                            if isinstance(k, str) and type(count) is int and count > 0)
+        report = get('report')
+        if get('status') == 'passed' and get('required') is not False and isinstance(report, dict):
+            counts, passed = report.get('counts'), report.get('passed_cases')
+            # Quiet pytest/unittest output has no verbose case lines. Its
+            # harness-validated report still names every pass exactly. An
+            # incomplete, failed or skipped report cannot establish the full
+            # execution of a replacement (including all parameter instances).
+            if (report.get('state') == 'parsed' and type(report.get('exitstatus')) is int
+                    and report['exitstatus'] == 0 and report.get('passed_truncated') is False
+                    and report.get('truncated') is False and report.get('collect_errors') == 0
+                    and isinstance(counts, dict) and all(type(counts.get(k)) is int and counts[k] == 0
+                                                       for k in ('failed', 'errors', 'skipped'))
+                    and isinstance(passed, list) and all(isinstance(k, str) and k for k in passed)
+                    and type(counts.get('passed')) is int and counts['passed'] == len(passed)
+                    and len(set(passed)) == len(passed)):
+                executed.update(passed)
+    for path, case in sorted(wanted):
+        declared = declared_cases(path, current.get(path, b'')) or []
+        if declared.count(case) != 1:
+            problems.append(f'{path}: replacement or retained case "{case}" is not declared exactly once')
+            continue
+        unqualified = any(case in (declared_cases(other, body) or []) for other, body in current.items()
+                          if other != path and _test_family(other) is not None)
+        py = _test_family(path)[1] == 'py'
+
+        def seen(pool, path=path, case=case, py=py, unqualified=unqualified):
+            return any((key == case and not unqualified) or (
+                py and key.split('::')[0] == path and key.split('::')[-1].split('[', 1)[0] == case)
+                       for key in pool)
+
+        if not py and unqualified:
+            problems.append(f'{path}: case "{case}" has an ambiguous name in another test file')
+        elif seen(skipped) or seen(failed):
+            problems.append(f'{path}: case "{case}" was skipped or failed')
+        elif not seen(executed):
+            problems.append(f'{path}: case "{case}" is not shown executing in a passed required check')
+    return problems
+
+
+test_change_authorizations.__test__ = False
+test_change_problems.__test__ = False
 
 
 def repair_problems(name: str, original: bytes, current: dict, receipts) -> List[str]:

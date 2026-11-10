@@ -40,6 +40,7 @@ size was necessary.
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 import json
 import re
@@ -238,26 +239,38 @@ class TaskScope:
         packet sent to a model still carries every exclusion, and permits()
         always enforces the full list.
         """
-        parts = ["## Scope of this task"]
+        return "\n".join(text for _name, text in self._render_parts(include_forbidden))
+
+    def component_bytes(self) -> Dict[str, int]:
+        """UTF-8 bytes of the rendered scope as the role packet counts it
+        (exclusions exempt) and of its larger parts, from the same parts
+        ``render`` joins (cycle21: a packet refusal says what to shorten)."""
+        parts = dict(self._render_parts(False))
+        sizes = {name: len(parts[name].encode()) for name in ("proofs", "acceptance", "intended") if name in parts}
+        whole = len(self.render(include_forbidden=False).encode())
+        return dict(scope=whole, **sizes, other=whole - sum(sizes.values()))
+
+    def _render_parts(self, include_forbidden: bool) -> List[Tuple[str, str]]:
+        parts = [("head", "## Scope of this task")]
         if self.intended_result:
-            parts.append(f"Intended result: {self.intended_result}")
+            parts.append(("intended", f"Intended result: {self.intended_result}"))
         if self.permitted_paths:
-            parts.append(
+            parts.append(("paths",
                 "You may change only these paths: "
                 + ", ".join(self.permitted_paths)
                 + ". A change anywhere else will be rejected as out of scope."
-            )
+            ))
         if self.forbidden_paths and include_forbidden:
-            parts.append("Never change: " + ", ".join(self.forbidden_paths) + ".")
+            parts.append(("forbidden", "Never change: " + ", ".join(self.forbidden_paths) + "."))
         if self.acceptance:
-            parts.append(
+            parts.append(("acceptance",
                 "This task is finished when:\n"
                 + "\n".join(f"  - {a}" for a in self.acceptance)
-            )
+            ))
         if self.review_only:
-            parts.append("Declared review-only: report findings; do not change project source.")
+            parts.append(("review", "Declared review-only: report findings; do not change project source."))
         if self.proofs:
-            parts.append("Proof scenarios (a test scenario is shown only by a named test case that runs and passes. "
+            parts.append(("proofs", "Proof scenarios (a test scenario is shown only by a named test case that runs and passes. "
                          + PROVES_RULE + " "
                          "A scenario marked 'evidence: reading' is a documentation claim the audit reads and cites; "
                          "one marked 'evidence: capture' is a visual state the harness renders and the design "
@@ -265,11 +278,11 @@ class TaskScope:
                          + "\n".join(f"  - {p['id']} [{', '.join(p['requirements'])}] {p['operation']}; given "
                                       f"{p['state']}; expect {p['expect']}; in {p['location']}"
                                       + (f"; evidence: {p['evidence']}" if p.get("evidence") in ("reading", "capture") else "")
-                                      for p in self.proofs))
+                                      for p in self.proofs)))
         if self.estimate:
-            parts.append("The planner's split of that size: "
+            parts.append(("estimate", "The planner's split of that size: "
                          + ", ".join(f"{k} {v}" for k, v in self.estimate.items())
-                         + " lines. The estimate below is the sum; every line counts the same.")
+                         + " lines. The estimate below is the sum; every line counts the same."))
         if self.max_lines:
             # The lead is told what the harness measures and what it does
             # with it (series rule-2ffa7f6 f3, f4 and f7: first tasks of 85
@@ -279,7 +292,7 @@ class TaskScope:
             # and complete requirements first, the tests that prove them,
             # then conciseness; the measured size reaches the reviewer, who
             # judges whether it was necessary.
-            parts.append(
+            parts.append(("size",
                 f"Expected size: about {self.max_lines} changed lines, counting added and removed "
                 f"lines in every file, tests in full. This is the planner's estimate, not a limit: "
                 f"the harness measures the diff after each editing call and reports the size to "
@@ -290,8 +303,8 @@ class TaskScope:
                 f"unrelated edits, no duplication, no padding. Never compress formatting, squeeze "
                 f"tests onto one line or leave a test out to fit a number; a reviewer judges "
                 f"whether the size was necessary, and length alone is not a finding."
-            )
-        return "\n".join(parts)
+            ))
+        return parts
 
     @classmethod
     def unbounded(cls) -> "TaskScope":
@@ -328,8 +341,35 @@ def _matches(path: str, pattern: str) -> bool:
         return path == prefix or path.startswith(prefix + "/")
     # Also accept a double-star directory wildcard matching zero levels.
     if "**" in pattern:
-        return fnmatch.fnmatch(path, pattern.replace("**/", "*").replace("**", "*"))
+        # Each **/ is an optional directory segment, not an optional filename
+        # prefix: src/**/config.py must not permit src/myconfig.py. Translate
+        # the remaining glob pieces intact so multiple recursive directories
+        # can independently match zero or more levels.
+        parts = [fnmatch.translate(part).removesuffix(r"\Z").removesuffix(r"\z")
+                 for part in pattern.split("**/")]
+        return re.fullmatch(r"(?s:.*/)?".join(parts), path) is not None
     return False
+
+
+def _diff_lines(diff: str):
+    """Yield lines with their hunk membership, even if payload resembles a header."""
+    old = new = 0
+    for line in (diff or "").splitlines():
+        match = re.match(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)
+        if match:
+            old, new = (int(n) if n is not None else 1 for n in match.groups())
+            yield line, False
+            continue
+        in_hunk = old > 0 or new > 0
+        if in_hunk:
+            if line.startswith("-"):
+                old -= 1
+            elif line.startswith("+"):
+                new -= 1
+            elif line.startswith(" "):
+                old -= 1
+                new -= 1
+        yield line, in_hunk
 
 
 def changed_paths(diff: str) -> List[str]:
@@ -341,7 +381,9 @@ def changed_paths(diff: str) -> List[str]:
     side and a deleted one by its ``---`` side.
     """
     seen: List[str] = []
-    for line in (diff or "").splitlines():
+    for line, in_hunk in _diff_lines(diff):
+        if in_hunk:
+            continue
         if line.startswith(("Binary file changed: ", "Empty file added/deleted: ")):
             name = line.partition(": ")[2]
             if name not in seen:
@@ -367,8 +409,8 @@ def count_change_lines(diff: str) -> int:
     itself worth a look.
     """
     total = 0
-    for line in (diff or "").splitlines():
-        if line.startswith(("+++", "---", "@@", "diff --git", "index ")):
+    for line, in_hunk in _diff_lines(diff):
+        if not in_hunk and line.startswith(("+++", "---", "@@", "diff --git", "index ")):
             continue
         if line.startswith(("+", "-")):
             total += 1
@@ -384,8 +426,8 @@ def count_change_lines_by_path(diff: str) -> Dict[str, int]:
     """
     counts: Dict[str, int] = {}
     current = ""
-    for line in (diff or "").splitlines():
-        if line.startswith(("--- ", "+++ ")):
+    for line, in_hunk in _diff_lines(diff):
+        if not in_hunk and line.startswith(("--- ", "+++ ")):
             raw = line[4:].strip().split("\t")[0]
             if raw != "/dev/null" and raw:
                 current = raw[2:] if raw.startswith(("a/", "b/")) else raw
@@ -419,6 +461,23 @@ PROVES_RULE = (
     "repeated with the same P<n>. A line that names a test class, a test file, or a "
     "comma-separated list binds nothing and invalidates that scenario's declaration; the "
     "measured reason is returned to you, and the correction is the corrected line(s)."
+)
+
+#: How an editing seat names what it could not run, so the harness's own
+#: complete run can discharge it (cycle22; run21 t8: the editing seat was told
+#: only 'NOT RUN: <command or file>' while the identity forms were stated to
+#: the planner alone, and "unittest on delivered source" bound nothing). The
+#: same sentence goes to the planner and to every editing call.
+NOT_RUN_RULE = (
+    "Report each check or acceptance step you could not run on its own line 'NOT RUN: <item> - <why>', "
+    "naming exactly what did not run: 'P<n>' for a declared scenario of this task (an inclusive range "
+    "'P<a>-P<b>' binds only when every scenario in it is declared), '<file>::[<Class>::]<test>' for a case, "
+    "'<file>::<Class>' for a whole test class (discharged only by a check that collects that file whole and "
+    "shows every method of the class passed), or a test file or the exact command. The harness's own "
+    "complete run on the current source discharges an item named this way, with no further run by you. A "
+    "report naming none of these (a whole suite in words, a reason in place of an identity, an unreadable "
+    "case) is kept as written, holds the requirements it serves and nothing can discharge it; a claim a "
+    "passing run cannot establish, such as mutation detection, stays held beside any scenarios it names."
 )
 
 #: What a delivered test must do, stated for the author and the judge
@@ -459,20 +518,74 @@ def is_test_path(path: str) -> bool:
 _DEFINED = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(")
 _DEFINED_WITH_ARGS = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(([^()]*)\)")
 _ELIDED = frozenset({"...", "\u2026"})
-_QUOTED = re.compile(r"`\s*(?:def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`")
+_QUOTED = re.compile(r"`\s*(def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`")
+#: The anchored assertion grammar (cycle19): a backticked ``name(args)``
+#: without ``def`` states a signature only when, on its own line, one of these
+#: phrases ends directly before its opening backtick (an optional colon
+#: between): "signature" or "signature is", "define", "defines", "defined as",
+#: "declare", "declares", "declared as", "make it". These are the forms the
+#: historical regressions assert with (attempt 2: "give the function
+#: signature `...`"; acceptance: "app.py defines `...`"; f6: "actually make it
+#: `...`"). Every other backticked ``name(args)`` is an invocation or an
+#: example and never a signature, however the sentence around it reads.
+_ASSERTED = re.compile(r"(?:\bsignature(?:\s+is)?|\bdefines?|\bdefined\s+as|\bdeclares?|\bdeclared\s+as"
+                       r"|\bmake\s+it)\s*:?\s*$", re.IGNORECASE)
+#: How far before a quoted form the assertion grammar looks, on its line.
+_ASSERTED_WINDOW = 40
+#: A parameter list longer than this is not read as one (bounded parsing).
+_MAX_PARAMETERS_CHARS = 400
+
+
+def _parameter_list(args: str) -> bool:
+    """Whether ``args`` reads as a Python parameter list, by static parsing
+    only (``ast``; nothing is executed or imported). A placeholder such as
+    ``<argv list>`` or an elision is not one and states no signature."""
+    if len(args) > _MAX_PARAMETERS_CHARS:
+        return False
+    try:
+        ast.parse(f"def _f({args}):\n    pass\n")
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
+def _asserted(text: str, start: int) -> bool:
+    """Whether the assertion grammar ends directly before ``start`` on its
+    line (``_ASSERTED``)."""
+    line = text[:start].rsplit("\n", 1)[-1]
+    return bool(_ASSERTED.search(line[-_ASSERTED_WINDOW:]))
 
 
 def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, List[str]]:
     """Every signature the declaration gives each function it defines.
 
-    A function is *declared* only where the description writes ``def name(``.
-    For those names, every ``def`` line and every backticked ``name(args)``
-    across the whole declaration is collected, with whitespace normalised.
-    Incidental calls (``float()``, ``len(row)``) are never declared, so they
-    cannot trip the check, and neither can a backticked name that is not a
-    function: attempt 3 of the blind acceptance quoted the CSV columns
-    ``Start (s)`` and ``End (s)`` in acceptance, which read as ``name(args)``
-    but are column headings. Requiring a ``def`` keeps the check on functions.
+    A function is *declared* where the description, the intended result or
+    an acceptance condition writes ``def name(``. For those names a signature
+    is (cycle19, PR73 6745520095):
+
+    - a definition: every ``def name(args)``, in a code block or in
+      backticks, in the description or the fields; or
+    - an asserted signature: a backticked ``name(args)`` that the anchored
+      assertion grammar (``_ASSERTED``) directly precedes on its line.
+
+    Any other backticked ``name(args)`` is an invocation or an example (a
+    test calling ``main(argv)``, an expected ``TypeError`` from ``f(1)``) and
+    is never collected: cycle18 stalled because ``main(argv)`` in test
+    guidance read as a second signature beside ``def main(argv=None)``.
+    Signatures are compared as written, whitespace normalised, so a rename or
+    a changed default in a real assertion is a difference even where the two
+    would bind the same call. A form whose parentheses do not read as a
+    parameter list (an elision such as ``(...)``, a placeholder) states no
+    signature and is skipped (f6-download-guard on 2ffa7f6). Incidental calls
+    (``float()``, ``len(row)``) and backticked names that are not functions
+    (attempt 3's column headings ``Start (s)``) are never declared, since
+    only a ``def`` declares a name.
+
+    Limits: names are matched as written, with no class or module
+    resolution, so two methods of one name in different classes are one
+    name, as before; a qualified invocation (``store.add(x)``) is not the
+    declared name and is never collected; and a form with nested
+    parentheses (a default of ``()``) is not read, as before.
 
     Returns ``{name: [distinct signatures, in order of appearance]}``. More
     than one entry for a name is the contradiction the decomposition prompt
@@ -482,8 +595,8 @@ def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, L
     from the first draft. The lead implemented one and was measured against
     the other.
     """
-    quoted_fields = [x for group in fields for x in group]
-    declared = set(_DEFINED.findall(description))
+    texts = [description, *[x for group in fields for x in group]]
+    declared = {name for text in texts for name in _DEFINED.findall(text)}
     if not declared:
         return {}
     found: Dict[str, List[str]] = {}
@@ -502,16 +615,19 @@ def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, L
             # orchestrator could not act on. An elision says nothing about
             # the parameters, so it is not collected.
             return
+        if not _parameter_list(args):
+            return
         normalised = ", ".join(parts)
         forms = found.setdefault(name, [])
         if normalised not in forms:
             forms.append(normalised)
 
-    for name, args in _DEFINED_WITH_ARGS.findall(description):
-        note(name, args)
-    for text in [description, *quoted_fields]:
-        for name, args in _QUOTED.findall(text):
+    for text in texts:
+        for name, args in _DEFINED_WITH_ARGS.findall(text):
             note(name, args)
+        for match in _QUOTED.finditer(text):
+            if match.group(1) or _asserted(text, match.start()):
+                note(match.group(2), match.group(3))
     return found
 
 
@@ -522,7 +638,10 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
     Raises :class:`ValueError` with a message the correction round can quote.
     The prompt asks for a final description with one signature per function,
     quoted verbatim in acceptance; this is the backstop for when the
-    orchestrator thinks aloud inside the description instead.
+    orchestrator thinks aloud inside the description instead. Only
+    definitions and asserted signatures are compared (``declared_signatures``);
+    the message says so, so the one correction is not spent rewriting call
+    examples (cycle19).
     """
     forms = declared_signatures(description, [scope.intended_result], scope.acceptance)
     for name, variants in forms.items():
@@ -531,7 +650,10 @@ def lint_declaration(description: str, scope: "TaskScope") -> None:
             raise ValueError(
                 f"the declaration gives {name} more than one signature ({listed}); "
                 f"write the description as final text with exactly one signature "
-                f"per function and quote it verbatim in acceptance"
+                f"per function and quote it verbatim in acceptance (a signature is a "
+                f"`def {name}(<parameters>)` form or a form written directly after 'signature', "
+                f"'defines' or 'make it'; a quoted call such as a test's invocation is "
+                f"an example, never a signature)"
             )
 
 

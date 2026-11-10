@@ -117,8 +117,12 @@ def record_invocation(ledger, event):
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
                evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None, authority=None,
-               effort_inputs=None):
+               effort_inputs=None, review_source=None):
     context = dict(task=task, role=role, origin=origin)
+    if review_source is not None:
+        # The task-start bytes for an independent audit's first read. This
+        # private handoff is not an editing grant or a persisted call field.
+        context["review_source"] = dict(review_source)
     if effort_inputs:
         # The task facts the effort policy reads at dispatch (quadratus.effort):
         # complexity, kind, work class, security, fix cycle, recheck impact.
@@ -354,9 +358,27 @@ def safe_diagnostics(value) -> dict:
     status = value.get('status')
     if type(status) is int and 100 <= status <= 599:
         result['status'] = status
+    # The wait before a re-sent attempt and why (providers.TransientOverload).
+    wait = value.get('retry_wait_seconds')
+    if type(wait) in (int, float) and 0 <= wait <= 86_400:
+        result['retry_wait_seconds'] = float(wait)
+    if value.get('retry_cause') == 'overloaded':
+        result['retry_cause'] = 'overloaded'
     failure_class = value.get('failure_class')
     if failure_class in ('cap', 'auth', 'rate_limited', 'unavailable'):
         result['failure_class'] = failure_class
+    # The CLI's own headless-approval refusal (cycle15): tool, target scheme
+    # and a target digest only; the raw target stays in the private stderr.
+    block = value.get('permission_block')
+    if isinstance(block, dict) and block.get('headless_approval') is True:
+        tool, scheme, digest = block.get('tool'), block.get('scheme'), block.get('target_digest')
+        if (isinstance(tool, str) and atom.fullmatch(tool) and isinstance(scheme, str)
+                and re.fullmatch(r"[a-z][a-z0-9+.-]{0,15}", scheme) and isinstance(digest, str)
+                and re.fullmatch(r"[0-9a-f]{16}", digest)):
+            lines = block.get('lines')
+            result['permission_block'] = dict(tool=tool, scheme=scheme, headless_approval=True,
+                                              target_digest=digest,
+                                              lines=lines if type(lines) is int and 0 < lines <= 200 else 1)
     # How much of this call's input the model was being handed again. An agent
     # re-sends its whole conversation on every step, so a long loop's reported
     # total is mostly text it has already seen -- 402,816 of attempt 9's

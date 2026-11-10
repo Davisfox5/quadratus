@@ -78,7 +78,14 @@ from .outcome import (
     primary,
     unclassified,
 )
-from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
+from .policy import PacketTooLarge
+from .providers import (
+    PartialWorkSuspected,
+    PermissionBlocked,
+    ProviderError,
+    ProviderRefusal,
+    TurnLimitReached,
+)
 from .registry import peers_for, resolve
 from .routing import (
     Seat,
@@ -90,6 +97,7 @@ from .routing import (
 )
 from .run_budget import FinishReserved, finishing
 from .scope import (
+    NOT_RUN_RULE,
     PROVES_RULE,
     TEST_SUBSTANCE_RULE,
     ScopeReport,
@@ -609,7 +617,41 @@ class SessionConfig:
     #: start still executes, unskipped (integration.repair_problems). Every
     #: other original is restored as before.
     repair_tests: tuple = ()
+    #: Exact operator-authorized replacements or retirements of existing test
+    #: cases. Bound to the goal and original file bytes; planned migrations
+    #: still need approval of their concrete result unless its digest is set.
+    test_changes: tuple = ()
 
+
+
+#: A requirement whose whole claim is that a named test command passes
+#: (cycle05 trial: R24/R28 "runs under python -m unittest") needs no proof
+#: scenario: the harness's exact receipt of that command on the delivered
+#: source is cited for it (``_command_receipt_citation``) and the audit judges
+#: it. t5 and t6 instead built a test that ran the whole suite inside itself,
+#: which collected itself and timed out. ``_proof_problem`` reads the same
+#: rule (``_test_command_requirement``).
+_TEST_COMMAND_RULE = (
+    "A requirement whose whole claim is that a named test command passes (python -m unittest, "
+    "pytest, npm test, make test) needs no scenario: the harness's own complete passing run of "
+    "exactly that command on the delivered source is cited for it and the independent audit judges "
+    "it, and it stays not met when the configured checks do not run that command. A clause naming "
+    "which tests that run includes ('including every test in tests/test_x.py and the new tests') "
+    "is part of the same claim, shown by that receipt's own executed cases from those files; it "
+    "needs no scenario either. Never write a test that runs the test suite or that command.")
+
+#: The early-rejection scenario (cycle18, PR73 6742757517 item 5b): every
+#: seat is told a framework's own rejections are responses of the interface
+#: (_CONTRACT_BOUNDARY_RULE), yet no declared scenario sent one, and the
+#: seats' sandboxes cannot open a socket, so only a case the gate runs can
+#: show it. Guidance in the scenario grammar only: no new gate, task, audit
+#: or requirement, and the independent review still judges adequacy.
+_EARLY_REJECTION_SCENARIO_RULE = (
+    "Where the goal fixes the form of every error or refusal response and the framework, server or argument "
+    "parser in front of the project's handler can itself reject an input before that handler runs, declare a "
+    "scenario whose operation is one such early rejection and whose expect is what the client actually "
+    "receives from it (the status, headers and body, or the exit status and output), checked as received, "
+    "not as the handler would have answered.")
 
 _SCOPE_REQUEST = (
     'After KIND, include exactly one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
@@ -630,7 +672,9 @@ _SCOPE_REQUEST = (
     'nothing, and the reviewers judge whether the size was necessary. '
     'Size the implementation and its executed proof together: every requirement the '
     'task COVERS is delivered in this task only with the executed tests that prove it '
-    '(for an error or refusal requirement, a passing case per rejecting path), so '
+    '(for an error or refusal requirement, a passing case per rejecting path; a requirement '
+    'whose claim is that a named test command passes is shown by the harness\'s own run of '
+    'that command instead), so '
     'estimate implementation lines, proof lines (the named cases: usually the larger '
     'half) and the fixed setup a new test file pays before its first case (imports, '
     'fixtures, stubs or fakes for what the environment lacks) separately, and set '
@@ -647,11 +691,13 @@ _SCOPE_REQUEST = (
     'at least one scenario and every scenario must name a covered requirement (a mismatch is '
     'sent back once); one scenario per operation and per negative case, with the prior state '
     'stated so the expected state is checked against it (an event already logged stays '
-    'logged: "unchanged" is not "empty"). A scenario is discharged only by a named test case '
+    'logged: "unchanged" is not "empty"). ' + _EARLY_REJECTION_SCENARIO_RULE + ' A scenario is discharged only by a named test case '
     'that runs and passes, which the lead binds in its delivery, and is unproved until then. '
     'Only a documentation claim may declare "evidence": "reading" (its location a documentation '
-    'file, never for an error or refusal requirement): it is judged by the audit reading and '
-    'citing that file and never by a check. Nothing is exempt by its location or wording: a '
+    'file, never for a requirement that asserts error or refusal behaviour of the program; one that '
+    'only asks documentation to describe that behaviour is a documentation claim, and behaviour beside '
+    'it in the same requirement takes its own executed scenario): it is judged by the audit reading and '
+    'citing that file and never by a check. ' + _TEST_COMMAND_RULE + ' Nothing else is exempt by its location or wording: a '
     'scenario without that declaration is an executable claim wherever it points. The harness '
     'checks the mapping, not its completeness, and the independent review judges that. Size the proof '
     'estimate from this list and from any measured sizing notes in the codebase map. '
@@ -659,10 +705,136 @@ _SCOPE_REQUEST = (
     'alternatives or thinking aloud; if you change your mind, rewrite the line. Give '
     'each function exactly one signature, and quote that signature verbatim in '
     'intended_result and acceptance. A declaration whose signatures disagree is '
-    'rejected and comes back for correction. You get one correction: a second '
+    'rejected and comes back for correction. A signature is a `def name(...)` form, or a form '
+    'written directly after "signature", "defines" or "make it"; write signatures as `def name(...)`. '
+    'A quoted call, such as a test invoking the function or a wrong call expected to raise, is an '
+    'example, never a second signature. You get one correction: a second '
     'invalid declaration stops the run, and the correction must be a task, not '
-    'DONE, ASK or FETCH. Keep the declaration short (well under 20,000 bytes).'
+    'DONE, ASK or FETCH.'
 )
+
+#: The no-policy role packet's byte limit (``Session._role_packet``).
+_FALLBACK_PACKET_BYTES = 20_000
+
+#: A task's role packet may pass the policy's default only by an allowance
+#: the orchestrator granted on its lead's justified request (Davis,
+#: 2026-11-09: "the orchestrator should have latitude to extend that if the
+#: lead can show justification"). The ceiling no grant can pass is the run's
+#: own resource bound, not another fixed figure: the packet rides every round
+#: of every call that carries it, so it may take at most this share of the
+#: context one round of a capped call is planned to spend (the per-call token
+#: threshold times ``run_budget.TURN_CAP_MARGIN`` over the lead turn cap, or
+#: the measured ``run_budget.TURN_CONTEXT_TOKENS`` when the run sets neither),
+#: at the meter's ``usage.CHARS_PER_TOKEN``. The other half is the round's own
+#: reading, writing and tool output (``Session._packet_ceiling``).
+_PACKET_ROUND_SHARE = 0.5
+#: The calls whose every round re-sends a task's packet, for the budget
+#: estimate of an extension: the lead's draft, one review and one recheck.
+#: An estimate for the refusal only; what is charged is what the calls report.
+_PACKET_CARRYING_CALLS = 3
+#: The lead's request (at intake, or as its whole draft reply) and its two
+#: justification lines, read by their markers only.
+_PACKET_REQUEST_LINE = re.compile(r"^[ \t]*PACKET[ \t]+EXTENSION:[ \t]*([0-9][0-9,_]*)[ \t]*(?:bytes)?[ \t]*$",
+                                  re.IGNORECASE | re.MULTILINE)
+_PACKET_NECESSARY = re.compile(r"^[ \t]*NECESSARY:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+_PACKET_WHY_NOT_SHORTER = re.compile(r"^[ \t]*WHY[ \t]+NOT[ \t]+SHORTER:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+_PACKET_NARROW = re.compile(r"^[ \t]*PACKET[ \t]+NARROW:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+#: The orchestrator's decision, a line of its own reply naming the request id
+#: the harness issued: ``PACKET GRANT: <id> <bytes> | because: <reason>`` or
+#: ``PACKET REFUSE: <id> | because: <reason>``.
+_PACKET_DECISION = re.compile(r"^[ \t]*PACKET[ \t]+(GRANT|REFUSE):[ \t]*(\S*)[ \t]*(.*)$",
+                              re.IGNORECASE | re.MULTILINE)
+_PACKET_GRANT_TAIL = re.compile(r"^([0-9][0-9,_]*)[ \t]*(?:bytes)?[ \t]*\|[ \t]*because:[ \t]*(.*)$", re.IGNORECASE)
+_PACKET_REFUSE_TAIL = re.compile(r"^\|?[ \t]*because:[ \t]*(.*)$", re.IGNORECASE)
+#: A justification or a decision's reason shorter than this says nothing a
+#: reader can check ("needed", "n/a"): form only, never a judgment of merit,
+#: which is the orchestrator's.
+_PACKET_REASON_MIN = 20
+#: Intake requests per task whose send-back spends no correction.
+_PACKET_FREE_REQUESTS = 2
+_PACKET_EMPTY = ("none", "n/a", "na", "-", "needed", "required", "necessary")
+
+
+def _packet_bytes(text: str) -> Optional[int]:
+    try:
+        return int(str(text).replace(",", "").replace("_", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _packet_reason_problem(text: str, what: str) -> str:
+    text = (text or "").strip()
+    if not text or text.lower().strip(" .") in _PACKET_EMPTY:
+        return f"{what} is empty"
+    if len(text) < _PACKET_REASON_MIN:
+        return f"{what} says too little to be checked ({len(text)} characters; at least {_PACKET_REASON_MIN})"
+    return ""
+
+
+def _parse_packet_request(reply: str) -> dict:
+    """A lead's answer to a packet question, read by its markers only:
+    ``kind`` is "request" (``bytes``, ``necessary``, ``why``), "narrow"
+    (``advice``) or "malformed" (``problem``). Prose without the markers is
+    no request, and a reply carrying both forms, or a marker twice with
+    different text, is malformed: nothing is guessed."""
+    text = reply or ""
+    sizes = list(dict.fromkeys(_PACKET_REQUEST_LINE.findall(text)))
+    narrow = list(dict.fromkeys(m.strip() for m in _PACKET_NARROW.findall(text)))
+    if sizes and narrow:
+        return dict(kind="malformed", problem="the reply carries both a PACKET EXTENSION and a PACKET NARROW line")
+    if narrow:
+        if len(narrow) > 1:
+            return dict(kind="malformed", problem="the reply carries PACKET NARROW twice with different text")
+        problem = _packet_reason_problem(narrow[0], "the PACKET NARROW advice")
+        return dict(kind="malformed", problem=problem) if problem else dict(kind="narrow", advice=narrow[0][:1200])
+    if not sizes:
+        return dict(kind="malformed", problem="the reply has no PACKET EXTENSION line")
+    if len(sizes) > 1:
+        return dict(kind="malformed", problem="the reply names more than one PACKET EXTENSION size")
+    size = _packet_bytes(sizes[0])
+    fields = {}
+    for name, pattern, label in (("necessary", _PACKET_NECESSARY, "NECESSARY"),
+                                 ("why", _PACKET_WHY_NOT_SHORTER, "WHY NOT SHORTER")):
+        found = list(dict.fromkeys(m.strip() for m in pattern.findall(text)))
+        if len(found) != 1:
+            return dict(kind="malformed", problem=(f"the reply has no {label} line" if not found else
+                                                   f"the reply carries {label} twice with different text"))
+        problem = _packet_reason_problem(found[0], f"the {label} line")
+        if problem:
+            return dict(kind="malformed", problem=problem)
+        fields[name] = found[0][:1200]
+    if not size:
+        return dict(kind="malformed", problem="the PACKET EXTENSION size is not a positive number of bytes")
+    return dict(kind="request", bytes=size, **fields)
+
+
+_PACKET_NARROW_TEXT = ("Name the task again narrower or split it, or state its scenarios, acceptance conditions and "
+                       "intended result more briefly; every covered requirement keeps its scenario and nothing "
+                       "required is dropped.")
+
+
+def _packet_allowance_record(grant: dict) -> dict:
+    """A granted request as a task's record carries it."""
+    return dict(request=grant.get("id"), origin=grant.get("origin"), granted=grant.get("granted"),
+                default=grant.get("default"), needed=grant.get("needed"), ceiling=grant.get("ceiling"),
+                lead=grant.get("lead"), necessary=grant.get("necessary"), why_not_shorter=grant.get("why_not_shorter"),
+                decided_by=grant.get("decided_by"), reason=grant.get("grant_reason"),
+                decision_artifact=grant.get("decision_artifact"), reply_artifact=grant.get("reply_artifact"))
+
+
+def _read_packet_decisions(spec):
+    """``(decisions, spec)``: the orchestrator's PACKET GRANT and PACKET
+    REFUSE lines, taken out of the task text it named (they decide a request;
+    they are not task text for its lead). Read here only, from the
+    orchestrator's own reply: a lead's justification shown to it is never
+    read as a decision."""
+    text = getattr(spec, "description", "") or ""
+    found = [dict(verb=m.group(1).upper(), id=m.group(2).strip(), rest=m.group(3).strip(), line=m.group(0).strip())
+             for m in _PACKET_DECISION.finditer(text)]
+    if not found:
+        return [], spec
+    kept = "\n".join(line for line in _PACKET_DECISION.sub("", text).splitlines() if line.strip())
+    return found, replace(spec, description=kept)
 
 #: What a UI task's SCOPE capture declares when the harness captures (Run 19:
 #: a favicon task declared a wait on an element visible at load, and the
@@ -1680,12 +1852,14 @@ def _check_runs(check: dict, root=None) -> List[dict]:
     from types import SimpleNamespace
 
     from .integration import (
+        RUNNER_UNKNOWN,
         _test_count,
         case_outcomes,
         deselected_count,
         is_filtered,
         operand_paths,
         skipped_count,
+        unittest_discover_command,
     )
     receipts = check.get("receipts") or ()
     # A single-command gate's selection and cwd are recorded on the check; its
@@ -1718,12 +1892,29 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         # of 81adcc7, R2: pytest.ini's addopts = -k unit printed "1 passed, 1
         # deselected" for a named file and looked like a whole run).
         filtered = is_filtered(argv) or bool(row["selection"]) or deselected_count(row["output"]) > 0
+        # The command-level reading, for a citation of the exact command a
+        # requirement names (cycle17): the same selection, except that the
+        # harness's own unknown-runner diagnostic is dropped, matched whole,
+        # for a strict ``unittest discover`` shape. Every other reason
+        # stays. ``filtered`` and ``files`` are unchanged: discover still
+        # grants no whole-file or per-case reading.
+        command_reasons = []
+        if is_filtered(argv):
+            command_reasons.append("argv")
+        unknown, other = _split_runner_unknown(str(row["selection"] or ""), RUNNER_UNKNOWN)
+        if unknown and not unittest_discover_command(argv):
+            command_reasons.append("runner")
+        if other:
+            command_reasons.append("external")
+        if deselected_count(row["output"]) > 0:
+            command_reasons.append("deselected")
         names = _receipt_names(row)
         skipped_names = names[0] if names[0] is not None else case_outcomes(row["output"])[0]
         every_names = names[1]
         qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
+                        command_filtered=bool(command_reasons), command_reasons=command_reasons,
                         cwd=row["cwd"], command=row["command"], interpreter=row.get("interpreter"),
                         report_cases=_report_cases(row["report"]), report_classes=_report_classes(row["report"]),
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
@@ -1732,6 +1923,26 @@ def _check_runs(check: dict, root=None) -> List[dict]:
                         skipped_names=skipped_names, executed_names=executed_names, every_names=every_names,
                         qualified_names=qualified_names))
     return out
+
+
+def _split_runner_unknown(selection: str, marker: str) -> Tuple[bool, str]:
+    """``(found, rest)``: whether ``selection`` (reasons joined by '; ')
+    holds the unknown-runner diagnostic as a whole element, and what else it
+    holds. Only whole occurrences at element boundaries are taken out (the
+    marker itself contains '; '); anything left, however split, is another
+    reason (cycle17)."""
+    found, rest, i, sep = False, [], 0, "; "
+    while i < len(selection):
+        if selection.startswith(marker, i) and (i + len(marker) == len(selection)
+                                                or selection.startswith(sep, i + len(marker))):
+            found = True
+            i += len(marker) + len(sep)
+            continue
+        j = selection.find(sep, i)
+        j = len(selection) if j < 0 else j
+        rest.append(selection[i:j])
+        i = j + len(sep)
+    return found, "; ".join(x for x in rest if x.strip())
 
 
 def _receipt_names(receipt):
@@ -1970,6 +2181,26 @@ def _complete_run(run: dict) -> bool:
 
 #: The bounded display of a NOT RUN item in a prompt; the record keeps it whole.
 _ITEM_DISPLAY_CHARS = 300
+
+
+def _folds_binding(plan: dict, editor: bool) -> bool:
+    """Whether a correction bundle's binding declaration rides in the editor
+    revision the same bundle already buys (cycle22; run21 t8's bundle needed
+    5 calls with 4 left, and its separate declaration settled on the
+    pre-edit source the revision then changed). The one decision both the
+    admission (``_fix_cycle_stages``) and the serve read."""
+    return bool(plan.get("binding")) and bool(editor)
+
+
+def _replaced_note(entry: dict) -> str:
+    """For a judge of a restated NOT RUN item that was bound to exact cases
+    before (cycle22: a renamed case): which cases the restatement replaced,
+    so the new cases are judged against the whole original claim."""
+    previous = [str(c) for c in ((entry.get("restatements") or [{}])[-1] or {}).get("previous", {}).get("cases") or ()]
+    if not previous:
+        return ""
+    return (f" (replacing {', '.join(previous)}, the case(s) it was bound to before; judge the new cases against "
+            "everything the original item reported, not against the old name)")
 
 
 def _display_item(item: str) -> str:
@@ -2249,6 +2480,242 @@ _COMMAND_PROSE_STOPS = frozenset({
 })
 
 
+#: Options of a test runner that take a value, so the next word is the
+#: option's operand, not prose (``_command_words``).
+_RUNNER_VALUED = {
+    "unittest": frozenset({"-s", "-p", "-t", "-k", "--start-directory", "--pattern", "--top-level-directory"}),
+    "pytest": frozenset({"-k", "-m", "-p", "-c", "-o", "--rootdir", "--maxfail", "--deselect", "--ignore",
+                         "--confcutdir", "--basetemp"}),
+}
+
+
+#: A clause that says which tests a command's run includes (cycle10 run
+#: 20261108T163004Z R1: "... passes on the delivered source, including every
+#: test in tests/test_existing.py and new feature tests"). Read by grammar,
+#: never by a vocabulary of accepted words (``_population_clause``).
+_POPULATION_INTRO = re.compile(r"[,;]?\s*\b(?:including|covering)\b", re.IGNORECASE)
+#: The head nouns of a test population: the item names tests, never a behaviour.
+_POPULATION_HEADS = frozenset({"test", "tests", "case", "cases", "suite", "suites", "file", "files", "module",
+                               "modules"})
+_POPULATION_LOCATIVES = frozenset({"in", "from", "under"})
+#: The one reading of a population's age: tests the run itself added.
+_POPULATION_ADDED = frozenset({"new", "added"})
+
+
+def _population_path(token: str) -> bool:
+    return "/" in token or bool(re.search(r"\.[A-Za-z]\w*$", token))
+
+
+def _population_clause(text: str) -> Tuple[str, Optional[List[dict]]]:
+    """Split a test-command requirement's text after the command into the
+    run-and-pass part and its population clause: ``(before, items)``, items
+    None when there is no clause and [] when one is there but does not
+    parse. Each item is a noun phrase whose last word before an optional
+    ``in|from|under <path>`` is a test noun (test, case, suite, file,
+    module) with at most four words before it, or a bare test path; the
+    item is ``{paths, added, text}``. "tests for malformed JSON", "tests
+    that check refunds" and anything else after the head make the clause
+    a behaviour, which keeps its scenario. ``added`` is true when the
+    phrase says the tests are new or added: the run's own test files."""
+    match = _POPULATION_INTRO.search(text)
+    if match is None:
+        return text, None
+    before, clause = text[:match.start()], text[match.end():]
+    clause = clause.strip().rstrip(".;:!")
+    if not clause:
+        return before, []
+    parts = [p.strip() for p in re.split(r",|\band\b", clause) if p.strip()]
+    items = []
+    for part in parts:
+        tokens = [t.strip("`'\"()") for t in part.split()]
+        tokens = [t.rstrip(",.;:") for t in tokens if t]
+        paths = [t for t in tokens if _population_path(t)]
+        if tokens and all(_population_path(t) for t in tokens):
+            items.append(dict(paths=paths, added=False, text=part))
+            continue
+        heads = [i for i, t in enumerate(tokens) if t.lower() in _POPULATION_HEADS]
+        if not heads:
+            return before, []
+        head = heads[-1]
+        tail = tokens[head + 1:]
+        if tail and not (tail[0].lower() in _POPULATION_LOCATIVES and len(tail) > 1
+                         and all(_population_path(t) for t in tail[1:])):
+            return before, []
+        modifiers = tokens[:head]
+        if len(modifiers) > 4 or any(not re.fullmatch(r"[A-Za-z][\w-]*", m) for m in modifiers):
+            return before, []
+        items.append(dict(paths=[t for t in tail[1:]], added=any(m.lower() in _POPULATION_ADDED for m in modifiers),
+                          text=part))
+    return before, items
+
+
+#: A runner at the start of a command span (``Session._command_requirement``).
+_RUNNER_SPAN = r"(?:[\w./~-]*/)?(?:python3?|pytest|npm|npx|node|make)"
+
+
+def _case_collision(root: Path, declared: str) -> Optional[str]:
+    """The existing spelling of ``declared`` when some component of it is
+    absent under that exact name but present under one name that differs
+    only in letter case; None when the path exists as written, is new, is
+    ambiguous, passes through a link, or reaches a glob component first
+    (cycle21). Reads directory listings only, never file contents."""
+    parts = [p for p in PurePosixPath(str(declared).strip("/")).parts if p not in ("", ".")]
+    current, spelled = root, []
+    for i, part in enumerate(parts):
+        if any(ch in part for ch in "*?["):
+            return None
+        try:
+            names = os.listdir(current)
+        except OSError:
+            return None
+        if part in names:
+            current = current / part
+            spelled.append(part)
+            if i < len(parts) - 1 and (current.is_symlink() or not current.is_dir()):
+                return None
+            continue
+        folded = [n for n in names if n.casefold() == part.casefold()]
+        if len(folded) != 1:
+            return None
+        return "/".join(spelled + [folded[0]] + list(parts[i + 1:]))
+    return None
+
+
+def _command_rest(text: str, argv) -> Optional[str]:
+    """A requirement's text with its one command taken out, every other
+    Markdown code span read as the plain text it marks, or None when the text
+    holds more than one command span or the command cannot be found exactly
+    once (cycle11 review, PR73 6725376982: "`pytest -q` passes, including every
+    test in `tests/test_existing.py` ..." was refused as two commands). A code
+    span is a command only when it starts with a runner; a path, a name or any
+    other span is ordinary text for the reader that follows."""
+    ticked = re.findall(r"`([^`\n]+)`", text)
+    commands = [t for t in ticked if re.match(r"\s*" + _RUNNER_SPAN + r"\b", t)]
+    if len(commands) > 1:
+        return None
+    if commands:
+        span = f"`{commands[0]}`"
+        if text.count(span) != 1:
+            return None
+        rest = text.replace(span, " ")
+    else:
+        phrase = " ".join(argv or ())
+        plain = re.sub(r"`([^`\n]+)`", r"\1", text)
+        if not phrase or plain.count(phrase) != 1:
+            return None
+        rest = plain.replace(phrase, " ")
+    return _without_command_label(re.sub(r"`([^`\n]+)`", r"\1", rest), argv)
+
+
+def _command_runner_name(argv) -> Optional[str]:
+    """The runner a test command names: ``pytest``, ``unittest`` (``python -m
+    unittest``), ``npm`` or ``make``; None for anything else."""
+    argv = [str(a) for a in argv or ()]
+    if not argv:
+        return None
+    head = os.path.basename(argv[0])
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", head) and len(argv) > 2 and argv[1] == "-m":
+        return argv[2] if argv[2] in ("pytest", "unittest") else None
+    return head if head in ("pytest", "npm", "make") else None
+
+
+def _without_command_label(rest: str, argv) -> str:
+    """``rest`` without one parenthetical that only labels the command it
+    follows, such as "(configured unittest check)" or "(the required test
+    command)" (cycle21: R23 was read as claiming "configured unittest check"
+    beside the command, and the planner wrote a test that loads the test
+    suite). The whole parenthetical must be that label: an optional "the",
+    "configured", "required" or "approved", optionally the command's own
+    runner name and "test", then "check", "command" or "gate". Any other word
+    ("(configured database check)") keeps it, and the requirement keeps its
+    scenario."""
+    runner = _command_runner_name(argv)
+    label = (r"\(\s*(?:the\s+)?(?:configured|required|approved)\s+"
+             + (rf"(?:{re.escape(runner)}\s+)?" if runner else "")
+             + r"(?:test\s+)?(?:check|command|gate)\s*\)")
+    found = list(re.finditer(label, rest, re.IGNORECASE))
+    if len(found) != 1:
+        return rest
+    return rest[:found[0].start()] + " " + rest[found[0].end():]
+
+
+def _python_case_defs(data) -> Optional[Dict[str, str]]:
+    """The test cases a Python test file defines, ``name`` or
+    ``Class::method`` (nested classes joined by ``::``), each with a dump of
+    its body; None when the file cannot be parsed. Static: a case generated
+    at run time has no entry here."""
+    import ast
+    try:
+        tree = ast.parse(data.decode("utf-8") if isinstance(data, bytes) else str(data))
+    except (SyntaxError, UnicodeDecodeError, ValueError):
+        return None
+    out: Dict[str, str] = {}
+
+    def walk(nodes, prefix):
+        for node in nodes:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                out["::".join(prefix + [node.name])] = ast.dump(ast.Module(body=node.body, type_ignores=[]))
+            elif isinstance(node, ast.ClassDef):
+                walk(node.body, prefix + [node.name])
+    walk(tree.body, [])
+    return out
+
+
+def _command_words(words) -> List[str]:
+    """The leading words of an unquoted phrase that are the command itself:
+    the runner (``python -m <module>`` counts as one), then only operands a
+    command has (an option, the value of an option the runner takes with a
+    value, a path or pattern, ``discover`` for unittest, ``test`` after npm or
+    make, a ``tests``/``test`` folder). The first other word ends it, and so
+    does a word that ends the sentence or clause (its punctuation is not part
+    of the command). A prose stop-word (``_COMMAND_PROSE_STOPS``) never
+    continues it."""
+    if not words:
+        return []
+    out = [words[0].rstrip(".,:;")]
+    if out[0] != words[0]:
+        return out
+    head = os.path.basename(out[0])
+    i, runner = 1, None
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", head) and len(words) > 2 and words[1] == "-m":
+        runner = words[2].rstrip(".,:;")
+        out += ["-m", runner]
+        if runner != words[2]:
+            return out
+        i = 3
+    elif head == "pytest":
+        runner = "pytest"
+    elif head in ("npm", "make"):
+        runner = head
+    valued = _RUNNER_VALUED.get(runner, frozenset())
+    expect_value = False
+    while i < len(words):
+        word = words[i]
+        bare = word.rstrip(".,:;")
+        lowered = bare.lower()
+        if expect_value:
+            ok, expect_value = bool(bare), False
+        elif lowered in _COMMAND_PROSE_STOPS:
+            ok = False
+        elif bare.startswith("-"):
+            ok, expect_value = True, bare.split("=", 1)[0] in valued and "=" not in bare
+        elif re.search(r"[/=*\[\]]", bare) or re.search(r"\.\w+$", bare):
+            ok = True
+        elif runner == "unittest" and lowered == "discover":
+            ok = True
+        elif runner in ("npm", "make") and lowered == "test" and i == 1:
+            ok = True
+        else:
+            ok = lowered in ("tests", "test")
+        if not ok:
+            break
+        out.append(bare)
+        if bare != word:
+            break
+        i += 1
+    return out
+
+
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 #: The id a reply line answers: its leading '<id>:' (a bullet, a number and
 #: backticks allowed), for the audit's required-line list (cycle05).
@@ -2268,7 +2735,12 @@ _TYPED_FINDING_FORMS = (
     "corrected scenario, and no code is rewritten for it. A bound case the harness has not shown executed "
     "on this exact source, with nothing else wrong with it, is an evidence gap, not a code finding: report "
     "it as 'BLOCKING: EVIDENCE P<n> - <what is not shown> | basis: P<n> | impact: contract'; the harness runs "
-    "the checks it can and you re-check the row.")
+    "the checks it can and you re-check the row. A scenario of an earlier task of this run, still standing "
+    "on the record, whose text contradicts its own requirement, is named with that task: 'BLOCKING: SCENARIO "
+    "t<k>:P<n> - <the contradiction> | proposal: <operation|state|expect>: <the corrected text> | basis: R<n> "
+    "| impact: contract'. The planner corrects it once or keeps it, you re-check it, its requirements, "
+    "location, evidence kind and binding stay the earlier task's, and its evidence is settled and judged "
+    "afresh; an unqualified P<n> is always this task's own.")
 #: The separator a reviewer or planner writes between a scenario id and
 #: the text after it: a hyphen, an en dash, an em dash, a minus sign or a
 #: colon (close family, 2026-10-26: Sol's SCENARIO claim on
@@ -2278,19 +2750,48 @@ _TYPED_FINDING_FORMS = (
 _TYPED_SEP = r"(?:-|\u2013|\u2014|\u2212|:)"
 #: Scenario ids are ASCII ``P`` plus ASCII digits only: ``\d`` would read
 #: other scripts' digits, and an id the task never declared is unbound.
-_SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*\|\s*proposal\s*:\s*"
+#: An earlier task's scenario is named with its task, ``t<k>:P<n>`` (cycle22),
+#: so a later reviewer's t7:P1 can never be read as its own task's P1.
+_SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(?:(t[0-9]+):)?(P[0-9]+)\s*" + _TYPED_SEP
+                             + r"\s*(.*?)\s*\|\s*proposal\s*:\s*"
                              r"(operation|state|expect)\s*:\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
 _EVIDENCE_CLAIM = re.compile(r"^\s*EVIDENCE\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
 #: Line-bounded on purpose: ``\s*`` would cross the newline after a blank
 #: field and read the next line as the corrected text (root's control,
 #: 2026-10-26: ``SCENARIO P1: state:`` followed by a P2 line or by prose
 #: was recorded as corrected with that next line as P1's state).
-_SCENARIO_REPLY = re.compile(r"^[ \t]*SCENARIO[ \t]+(P[0-9]+)[ \t]*:[ \t]*(operation|state|expect|KEEP|REQUIREMENT)\b"
+_SCENARIO_REPLY = re.compile(r"^[ \t]*SCENARIO[ \t]+((?:t[0-9]+:)?P[0-9]+)[ \t]*:[ \t]*"
+                             r"(operation|state|expect|KEEP|REQUIREMENT)\b"
                              r"[ \t]*" + _TYPED_SEP + r"?[ \t]*(.*?)[ \t]*$", re.IGNORECASE | re.MULTILINE)
 #: A claim that opens like a typed one. Read only to say why it did not
 #: type, never to route it.
-_TYPED_HEAD = re.compile(r"^\s*(SCENARIO|EVIDENCE)\s+(P\S*)", re.IGNORECASE)
+_TYPED_HEAD = re.compile(r"^\s*(SCENARIO|EVIDENCE)\s+((?:t[0-9]+:)?P\S*)", re.IGNORECASE)
+#: An inclusive scenario range in a NOT RUN item, ASCII hyphen or en dash,
+#: with a third endpoint captured so a chain is refused (cycle22).
+_SCENARIO_RANGE = re.compile(r"(?<![\w./:-])P([0-9]+)[ \t]*[-\u2013][ \t]*P([0-9]+)"
+                             r"(?:[ \t]*[-\u2013][ \t]*P([0-9]+))?(?![\w./:-])")
+#: A claim no passing run establishes, beside scenarios in a NOT RUN item.
+_UNRUNNABLE_CLAIM = re.compile(r"\b(?:mutation|mutations|mutant|mutants)\b", re.IGNORECASE)
 
+
+#: A review finding's standing reason, as the planner sees it (cycle16).
+_STANDING_REASON_CHARS = 400
+#: Who admits a scenario a reviewer says is missing (cycle16, cycle15
+#: RFT4-11): only the planner, through the resolving task's SCOPE.
+_MISSING_SCENARIO_RULE = (
+    "A review finding that says declared scenarios are missing is resolved only by a task whose SCOPE declares "
+    "a proof scenario for each missing behaviour, so its lead can bind the existing cases with PROVES; no lead "
+    "or reviewer can add a scenario to a task, and the reviewer who raised the finding still judges whether it "
+    "is resolved.")
+
+#: Why a receipt of the exact required command is not a whole-command run,
+#: by ``_check_runs``'s command reasons (cycle17): each says which fact holds.
+_COMMAND_SELECTION_REASONS = {
+    "argv": "its arguments carry an option the harness reads as a test selection",
+    "runner": "the harness cannot establish what this command form selects",
+    "external": "a test selection from the environment or configuration applies to it",
+    "deselected": "the runner reported deselected cases",
+}
 
 _IMPACT_RANK = ("other", "contract", "correctness", "irreversible", "security", "integrity", "data-loss")
 
@@ -2314,8 +2815,10 @@ def _typed_finding(claim: str):
     not reach the editor either is ``_typed_near_miss``."""
     match = _SCENARIO_CLAIM.match(claim or "")
     if match:
-        fields = dict(proof_id=match.group(1).upper(), reason=match.group(2).strip(),
-                      field=match.group(3).lower(), proposal=match.group(4).strip())
+        fields = dict(proof_id=match.group(2).upper(), reason=match.group(3).strip(),
+                      field=match.group(4).lower(), proposal=match.group(5).strip())
+        if match.group(1):
+            fields["task"] = match.group(1).lower()
         if fields["reason"] and fields["proposal"]:
             return "scenario", fields
         return None, None
@@ -2338,7 +2841,7 @@ def _typed_near_miss(claim: str) -> str:
     if not head or _typed_finding(claim)[0] is not None:
         return ""
     kind = head.group(1).upper()
-    if not re.fullmatch(r"(?i)P[0-9]+", head.group(2).rstrip(":.,;")):
+    if not re.fullmatch(r"(?i)(?:t[0-9]+:)?P[0-9]+", head.group(2).rstrip(":.,;")):
         return f"a {kind} claim whose scenario id ({head.group(2)[:20]}) is not P followed by digits"
     if kind == "SCENARIO":
         if "|" not in (claim or "") or not re.search(r"(?i)\|\s*proposal\s*:", claim or ""):
@@ -2394,7 +2897,9 @@ _ERROR_BOUNDARY_LENS = (
     "Cover the whole error boundary of the work, not only its happy path. For every entry point the "
     "task adds or changes (a command, a request handler, a function the goal names), check what happens "
     "on malformed, missing, empty, out-of-range or oversized input, on a value at the edge of its type's "
-    "range, on a missing or unreadable resource, and on a failure of anything the code calls (storage, a "
+    "range, on a value one layer accepts and a later one cannot represent (an integer wider than a storage "
+    "column or a database binding, a number that overflows, text longer than a field holds), on a missing "
+    "or unreadable resource, and on a failure of anything the code calls (storage, a "
     "parser, a subprocess, the network); and check where each failure is caught, so that what the caller "
     "sees is the boundary the requirement names (an exit status, a response status, a message), never a "
     "traceback or a crash. Construction, parsing and checks that run before or outside the handler are "
@@ -2410,7 +2915,25 @@ _ERROR_BOUNDARY_LENS = (
     "from one while releasing resources after it is durable: the first must leave the state unchanged "
     "and report the refusal; after the second the change stands, so the caller must not be told the "
     "operation failed and the release failure must not surface as a crash. Check both at every entry "
-    "point that performs the operation, against the state read afterwards.")
+    "point that performs the operation, against the state read afterwards. A parser or library the code "
+    "relies on can also accept input the requirement calls invalid (a lenient header, number, date or "
+    "document reader), not only raise on it: the goal and the requirement decide what is invalid and "
+    "what must stay accepted, so check what each layer lets through as well as what it refuses, and "
+    "never treat an input the goal leaves unspecified as one that must be refused. Where the requirement "
+    "maps a class of failures to one response (a status, an exit code, a message), read the places on the "
+    "path the task reaches where the framework or server itself can refuse that input before the code's "
+    "own handling runs, and the forms the goal keeps valid: a mapping that covers only the code's own "
+    "refusals, or that refuses a form the goal accepts, does not meet the requirement. This is reading "
+    "the reachable code, not an exhaustive search.")
+
+#: What a repair task states (cycle14, from the cycle13 assessment): the
+#: outcome the goal entitles the caller to and the causal class, never the
+#: narrower condition one reproduction showed. Generic by construction.
+_REPAIR_OUTCOME_RULE = (
+    "State each repair as the outcome the goal entitles the caller to and the class of cause behind the "
+    "failure (every input and path that reaches the same cause), never a narrower implementation "
+    "condition that one reproduction happened to show; the audit judges the repaired source against the "
+    "goal, not against the task's wording.")
 
 #: Counterpart entry points (Davis, 2026-11-04, after grok-worker-01: a
 #: review caught a cleanup failure on the CLI path, the fix became its own
@@ -2462,6 +2985,16 @@ _AUTHORITY_ORDER = (
     "meet is NOT MET however minor it seems; never mark a requirement MET beside a note that one of its "
     "conditions is not met. Behaviour the goal does not address, and old behaviour outside the work it "
     "asks for, is judged on its own merits as before.")
+
+#: cycle05 trial audit: a requirement's prose asked every response for a
+#: JSON body and the auditor counted HEAD's empty body against it, while
+#: HTTP itself forbids one. Generic: the protocol's own semantics bind the
+#: reading of a requirement's words.
+_PROTOCOL_RULE = (
+    "Read every requirement under the semantics of the protocol it names: a condition the protocol "
+    "itself rules out for a case does not apply to that case. For example an HTTP HEAD response carries "
+    "the status and headers of the matching GET and no body, so a requirement that responses carry a "
+    "JSON body is met for HEAD by those headers; never ask for what the protocol forbids.")
 
 #: One compact reading of the original contract that every seat gets
 #: (quality/completion batch, 2026-10-31; P12: json.loads accepted NaN and
@@ -3033,15 +3566,161 @@ _REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+M
 #: or value is named. Such a requirement is accepted only on executed
 #: negative-path evidence (Session._executed_cases); no model's reading,
 #: applicability note or "tested" claim stands in for a run.
+#: Every word a requirement whose whole claim is "this test command runs and
+#: passes" may use besides the command itself (``_test_command_requirement``).
+#: A word outside it (a behaviour, a value, an endpoint, a status) makes the
+#: requirement a behaviour with its own scenario.
+_PASS_ONLY_WORDS = frozenset("""
+    a all an and any be before by case cases cleanly code completion declaring delivered done entire every
+    exit exits existing fail fails failing failure failures full green is it its must no on pass passes
+    passing project run runs running should source status succeed succeeds success successfully suite test
+    tests the under using via when whole with without zero 0 error errors
+    keep keeps kept continue continues continuing still remain remains stay stays also both each after
+    passed ran execute executes executed complete completes current final clean to change changes
+""".split())
+#: Ordinary grammatical variants of the same claim (cycle08 run
+#: 20261108T121411Z-720c5d46: R17, "All existing tests keep passing and
+#: `python3 -m unittest discover -s tests` passes on the delivered source", was
+#: read as a behaviour for the word "keep", its task was sent back, a 148,417-
+#: token planning call was spent, and the planner dropped R17 and R21). Words
+#: that change what is claimed (unchanged, preserved, behaviour, a value or
+#: an endpoint) are still outside the vocabulary.
+
+
+def _test_runner_shape(argv) -> bool:
+    """Whether argv is a test runner run as a whole: ``pytest`` or
+    ``python -m pytest|unittest`` followed only by options, ``discover``
+    (unittest), test paths or a ``tests``/``test`` folder, or exactly
+    ``npm test`` / ``make test``. An option's value that is not one of those
+    (``-k refunds``) is a selection, and an application run (``python app.py
+    pytest``) is not a runner."""
+    argv = [str(a) for a in argv or ()]
+    if not argv:
+        return False
+    head, rest = os.path.basename(argv[0]), argv[1:]
+    if head in ("npm", "make"):
+        return rest == ["test"]
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", head):
+        if len(rest) < 2 or rest[0] != "-m" or rest[1] not in ("pytest", "unittest"):
+            return False
+        runner, rest = rest[1], rest[2:]
+    elif head == "pytest":
+        runner = "pytest"
+    else:
+        return False
+    for arg in rest:
+        if arg.startswith("-") or (runner == "unittest" and arg == "discover"):
+            continue
+        if is_test_path(arg) or arg.rstrip("/") in ("tests", "test"):
+            continue
+        return False
+    return True
+
+
 _ERROR_CLAUSE = re.compile(
     r"\b(?:raises?|raised|raising|rejects?|rejected|rejecting|rejection|refus(?:e|es|ed|ing|al)|invalid|"
     r"malformed|non-?zero|exceptions?|denied|forbidden|conflicts?|not found|(?:HTTP|status)\s*[45]\d\d|"
+    # A returned client or server status by its number alone, and the usual
+    # words for an absent resource (cycle05 trial: an unknown-ID 404
+    # requirement never reached the 2**63 boundary candidate).
+    r"(?:returns?|responds?(?:\s+with)?|answers?(?:\s+with)?)\s+(?:an?\s+|with\s+)?(?:HTTP\s*)?[45]\d\d|"
+    r"nonexistent|non-existent|(?:does|do)\s+not\s+exist|"
     r"errors?\s+(?:response|member|message|code|status|object|output)s?|(?:an|the|JSON)\s+error)\b",
     re.IGNORECASE)
 
 
 def _error_clause(text: str) -> bool:
     return bool(_ERROR_CLAUSE.search(text or ""))
+
+
+#: A documentation assertion about behaviour is not the behaviour (cycle07
+#: run 20261108T091024Z-75154efd: R23, "README documents the new Store
+#: methods, HTTP endpoints and CLI commands, including the refusal rules",
+#: was refused reading evidence for the word "refusal", the last task was
+#: never admitted, and its audit would have lowered the MET for the same
+#: word). A clause whose subject is documentation the work writes (a README,
+#: the docs or documentation, a changelog, a guide or manual, a named .md,
+#: .rst or .adoc file) and whose verb documents something, or that starts with
+#: the imperative Document, Describe or Explain, asserts what that text says;
+#: the words it documents are its object, not claims about the program. A
+#: behaviour coordinated after it ("Document rejection and reject invalid
+#: input") is a claim of its own and is kept. Program output (help or usage
+#: text, messages) is never documentation here, and a passive "is documented
+#: in" is not recognised: such text stays behaviour, the conservative side.
+_DOC_SUBJECT = (r"(?:readme(?:\.\w+)?|docs?|documentation|changelog|(?:user\s+)?guide|manual|"
+                r"[\w./-]+\.(?:md|rst|adoc))")
+_DOC_ACTIVE = re.compile(
+    r"(?i)\b" + _DOC_SUBJECT + r"\s+(?:(?:must|should|shall)\s+)?(?:also\s+)?"
+    r"(?:documents?|describes?|explains?|lists?|states?|mentions?|notes?|covers?)\b")
+_DOC_IMPERATIVE = re.compile(r"(?i)^\s*(?:document|describe|explain)\b")
+#: Where a documentation clause's object may end and another claim begin: a
+#: comma or semicolon, a coordinator, a subordinator, or "ensure" (root review
+#: of 06c708d, PR73 6720550674). The word that opens a segment stays with it.
+_SEGMENT_BOUNDARY = re.compile(
+    r"\s*[,;]\s*|\s+(?=(?:and|or|but|while|whereas|then|so\s+that|ensur(?:e|es|ing)|which|whose)\b)",
+    re.IGNORECASE)
+_COORDINATOR = re.compile(r"(?i)^(?:and|or)\b\s*")
+#: A segment opened by one of these always starts a claim of its own.
+_SUBORDINATOR = re.compile(r"(?i)^(?:but|while|whereas|then|so\s+that|ensur(?:e|es|ing)|which|whose)\b")
+#: A segment that continues the documented object: it opens with one of these.
+_OBJECT_CONTINUATION = re.compile(
+    r"(?i)^(?:including|such\s+as|for\s+example|e\.g\.|like|covering|listing|with|without|for|of|in|as|"
+    r"plus|alongside)\b")
+#: A predicate in a segment: an auxiliary or modal, or a finite or
+#: participle form of a verb that asserts what the program does. Explicit and
+#: lexical on purpose (root review of 621df07, PR73 6720918371): a coordinated
+#: noun list ("refusal rules and invalid ID responses") carries none and stays
+#: the documented object; "and the API rejects invalid IDs" carries one and is
+#: a claim. Nouns that share a stem ("rejection", "refusal", "responses",
+#: "errors", "conflicts") are not verb forms here.
+_PREDICATE = re.compile(
+    r"(?i)\b(?:is|are|was|were|be|been|being|do|does|did|must|should|shall|will|would|can|cannot|could|may|"
+    r"might|has|have|had|"
+    r"reject(?:s|ed|ing)?|refus(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|return(?:s|ed|ing)?|respond(?:s|ed|ing)?|"
+    r"answer(?:s|ed|ing)?|exit(?:s|ed|ing)?|fail(?:s|ed|ing)?|den(?:y|ies|ied|ying)|validat(?:e|es|ed|ing)|"
+    r"abort(?:s|ed|ing)?|leav(?:e|es|ing)|left|stor(?:e|es|ed|ing)|creat(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|"
+    r"delet(?:e|es|ed|ing)|writ(?:e|es|ing)|wrote|written|print(?:s|ed|ing)?|accept(?:s|ed|ing)?|"
+    r"emit(?:s|ted|ting)?|sends?|sent|throw(?:s|n|ing)?|threw|crash(?:es|ed|ing)?|keeps?|kept|"
+    r"preserv(?:e|es|ed|ing)|mutat(?:e|es|ed|ing)|produc(?:e|es|ed|ing))\b")
+
+
+def _behaviour_text(text: str) -> str:
+    """The requirement with each documentation clause's documented object
+    removed: what it asserts about the program itself (``_DOC_ACTIVE``).
+    Clauses are split at a sentence end or a semicolon; text before the
+    documentation subject stays. After the documenting verb, the object runs
+    through its first segment and on through every later segment that opens
+    with an ``_OBJECT_CONTINUATION`` word, or that is a coordinated item
+    (and, or, a comma) carrying no ``_PREDICATE``: a noun list. A segment
+    opened by a subordinator (but, while, then, ensure, ...) or carrying a
+    predicate is a claim of its own and stays, and so does everything after
+    it. Any segment whose form this cannot place stays: uncertain is
+    behaviour."""
+    kept = []
+    for clause in re.split(r"(?<=[.;])\s+|;\s*", text or ""):
+        hit = _DOC_ACTIVE.search(clause) or _DOC_IMPERATIVE.match(clause)
+        if hit is None:
+            kept.append(clause)
+            continue
+        kept.append(clause[:hit.start()])
+        segments = [seg.strip() for seg in _SEGMENT_BOUNDARY.split(clause[hit.end():]) if seg and seg.strip()]
+        claim = False
+        for seg in segments[1:]:
+            body = _COORDINATOR.sub("", seg)
+            if not claim and body and (_OBJECT_CONTINUATION.match(body)
+                                      or (not _SUBORDINATOR.match(body) and not _PREDICATE.search(body))):
+                continue
+            claim = True
+            kept.append(body)
+    return " ".join(part for part in kept if part.strip())
+
+
+def _behavioural_error(text: str) -> bool:
+    """Whether a requirement asserts error, refusal or invalid-input
+    behaviour of the program (``_error_clause`` over ``_behaviour_text``):
+    the claim that needs executed negative-path evidence. Documentation that
+    describes such behaviour is not that claim."""
+    return _error_clause(_behaviour_text(text))
 
 
 #: An error requirement whose input is an integer or an identifier (Davis,
@@ -3077,12 +3756,15 @@ def boundary_classes(texts) -> list:
     limit = _int_conversion_limit()
     classes = ["non-numeric text, where the ID is numeric", "an empty or missing value",
                "a negative value and zero, where the ID is a positive integer",
-               "2**63 (9223372036854775808), where values reach a signed 64-bit or SQLite INTEGER store"]
+               "2**63 (9223372036854775808), where values reach a signed 64-bit or SQLite INTEGER store",
+               # The same store's lower edge (cycle06 run: a negative ID past
+               # it reached the binding unchecked while the upper was bounded).
+               "-(2**63)-1 (-9223372036854775809), where a negative value is accepted and reaches the same store"]
     if limit:
         classes.append(f"a decimal of {limit + 1} digits, where text is converted with this Python's int() "
                        f"(its limit is {limit} digits, sys.get_int_max_str_digits())")
     return [(rid, list(classes)) for rid, text in texts
-            if _error_clause(text) and _INTEGER_INPUT.search(text or "")]
+            if _behavioural_error(text) and _INTEGER_INPUT.search(_behaviour_text(text))]
 
 
 def boundary_note(texts) -> str:
@@ -3115,13 +3797,61 @@ def boundary_note(texts) -> str:
 _EXECUTED_ERROR_RULE = (
     "A requirement about errors, refusals or invalid input is accepted only on executed evidence: "
     "on its MET line, cite each test case that exercises the rejecting path (invalid types, missing "
-    "values, conflicts, and the representation or range boundaries the implementation exposes) by "
+    "values, conflicts, and the representation or range boundaries the implementation exposes where "
+    "the goal or the requirement makes them invalid) by "
     "its exact identity, file::test_name, or file::Class::test_name for a method, with [param] for "
     "one parametrized instance; for example 'R3: MET - tests/test_parser.py::test_invalid_syntax and "
     "tests/test_config.py::ConfigTests::test_wrong_type'. A bare test name or a file alone is not such a "
     "citation. Each cited case must have run and passed on this source in the approved checks, or "
     "in a scratch test the harness ran for this requirement. A MET without that is not counted, "
-    "whatever it says. Other requirements cite files or tests as before.")
+    "whatever it says. A requirement that only asks documentation to describe errors or refusals is a "
+    "documentation claim, judged by reading that documentation; the behaviour it describes is judged under "
+    "the requirements that assert it. A representation the implementation exposes but the goal leaves "
+    "unspecified (a spelling of a number, a whitespace or case variant) is a candidate risk to check, "
+    "never a rejection to require: an input the contract accepts must stay accepted. Other requirements "
+    "cite files or tests as before.")
+
+
+#: A reviewer's optional note of the input layers it checked for a covered
+#: error requirement (cycle12): observational only, never proof or a gate.
+_BOUNDARY_NOTE_RULE = (
+    "Optionally, for each covered requirement about errors, refusals or invalid input, one line 'BOUNDARY "
+    "R<n>: <the input layers you checked> - <the case id or file:line for each> (executed | read)'. It is "
+    "recorded as what you checked and shown to the audit; it is never proof, never a verdict and never "
+    "required.")
+_BOUNDARY_NOTE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?BOUNDARY[ \t]+(R\d+)[ \t]*:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+#: Bounds on what one reply may record and what a prompt shows.
+_BOUNDARY_NOTE_CHARS = 400
+_BOUNDARY_NOTES_PER_REPLY = 8
+#: Bounds on the audit history a prompt carries (cycle12): per requirement,
+#: per reason, per example, and in all. What is left out is counted.
+_HISTORY_PER_REQUIREMENT = 3
+_HISTORY_REASON_CHARS = 500
+#: The reason a DONE send-back and ``finish_routing`` show for an unmet
+#: requirement (unchanged bound; cycle20 discloses what it leaves out).
+_FINISH_REASON_CHARS = 300
+#: How many distinct counterexamples one NOT MET line may name (cycle20):
+#: each audit used to hand over one example per requirement, and each repair
+#: fixed that one. A ceiling, never a minimum; the line grammar is unchanged.
+_AUDIT_EXAMPLES = 3
+_HISTORY_EXAMPLE_CHARS = 400
+_HISTORY_TOTAL_CHARS = 6000
+#: A decision or ruling longer than this is named, never cut.
+_HISTORY_BINDING_CHARS = 600
+#: Reserved inside the total for the one omission line, which names at
+#: most eight requirement ids per list and so always fits.
+_HISTORY_FOOTER_CHARS = 600
+#: A quoted span in an auditor's stated basis (cycle20): a straight or curly
+#: double-quoted span, or a single-quoted one whose quote marks sit at word
+#: boundaries, with apostrophes between letters (goal's, isn't) allowed inside.
+#: Opening and closing marks must pair; an apostrophe inside a word never
+#: opens or closes a span (the pattern before read "the goal's rule" as the
+#: opening of a quote and reported spans no text contains).
+_QUOTED_SPAN = re.compile(
+    r'"([^"\n]{3,200}?)"'
+    r"|\u201c([^\u201c\u201d\n]{3,200}?)\u201d"
+    r"|(?<!\w)'((?:[^'\n]|(?<=\w)'(?=\w)){3,200}?)'(?!\w)")
+_NOT_MET_SEGMENT = re.compile(r";\s*(basis|evidence|at|example)\s*:\s*", re.IGNORECASE)
 
 
 #: A token that is a source or test file by its extension (a path operand
@@ -3202,7 +3932,10 @@ def _clean_goal_review(text: str, rids) -> bool:
     verdicts = _requirement_verdicts(text)
     if not rids or any(verdicts.get(rid) is not True for rid in rids):
         return False
+    # An optional 'BOUNDARY R<n>:' note is an observation the prompt offers,
+    # never text that makes a clean review unfinished (cycle12).
     return all(_REQUIREMENT_VERDICT.match(line) or _INSPECTION_VERDICT.match(line) or _ROW_LINE.match(line)
+               or _BOUNDARY_NOTE.match(line)
                or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE for line in lines[1:])
 
 
@@ -3367,6 +4100,16 @@ class Session:
         #: Every judgment-completion decision (session._complete_judgment):
         #: attempted or not, with its claim, outcome and the raw reply kept.
         self.judgment_completions: List[dict] = []
+        #: Role packets refused for size at intake, before any charge (cycle21):
+        #: task, role, measured bytes, the limit and the scope's parts.
+        self.packet_refusals: List[dict] = []
+        #: Role packet extension requests and decisions (Davis, 2026-11-09):
+        #: each lead request with its justification, measured size, ceiling
+        #: and state, and the orchestrator's decision lines on it. A granted
+        #: one is the task's allowance (``_packet_allowance``).
+        self.packet_requests: List[dict] = []
+        #: Decision lines that named no request the harness issued.
+        self.packet_decisions_rejected: List[dict] = []
         #: Mandatory judgments that ended without a valid verdict and were not
         #: completed: the obligation view names them (session._judgment_gap).
         self.judgment_gaps: List[dict] = []
@@ -3549,6 +4292,9 @@ class Session:
         #: One record per authorized repair: the run-start bytes kept as
         #: evidence, and each check of the repaired file.
         self.test_repairs: List[dict] = []
+        #: Exact operator decisions about superseding run-start test cases.
+        #: The original and approved delivered bytes remain independently named.
+        self.test_change_decisions: List[dict] = []
         #: What the gate's commands skipped on the run-start source, measured
         #: once when a check first skips cases (Session._skip_baseline).
         self.skip_baselines: List[dict] = []
@@ -3641,6 +4387,23 @@ class Session:
         #: decision (``_declaration_decision``) for the whole job, appended
         #: before its call, with its outcome and ids.
         self.done_declarations: List[dict] = []
+        #: Pure test-command requirements covered for the audit by the
+        #: harness's own exact receipt (cycle08, ``_cover_by_receipt``).
+        self.receipt_coverage: List[dict] = []
+        #: RESOLVES lines read by their typed ids (cycle10,
+        #: ``_normalize_resolves``): requirement ids the audit holds NOT MET
+        #: moved to COVERS and annotations dropped, each kept as written.
+        self.resolves_normalized: List[dict] = []
+        #: NOT RUN items a later task repeated about files it did not change
+        #: (cycle10, ``_inherited_not_run``): kept with the standing item they
+        #: repeat, never a new obligation of the repeating task.
+        self.inherited_not_run: List[dict] = []
+        #: Independent judgments of restatements the auditor wrote (cycle14,
+        #: ``_judge_restatements``): one per judge and decision, with outcome.
+        self.restatement_judgments: List[dict] = []
+        #: Reviewers' optional 'BOUNDARY R<n>:' notes (cycle12): the input
+        #: layers a seat says it checked, observational, never proof or a gate.
+        self.boundary_notes: List[dict] = []
         self._planning_decision = False
         #: The job's commitment to end after one task whose ordinary route
         #: could not be paid (admission/3, ``_commit_terminal``); carried.
@@ -3924,10 +4687,15 @@ class Session:
         its own outcome."""
         reply = self._invoke_model_watched(key, prompt, allow_writes=allow_writes)
         context = invocation_context.get() or {}
-        if context.get("role") in ("collaborator", "recheck") and context.get("origin", "seat") != "worker":
+        if (context.get("role") in ("collaborator", "recheck") and context.get("origin", "seat") != "worker"
+                and context.get("task") != "restatement-judgment"):
+            # A restatement judgment (cycle14) is read by its caller, only
+            # after the completion's binding held, never here before it.
             # The restating task's reviewer judges its restated NOT RUN items
             # (cycle02): its own lines, never the lead's.
             self._judge_restated(key, reply if isinstance(reply, str) else "", task=context.get("task"))
+            self._record_boundary_notes(key, context.get("role"), reply if isinstance(reply, str) else "",
+                                        task=context.get("task"))
         return reply
 
     def _invoke_model_watched(self, key, prompt, *, allow_writes=False):
@@ -3961,12 +4729,13 @@ class Session:
         # record is committed here, before the call, and its digest is what
         # the transport and the budget name.
         context = dict(context, authority=self._authority_before(f"{context.get('role', 'direct')} call"))
-        self._active_call = dict(context, model=key, allow_writes=allow_writes)
+        self._active_call = dict({k: v for k, v in context.items() if k != "review_source"},
+                                 model=key, allow_writes=allow_writes)
         # The task facts the effort policy reads at dispatch, from what the
         # session already knows: no classification call (quadratus.effort).
         context = dict(context, effort_inputs=self._effort_inputs(key, context))
         spec = self._active_spec
-        if (context.get("role") != "closeout" and context.get('origin') != 'worker'
+        if (context.get("role") not in ("closeout", "packet-justification") and context.get('origin') != 'worker'
                 and spec is not None and '## Role packet' not in prompt):
             # design-fix is the task's own lead editing its work (map G11): it
             # carries the lead's packet, like every other editing role.
@@ -4011,17 +4780,20 @@ class Session:
                 prompt += "\n\n" + repair
         if context.get("role") == "lead" and getattr(self, "_worker_tool", None):
             context = dict(context, worker_tool=self._worker_tool)
-        if (not allow_writes and context.get("role") in ("collaborator", "recheck", "design-review")
+        blind_source = context.get("review_source") is not None
+        if (not blind_source and not allow_writes
+                and context.get("role") in ("collaborator", "recheck", "design-review")
                 and getattr(self, "_review_evidence", None)):
             context = dict(context, evidence_files=tuple(self._review_evidence))
             if context.get("role") == "design-review" and self._review_evidence_hashes:
                 context = dict(context, evidence_sha256=dict(self._review_evidence_hashes))
         from .runtime import REVIEW_CAPPED_ROLES
-        if not allow_writes and context.get("role") in REVIEW_CAPPED_ROLES:
+        if not blind_source and not allow_writes and context.get("role") in REVIEW_CAPPED_ROLES:
             facts = self._harness_facts(current_only=True, excerpt=True)
             if facts:
                 context = dict(context, harness_checks=facts)
-        if not allow_writes and context.get("role") == "collaborator" and self._covered_texts():
+        if (not blind_source and not allow_writes and context.get("role") == "collaborator"
+                and self._covered_texts()):
             probe_checks = self._probe_checks(key)
             if probe_checks:
                 # The review prompt asked for a scratch demonstration; the
@@ -4492,7 +5264,8 @@ class Session:
             return fresh, self._invoke_with_fetches(fresh.key, build, task=task)
 
     # -- request channels ----------------------------------------------------
-    def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None, editing=False) -> str:
+    def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None, editing=False,
+                             remember_request=None) -> str:
         """Invoke, serving artifact requests until a real answer arrives.
 
         ``build_prompt`` takes the fetched (id, content) pairs gathered so far
@@ -4521,6 +5294,8 @@ class Session:
             except KeyError:
                 content, offset = f"(no artifact {artifact_id!r} exists -- check the id)", 0
             fetched.append((artifact_id, content, offset))
+            if remember_request is not None:
+                remember_request(reply)
             if task is not None:
                 task.record("assistant", f"[fetched artifact {artifact_id}"
                                          + (f" from character {offset:,}" if offset else "") + "]")
@@ -4612,6 +5387,13 @@ class Session:
         finally:
             self._active_call = saved
         text = "\n\n".join(texts)
+        remember = state.get("remember_request")
+        if remember is not None:
+            # The tool preserves this native call, but a later CONSULT or
+            # write-worker reply may still end it. Keep the completed errand
+            # and its answer in that task's bounded handoff too.
+            remember("Completed in-session commission_worker (historical):\n"
+                     + json.dumps(request) + "\nResult:\n" + text)
         return text, text.startswith("Worker errand ")
 
     def _interim_edits_note(self) -> str:
@@ -4750,6 +5532,10 @@ class Session:
             return out
         except (DependencyTreeChanged, DependencyIdentityUnavailable):
             raise       # a run stop, never an errand's failure
+        except PermissionBlocked:
+            # A denial, never an errand the lead may reissue on another worker
+            # or tool (cycle15): it stops as raised.
+            raise
         except Exception as exc:  # noqa: BLE001 -- returned, not raised
             detail = str(exc)[:400]
             task.record("user", f"[worker {label}] FAILED: {detail}")
@@ -4768,6 +5554,10 @@ class Session:
                 out.append(self._close_workers(state, spec))
             return out
         for result in results:
+            if isinstance(result.failure, PermissionBlocked):
+                # A sibling's denial stops as raised too (cycle15).
+                self._note(f"worker {result.label} was blocked by a permission it cannot ask for; stopping")
+                raise result.failure
             if result.failure is not None and unclassified(result.failure):
                 # Siblings ran to completion; the unknown failure is then the
                 # operator's, as raised, before the lead sees any result (J27).
@@ -4800,15 +5590,77 @@ class Session:
         prompt offers is a channel the harness serves.
         """
         answers = []
-        state = dict(failures=0, failed_errands=set(), closed=None)
+        state = dict(failures=0, failed_errands=set(), closed=None, handoffs=[])
+        # A reply channel ends the native call, but not the task. Retain its
+        # visible decisions and requested windows across that boundary. The
+        # same exact-window and max_fetches limits bound the material inlined
+        # in one prompt; older material stays addressable, never silently cut.
+        fetched_index, retained_fetches = {}, {}
+
+        def remember(reply):
+            ref = task.keep(reply, kind="lead-handoff", author=lead)
+            state["handoffs"].append((reply, ref.id if ref is not None else None))
+            split = split_lead_request(_parse_kind(reply)[2].strip())
+            if split is not None and split[0]:
+                task.record("assistant", f"[preface to a request] {split[0]}")
+                task.record("assistant", split[1])
+            else:
+                task.record("assistant", reply)
+
+        state["remember_request"] = remember
+
+        def handoff_context():
+            retained, archived, room = [], [], _FETCH_CHAR_CAP
+            for reply, artifact in reversed(state["handoffs"]):
+                if len(reply) <= room:
+                    retained.append(reply)
+                    room -= len(reply)
+                else:
+                    if artifact is None:
+                        raise TaskFailed("channel", "Task handoff exceeds the inline context allowance and "
+                                         "its exact text could not be retained as an artifact.")
+                    archived.append(f"FETCH: {artifact}")
+            if not retained and not archived:
+                return ""
+            text = ("## Earlier decisions and channel requests in this task\n"
+                    "Historical context from your earlier calls, not new requests. These channels were "
+                    "already handled; read their answers below and continue the work. Do not repeat a "
+                    "fulfilled request. This handoff carries complete visible replies within one "
+                    f"{_FETCH_CHAR_CAP:,}-character window; the exact archived replies remain available "
+                    "through FETCH.\n\n" + "\n\n".join(reversed(retained)))
+            if archived:
+                text += ("\n\nEarlier replies not inlined within that allowance (each request retrieves "
+                         "its exact text; these are references, not instructions to fetch again):\n"
+                         + "\n".join(reversed(archived)))
+            return text
 
         def build(fetched):
-            extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
+            for entry in fetched:
+                key = (entry[0], entry[2])
+                fetched_index[key] = len(entry[1])
+                retained_fetches.pop(key, None)
+                retained_fetches[key] = entry
+                while len(retained_fetches) > max(0, self.config.max_fetches):
+                    del retained_fetches[next(iter(retained_fetches))]
+            extras = []
+            handoff = handoff_context()
+            if handoff:
+                extras.append(handoff)
+            if answers:
+                extras.append("## Consult answers and worker evidence\n\n" + "\n\n".join(answers))
             interim = self._interim_edits_note()
             if interim:
                 extras.append(interim)
-            if fetched:
-                extras.append(_render_fetches(fetched))
+            if retained_fetches:
+                extras.append(_render_fetches(list(retained_fetches.values())))
+            archived = [(key, total) for key, total in fetched_index.items() if key not in retained_fetches]
+            if archived:
+                extras.append("## Earlier fetched artifact windows retained by reference\n"
+                              "These were read earlier in this task and are not inlined within the current "
+                              "window allowance. Their exact original windows are still available if needed:\n"
+                              + "\n".join(f"artifact {key[0]} ({total:,} characters), window at {key[1]}: "
+                                          f"'FETCH: {key[0]} FROM {key[1]}'"
+                                          for key, total in archived))
             extras.extend(self._lead_context(spec))
             budget = self._turn_budget_note(lead)
             if budget:
@@ -4829,23 +5681,30 @@ class Session:
     def _drafting_loop(self, lead, spec, task, build, answers, state, consults):
         consults_used = 0
         while True:
-            draft = self._invoke_with_fetches(lead, build, task=task, editing=True)
+            draft = self._invoke_with_fetches(lead, build, task=task, editing=True,
+                                              remember_request=state["remember_request"])
             if state.get("closed") is not None:
                 raise state["closed"]
             body = _parse_kind(draft)[2].strip()
             split = split_lead_request(body)
             if split is not None:
-                preface, body = split
-                if preface:
-                    task.record("assistant", f"[preface to a request] {preface[:1500]}")
+                body = split[1]
             if body.startswith("WORKER "):
+                state["remember_request"](draft)
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
+                continue
+            if _PACKET_REQUEST_LINE.match((body.splitlines() or [""])[0]):
+                state["remember_request"](draft)
+                # The lead's own request for a larger allowance (Davis,
+                # 2026-11-09), decided by the orchestrator.
+                answers.append(self._serve_packet_request(lead, spec, task, body, state))
                 continue
             requests = _parse_consults(body)
             if not requests:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
                     raise TaskFailed("channel", "An unresolved request cannot be accepted as a draft.")
                 return draft
+            state["remember_request"](draft)
             if not consults:
                 # A refusal is charged against the same allowance a served
                 # consult would be, so a lead that keeps asking stalls the run
@@ -4876,6 +5735,96 @@ class Session:
                 task.record("assistant", f"[consult {peer}] {answer}")
                 task.keep(answer, kind=f"consult:{peer}", author=peer)
                 answers.append(f"[{peer}]\n{answer}")
+
+    def _serve_packet_request(self, lead, spec, task, body: str, state: dict) -> str:
+        """A lead's request, during its draft, for a larger role packet
+        allowance for its own task: validated for form, ceiling and budget,
+        then decided by the seated orchestrator in one bounded call whose
+        decision line names the request id. One request per task is served;
+        the answer goes back to the lead either way, and a grant raises only
+        this task's allowance for its later calls (more reference notes, and
+        room for a reviewed scenario correction within it)."""
+        state["packet_asks"] = state.get("packet_asks", 0) + 1
+        task.record("assistant", f"[packet extension request] {body[:1500]}")
+        if state["packet_asks"] > 2:
+            raise TaskFailed("channel", "The lead kept requesting a role packet extension; it is not converging.")
+        if state["packet_asks"] > 1:
+            return ("A role packet extension was already asked for in this task and decided; one request per task "
+                    "is served. Continue with the packet you have, or report exactly what blocks you.")
+        policy = self.config.repository_policy
+        current_spec = self._active_spec if getattr(self._active_spec, "task_id", None) == spec.task_id else spec
+        if policy is None or getattr(current_spec, "scope", None) is None:
+            return ("No repository policy measures this task's role packet, so there is no allowance to extend. "
+                    "Continue with what you have.")
+        default = policy.packet_limit
+        current = self._packet_allowance(current_spec) or default
+        needed = max(policy.packet_needed(current_spec.scope, r) for r in self._packet_roles(current_spec))
+        ceiling, basis = self._packet_ceiling()
+        fingerprint = self._packet_fingerprint(current_spec)
+        rid = f"PX-{spec.task_id}-{sum(1 for r in self.packet_requests if r.get('task') == spec.task_id) + 1}"
+        request = dict(id=rid, task=spec.task_id, origin="lead", fingerprint=fingerprint, role="lead",
+                       roles=list(self._packet_roles(current_spec)), needed=needed, default=default, current=current,
+                       ceiling=ceiling, ceiling_basis=basis, lead=lead, state=None, requested=None, decisions=[],
+                       revisions=[], reply_artifact=self.store.put(body, kind="packet-request", author=lead).id)
+        self.packet_requests.append(request)
+        parsed = _parse_packet_request(body)
+        problem, why = "", "malformed"
+        if parsed["kind"] != "request":
+            problem = parsed.get("problem") or "PACKET NARROW answers an intake question; there is nothing to request"
+        elif parsed["bytes"] <= current:
+            problem = f"it asks for {parsed['bytes']:,} bytes, not more than the task's current allowance of {current:,}"
+        elif parsed["bytes"] > ceiling:
+            problem = f"it asks for {parsed['bytes']:,} bytes, over this run's ceiling of {ceiling:,} ({basis})"
+        else:
+            problem, why = self._packet_budget_problem(parsed["bytes"] - current), "unaffordable"
+        if problem:
+            request.update(state=why, problem=problem[:400], requested=parsed.get("bytes"))
+            self._note(f"task {spec.task_id}: packet request {rid} not sent to the orchestrator: {problem[:160]}")
+            return (f"Your role packet extension request was not sent to the orchestrator: {problem}. The allowance "
+                    f"stays {current:,} bytes; continue with the packet you have, or report exactly what blocks you.")
+        request.update(state="requested", requested=parsed["bytes"], necessary=parsed["necessary"],
+                       why_not_shorter=parsed["why"])
+        prompt = (
+            f"--- ROLE PACKET EXTENSION ({spec.task_id}) ---\n"
+            f"The lead of task {spec.task_id}, {lead}, asks during its work for a larger role packet allowance for "
+            f"this task only, request {rid}: {parsed['bytes']:,} bytes, against the task's current {current:,} (the "
+            f"policy default is {default:,}). The packet's mandatory content measures {needed:,} bytes; the room "
+            "above it carries reference notes (the codebase map's conventions and the repository's instruction "
+            f"files), which are cut at the allowance. This run's ceiling is {ceiling:,} bytes ({basis}).\n\n"
+            f"The lead's justification (verbatim):\nNECESSARY: {parsed['necessary']}\n"
+            f"WHY NOT SHORTER: {parsed['why']}\n\n"
+            "Decide on its merits. Reply with exactly one line:\n"
+            f"PACKET GRANT: {rid} <bytes> | because: <why the justification holds>  (more than {current:,}, at most "
+            f"{parsed['bytes']:,})\n"
+            f"PACKET REFUSE: {rid} | because: <why>\n"
+            "A grant raises this task's allowance only. Nothing else about the task, its reviews or its evidence "
+            "changes.")
+        self._count("packet_decision")
+        try:
+            seat, reply = self._ask_seat(self.seat(), lambda fetched: prompt + ("\n\n" + _render_fetches(fetched)
+                                                                                 if fetched else ""))
+        except FinishReserved as exc:
+            request.update(state="unaffordable", problem=f"the decision call was refused to keep the finish: {exc}"[:400])
+            return (f"Your request {rid} was not decided: the orchestrator's call was refused to keep the run's "
+                    f"finish. The allowance stays {current:,} bytes.")
+        reply = reply if isinstance(reply, str) else ""
+        task.keep(reply, kind="packet-decision-reply", author=seat.key)
+        decisions = [dict(verb=m.group(1).upper(), id=m.group(2).strip(), rest=m.group(3).strip(),
+                          line=m.group(0).strip()) for m in _PACKET_DECISION.finditer(reply)]
+        problems = self._packet_decide(current_spec, fingerprint, needed, decisions, floor=current + 1)
+        if request["state"] == "granted":
+            if self._outcome is not None and getattr(self._outcome, "task_id", None) == spec.task_id:
+                self._outcome.packet_allowance = _packet_allowance_record(request)
+            return (f"The orchestrator granted request {rid}: {int(request['granted']):,} bytes "
+                    f"({request.get('grant_reason')}). From this call on, this task's role packets carry up to "
+                    f"{int(request['granted']):,} bytes. Continue your work.")
+        if request["state"] == "refused":
+            return (f"The orchestrator refused request {rid} ({request.get('refusal_reason') or 'no reason given'}). "
+                    f"The allowance stays {current:,} bytes; continue with the packet you have.")
+        request.update(state="undecided", problem=("; ".join(problems) or "the reply carried no decision line for "
+                                                   "this request")[:400])
+        return (f"The orchestrator made no valid decision on request {rid} ({request['problem']}). The allowance "
+                f"stays {current:,} bytes; continue with the packet you have.")
 
     def _record_selection(self, spec: TaskSpec, model: str, role: str) -> None:
         """Note that a model was chosen for this task. Not that it ran."""
@@ -5151,14 +6100,18 @@ class Session:
             )
         return report
 
-    def _role_packet(self, spec, role):
+    def _role_packet(self, spec, role, *, limit=None):
         notes = (self.config.codebase_map.render(topics=['conventions'])
                  if self.config.codebase_map is not None else '')
         policy = self.config.repository_policy
         if policy is not None:
-            return policy.role_packet(spec.scope, role, notes)
+            # The task's approved allowance, or the policy's default: the
+            # same lookup for every role, call and path that builds a packet.
+            allowance = limit if limit is not None else self._packet_allowance(spec)
+            return policy.role_packet(spec.scope, role, notes,
+                                      **({"limit": allowance} if allowance is not None else {}))
         contract = '## Role packet\n' + (spec.scope.render() if spec.scope else 'Scope: not declared.')
-        if len(contract.encode()) > 20_000:
+        if len(contract.encode()) > _FALLBACK_PACKET_BYTES:
             raise RunStalled('Task scope exceeds the role packet limit; narrow the task')
         return contract + '\nConventions notes:\n' + notes.encode()[:3000].decode('utf-8', errors='ignore')
 
@@ -5395,6 +6348,15 @@ class Session:
                     open_at_close=before.open_at_close,
                     changed=(before.partial or {}).get("changed"),
                     closed_as=before.closed_as)
+        if evidence == "self":
+            from .contract import self_capture_state
+            intended = self_capture_state(
+                spec.task_id, goal=self.memory.goal,
+                requirements=[(rid, self.memory.ledger.requirements.get(rid, "")) for rid in outcome.covers],
+                scope=scope.to_dict() if scope is not None else {},
+                predecessor=before.contract if outcome.continues and before is not None else None)
+            if outcome.resolves:
+                intended = dict(intended, findings=measured)
         passed = tuple(r["id"] for r in self.run_outcome.readiness if r.get("passed"))
         authority = (("write_grant", "operator" if editing else "none"),
                      ("edits", "none" if is_review_only(spec) else
@@ -5746,9 +6708,475 @@ class Session:
                                                      exclude=self.config.project_excludes)
         # Every packet this task's calls will carry, built before the first of
         # them: run 20261010T135407Z-f3d33e9d spent its planning calls, then
-        # the lead's packet was refused. Same builder, same 12,000-byte cap.
+        # the lead's packet was refused. Same builder, and the task's own
+        # allowance: the policy's default or what the orchestrator granted.
         for role in self._packet_roles(spec):
             self._role_packet(spec, role)
+        self._packet_record_dispatch(spec)
+        self._dispatch_prepared = spec.task_id
+
+    def _unmark_not_started(self, spec: TaskSpec, decision: dict, *, why: str) -> None:
+        """Undo the dispatch marks the serial loop set for a task that never
+        began (cycle21): its survey recovery charge, its listed-task ran mark
+        and its DISCHARGES takeover, and record it not started. Only for a
+        refusal before the task's admission; started work keeps every mark."""
+        if self.config.survey is not None and decision.get("charged"):
+            self.survey["recovery_used"] = max(0, int(self.survey.get("recovery_used", 0) or 0) - 1)
+            decision["charged"] = False
+            decision["not_started"] = True
+        if self._explicit_tasks is not None:
+            ran = self.explicit.get("ran") or []
+            self.explicit["ran"] = [r for r in ran if r.get("task") != spec.task_id]
+        for entry in self.unexecuted_acceptance:
+            if entry.get("taken_over_by"):
+                entry["taken_over_by"] = [t for t in entry["taken_over_by"] if t.get("task") != spec.task_id]
+        self.not_started.append(dict(task=spec.task_id, lead=getattr(spec, "lead", None),
+                                     description=(spec.description or "")[:300], detail=str(why)[:300]))
+
+    def _scope_request(self) -> str:
+        """The SCOPE rules with the role packet bound this run enforces
+        (cycle21: the prompt said "well under 20,000 bytes" while the policy's
+        packet limit was 12,000). The limit is the policy's own, as the packet
+        builder applies it, with its mandatory overhead measured by the same
+        builder; without a policy, the fallback packet's limit."""
+        policy = self.config.repository_policy
+        if policy is None:
+            return (_SCOPE_REQUEST + f" The scope as rendered goes into each role packet, whose limit here is "
+                    f"{_FALLBACK_PACKET_BYTES:,} bytes; a task whose packet would not fit is refused.")
+        limit, overhead = policy.packet_limit, policy.packet_overhead("lead")
+        return (_SCOPE_REQUEST + f" The scope as rendered (intended result, paths, acceptance and every proof "
+                f"scenario, in UTF-8 bytes) goes into each role packet, whose limit is {limit:,} bytes; the "
+                f"policy's own checklists and check configuration already take about {overhead:,} of them, so "
+                f"the rendered scope must stay under about {max(0, limit - overhead):,} bytes. A task whose packet "
+                "would not fit is sent back with its measured size, before anything runs: narrow it or state its "
+                "scenarios more briefly, keeping every covered requirement's scenario. When the content is "
+                "necessary as declared, its lead is asked once whether a larger allowance for that task is justified, "
+                f"up to this run's ceiling of {self._packet_ceiling()[0]:,} bytes; a justified request comes back to "
+                "you to decide by its request id, and only your own 'PACKET GRANT: <id> <bytes> | because: <reason>' "
+                "line grants it ('PACKET REFUSE: <id> | because: <reason>' refuses it). A grant covers that task's "
+                "scope exactly as measured.")
+
+    def _packet_problem(self, spec: TaskSpec, decisions=()) -> str:
+        """Why a task cannot start with its role packets, or "" (cycle21, run
+        20261109T195618Z: t8's packet was built only at dispatch, after its
+        slot was charged). Measured with the dispatch builder for every role
+        the task carries; only size is a problem here, every other refusal is
+        left for dispatch, where it stops as before.
+
+        Over the policy's default the task needs an allowance (Davis,
+        2026-11-09). Its lead is asked once, for this exact scope, whether
+        the content is necessary as declared (``_packet_justify``); a
+        justified request goes to the orchestrator, whose PACKET GRANT or
+        PACKET REFUSE line in its next reply decides it (``decisions``,
+        ``_packet_decide``). Nothing here approves anything, and nothing runs
+        under an allowance until the orchestrator granted it. Over the run's
+        ceiling (``_packet_ceiling``) no request is made. Every send-back goes
+        through the bounded correction allowance its caller charges."""
+        self._packet_progress = False
+        policy = self.config.repository_policy
+        if policy is None or getattr(spec, "scope", None) is None:
+            self._packet_decisions_unused(spec, decisions, "no role packet of this task is measured against a "
+                                                           "repository policy")
+            return ""
+        prepared = replace(spec, scope=policy.scope(spec.scope))
+        role, needed = None, 0
+        for name in self._packet_roles(prepared):
+            try:
+                size = policy.packet_needed(prepared.scope, name)
+            except Exception:  # noqa: BLE001 -- any other refusal is dispatch's to raise
+                return ""
+            if role is None or size > needed:
+                role, needed = name, size
+        default = policy.packet_limit
+        if needed <= default:
+            self._packet_decisions_unused(spec, decisions, "the task's role packets fit the default")
+            return ""
+        fingerprint = self._packet_fingerprint(spec)
+        problems = self._packet_decide(spec, fingerprint, needed, decisions) if decisions else []
+        grant = self._packet_grant_for(spec)
+        if grant is not None and int(grant.get("granted") or 0) >= needed:
+            return ""
+        parts = prepared.scope.component_bytes()
+        components = dict(parts, fixed=needed - parts.get("scope", 0))
+        self.packet_refusals.append(dict(task=spec.task_id, role=role, needed=needed, limit=default,
+                                         components=components))
+        text = (f"The {role} role packet for this task would be {needed:,} bytes; the limit is {default:,} (the "
+                f"repository policy's default role packet limit). Its scope renders {parts.get('scope', 0):,} bytes: "
+                f"proof scenarios {parts.get('proofs', 0):,}, acceptance {parts.get('acceptance', 0):,}, intended "
+                f"result {parts.get('intended', 0):,}, the rest of the scope text {parts.get('other', 0):,}; the "
+                f"policy's own checklists and check configuration take {components['fixed']:,}.")
+        if problems:
+            text += " Your packet decision was not applied: " + "; ".join(problems) + "."
+        ceiling, basis = self._packet_ceiling()
+        if needed > ceiling:
+            self._note(f"task {spec.task_id}: role packet {needed:,} bytes is over this run's ceiling {ceiling:,}")
+            return (text + f" That is over the largest allowance any extension can grant in this run, {ceiling:,} "
+                    f"bytes ({basis}), so no extension can carry it. " + _PACKET_NARROW_TEXT)
+        if self._explicit_tasks is not None:
+            # No orchestrator runs a listed task, so nobody can grant one.
+            return (text + " A listed task has no orchestrator to grant a larger allowance; " + _PACKET_NARROW_TEXT)
+        request = self._packet_current_request(spec.task_id, fingerprint)
+        if request is None:
+            request = self._packet_justify(spec, prepared, fingerprint, role, needed, default, ceiling, basis,
+                                           components)
+            # A new justified request is the protocol's own step, paid by its
+            # call, not a planner error: its send-back spends no correction,
+            # for at most _PACKET_FREE_REQUESTS requests per task (the
+            # correction allowance would otherwise stall a run whose fourth
+            # task is the fourth to need an extension).
+            asked = sum(1 for r in self.packet_requests if r.get("task") == spec.task_id and r.get("origin") == "intake")
+            self._packet_progress = request.get("state") == "requested" and asked <= _PACKET_FREE_REQUESTS
+        return text + " " + self._packet_request_text(request)
+
+    def _packet_default(self) -> int:
+        policy = self.config.repository_policy
+        return policy.packet_limit if policy is not None else _FALLBACK_PACKET_BYTES
+
+    def _packet_ceiling(self) -> Tuple[int, str]:
+        """The largest role packet any grant can allow in this run, and how it
+        was derived (``_PACKET_ROUND_SHARE``). Never below the default; the
+        policy's 24,000-byte clamp on its own default does not bound it."""
+        from .run_budget import TURN_CAP_MARGIN, TURN_CONTEXT_TOKENS, lead_turns_for
+        from .usage import CHARS_PER_TOKEN
+        budget = self._budget()
+        per_call = getattr(getattr(budget, "limits", None), "max_tokens_per_call", None) if budget is not None else None
+        turns = self.config.lead_max_turns or lead_turns_for(per_call)
+        if per_call and turns:
+            round_tokens = per_call * TURN_CAP_MARGIN / int(turns)
+            basis = (f"half of one round of a capped call: the {int(per_call):,}-token per-call threshold times "
+                     f"{TURN_CAP_MARGIN:g} over {int(turns)} rounds is {int(round_tokens):,} tokens a round")
+        else:
+            round_tokens = TURN_CONTEXT_TOKENS
+            basis = f"half of the measured {TURN_CONTEXT_TOKENS:,}-token context of one round"
+        ceiling = int(round_tokens * _PACKET_ROUND_SHARE * CHARS_PER_TOKEN)
+        return max(ceiling, self._packet_default()), basis + f", at about {CHARS_PER_TOKEN:g} bytes a token"
+
+    def _packet_fingerprint(self, spec) -> str:
+        """What a grant approves: the roles and the scope exactly as every
+        packet renders it. A changed scenario, path, acceptance line or
+        intended result is a different request."""
+        policy = self.config.repository_policy
+        scope = policy.scope(spec.scope) if policy is not None else spec.scope
+        text = ",".join(self._packet_roles(spec)) + "\n" + (scope.render() if scope is not None else "")
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def _packet_grant_for(self, spec):
+        """The granted request in force for this task and scope, or None:
+        bound to the task id it was requested for and to the scope it
+        measured, or to a revision of it recorded by a reviewed correction
+        (``_apply_scenario_correction``). The latest grant wins."""
+        task_id = getattr(spec, "task_id", None)
+        granted = [r for r in getattr(self, "packet_requests", ()) or ()
+                   if r.get("state") == "granted" and r.get("task") == task_id]
+        if not granted or getattr(spec, "scope", None) is None:
+            return None
+        fingerprint = self._packet_fingerprint(spec)
+        for request in reversed(granted):
+            if fingerprint == request.get("fingerprint") or any(
+                    fingerprint == r.get("fingerprint") for r in request.get("revisions") or ()):
+                return request
+        return None
+
+    def _packet_allowance(self, spec) -> Optional[int]:
+        """This task's approved role packet allowance in bytes, or None for
+        the policy's default."""
+        grant = self._packet_grant_for(spec)
+        return int(grant["granted"]) if grant is not None else None
+
+    def _packet_current_request(self, task_id, fingerprint):
+        return next((r for r in reversed(self.packet_requests)
+                     if r.get("task") == task_id and r.get("fingerprint") == fingerprint
+                     and r.get("origin") == "intake"), None)
+
+    def _packet_seat_key(self) -> str:
+        try:
+            return self.seat().key
+        except Exception:  # noqa: BLE001 -- the record names what it can
+            return "orchestrator"
+
+    def _packet_budget_problem(self, extra_bytes: int) -> str:
+        """Why an extension cannot be afforded, or "": the request call needs
+        a call and its reserve, and the larger packet is re-sent on every
+        round of the calls that carry it (``_PACKET_CARRYING_CALLS``), all
+        from what is left after the held finish. An estimate for refusing
+        early; the calls are charged what they report."""
+        budget = self._budget()
+        if budget is None or not hasattr(budget, "snapshot"):
+            return ""
+        try:
+            snap = budget.snapshot()
+        except Exception:  # noqa: BLE001 -- a missing estimate refuses nothing
+            return ""
+        from .run_budget import lead_turns_for
+        from .usage import CHARS_PER_TOKEN
+        limits, fin = snap.get("limits") or {}, snap.get("finish_protection") or {}
+        held = len(fin.get("pending") or [])
+        calls = int(limits.get("max_calls") or 0) - int(snap.get("reserved_attempts") or 0) - held
+        if calls < 2:
+            return (f"the job has {max(0, calls)} ordinary call(s) left after the held finish, and a request and "
+                    "the task need at least 2")
+        reserve = int(limits.get("reserve_tokens_per_call") or 0)
+        if not reserve:
+            return ""
+        turns = int(self.config.lead_max_turns or lead_turns_for(limits.get("max_tokens_per_call")) or 1)
+        extra = -(-max(0, int(extra_bytes)) // int(CHARS_PER_TOKEN)) * turns * _PACKET_CARRYING_CALLS
+        tokens = (int(limits.get("max_reported_tokens") or 0) - int(snap.get("reported_tokens") or 0)
+                  - held * reserve)
+        if tokens < reserve + extra:
+            return (f"the job has {max(0, tokens):,} tokens left after the held finish; the request call's reserve "
+                    f"of {reserve:,} and the larger packet's estimated re-send cost of {extra:,} ({extra_bytes:,} "
+                    f"more bytes on each of {turns} rounds of {_PACKET_CARRYING_CALLS} calls) do not fit")
+        return ""
+
+    def _packet_lead(self, spec) -> str:
+        """The lead asked to justify: the one dispatch will use (picked once
+        and held for this task id, as the capture check does)."""
+        chosen = getattr(self, "_dispatch_lead", None)
+        if chosen and chosen[0] == spec.task_id:
+            return chosen[1]
+        lead = self._pick_lead(spec)
+        self._dispatch_lead = (spec.task_id, lead)
+        return lead
+
+    def _packet_justify(self, spec, prepared, fingerprint, role, needed, default, ceiling, basis, components):
+        """One bounded call to the task's lead, before anything of the task
+        runs: is the content necessary as declared, and how large must the
+        packet be? It carries the scope as text for judgment, not a role
+        packet: the lead is not working, cannot edit (a source copy, the
+        declaration round cap) and its reply grants nothing. Asked once per
+        task and scope; any failure is a request not made, never a stop."""
+        rid = f"PX-{spec.task_id}-{sum(1 for r in self.packet_requests if r.get('task') == spec.task_id) + 1}"
+        request = dict(id=rid, task=spec.task_id, origin="intake", fingerprint=fingerprint, role=role,
+                       roles=list(self._packet_roles(prepared)), needed=needed, default=default, ceiling=ceiling,
+                       ceiling_basis=basis, components=dict(components), lead=None, state=None, requested=None,
+                       decisions=[], revisions=[])
+        self.packet_requests.append(request)
+        short = self._packet_budget_problem(needed - default)
+        if short:
+            request.update(state="unaffordable", problem=short[:400])
+            return request
+        try:
+            lead = self._packet_lead(spec)
+        except (RunStalled, CapabilityUnavailable) as exc:
+            request.update(state="no_lead", problem=str(exc)[:400])
+            return request
+        request["lead"] = lead
+        prompt = (
+            f"--- ROLE PACKET EXTENSION REQUEST ({spec.task_id}) ---\n"
+            f"You are named to lead this task. Before it starts, the harness measured the role packet its calls "
+            f"would carry: {needed:,} bytes against the repository policy's default of {default:,}. The packet is "
+            f"the task's scope as rendered (below) plus the policy's own checklists and check configuration "
+            f"({components.get('fixed', 0):,} bytes). Required text is never cut, so the task cannot start at the "
+            f"default. Measured parts of the scope: proof scenarios {components.get('proofs', 0):,}, acceptance "
+            f"{components.get('acceptance', 0):,}, intended result {components.get('intended', 0):,}, the rest "
+            f"{components.get('other', 0):,}.\n\n"
+            f"You may ask the orchestrator for a larger allowance for this task only, at most {ceiling:,} bytes "
+            f"({basis}). Ask when the content is necessary as declared: when stating it more briefly or splitting "
+            "the task would lose required context or be counterproductive. When a briefer statement or a split "
+            "would serve the task as well, say so instead. You change nothing in this call and run nothing; read "
+            "the source copy only if you need it to judge what the task needs.\n\n"
+            "## Task (verbatim)\n" + (spec.description or "").strip() + "\n\n"
+            "## Scope as rendered\n" + prepared.scope.render() + "\n\n"
+            "Reply with exactly one of these two forms and nothing else:\n"
+            f"PACKET EXTENSION: <bytes, at least {needed:,} and at most {ceiling:,}>\n"
+            "NECESSARY: <the content the packet must carry and what each part is for>\n"
+            "WHY NOT SHORTER: <why a briefer statement or a split would lose required context or be "
+            "counterproductive>\n\nor\n\n"
+            "PACKET NARROW: <how to state the task more briefly or split it, keeping every covered requirement's "
+            "scenario>\n\n"
+            f"Each line says something checkable (at least {_PACKET_REASON_MIN} characters). The orchestrator "
+            "decides; your reply grants nothing. A reply in neither form is no request.")
+        self._count("packet_justification")
+        self._note(f"task {spec.task_id}: role packet {needed:,} bytes over the default {default:,}; asking "
+                   f"its lead {lead} whether an extension is justified")
+        try:
+            with invocation("packet-request", "packet-justification"):
+                reply = self._invoke_model(lead, prompt)
+        except FinishReserved as exc:
+            request.update(state="unaffordable", problem=f"the request call was refused to keep the finish: {exc}"[:400])
+            return request
+        except TurnLimitReached as exc:
+            if exc.partial_text:
+                request["partial_artifact"] = self.store.put(exc.partial_text, kind="packet-justification-capped",
+                                                             author=lead).id
+            request.update(state="capped", problem=(f"the request call stopped at {exc.turns or 'its'} rounds "
+                                                    "before answering; nothing it wrote is read as a request"))
+            return request
+        except ProviderError as exc:
+            request.update(state="call_failed", problem=f"the request call failed: {str(exc)[:300]}")
+            return request
+        reply = reply if isinstance(reply, str) else ""
+        request["reply_artifact"] = self.store.put(reply, kind="packet-justification", author=lead).id
+        parsed = _parse_packet_request(reply)
+        if parsed["kind"] == "narrow":
+            request.update(state="narrow", advice=parsed["advice"])
+        elif parsed["kind"] == "malformed":
+            request.update(state="malformed", problem=parsed["problem"])
+        elif parsed["bytes"] < needed:
+            request.update(state="malformed", requested=parsed["bytes"],
+                           problem=f"it asks for {parsed['bytes']:,} bytes, below the measured {needed:,}")
+        elif parsed["bytes"] > ceiling:
+            request.update(state="malformed", requested=parsed["bytes"],
+                           problem=f"it asks for {parsed['bytes']:,} bytes, over this run's ceiling of {ceiling:,}")
+        else:
+            request.update(state="requested", requested=parsed["bytes"], necessary=parsed["necessary"],
+                           why_not_shorter=parsed["why"])
+        self._note(f"task {spec.task_id}: packet request {rid} from {lead}: {request['state']}")
+        return request
+
+    def _packet_request_text(self, request: dict) -> str:
+        """What the planner is told about a task's packet request."""
+        state, rid, lead = request.get("state"), request.get("id"), request.get("lead") or "its lead"
+        art = request.get("reply_artifact")
+        where = f" (its whole reply is artifact {art}; FETCH: {art})" if art else ""
+        if state == "requested":
+            needed, requested = int(request["needed"]), int(request["requested"])
+            return (f"Its lead ({lead}) asks for a larger allowance for this task only, request {rid}: "
+                    f"{requested:,} bytes{where}. NECESSARY, in the lead's words: {request.get('necessary')} "
+                    f"WHY NOT SHORTER, in the lead's words: {request.get('why_not_shorter')} "
+                    "Decide on its merits; nothing of the task runs until you do. To approve, name this task again "
+                    f"unchanged and add the line 'PACKET GRANT: {rid} <bytes> | because: <why the justification "
+                    f"holds>', granting at least the measured {needed:,} and at most {requested:,} bytes. To refuse, "
+                    f"add 'PACKET REFUSE: {rid} | because: <why>' and name the task narrower or split. A grant covers "
+                    "this task's scope exactly as measured: any change to it is a new request.")
+        if state == "refused":
+            return (f"You refused request {rid} ({request.get('refusal_reason') or 'no reason given'}); this exact "
+                    "scope is not asked again. " + _PACKET_NARROW_TEXT)
+        if state == "narrow":
+            return (f"Its lead ({lead}) recommends narrowing over an extension{where}: {request.get('advice')} "
+                    + _PACKET_NARROW_TEXT)
+        if state == "granted":
+            return f"Request {rid} was granted {int(request.get('granted') or 0):,} bytes."
+        reason = request.get("problem") or "no reason recorded"
+        if state == "malformed":
+            return (f"Its lead's reply made no valid request{where} ({reason}), so there is nothing to grant. "
+                    + _PACKET_NARROW_TEXT)
+        return f"No extension can be requested for it ({reason}). " + _PACKET_NARROW_TEXT
+
+    def _packet_decide(self, spec, fingerprint, needed: int, decisions, *, floor=None, grants: str = "") -> List[str]:
+        """Apply the orchestrator's decision lines. A line decides only a
+        pending request the harness issued under its id. A refusal applies
+        whatever task the line rides on (it widens nothing; the planner
+        refuses and names a narrower task in one reply). A grant applies only
+        to this task and the scope its request measured, with a size from
+        the measured need to the lead's request, within the ceiling, and a
+        reason; ``grants`` names why no grant can apply here (a task that
+        fits). Every line is recorded; the problems are returned."""
+        problems: List[str] = []
+        ceiling, _ = self._packet_ceiling()
+        seat = self._packet_seat_key()
+        by_id: Dict[str, List[dict]] = {}
+        for line in decisions:
+            by_id.setdefault(line["id"], []).append(line)
+        for rid, lines in by_id.items():
+            record = dict(task=spec.task_id, seat=seat, lines=[line["line"][:400] for line in lines])
+            request = next((r for r in self.packet_requests if r.get("id") == rid), None) if rid else None
+            if request is None:
+                self.packet_decisions_rejected.append(dict(record, id=rid, problem="no request the harness issued "
+                                                                                   "has this id"))
+                problems.append(f"'{rid or '(no id)'}' names no request the harness issued, so it decides nothing")
+                continue
+            if len(lines) > 1:
+                request["decisions"].append(dict(record, outcome="not applied: more than one decision line"))
+                problems.append(f"{rid} carries more than one decision line; one line decides a request")
+                continue
+            line = lines[0]
+            if request.get("state") != "requested":
+                request["decisions"].append(dict(record, outcome=f"not applied: the request is {request.get('state')}"))
+                problems.append(f"{rid} is {request.get('state')}, so there is nothing to decide")
+                continue
+            if line["verb"] == "GRANT" and grants:
+                request["decisions"].append(dict(record, outcome=f"not applied: {grants}"))
+                continue
+            if line["verb"] == "GRANT" and (request.get("task") != spec.task_id
+                                            or request.get("fingerprint") != fingerprint):
+                why = ("another task" if request.get("task") != spec.task_id
+                       else "a different scope than this task now declares")
+                request["decisions"].append(dict(record, outcome=f"not applied: made for {why}"))
+                problems.append(f"{rid} was requested for {why}; a grant covers only the scope its request measured, "
+                                "so a changed task needs its own request")
+                continue
+            artifact = self.store.put(line["line"], kind="packet-decision", author=seat).id
+            if line["verb"] == "REFUSE":
+                match = _PACKET_REFUSE_TAIL.match(line["rest"])
+                reason = (match.group(1) if match else line["rest"]).strip()
+                request.update(state="refused", refusal_reason=reason[:600] or None, decided_by=seat,
+                               decision_artifact=artifact)
+                request["decisions"].append(dict(record, outcome="refused", artifact=artifact))
+                self._note(f"task {spec.task_id}: packet request {rid} refused by {seat}")
+                continue
+            match = _PACKET_GRANT_TAIL.match(line["rest"])
+            size = _packet_bytes(match.group(1)) if match else None
+            reason = match.group(2).strip() if match else ""
+            bad = ("the line is not 'PACKET GRANT: <id> <bytes> | because: <reason>'" if size is None
+                   else _packet_reason_problem(reason, "the grant's reason"))
+            if not bad and size < needed:
+                bad = f"{size:,} bytes is below the measured {needed:,} the packet needs"
+            if not bad and floor is not None and size < floor:
+                bad = f"{size:,} bytes does not raise the task's current allowance ({floor - 1:,})"
+            if not bad and size > int(request.get("requested") or 0):
+                bad = f"{size:,} bytes is more than the lead asked for ({int(request.get('requested') or 0):,})"
+            if not bad and size > ceiling:
+                bad = f"{size:,} bytes is over this run's ceiling of {ceiling:,}"
+            if bad:
+                request["decisions"].append(dict(record, outcome=f"not applied: {bad}", artifact=artifact))
+                problems.append(f"the grant on {rid} was not applied: {bad}")
+                continue
+            request.update(state="granted", granted=size, grant_reason=reason[:600], decided_by=seat,
+                           decision_artifact=artifact)
+            request["decisions"].append(dict(record, outcome="granted", artifact=artifact))
+            self._note(f"task {spec.task_id}: packet request {rid} granted {size:,} bytes by {seat}")
+        return problems
+
+    def _packet_decisions_unused(self, spec, decisions, why: str) -> None:
+        """Decision lines on a task that needs no grant: a refusal still
+        decides its pending request, a grant is recorded and never applied."""
+        if decisions:
+            self._packet_decide(spec, None, 0, decisions, grants=why)
+
+    def _packet_record_dispatch(self, spec) -> None:
+        """The allowance a task starts with, on its own record: the request,
+        the lead's justification, the decision and its reason."""
+        grant = self._packet_grant_for(spec)
+        outcome = getattr(self, "_outcome", None)
+        if grant is None or outcome is None or getattr(outcome, "task_id", None) != spec.task_id:
+            return
+        outcome.packet_allowance = _packet_allowance_record(grant)
+        if spec.task_id not in grant.setdefault("dispatched", []):
+            grant["dispatched"].append(spec.task_id)
+
+    def _path_case_problem(self, spec: TaskSpec) -> str:
+        """A SCOPE path that differs only in letter case from an existing
+        project path, or "" (cycle21, run 20261109T195618Z: t7 named
+        ``readme.md`` while the file is ``README.md``, and the merge refused
+        the write only after the task was spent). Names are compared against
+        the directory entries as stored, so a case-insensitive filesystem that
+        resolves ``readme.md`` still shows ``README.md``. A glob component
+        ends the walk, a symbolic link is never followed, a path that does not
+        exist yet is a new file, and nothing is corrected: the planner names
+        the path again. An existing spelling in a path the task may not name
+        (an exclusion or a forbidden path) is not disclosed."""
+        scope = getattr(spec, "scope", None)
+        if not self.project or scope is None or not scope.permitted_paths:
+            return ""
+        policy = self.config.repository_policy
+        prepared = policy.scope(scope) if policy is not None else scope
+        hidden = list(prepared.forbidden_paths) + list(self.config.project_excludes or ())
+        root = Path(self.project)
+        problems = []
+        for declared in scope.permitted_paths:
+            found = _case_collision(root, declared)
+            if found is None:
+                continue
+            if any(_scope_matches(found, pattern) for pattern in hidden):
+                problems.append(f"`{declared}` differs only in letter case from an existing path this task may "
+                                "not name")
+            else:
+                problems.append(f"`{declared}` differs only in letter case from the existing `{found}`")
+        if not problems:
+            return ""
+        return ("SCOPE paths are exact, and " + "; ".join(problems) + ". Name the existing spelling, or a "
+                "different path for a new file; nothing is corrected for you.")
 
     def _packet_roles(self, spec: TaskSpec):
         """The role packets a task's calls carry: lead and reviewer always,
@@ -5767,8 +7195,8 @@ class Session:
         self._active_spec = spec
         self._task_before = self._capture_source()
         self._review_before = None
-        if self.project and self.config.allow_writes and self._task_before is None:
-            raise RunStalled("Cannot capture source to measure this editing task.")
+        if self.project and self._task_before is None and (self.config.allow_writes or spec.kind == TaskKind.REVIEW):
+            raise RunStalled("Cannot capture source to measure this editing task or bind independent audit reads.")
         self.in_flight = {}
         try:
             try:
@@ -5881,7 +7309,9 @@ class Session:
         except ProviderError as exc:
             # Only a failed lead, not a consultant/worker or policy refusal,
             # may be replaced. Never replay partial or uninspectable edits.
-            if (isinstance(exc, (ProviderRefusal, PartialWorkSuspected))
+            # A headless permission block is a denial, never a transport
+            # failure another lead may take over (cycle15): it stops as raised.
+            if (isinstance(exc, (ProviderRefusal, PartialWorkSuspected, PermissionBlocked))
                     or getattr(exc, 'window_exhausted', False) or spec.lead
                     or self._active_call.get('model') != lead
                     or self._active_call.get('role') != 'lead'):
@@ -5986,9 +7416,10 @@ class Session:
         for peer in collaborators:
             self._snapshot_scratch_bindings(spec)
             prompt = self._collaborator_prompt(spec, draft, peer, since=self._task_before)
+            review_source = self._task_before if spec.kind == TaskKind.REVIEW and self.project else None
             rv = None
             try:
-                with invocation(spec.task_id, "collaborator"):
+                with invocation(spec.task_id, "collaborator", review_source=review_source):
                     note = self._invoke_model(peer, prompt)
             except TurnLimitReached as exc:
                 # The cap is a transport fact kept here, never read back from
@@ -5997,7 +7428,7 @@ class Session:
                 # Recovered once with what the call did carried, or held as
                 # owned review debt (recovery lifecycle, 2026-10-31).
                 recovered, rv = self._recover_judgment(spec, peer, "review", role="collaborator", prompt=prompt,
-                                                       task=task, exc=exc)
+                                                       task=task, exc=exc, review_source=review_source)
                 if recovered is not None and not self._review_gaps(recovered):
                     self._settle_completion(spec, peer, "review", True)
                     self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
@@ -6019,7 +7450,7 @@ class Session:
                     # what the harness observed, never shown its own reply.
                     self._record_scratch_evidence(spec, peer)
                     completed, rv = self._recover_judgment(spec, peer, "review", role="collaborator", prompt=prompt,
-                                                           task=task, raw=note, gaps=gaps)
+                                                           task=task, raw=note, gaps=gaps, review_source=review_source)
                     if completed is not None:
                         self._settle_completion(spec, peer, "review", not self._review_gaps(completed))
                         note = completed
@@ -6105,7 +7536,8 @@ class Session:
                 cycle = self._admit_plan(spec.task_id,
                                          self._fix_cycle_stages(spec, blocking, editor=plan["editor"],
                                                                 correction=bool(plan["scenario"]),
-                                                                binding=bool(plan["binding"])),
+                                                                binding=bool(plan["binding"])
+                                                                and not _folds_binding(plan, plan["editor"])),
                                          scope="fix-cycle", wall_extra=wall_extra, wall_known=wall_known)
                 admitted = cycle.feasible
                 if not admitted:
@@ -6116,13 +7548,16 @@ class Session:
                     refused = FinishReserved(f"{spec.task_id}: the correction the review selected cannot be paid whole")
                     refused.recorded = True
                     raise refused
-                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead)
+                fold = _folds_binding(plan, plan["editor"])
+                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead, fold=fold)
                 self._fix_cycle_now = 1
                 if not plan["editor"]:
                     # Every finding went to the planner or the harness: no
                     # editing call; the reviewers re-check what is now shown.
                     revision = draft
                 else:
+                    if fold:
+                        revision_prompt += self._fold_note(spec, plan["binding"])
                     try:
                         revision = self._edit(lead, revision_prompt)
                     except TurnLimitReached as exc:
@@ -6161,6 +7596,7 @@ class Session:
                 if plan["editor"]:
                     task.record("assistant", revision)
                     task.keep(revision, kind="revision")
+                    self._settle_folded(spec, lead, revision)
                 unresolved = self._recheck_blocking(
                     spec, blocking, revision, task, labels=labels
                 )
@@ -6185,7 +7621,8 @@ class Session:
                     extra = self._admit_plan(spec.task_id,
                                              self._fix_cycle_stages(spec, unresolved, editor=bool(actionable),
                                                                     correction=bool(plan["scenario"]),
-                                                                    binding=bool(plan["binding"])),
+                                                                    binding=bool(plan["binding"])
+                                                                    and not _folds_binding(plan, bool(actionable))),
                                              scope="fix-cycle", wall_extra=wall_extra, wall_known=wall_known)
                     if not extra.feasible:
                         self._finish_refused(spec, "fix round", FinishReserved(
@@ -6194,14 +7631,18 @@ class Session:
                         break
                 self._count("revision")
                 self._fix_cycle_now = cycles + 1
-                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead)
+                fold = _folds_binding(plan, bool(actionable))
+                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead, fold=fold)
                 pending = [(p, n) for p, n in blocking
                            if any(up == p and ((up, v) in actionable or _finding_id(v) in routed_now)
                                   for up, v in unresolved)]
                 if actionable:
                     try:
                         revision = self._edit(lead, self._fix_prompt(spec, revision,
-                                                                     [(labels[p], v) for p, v in actionable]))
+                                                                     [(labels[p], v) for p, v in actionable])
+                                              + (self._fold_note(spec, plan["binding"]) if fold else ""))
+                        if fold:
+                            self._settle_folded(spec, lead, revision)
                     except TurnLimitReached as exc:
                         handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels,
                                                                 stage="fix",
@@ -7483,7 +8924,7 @@ class Session:
                     + (self._done_refusal or "")
                     + self._findings_prompt()
                     + self._planner_failure_context()
-                    + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
+                    + ("\n\n" + self._scope_request() if self.project and self.config.allow_writes else "")
                     + ("\n\n" + _CAPTURE_SCOPE_REQUEST
                        + f" This task's id will be t{len(self.history) + 1}."
                        if self._capture_guidance() else "")
@@ -7621,8 +9062,12 @@ class Session:
             seat, reply = self._ask_seat(seat, build_with_correction)
             reply = self._absorb_requirements(reply)
             retry_control = parse_control(reply)
-            if retry_control is not None and retry_control.verb == "DONE":
-                return None
+            if retry_control is not None:
+                if retry_control.verb == "DONE":
+                    return None
+                raise RunStalled(
+                    f"An unresolved {retry_control.verb} request cannot become a task."
+                ) from exc
             try:
                 meta = _read_metadata(reply)
             except AmbiguousMetadata as second:
@@ -7651,7 +9096,7 @@ class Session:
                     # held to. The phase-4 rerun on a6c9576 (2026-09-28) spent
                     # it on the step schema and then stalled on the fixture
                     # path, a rule the orchestrator had never been shown.
-                    correction = (f"\n\nCORRECTION REQUIRED: {exc}.\n{_SCOPE_REQUEST}"
+                    correction = (f"\n\nCORRECTION REQUIRED: {exc}.\n{self._scope_request()}"
                                   + ("\n" + _CAPTURE_SCOPE_REQUEST if self._capture_guidance() else ""))
                     seat, reply = self._ask_seat(seat, build_with_correction)
                     if (control := parse_control(reply)) is not None:
@@ -8253,7 +9698,8 @@ class Session:
                                      in {s.task_id for s in batch} else "sent_back",
                                      [s.task_id for s in batch], used,
                                      why=(self._done_refusal or "").strip().splitlines()[-1] if self._done_refusal else "")
-                    self._covers_corrections += 1
+                    if not getattr(self, "_packet_progress", False):
+                        self._covers_corrections += 1
                     if self._covers_corrections > self.config.max_requirement_reopens:
                         raise RunStalled("the orchestrator kept naming parallel batches that were sent back: "
                                          + (self._done_refusal or "").replace("--- BATCH SENT BACK ---", "")
@@ -8329,6 +9775,7 @@ class Session:
                     self.store.put(hypothesis, kind="hypothesis",
                                    author="operator" if self._explicit_tasks is not None else self.seat().key)
                 self._note(f"hypothesis for {spec.task_id}: {(hypothesis or 'none stated')[:160]}")
+            spec = self._normalize_resolves(spec)
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
             if problem:
@@ -8354,6 +9801,30 @@ class Session:
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks without a valid proof mapping: {problem}")
                 self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
+                previous_description = None
+                continue
+            # The orchestrator's packet decisions are its own reply's lines,
+            # read before anything else of this task is checked.
+            packet_decisions, spec = _read_packet_decisions(spec)
+            self._packet_progress = False
+            problem = self._path_case_problem(spec)
+            if problem:
+                self._packet_decisions_unused(spec, packet_decisions, "the task was sent back for its paths first")
+            problem = problem or self._packet_problem(spec, packet_decisions)
+            if problem:
+                # Before any charge, recovery count, listed-task mark,
+                # admission or task call (cycle21): an exact path the planner
+                # can spell, and role packets over the task's allowance, with
+                # the lead's request and the orchestrator's decision between
+                # (Davis, 2026-11-09), through the same bounded allowance as
+                # COVERS.
+                self._refuse_listed(spec, problem)
+                self._slot_event("sent_back", [spec.task_id], used, why=problem)
+                if not getattr(self, "_packet_progress", False):
+                    self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming tasks the dispatch would refuse: {problem}")
+                self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem}"
                 previous_description = None
                 continue
             lines = len(_RESOLVES.findall(spec.description or ""))
@@ -8493,6 +9964,19 @@ class Session:
                     # charge read dispatched work with no admission named).
                     charged = False
                     self._refuse_admission_record([spec], exc, used=used)
+                raise
+            except PacketTooLarge as exc:
+                # The intake measures every required packet; one refused here
+                # anyway (a backstop) is truthful only when nothing of the task
+                # began: no admission, and dispatch never finished preparing.
+                # Then no slot, recovery or listed-task mark is spent, and the
+                # record says not started; the stop itself is unchanged
+                # (cycle21: slot 8 read charged with no admission or lead).
+                admitted = any(e.get("tasks") == [spec.task_id] for e in self.task_admissions)
+                if not admitted and getattr(self, "_dispatch_prepared", None) != spec.task_id:
+                    charged = False
+                    self._unmark_not_started(spec, decision, why=str(exc))
+                    self._slot_event("not_started", [spec.task_id], used, why=str(exc))
                 raise
             except FinishReserved as exc:
                 if not self._settle_not_started(spec, exc):
@@ -8945,11 +10429,7 @@ class Session:
                 "drop it and do not prescribe it: ASK, naming the command and the configured checks as "
                 "a configuration conflict. A lead that cannot run a case where it works (a sandbox "
                 "that denies a socket, a missing dependency) reports it by identity, so the harness's "
-                "own run can discharge it: 'NOT RUN: P<n> - <why>' for a declared scenario, "
-                "'NOT RUN: <file>::<Class>::<test> - <why>' for a case, or 'NOT RUN: <file>::<Class> - <why>' "
-                "for a whole test class (discharged only by a check that collects that file whole and shows "
-                "every method of the class passed); a report naming none of these is "
-                "kept as written and nothing can discharge it.")
+                "own run can discharge it; every editing call is told the same rule: " + NOT_RUN_RULE)
 
     def _verification_note(self) -> str:
         """The orchestrator's view of the harness's own verification."""
@@ -9913,12 +11393,15 @@ class Session:
         """
         import concurrent.futures
         import contextlib
+        self._packet_progress = False
 
         from .project import Project
         from .run_budget import RunBudgetExceeded
         parsed = []
         for spec in specs:
+            packet_decisions, spec = _read_packet_decisions(spec)
             continues, spec = _read_continues(spec)
+            spec = self._normalize_resolves(spec)
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers) or self._proof_problem(spec, covers)
             if continues is not None:
@@ -9941,6 +11424,18 @@ class Session:
                 problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
             else:
                 problem = problem or self._capture_problem(spec, None)
+            dispatchable = "" if problem else self._path_case_problem(spec)
+            if problem or dispatchable:
+                self._packet_decisions_unused(spec, packet_decisions, "the batch was sent back for another problem")
+            else:
+                # Each block's own decision lines decide only its own request.
+                dispatchable = self._packet_problem(spec, packet_decisions)
+            if dispatchable:
+                # The serial intake's exact-path and packet checks (cycle21),
+                # before the wave's admission or any child.
+                self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {dispatchable} Name the "
+                                      "tasks again.")
+                return False
             if not problem:
                 # The same ownership and closure admission as the serial
                 # intake, before any child's writer call (root review of
@@ -10030,6 +11525,11 @@ class Session:
                 # Record-only: a child's ledger is off, so its COVERS feed its
                 # contract and snapshot without any audit-debt decision.
                 for child, (mine, covers, _) in zip(children, parsed, strict=True):
+                    # Its own task's granted allowance and nothing else: the
+                    # same records, so a correction it applies is the
+                    # parent's record too (no batch sibling can read it).
+                    child.packet_requests = [r for r in self.packet_requests
+                                             if r.get("task") == mine.task_id and r.get("state") == "granted"]
                     child._current_covers = list(covers)
                     child._requirement_texts = dict(self.memory.ledger.requirements)
                     # The parent's approved commands, for the scratch
@@ -10055,6 +11555,9 @@ class Session:
                 changed = sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p))
                 allowed = _literal_paths(spec.scope) or set()
                 outside = [p for p in changed if p.strip("./") not in allowed]
+                known = {id(r) for r in self.packet_requests}
+                self.packet_requests.extend(r for r in child.packet_requests if id(r) not in known)
+                self.packet_decisions_rejected.extend(child.packet_decisions_rejected)
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
@@ -10099,6 +11602,8 @@ class Session:
                 self.scope_declarations.extend(dict(d) for d in getattr(child, "scope_declarations", []) or [])
                 self.scope_gate_skips.extend(dict(d) for d in getattr(child, "scope_gate_skips", []) or [])
                 self.done_declarations.extend(dict(d) for d in getattr(child, "done_declarations", []) or [])
+                self.restatement_judgments.extend(dict(d) for d in getattr(child, "restatement_judgments", []) or [])
+                self.boundary_notes.extend(dict(d) for d in getattr(child, "boundary_notes", []) or [])
                 self.deferred_evidence.extend(child.deferred_evidence)
                 self.scenario_corrections.extend(child.scenario_corrections)
                 self.evidence_routes.extend(child.evidence_routes)
@@ -10166,8 +11671,12 @@ class Session:
                                           author=spec.lead)
                     reason = (f"changed files outside its scope: {', '.join(outside)}" if outside
                               else f"{type(exc).__name__}: {str(exc)[:200]}")
+                    # A child that changed nothing has no files to keep: the
+                    # line says so rather than pointing at an empty artifact
+                    # as if it held edits (cycle15, cycle14 t5).
                     self.open_findings.append(f"Parallel task {spec.task_id} was not merged ({reason}); "
-                                              f"its files are kept in artifact {kept.id}.")
+                                              + (f"its files are kept in artifact {kept.id}." if changed
+                                                 else "it changed no files."))
                     if mine is not None:
                         mine.note("integrity" if outside else classify(exc), f"not merged: {reason}",
                                   stage="merge")
@@ -10184,9 +11693,13 @@ class Session:
                         # continued by this run (root boundary evidence: a
                         # refusal, a cancellation below the cap, an unknown
                         # stop and a cap carrying an error all stop here).
-                        self._record_unmerged_failure(spec, mine, changed, base, kept,
-                                                      cause=classify(exc), reason=reason,
-                                                      role=str(child._active_call.get("role") or "lead"))
+                        failed = self._record_unmerged_failure(spec, mine, changed, base, kept,
+                                                               cause=classify(exc), reason=reason,
+                                                               role=str(child._active_call.get("role") or "lead"))
+                        if isinstance(exc, PermissionBlocked):
+                            # The bounded block, never the raw target
+                            # (cycle15); the stop stands as for a refusal.
+                            failed["permission_block"] = dict(exc.permission_block)
                     self._note(f"{spec.task_id} not merged: {reason[:160]}")
                     if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
                         fatal = fatal or exc
@@ -10380,8 +11893,10 @@ class Session:
             origins = [e for e in group if e.get("task") and e["task"] != spec.task_id and e.get("description")]
             reviewed = "".join(f"Task {e['task']}, as you reviewed it: {e['description'][:1500]}\n\n"
                                for e in {e["task"]: e for e in origins}.values())
+            history = self._audit_history([(r.get("requirement") or [None])[0] for r in records])
             prompt = (self._role_packet(spec, "reviewer") + "\n\n"
                       + (self._finding_contract(records) + "\n\n" if records else "")
+                      + (history.strip() + "\n\n" if history else "")
                       + f"Task: {spec.description}\n\n" + reviewed
                       + f"{situation}\n\n"
                       + (f"Your findings left open:\n{self._finding_lines(records)}\n\n" + instructions
@@ -10744,7 +12259,8 @@ class Session:
         self._hold_task_findings(spec, f"left open when {spec.task_id} was not merged ({cause}): {reason[:160]}",
                                  outcome=outcome)
         record = dict(task=spec.task_id, lead=lead or spec.lead or (getattr(outcome, "lead", "") or ""),
-                      cause=cause, error=f"not merged: {reason}; its files are kept in artifact {kept.id}",
+                      cause=cause, error=(f"not merged: {reason}; " + (f"its files are kept in artifact {kept.id}"
+                                                                        if changed else "it changed no files")),
                       changed=list(changed), changed_lines=0, note="parallel batch: nothing was merged",
                       role=role, content=self._content_fingerprint([]), unmerged_artifact=kept.id,
                       **self._attempt_identity(spec))
@@ -10793,15 +12309,27 @@ class Session:
         if (not self.config.requirements_ledger or not self.memory.ledger.requirements or self._explicit_tasks is not None
                 or not self.project or not self.config.allow_writes or scope is None or scope.review_only or not covers):
             return ""
+        if scope.proofs is None and all(self._test_command_requirement(r) for r in covers):
+            # Every covered requirement is a test command's pass: the
+            # harness's receipt is its evidence (_TEST_COMMAND_RULE).
+            return ""
         if scope.proofs is None:
             return ('The task declares no proof scenarios: add "proofs": [{"id": "P1", "requirements": ["R<n>"], '
                     '"operation": ..., "state": ..., "expect": ..., "location": ...}, ...] to SCOPE, mapping every '
                     f"requirement in COVERS ({', '.join(covers)}).")
         named = {r for p in scope.proofs for r in p["requirements"]}
-        missing = [r for r in covers if r not in named]
+        missing = [r for r in covers if r not in named and not self._test_command_requirement(r)]
         extra = sorted(r for r in named if r not in covers)
         if missing:
-            return f"COVERS names {', '.join(missing)} but no proof scenario shows {'it' if len(missing) == 1 else 'them'}."
+            # Say why a requirement that names a test command still needs a
+            # scenario, so the one correction addresses it (cycle08: the
+            # planner dropped R17 and R21 instead).
+            named_commands = [f"{r} names a test command but also claims '{' '.join(words[:12])}'"
+                              for r in missing if (words := self._test_command_extra_words(r))]
+            return (f"COVERS names {', '.join(missing)} but no proof scenario shows {'it' if len(missing) == 1 else 'them'}."
+                    + (" " + "; ".join(named_commands) + ": declare a scenario for that claim and keep the "
+                       "requirement in COVERS (the command's own run is cited from the harness's receipt)."
+                       if named_commands else ""))
         if extra:
             return f"Proof scenarios name requirements the task does not COVER: {', '.join(extra)}."
         texts = self.memory.ledger.requirements
@@ -10815,9 +12343,10 @@ class Session:
                 if legacy != "on":
                     return (f"Proof scenario {proof['id']} declares capture evidence, but this task is not design "
                             "work with design evidence in force; declare a test case instead.")
-                if any(_error_clause(str(texts.get(r, ""))) for r in proof["requirements"]):
-                    return (f"Proof scenario {proof['id']} declares capture evidence for an error or refusal "
-                            "requirement; that needs an executed case.")
+                behavioural = [r for r in proof["requirements"] if _behavioural_error(str(texts.get(r, "")))]
+                if behavioural:
+                    return (f"Proof scenario {proof['id']} declares capture evidence for {', '.join(behavioural)}, "
+                            "which asserts error or refusal behaviour; that needs an executed case (evidence test).")
                 continue
             if proof.get("evidence", "test") != "reading":
                 continue
@@ -10828,9 +12357,21 @@ class Session:
             if not str(proof["location"]).lower().endswith(_DOC_SUFFIXES):
                 return (f"Proof scenario {proof['id']} declares reading evidence at {proof['location']}, which is "
                         "not a documentation file; a behavioural scenario needs a test case (evidence test).")
-            if any(_error_clause(str(texts.get(r, ""))) for r in proof["requirements"]):
-                return (f"Proof scenario {proof['id']} declares reading evidence for an error or refusal requirement; "
-                        "that needs an executed case.")
+            behavioural = [r for r in proof["requirements"] if _behavioural_error(str(texts.get(r, "")))]
+            if behavioural:
+                # Name the requirement and the behaviour it asserts, and the
+                # modality that fits, so the one correction can be made
+                # (cycle07: the bare refusal spent the correction budget).
+                others = [r for r in proof["requirements"] if r not in behavioural]
+                shown = "; ".join(f"{r}: '{_behaviour_text(str(texts.get(r, ''))).strip()[:160]}'"
+                                  for r in behavioural)
+                return (f"Proof scenario {proof['id']} declares reading evidence for {', '.join(behavioural)}, which "
+                        f"asserts error or refusal behaviour of the program ({shown}); prove that behaviour with an "
+                        "executed case in its own scenario (evidence test)"
+                        + (f", and keep reading evidence for the documentation claim of {', '.join(others)}"
+                           if others else "")
+                        + ". A requirement that only asks documentation to describe such behaviour takes reading "
+                        "evidence.")
         return ""
 
     def _covers_problem(self, covers) -> str:
@@ -11017,14 +12558,49 @@ class Session:
             self._note(f"DONE sent back: unsettled ambiguous requirements: {', '.join(unsettled)}")
             return False
         status = ledger.requirement_status
+        self._cover_by_receipt(claimed)
+        early = None
+        if not final and self._explicit_tasks is None:
+            # Declaration-only debt is offered to its owning leads before the
+            # coverage gate (cycle10, PR73 6722947726: with a requirement
+            # uncovered or held NOT MET by the audit, DONE was refused above
+            # the declaration route and done_declarations stayed empty while
+            # the same binding-only items were re-filed task after task). The
+            # plan's own rules decide; uncovered work is not editing debt.
+            first = self._deterministic_blockers()
+            if first:
+                held = dict(first)
+                declared, why = self._done_declarations(first)
+                early = (declared, why, held)
+                if declared is not None:
+                    self._note(f"DONE declarations asked {', '.join(declared)} before the coverage gate")
+        if final and self._explicit_tasks is None:
+            # The cap's final check reaches the same declaration route DONE
+            # does (cycle05 trial t7: an admission refusal at the cap went to
+            # the goal question and the final audit, and declaration-only
+            # debt was never offered to its owners), before the coverage gate
+            # as DONE's is (cycle10).
+            self._declare_at_cap()
         uncovered = [r for r in ledger.requirements
                      if r in claimed and not status.get(r, "").startswith(("covered", "met"))]
         if uncovered:
+            # A pure test-command claim needs no scenario, only the harness's
+            # receipt: say exactly what that receipt lacks, so the repair is
+            # the missing run or tests, not a task re-covering the claim
+            # (cycle10: R1's population clause).
+            receipts = []
+            for rid in uncovered:
+                if self._test_command_requirement(rid) and not status.get(rid, "").startswith("NOT MET"):
+                    _receipt, why = self._command_receipt_citation(rid)
+                    if why:
+                        receipts.append(f"- {rid}: {why[:300]}")
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nThese requirements are not covered by any finished "
                 f"task: {', '.join(uncovered)} (never covered, or found not met by the audit and not "
                 "covered again since). Name a task for them (with COVERS), or explain in the task "
-                "why one cannot be done.")
+                "why one cannot be done."
+                + ("\nTest-command requirements need no scenario; the harness's receipt of the named command "
+                   "covers them once it shows what is missing below:\n" + "\n".join(receipts) if receipts else ""))
             self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
             return False
         if not final and self._explicit_tasks is None:
@@ -11038,12 +12614,16 @@ class Session:
             blocked = self._deterministic_blockers()
             needs_editing = bool(getattr(self, "_blockers_need_editing", True))
             declared, declaration = None, ""
-            if blocked:
+            if blocked or early is not None:
                 # Declaration-only debt is settled first, by its owning leads,
                 # with no planner call and no task slot (cycle05); a mixed set
-                # keeps the edit route below and its pricing.
-                held_before = dict(blocked)
-                declared, declaration = self._done_declarations(blocked)
+                # keeps the edit route below and its pricing. Asked once per
+                # DONE, before the coverage gate (cycle10).
+                if early is not None:
+                    declared, declaration, held_before = early
+                else:
+                    held_before = dict(blocked)
+                    declared, declaration = self._done_declarations(blocked)
                 if declared is not None:
                     blocked = self._deterministic_blockers()
                     needs_editing = bool(getattr(self, "_blockers_need_editing", True))
@@ -11064,13 +12644,15 @@ class Session:
                 continuation = self._continuation_admission(needs_editing)
                 if continuation["feasible"] and not again:
                     routes = {r: self._evidence_route(r, why) for r, why in blocked.items()}
+                    shown = {r: self._shown_reason(r, why) for r, why in blocked.items()}
                     for rid, route in routes.items():
                         self.finish_routing.append(dict(requirement=rid, site="done refused before audit",
-                                                        why=blocked[rid][:300], **route))
+                                                        why=blocked[rid][:_FINISH_REASON_CHARS], **shown[rid][1],
+                                                        **route))
                     self._done_refusal = (
                         "\n\n--- DONE SENT BACK ---\nNo audit was asked: the harness's record on the current "
                         "source already holds these requirements not met, whatever an audit would say:\n"
-                        + "\n".join(f"- {r}: {why[:300]}\n  route: {routes[r]['route']}" for r, why in blocked.items())
+                        + "\n".join(f"- {r}: {shown[r][0]}\n  route: {routes[r]['route']}" for r in blocked)
                         + f"\nA continuation is admissible now ({continuation['detail'][:200]}). Name a task "
                         "that takes one of these routes, or reply DONE again to have the independent audit "
                         "judge the rest.")
@@ -11082,6 +12664,11 @@ class Session:
                                             audit_asked=True, source=source, declaration=declaration,
                                             why=("DONE repeated over the same held requirements on this source"
                                                  if again else "no continuation is admissible")))
+        if self._explicit_tasks is None:
+            # Restated NOT RUN items the auditor cannot judge (it wrote the
+            # restatement) are offered to another eligible independent seat
+            # before the audit (cycle14).
+            self._judge_restatements("final" if final else "done")
         if self._explicit_tasks is not None:
             self._note("requirements no listed task claimed, left unjudged: "
                        + ", ".join(self.explicit["requirements_unclaimed"]))
@@ -11099,16 +12686,123 @@ class Session:
             unmet = self._final_challenge(unmet)
         if unmet:
             routes = {r: self._evidence_route(r, why) for r, why in unmet.items()}
+            shown = {r: self._shown_reason(r, why) for r, why in unmet.items()}
             for rid, route in routes.items():
-                self.finish_routing.append(dict(requirement=rid, site="done refused", why=unmet[rid][:300], **route))
+                self.finish_routing.append(dict(requirement=rid, site="done refused",
+                                                why=unmet[rid][:_FINISH_REASON_CHARS], **shown[rid][1], **route))
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
-                + "\n".join(f"- {r}: {why[:300]}\n  route: {routes[r]['route']}" for r, why in unmet.items())
-                + "\nName a task that fixes them (with COVERS): a repair for a finding on the behaviour; for "
-                "execution debt, a task whose checks run what the NOT RUN item binds.")
+                + "\n".join(f"- {r}: {shown[r][0]}" + self._basis_label(r) + f"\n  route: {routes[r]['route']}"
+                             for r in unmet)
+                + "\nName a task that fixes them with these requirement ids in COVERS (RESOLVES names only "
+                "finding ids, F<n> or RFT<task>-<n>, never a requirement): a repair for a finding on the "
+                "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
+                "independent audit judges the repaired source. " + _REPAIR_OUTCOME_RULE)
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
         return True
+
+    def _audit_text_artifact(self, audit: dict, text: str) -> Tuple[Optional[str], str]:
+        """The artifact of one audit that holds ``text`` verbatim (whitespace
+        normalised): its reply, or its completion's reply (an omitted id
+        answered on the completion is not in the first reply). ``(None,
+        "reply artifact")`` when neither is stored or holds it, so a pointer
+        never names a reply that does not contain the words (cycle20)."""
+        def norm(value) -> str:
+            return " ".join(str(value or "").split())
+        want = norm(text)
+        for ref, label in ((audit.get("reply_artifact"), "reply artifact"),
+                           ((audit.get("completion") or {}).get("reply_artifact"), "completion reply artifact")):
+            if not ref or not want:
+                continue
+            try:
+                held = self.store.get(ref)
+            except (KeyError, OSError, ValueError):
+                continue
+            if want in norm(held):
+                return ref, label
+        return None, "reply artifact"
+
+    def _reason_source(self, rid: str, why: str) -> Tuple[Optional[str], str]:
+        """Where the whole of a finish reason can be read (cycle20): the
+        audit reply, or that audit's completion reply, that holds this exact
+        text (whitespace normalised), found from the audit whose verdict for
+        ``rid`` is this reason; never an audit reply that does not contain
+        it. A reason the harness wrote or revised (a lowering, a synthesized
+        verdict, a record held before any audit) is kept as its own artifact
+        and named as the reason as recorded. Returns ``(artifact id or None,
+        what it is)``."""
+        def norm(text) -> str:
+            return " ".join(str(text or "").split())
+        want = norm(why)
+        for audit in reversed(self.requirement_audits):
+            if norm(((audit.get("verdicts") or {}).get(rid) or {}).get("why")) != want:
+                continue
+            ref, label = self._audit_text_artifact(audit, why)
+            if ref:
+                return ref, "audit " + label.replace(" artifact", "")
+            break
+        try:
+            return self.store.put(str(why), kind=f"finish-reason:{rid}", author="harness").id, "the reason as recorded"
+        except OSError:
+            return None, "no stored copy"
+
+    def _shown_reason(self, rid: str, why: str) -> Tuple[str, dict]:
+        """The finish reason as the send-back shows it: whole when it fits
+        ``_FINISH_REASON_CHARS``, else that many characters and a marker that
+        counts what was left out and names the artifact holding the whole
+        text, readable with FETCH (cycle20: the cut was silent and named no
+        artifact). Returns ``(text, record fields for finish_routing)``."""
+        why = str(why or "")
+        if len(why) <= _FINISH_REASON_CHARS:
+            return why, {}
+        ref, label = self._reason_source(rid, why)
+        omitted = len(why) - _FINISH_REASON_CHARS
+        marker = (f" [... {omitted} more characters in {label} {ref}; read it whole with FETCH: {ref}]" if ref
+                  else f" [... {omitted} more characters; {label}]")
+        return why[:_FINISH_REASON_CHARS] + marker, dict(why_omitted=omitted, why_artifact=ref, why_source=label)
+
+    def _basis_label(self, rid: str) -> str:
+        """How the latest audit's NOT MET for ``rid`` stated its basis, for
+        the planner: provenance only, the verdict stands either way."""
+        audit = self.requirement_audits[-1] if self.requirement_audits else {}
+        basis = (audit.get("bases") or {}).get(rid)
+        if basis is None:
+            return ""
+        if not basis.get("stated"):
+            return " (no basis stated by the auditor; the verdict stands)"
+        if basis.get("quoted") and not basis.get("quoted_in"):
+            return " (its quoted basis was not found in the goal, the requirement or a ruling; recorded only)"
+        return ""
+
+    def _cover_by_receipt(self, claimed) -> None:
+        """A requirement whose whole claim is that a named test command passes
+        (``_test_command_requirement``), never covered by a task (no status,
+        or open; not one an audit found NOT MET), is covered for the audit
+        when the harness's own exact receipt of that command shows it run
+        whole and passed on the current source, gate and environment
+        (``_command_receipt_citation``). The fact is the receipt; the MET is
+        the independent audit's. Cycle08: the planner dropped R17 and R21
+        from COVERS after a sendback and DONE stopped on "not covered" while
+        the gate's unittest run was passing. A missing, stale, failed,
+        filtered or skipping receipt covers nothing. Kept on
+        ``receipt_coverage`` (result.json, checkpoint)."""
+        ledger = self.memory.ledger
+        status = ledger.requirement_status
+        for rid in ledger.requirements:
+            current = str(status.get(rid, "") or "open")
+            if rid not in claimed or current.startswith(("covered", "met", "NOT MET")):
+                continue
+            if not self._test_command_requirement(rid):
+                continue
+            receipt, problem = self._command_receipt_citation(rid)
+            if receipt is None:
+                continue
+            status[rid] = f"covered (harness receipt {receipt['id']}: `{receipt['command']}` passed on the current source)"
+            self.receipt_coverage.append(dict(requirement=rid, receipt=receipt["id"], command=receipt["command"],
+                                              source=receipt.get("source"), gate=receipt.get("gate")))
+            self._note(f"{rid} covered by the harness's receipt {receipt['id']} of `{receipt['command']}`; "
+                       "the audit judges it")
 
     def _auditor(self) -> Optional[str]:
         """A brain-trust member from a vendor other than the orchestrator's,
@@ -11126,18 +12820,17 @@ class Session:
         import shlex
         text = str(self.memory.ledger.requirements.get(rid) or "")
         ticked = re.findall(r"`([^`\n]+)`", text)
-        runner = r"(?:[\w./~-]*/)?(?:python3?|pytest|npm|npx|node|make)"
+        runner = _RUNNER_SPAN
         phrase = next((t for t in ticked if re.match(r"\s*" + runner + r"\b", t)), None)
         if phrase is None:
-            match = re.search(r"(?<![\w./-])(" + runner + r"\b(?:\s+-m\s+\S+)?[^.;\n`]*)", text)
-            phrase = match.group(1) if match else None
-            if phrase is not None:
-                # Prose ends where the sentence turns back to English: the
-                # command is the runner and its own operands, never the words
-                # around it ("run pytest before declaring completion").
-                words = phrase.split()
-                stop = next((i for i, w in enumerate(words[1:], 1) if w.lower() in _COMMAND_PROSE_STOPS), len(words))
-                phrase = " ".join(words[:stop])
+            match = re.search(r"(?<![\w./-])(" + runner + r"\b[^;\n`]*)", text)
+            if match is not None:
+                # The command is the runner and its own operands, never the
+                # words around it: read token by token, structurally
+                # (``_command_words``), not by a list of English stop-words
+                # (cycle09: "... -s tests successfully before declaring
+                # completion" kept "successfully" as an argument).
+                phrase = " ".join(_command_words(match.group(1).split()))
         if phrase is None:
             return None
         try:
@@ -11146,18 +12839,156 @@ class Session:
             return None
         return argv or None
 
+    def _test_command_requirement(self, rid: str) -> bool:
+        """Whether a requirement's whole claim is that a named test command
+        passes (``_TEST_COMMAND_RULE``). Conservative: anything unclear keeps
+        its scenario. Both must hold (root review of 63fbef7, PR73
+        6718399838: a runner name anywhere in argv exempted three
+        behavioural requirements):
+
+        - the requirement names exactly one command, and it has a test
+          runner's own shape (``_test_runner_shape``): ``pytest`` or
+          ``python -m pytest`` / ``python -m unittest`` followed only by
+          options, ``discover``, test paths or ``tests``, or exactly
+          ``npm test`` / ``make test``. ``python app.py pytest`` runs an
+          application, and a ``-k`` selection is not the whole suite;
+        - with that command removed, every word of the requirement is
+          run-and-pass vocabulary (``_PASS_ONLY_WORDS``): no behaviour,
+          value, endpoint or status is asserted beside it. "refunds are
+          atomic" or "malformed JSON returning 400" next to the command
+          make it a behaviour, which needs its scenario."""
+        text = str(self.memory.ledger.requirements.get(rid) or "")
+        argv = self._command_requirement(rid) or []
+        if not argv or not _test_runner_shape(argv):
+            return False
+        rest = _command_rest(text, argv)
+        if rest is None:
+            return False
+        rest, population = _population_clause(rest)
+        if population is not None and not population:
+            return False
+        words = re.findall(r"[a-z0-9']+", rest.lower())
+        return bool(words) and all(w.removesuffix("'s") in _PASS_ONLY_WORDS for w in words)
+
+    def _command_population(self, rid: str) -> Optional[List[dict]]:
+        """The test population a pure test-command requirement says its run
+        includes (``_population_clause``), or None when it names none."""
+        text = str(self.memory.ledger.requirements.get(rid) or "")
+        rest = _command_rest(text, self._command_requirement(rid) or [])
+        return (_population_clause(rest)[1] or None) if rest is not None else None
+
+    def _new_case_problems(self, tests, current: dict, passed: set, text: str) -> List[str]:
+        """What a receipt lacks for "the new tests" (cycle11 review, PR73
+        6725376982: a new case appended to an existing test file was refused
+        as "the run added no test file"). New tests are new test cases, read
+        from the run-start bytes (``_original_tests``) and the current source:
+        a case name a test file did not define at run start, in a new or a
+        changed file. A case whose body is that of a run-start case now gone
+        from its file is the old test renamed, never new. Each new case must
+        appear among the receipt's executed ids; at least one must exist. A
+        changed test file whose cases cannot be read (not Python, or not
+        parseable) leaves which cases are new unknown, and that is said."""
+        if self._original_tests is None:
+            return [f"which tests are new is unknown: the run-start tests were not recorded ({text[:60]})"]
+        new, renamed, unknown = [], [], []
+        for path in tests:
+            before, now = self._original_tests.get(path), current.get(path)
+            if before == now:
+                continue
+            defs_now = _python_case_defs(now) if path.endswith(".py") else None
+            defs_before = ({} if before is None else _python_case_defs(before)) if path.endswith(".py") else None
+            if defs_now is None or defs_before is None:
+                unknown.append(path)
+                continue
+            gone = {body for name, body in defs_before.items() if name not in defs_now}
+            for name, body in defs_now.items():
+                if name in defs_before:
+                    continue
+                (renamed if body in gone else new).append(f"{path}::{name}")
+        out = []
+        if unknown:
+            out.append(f"which cases are new in {', '.join(unknown[:3])} cannot be read from the source")
+        if not new and not unknown:
+            out.append(f"the run added no test case ({text[:60]})"
+                       + (f"; {', '.join(renamed[:3])} renames a run-start test" if renamed else ""))
+        out += [f"new case {case} was not executed" for case in new if case not in passed]
+        return out
+
+    def _population_problem(self, rid: str, run: dict) -> str:
+        """Why one receipt's run does not show the population ``rid`` names,
+        or "" (cycle10). The run's own executed case identities decide
+        (``_run_passed_cases``: the harness's report, pytest node ids, the
+        unittest producer's file ids), never the command line: a named path
+        must exist and show a passed case; the new tests are the test files
+        the run added since run start, at least one, each with a passed
+        case; any other phrase is read as every test file in the project,
+        the superset that includes it. A run with no case identity shows no
+        population."""
+        population = self._command_population(rid)
+        if not population:
+            return ""
+        from .integration import _test_family
+        from .project import Project
+        files = {name.partition("::")[0] for name in _run_passed_cases(run)}
+        if not files:
+            return "its run names no executed case files, so the tests it included are not shown"
+        try:
+            current = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- unknown is not shown
+            return "the current source could not be read to find the named tests"
+        tests = sorted(n for n in current if _test_family(n))
+        passed = _run_passed_cases(run)
+        missing = []
+        for item in population:
+            if item["paths"]:
+                for path in item["paths"]:
+                    path = path[2:] if path.startswith("./") else path.rstrip("/")
+                    named = [t for t in tests if t == path or t.startswith(path + "/")]
+                    if not named:
+                        missing.append(f"{path} is not a test file on the current source")
+                    missing += [f"no executed case from {t}" for t in named if t not in files]
+            elif item["added"]:
+                missing += self._new_case_problems(tests, current, passed, item["text"])
+            else:
+                missing += [f"no executed case from {t}" for t in tests if t not in files]
+        missing = list(dict.fromkeys(missing))
+        if not missing:
+            return ""
+        return "it does not show the tests the requirement names: " + "; ".join(missing[:6]) + (
+            f" and {len(missing) - 6} more" if len(missing) > 6 else "")
+
+    def _test_command_extra_words(self, rid: str) -> List[str]:
+        """For a requirement that names exactly one runner-shaped command but
+        is not a pure run-and-pass claim, the words beside the command that
+        are outside ``_PASS_ONLY_WORDS``: what the requirement claims besides
+        the command passing, for an actionable correction. Empty otherwise."""
+        text = str(self.memory.ledger.requirements.get(rid) or "")
+        argv = self._command_requirement(rid) or []
+        rest = _command_rest(text, argv) if argv else None
+        if rest is None or not _test_runner_shape(argv) or self._test_command_requirement(rid):
+            return []
+        before, population = _population_clause(rest)
+        if population:
+            rest = before
+        return list(dict.fromkeys(w for w in re.findall(r"[a-z0-9']+", rest.lower())
+                                  if w.removesuffix("'s") not in _PASS_ONLY_WORDS))
+
     @staticmethod
     def _command_key(argv) -> Tuple[str, ...]:
         """A command's identity for the citation: the interpreter by its
         public name (``/usr/bin/python3.11`` is ``python``; ``pytest`` is
         ``python -m pytest``, the same rule as project_run._check_identity),
-        the harness's own report token and ``-p no:cacheprovider`` removed,
-        every other argument kept exactly: a flag, a path or a filter makes
-        another command."""
-        from .integration import REPORT_TOKEN
+        the harness's own report token removed and, for a pytest command
+        only, ``-p no:cacheprovider`` (non-selecting plumbing there); every
+        other argument kept exactly: a flag, a path or a filter makes another
+        command. For ``unittest discover``, ``-p`` is the discovery pattern
+        and is never removed (cycle17: ``-p no:cacheprovider`` there is a
+        pattern, and dropping it equated two different discovery commands)."""
+        from .integration import REPORT_TOKEN, _is_pytest
         argv = [str(a) for a in argv or ()]
         if not argv:
             return ()
+        pytest = _is_pytest(argv)
         head, rest = os.path.basename(argv[0]), argv[1:]
         if re.fullmatch(r"python(\d+(\.\d+)*)?", head):
             head = "python"
@@ -11168,10 +12999,10 @@ class Session:
             if skip:
                 skip = False
                 continue
-            if arg == "-p" and i + 1 < len(rest) and rest[i + 1] == "no:cacheprovider":
+            if pytest and arg == "-p" and i + 1 < len(rest) and rest[i + 1] == "no:cacheprovider":
                 skip = True
                 continue
-            if arg == "-pno:cacheprovider" or REPORT_TOKEN in arg or arg.startswith("--quadratus-report="):
+            if (pytest and arg == "-pno:cacheprovider") or REPORT_TOKEN in arg or arg.startswith("--quadratus-report="):
                 continue
             out.append(arg)
         return (head, *out)
@@ -11234,12 +13065,22 @@ class Session:
                     reasons.append(f"its run {row.get('status') or 'did not pass'}")
                 if not row.get("required", True):
                     reasons.append("it is an optional command")
-                if run["filtered"]:
-                    reasons.append("it ran a selection, not the whole command")
+                # The command-level reading (cycle17); a run without it (a
+                # legacy or synthesized record) keeps the file-level one.
+                command_reasons = run.get("command_reasons")
+                if command_reasons is None:
+                    if run["filtered"]:
+                        reasons.append("it ran a selection, not the whole command")
+                else:
+                    reasons.extend(_COMMAND_SELECTION_REASONS[r] for r in command_reasons)
                 if str(run.get("cwd") or ".") not in ("", "."):
                     reasons.append("it ran from another directory, not the project root")
                 if not (run["tests"] or 0) > 0:
                     reasons.append("it executed no cases")
+                elif self._test_command_requirement(rid):
+                    population = self._population_problem(rid, run)
+                    if population:
+                        reasons.append(population)
                 if run["skipped"] is None:
                     reasons.append("its skips are unknown")
                 elif run["skipped"] > 0:
@@ -11253,7 +13094,13 @@ class Session:
                     # the summary line is the record (tests and skips read).
                     pass
                 if reasons:
-                    nearest = nearest or f"the receipt for `{public}` does not count: " + "; ".join(reasons)
+                    # The configuration already runs the requested command;
+                    # what is refused is this receipt's evidence. Only the
+                    # receipt id and the requirement's own public spelling
+                    # are named, never the gate's argv, interpreter or
+                    # environment values.
+                    nearest = nearest or (f"configured check {str(row.get('id') or 'check')[:60]} runs `{public}`; "
+                                          "its receipt does not count as evidence: " + "; ".join(reasons))
                     continue
                 return dict(id=f"check-{index + 1}", receipt=row.get("id"), command=public,
                             source=check.get("source"), gate=check.get("gate")), ""
@@ -11363,7 +13210,9 @@ class Session:
             self._authority_context(audited, ids)
             + self._evidence_block()
             + self._findings_block(carried, standing)
-            + self._obligations_block(obligations_rows))
+            + self._obligations_block(obligations_rows)
+            + self._audit_history(list(audited), judge=True)
+            + self._boundary_notes_block(list(audited)))
         instructions = (
             "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. The goal above is the authority; the requirements are this run's reading "
@@ -11371,7 +13220,7 @@ class Session:
             "states a condition the goal, a decision and a ruling do not, judge the goal's own "
             "condition and say so on the line ('wording stricter than the goal: <condition>'); a "
             "condition the goal does state is never relaxed this way. " + _AUTHORITY_ORDER + " "
-            + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE + " "
+            + _PROTOCOL_RULE + " " + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE + " "
             + "For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
@@ -11379,9 +13228,13 @@ class Session:
             "with rendered evidence above. Reply with exactly the lines listed under 'Lines this reply "
             "must contain' below, one per id, and no other line that starts with an id. A requirement's "
             "line is 'R1: MET - <file path or test name that shows it>' or "
-            "'R1: NOT MET - <what is missing or contradicts the goal>; at <file and function>; "
-            "example: <an input or call and the wrong result it gives, or none for a qualitative "
-            "requirement>'. A MET without a cited "
+            "'R1: NOT MET - <what is missing or contradicts the goal>; basis: <the words of the goal, the "
+            "requirement or a ruling it contradicts, quoted, and how the delivered behaviour contradicts "
+            "them>; evidence: <executed reproduction | source reading | untested risk>; at <file and "
+            "function>; example: <each distinct input or call you found and the wrong result it gives, at "
+            "most " + str(_AUDIT_EXAMPLES) + ", separated by ' | ', or none for a qualitative requirement>'. Name "
+            "only examples you found; one is enough, and none is asked for beyond them. The original goal outranks a requirement's generated wording. A "
+            "MET without a cited "
             "file or test is counted as not met. A citation resolves only as a project-relative "
             "file path with an extension, or a test function named test_* defined in a file "
             "whose name starts with test and ends in .py; other names do not resolve."
@@ -11485,7 +13338,9 @@ class Session:
                 if record["fid"] in reading.dispositions and record.get("closed"):
                     self._close_review_finding_by_id(record["fid"], f"{record['state']} by the final audit")
         original = dict(found)
-        self._judge_restated(auditor, reply or "")
+        # Exactly the restatements the audit was asked to judge (cycle18): a
+        # line about any other item, its own restatement included, is not read.
+        self._judge_restated(auditor, reply or "", oids=[i for i, k in required if k == "restatement"])
         lowered = self._lower_unexecuted(found)
         lowered += self._lower_unexercised_errors(found, audited, original=original, lowered=lowered)
         # Sufficiency is implied from the auditor's own lines (``original``),
@@ -11495,6 +13350,8 @@ class Session:
         # auditor wrote stands only where the record agrees.
         lowered += self._apply_acceptance(found, audited)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
+        stated_reasons = {r: original[r][1] for r in stated if r in audited and r in original}
+        revisions_now = self._requirement_revisions()
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
                                                                        for r, (ok, why) in verdicts.items()},
                                             lowered=lowered, stated=[r for r in stated if r in audited],
@@ -11505,7 +13362,14 @@ class Session:
                                             acceptance=dict(self._last_acceptance), packet=packet_after.digest,
                                             failed=failed, reply_artifact=reply_ref,
                                             required=[i for i, _ in required], omitted=omitted,
-                                            completion=completion))
+                                            completion=completion,
+                                            # The auditor's own NOT MET words, whole, with the
+                                            # requirement revision judged and the basis as stated:
+                                            # what later seats are shown as history (cycle12).
+                                            stated_reasons=stated_reasons,
+                                            revisions={r: int(revisions_now.get(r, 1)) for r in audited},
+                                            bases={r: self._not_met_basis(r, why)
+                                                   for r, why in stated_reasons.items()}))
         if not failed:
             # Every audit records the packet it was about (the cap's final
             # audit records the same binding below, settled), so the record
@@ -11932,6 +13796,8 @@ class Session:
         body = dict(goal=hashlib.sha256((self.memory.goal or "").encode()).hexdigest()[:16], requirements=rows,
                     rulings=list(ledger.rulings), decisions=dict(ledger.decisions), ambiguous=dict(ledger.ambiguous),
                     plan_gate=self._plan_gate_receipt, policy="authority/3")
+        if self.test_change_decisions:
+            body["test_changes"] = [dict(d) for d in self.test_change_decisions]
         body["digest"] = hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
         return body
 
@@ -12029,6 +13895,91 @@ class Session:
                     "for this prompt and not shown; leave this row unjudged (an explicit INSUFFICIENT is allowed).")
         return f"\n  scenario: {text}"
 
+    @staticmethod
+    def _scenario_field(o: dict, key: str) -> str:
+        return str(dict(o.get("scenario") or {}).get(key) or "")
+
+    @classmethod
+    def _behavior_is_generated(cls, o: dict) -> bool:
+        """Whether a row's behaviour is exactly the summary
+        ``_register_acceptance_obligations`` generates from its own declared
+        scenario (proof, operation, prior state, expectation, location),
+        bounded as it is stored: then it says nothing the scenario line does
+        not. A legacy row, a mixed record or a behaviour that differs in any
+        character is its own claim and is never treated as redundant."""
+        scenario = dict(o.get("scenario") or {})
+        keys = ("proof", "operation", "state", "expect", "location")
+        if not all(k in scenario for k in keys):
+            return False
+        generated = (f"{scenario['proof']}: {scenario['operation']}; given {scenario['state']}; "
+                     f"expect {scenario['expect']}; in {scenario['location']}")
+        return str(o.get("behavior") or "") == generated[:300]
+
+    def _superseding_rows(self, rows: List[dict]) -> Dict[str, dict]:
+        """For each superseded acceptance row, the one row that now holds the
+        same proof, when it can be named exactly (cycle13): ``superseded_by``
+        is a task id, so the successor is the single acceptance row of that
+        task with the same scenario (proof id aside), the same requirement
+        revisions and the same modality, followed while it is itself
+        superseded, bounded by the number of rows and never revisiting a
+        row. No successor, two of them, a cycle, or a successor whose
+        scenario is not shown keeps the full row; nothing is mapped by
+        guess."""
+        def norm(o: dict):
+            # The identity ``_supersede_obligation`` matched on: every
+            # scenario field but the proof id, the requirement revisions and
+            # the modality.
+            scenario = dict(o.get("scenario") or {})
+            return (sorted((k, json.dumps(v, sort_keys=True, default=str)) for k, v in scenario.items() if k != "proof"),
+                    [list(r) for r in o.get("requirements") or ()], o.get("modality") or "test")
+        out: Dict[str, dict] = {}
+        for o in rows:
+            if not o.get("superseded_by") or not o.get("scenario"):
+                continue
+            # Only a row whose behaviour is exactly its generated summary and
+            # whose own scenario (its own proof and bound cases) is shown may
+            # refer to a successor: a distinct claim or an over-bound scenario
+            # keeps the full row (root review of 10a9433).
+            if not (self._behavior_is_generated(o) and self._scenario_shown(o)):
+                continue
+            current, seen = o, {id(o)}
+            for _ in range(len(rows)):
+                candidates = [r for r in rows if r is not current and r.get("task") == current.get("superseded_by")
+                              and r.get("kind", "acceptance") == "acceptance" and norm(r) == norm(o)]
+                if len(candidates) != 1 or id(candidates[0]) in seen:
+                    current = None
+                    break
+                current = candidates[0]
+                seen.add(id(current))
+                if not current.get("superseded_by"):
+                    break
+            else:
+                current = None
+            if current is not None and not current.get("superseded_by") and self._scenario_shown(current):
+                out[o["oid"]] = current
+        return out
+
+    def _superseded_row_line(self, o: dict, successor: dict, modality: str) -> str:
+        """A superseded row named against the row that holds its scenario
+        now: everything that is its own (task, requirements, its proof id, modality,
+        runner, execution, the reason it had before it was superseded,
+        sufficiency and its judge, bound cases that differ) stays on the
+        line; only the shared scenario text is referred to."""
+        runner = (o.get("runner") or "NONE (prerequisite missing)") if modality == "test" else "none"
+        before = (o.get("pre_supersession") or {}).get("reason")
+        cases = list(o.get("cases") or ())
+        own, theirs = self._scenario_field(o, "proof"), self._scenario_field(successor, "proof")
+        return (f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): superseded by task "
+                f"{o['superseded_by']}; its proof {own} is the same scenario as {successor['oid']}"
+                + (f" (proof {theirs})" if theirs and theirs != own else "")
+                + f", stated there; evidence {modality}; "
+                f"runner {runner}; execution {o['execution']}"
+                + (f" (before it was superseded: {before})" if before else "")
+                + f"; sufficiency {o['sufficiency']}"
+                + (f" by {o['judged_by']}" if o.get("judged_by") else "")
+                + (f"; its own bound cases: {', '.join(cases)}" if cases and cases != list(successor.get("cases") or ())
+                   else ""))
+
     def _obligations_block(self, rows: List[dict]) -> str:
         if not rows:
             return ""
@@ -12065,15 +14016,28 @@ class Session:
             return "\n".join(lines)
         lines.append("\n\n## Evidence obligations (harness records: execution is what ran; sufficiency is "
                      "your judgment, never the harness's)")
+        compact = getattr(self, "_compact_audit_packet", True)
+        successors = self._superseding_rows(rows) if compact else {}
         for o in rows:
             modality = o.get("modality") or "test"
+            successor = successors.get(o.get("oid"))
+            if successor is not None:
+                lines.append(self._superseded_row_line(o, successor, modality))
+                continue
             runner = (o['runner'] or 'NONE (prerequisite missing)') if modality == "test" else (
                 "none (reading claim: no runnable proof)" if modality == "reading" else
                 "none (capture claim: measured by the harness's verified render, judged by the design reviewer)"
                 if modality == "capture" else
                 "none (legacy acceptance: no scenario declared, no case bound, mapping unknown)")
+            # The scenario is stated once: a behaviour that is exactly the
+            # summary generated from the row's own scenario is not repeated
+            # beside it (cycle13); any other behaviour is a claim of its own
+            # and is shown whole, and so is every behaviour whose scenario
+            # is over the render bound and not shown.
+            behavior = (f"scenario {self._scenario_field(o, 'proof')} (stated once below)"
+                        if compact and self._behavior_is_generated(o) and self._scenario_shown(o) else o["behavior"])
             lines.append(f"- {o['oid']} ({o['task']}; {', '.join(r[0] for r in o['requirements'])}): "
-                         f"{o['behavior']}; evidence {modality}; runner {runner}; "
+                         f"{behavior}; evidence {modality}; runner {runner}; "
                          f"execution {o['execution']}"
                          + (f" ({o['reason']})" if o.get("reason") else "")
                          + f"; sufficiency {o['sufficiency']}"
@@ -12184,6 +14148,256 @@ class Session:
             self._consume_evidence(record)
             self._quiescent()
 
+    # -- audit history and observational records (cycle12) -----------------------
+    @staticmethod
+    def _not_met_segments(why: str) -> Dict[str, str]:
+        """A NOT MET line's labelled segments (``basis``, ``evidence``,
+        ``at``, ``example``) and the explanation before them, as written."""
+        text = str(why or "")
+        marks = list(_NOT_MET_SEGMENT.finditer(text))
+        out = {"explanation": text[:marks[0].start()] if marks else text}
+        for i, mark in enumerate(marks):
+            end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+            out.setdefault(mark.group(1).lower(), text[mark.end():end].strip())
+        return {k: v.strip() for k, v in out.items()}
+
+    def _not_met_basis(self, rid: str, why: str) -> dict:
+        """The basis an auditor stated for a NOT MET, as provenance only
+        (cycle12, root's adjustment): what it quoted, its evidence kind as
+        written, and which texts the quoted words occur in. An occurrence
+        never validates the claim and its absence never discards it; the
+        verdict stays the auditor's."""
+        parts = self._not_met_segments(why)
+        basis, evidence = parts.get("basis", ""), parts.get("evidence", "")
+        quoted = [q.strip() for match in _QUOTED_SPAN.finditer(basis) for q in match.groups() if q and q.strip()]
+        ledger = self.memory.ledger
+        texts = [("goal", self.memory.goal), (rid, ledger.requirements.get(rid, ""))]
+        texts += [(f"ruling {i + 1}", r) for i, r in enumerate(ledger.rulings)]
+        texts += [(f"decision {k}", v) for k, v in ledger.decisions.items()]
+
+        def norm(text: str) -> str:
+            return " ".join(str(text or "").lower().split())
+        found = sorted({name for q in quoted for name, text in texts if norm(q) and norm(q) in norm(text)})
+        return dict(basis=basis[:600], evidence=evidence[:80], quoted=[q[:200] for q in quoted][:6],
+                    quoted_in=found, stated=bool(basis))
+
+    def _audit_source(self):
+        """The audits, ledger and revisions this seat reads history from: a
+        parallel child reads its parent's (its own ledger is off)."""
+        parent = getattr(self, "_authority_parent", None)
+        owner = parent if parent is not None and not self.requirement_audits else self
+        return owner.requirement_audits, owner.memory.ledger, owner
+
+    def _audit_history(self, rids, *, judge: bool = False) -> str:
+        """Earlier audits' own NOT MET reasons for ``rids``, as historical
+        questions (cycle12; cycle11 run 20261108T191017Z: each audit found
+        one more defect of R16 and R18 and nothing showed the repair's lead,
+        its reviewer or the next audit what earlier audits had asked).
+        Read from ``requirement_audits`` only, never a second history: the
+        auditor's own words (a harness lowering is not a counterexample),
+        deduplicated, with the auditor, the source and requirement revision
+        judged, the reply artifact, whether a later audit found it MET, and
+        a decision or ruling naming it. Bounded per requirement, per reason
+        and in all, the example kept apart from the explanation so a long
+        explanation never cuts it, and every omission counted. Nothing here
+        is a current finding, an owner, proof or a new requirement."""
+        audits, ledger, owner = self._audit_source()
+        rids = [r for r in dict.fromkeys(rids or ()) if r]
+        if not audits or not rids:
+            return ""
+        current = self._source_fingerprint() if self.project else None
+        revisions = owner._requirement_revisions()
+        entries: Dict[str, List[dict]] = {rid: [] for rid in rids}
+        index: Dict[tuple, dict] = {}
+        for number, audit in enumerate(audits, 1):
+            verdicts = audit.get("verdicts") or {}
+            if audit.get("failed") or not verdicts:
+                continue
+            stated = audit.get("stated_reasons")
+            if stated is None:
+                # An audit recorded before cycle12: its own NOT MET lines are
+                # the ids it stated, with the verdict text kept for them.
+                stated = {r: (verdicts.get(r) or {}).get("why", "") for r in audit.get("stated") or ()}
+            for rid in rids:
+                verdict = verdicts.get(rid)
+                if verdict is None:
+                    continue
+                if verdict.get("met"):
+                    for entry in entries[rid]:
+                        entry.setdefault("met_later", (number, audit.get("source")))
+                    continue
+                why = str(stated.get(rid) or "").strip()
+                if not why:
+                    continue
+                key = (rid, " ".join(why.lower().split()))
+                if key in index:
+                    index[key]["again"].append(number)
+                    index[key].pop("met_later", None)
+                    continue
+                artifact, kind = owner._audit_text_artifact(audit, why)
+                entry = dict(number=number, auditor=audit.get("auditor") or "unknown", source=audit.get("source"),
+                             revision=(audit.get("revisions") or {}).get(rid), artifact=artifact, kind=kind,
+                             why=why, again=[], basis=(audit.get("bases") or {}).get(rid))
+                index[key] = entry
+                entries[rid].append(entry)
+        if not any(entries.values()):
+            return ""
+
+        def clip(text: str, limit: int, artifact) -> str:
+            text = " ".join(str(text or "").split())
+            if len(text) <= limit:
+                return text
+            return text[:limit] + f" [... {len(text) - limit} more characters in artifact {artifact or 'unavailable'}]"
+
+        def render(rid: str, entry: dict) -> str:
+            parts = self._not_met_segments(entry["why"])
+            where = ("this source" if current and entry["source"] == current else
+                     f"an earlier source {str(entry['source'])[:12]}" if entry["source"] else "an unrecorded source")
+            now = int(revisions.get(rid, 1))
+            rev = entry["revision"]
+            revised = ("requirement revision not recorded" if rev is None else
+                       f"requirement revision {rev}" + (f", revised since (now {now}): judge the current wording"
+                                                        if int(rev) != now else ""))
+            line = (f"- {rid}: audit {entry['number']} by {entry['auditor']} on {where} ({revised}; {entry['kind']} "
+                    f"{entry['artifact'] or 'unavailable'}): "
+                    + clip(parts.get("explanation", ""), _HISTORY_REASON_CHARS, entry["artifact"]))
+            basis = entry.get("basis") or {}
+            line += (f" Basis as stated: {clip(parts['basis'], 300, entry['artifact'])}." if parts.get("basis")
+                     else " No basis was stated.")
+            if parts.get("evidence"):
+                line += f" Evidence as stated: {clip(parts['evidence'], 80, entry['artifact'])}."
+            if basis.get("quoted") and not basis.get("quoted_in"):
+                line += " Its quoted words were not found in the goal, the requirement or a ruling (recorded only)."
+            if parts.get("at"):
+                line += f" At: {clip(parts['at'], 200, entry['artifact'])}."
+            if parts.get("example"):
+                line += f" Example: {clip(parts['example'], _HISTORY_EXAMPLE_CHARS, entry['artifact'])}."
+            if entry["again"]:
+                line += f" Stated again by audit(s) {', '.join(map(str, entry['again']))}."
+            if entry.get("met_later"):
+                number, source = entry["met_later"]
+                line += (f" Audit {number} later found {rid} MET on "
+                         + ("this source." if current and source == current else "another source."))
+            return line
+        head = ("\n\n## Earlier audits of these requirements (historical questions, not current findings)\n\n"
+                "Each line is what an earlier independent audit wrote about a requirement here, on the source and "
+                "requirement revision it names. It is a question to judge afresh on the current source: not a "
+                "current finding, not proof either way, not a new requirement, and it transfers no finding or "
+                "owner. A decision, a ruling or a revised requirement shown here outranks a condition an older "
+                "line assumed, and the original goal outranks them all.")
+        if judge:
+            head += (" Judge each requirement on the current source yourself; where an earlier question still "
+                     "holds, say so on its line, and where it no longer does, say what now shows that.")
+        else:
+            head += (" Work and review that touch these requirements should hold for these questions and for the "
+                     "rest of the requirement's input, not only for the last example. For each example, identify the "
+                     "rule the goal entitles at that input layer (the protocol's or the format's own grammar or "
+                     "contract) that the example breaks, and hold that rule across the cases it applies to, while "
+                     "every form the rule allows stays accepted. This says where to look; it adds no requirement.")
+
+        def binding_lines(rid: str) -> List[str]:
+            # A decision or ruling is shown whole or not at all: a cut one
+            # could change what it says. Too long to show, it is named with
+            # where to read it, and it still binds.
+            out = []
+            named = [("decision", ledger.decisions.get(rid), "the orchestrator's decisions")] if ledger.decisions.get(rid) else []
+            named += [(f"ruling {i + 1}", r, "the operator's rulings") for i, r in enumerate(ledger.rulings)
+                      if re.search(rf"\b{re.escape(rid)}\b", r)]
+            for label, text, where in named:
+                text = " ".join(str(text).split())
+                if len(text) <= _HISTORY_BINDING_CHARS:
+                    out.append(f"  Current {label} naming {rid} (binds over any older condition): {text}")
+                else:
+                    out.append(f"  Current {label} naming {rid} binds over any older condition; it is {len(text)} "
+                               f"characters, too long to show whole here: read it in {where}.")
+            return out
+        # One shared bound for the whole block, framing and metadata
+        # included (root review of b54a28c: the first entry of every
+        # requirement was admitted after the bound was spent, and decisions,
+        # rulings and omission lists were never counted). Each requirement
+        # enters as a unit, its newest entry with every decision or ruling
+        # naming it, so no older condition is ever shown without what
+        # supersedes it; older entries fill what is left; whatever does not
+        # fit is counted in one bounded line.
+        budget = _HISTORY_TOTAL_CHARS - len(head) - 1 - _HISTORY_FOOTER_CHARS
+        shown: Dict[str, List[dict]] = {}
+        bindings: Dict[str, List[str]] = {}
+        for rid in rids:
+            items = entries[rid]
+            if not items:
+                continue
+            unit = [render(rid, items[-1])] + binding_lines(rid)
+            cost = sum(len(line) + 1 for line in unit)
+            if cost <= budget:
+                shown[rid], bindings[rid] = [items[-1]], unit[1:]
+                budget -= cost
+        for depth in range(2, _HISTORY_PER_REQUIREMENT + 1):
+            for rid in list(shown):
+                items = entries[rid]
+                if len(items) < depth:
+                    continue
+                text = render(rid, items[-depth])
+                if len(text) + 1 <= budget:
+                    shown[rid].insert(0, items[-depth])
+                    budget -= len(text) + 1
+        blocks = []
+        for rid in rids:
+            if rid in shown:
+                blocks.append("\n".join([render(rid, e) for e in shown[rid]] + bindings[rid]))
+        hidden = {rid: [e for e in entries[rid] if all(e is not x for x in shown.get(rid, []))] for rid in rids}
+        hidden = {rid: items for rid, items in hidden.items() if items}
+        if hidden:
+            count = sum(len(items) for items in hidden.values())
+            whole = [rid for rid in hidden if rid not in shown]
+            numbers = sorted({e["number"] for items in hidden.values() for e in items})
+
+            def ids(names: List[str]) -> str:
+                return ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+            footer = (f"({count} earlier audit entr{'y' if count == 1 else 'ies'} not shown here, for "
+                      f"{len(hidden)} requirement(s): {ids(list(hidden))}"
+                      + (f"; none shown for {ids(whole)}, whose binding decisions or rulings, if any, are in the "
+                         "decisions and rulings" if whole else "")
+                      + f". Each audit's whole reply is kept as a run artifact (audits {numbers[0]}-{numbers[-1]}, "
+                      "kind audit-reply), retrievable by its id.)")
+            blocks.append(footer)
+        if not blocks:
+            return ""
+        return head + "\n" + "\n".join(blocks)
+
+    def _record_boundary_notes(self, key, role, reply: str, *, task=None) -> None:
+        """Keep a reviewer's 'BOUNDARY R<n>:' lines (cycle12) as observations:
+        bounded, attributed, bound to the source they were written on. They
+        are never proof, a verdict or a gate."""
+        current = None
+        for match in list(_BOUNDARY_NOTE.finditer(reply or ""))[:_BOUNDARY_NOTES_PER_REPLY]:
+            if current is None:
+                current = (self._source_fingerprint() if self.project else None) or ""
+            self.boundary_notes.append(dict(task=task or getattr(self._active_spec, "task_id", "run"), author=key,
+                                            role=role, requirement=match.group(1),
+                                            note=match.group(2)[:_BOUNDARY_NOTE_CHARS], source=current or None))
+
+    def _boundary_notes_block(self, rids) -> str:
+        """For the audit: what reviewers said they checked for each covered
+        error requirement, or 'none stated' (cycle12). Observations only."""
+        texts = dict(self._requirement_texts_now())
+        errors = [r for r in rids if _behavioural_error(texts.get(r, ""))]
+        if not errors:
+            return ""
+        current = self._source_fingerprint() if self.project else None
+        lines = []
+        for rid in errors:
+            notes = [n for n in self.boundary_notes if n.get("requirement") == rid][-3:]
+            if not notes:
+                lines.append(f"- {rid}: none stated")
+                continue
+            for n in notes:
+                where = "this source" if current and n.get("source") == current else "an earlier source"
+                lines.append(f"- {rid}: {n['author']} ({n['role']}, {n['task']}, {where}): {n['note']}")
+        return ("\n\n## Input layers reviewers said they checked (observations, not proof)\n\n"
+                "Each line is a reviewer's own note of what it checked for a requirement about errors or invalid "
+                "input. It is not evidence that a layer is handled and decides nothing; judge every layer the "
+                "requirement's input passes through yourself.\n" + "\n".join(lines))
+
     def _final_challenge(self, unmet: dict) -> dict:
         """After the task cap's final audit: the orchestrator may challenge
         the auditor's own NOT MET lines with executed evidence, read-only.
@@ -12203,7 +14417,9 @@ class Session:
         tested = {tuple(r["key"][:2]) for r in self.evidence_requests if r.get("identity") == identity}
         routes = {rid: self._evidence_route(rid, why) for rid, why in unmet.items()}
         for rid, route in routes.items():
-            self.finish_routing.append(dict(requirement=rid, site="final challenge", why=unmet[rid][:300], **route))
+            self.finish_routing.append(dict(requirement=rid, site="final challenge",
+                                            why=unmet[rid][:_FINISH_REASON_CHARS],
+                                            **self._shown_reason(rid, unmet[rid])[1], **route))
         open_ = {rid: e for rid, e in self._disputable().items()
                  if e["kind"] == "audit" and rid in unmet and ("audit", e["identity"]) not in tested
                  and routes[rid]["challengeable"]}
@@ -12293,14 +14509,26 @@ class Session:
             for e in standing:
                 oid = e.get("oid") or "the item"
                 cases = ", ".join(e.get("cases") or [])
-                executable = e.get("executable") if "executable" in e else self._not_run_executable(e)
-                if e.get("restatements") and self._discharge_record(e) is not None:
-                    parts.append(f"{oid}: restated as {cases} and executed on this source; it awaits the audit's own "
-                                 f"'{oid}: SUFFICIENT|INSUFFICIENT <why>' judgment of the whole reported behaviour")
+                executable = self._not_run_runnable(e)
+                gone = self._bound_cases_gone(e)
+                if gone:
+                    parts.append(f"{oid}: its bound case {', '.join(gone)} is no longer defined on the current "
+                                 "source; a run never clears it. Route: its own task's lead (or a task naming "
+                                 f"'DISCHARGES: {oid}') restates it with 'RUNS: {oid} - file::[Class::]test_case' "
+                                 "lines for exact current cases; the harness settles them from a complete passing "
+                                 "run on the current source and an independent seat judges whether they exercise "
+                                 "everything the item originally reported")
+                elif e.get("restatements") and self._discharge_record(e) is not None:
+                    # Who judges it and what stands, truthfully (cycle18): the
+                    # audit never judges its own restatement, and a current
+                    # adverse judgment carries its reason and repair route.
+                    parts.append(f"restated as {cases} and executed on this source; " + self._restatement_status(e))
                 elif e.get("cases"):
                     parts.append(f"{oid}: discharged only by the harness's gate executing {cases} whole on the "
                                  "current source, gate and environment"
-                                 + (" (restated; then judged by the audit)" if e.get("restatements") else ""))
+                                 + ((" (restated; " + (self._restatement_status(e) if self._restated_current(e)
+                                                       else "then judged by " + self._restatement_judge(e)[1]) + ")")
+                                    if e.get("restatements") else ""))
                 elif executable:
                     parts.append(f"{oid}: discharged only by a complete run naming "
                                  f"{', '.join(_item_paths(str(e.get('item') or '')))} whole")
@@ -12313,7 +14541,16 @@ class Session:
                                  "them from a complete passing run on the current source and the audit judges whether "
                                  "they exercise the whole reported behaviour")
             route = "execution debt: " + "; ".join(parts) + "; never a challenge"
-            return dict(kind="execution debt", challengeable=False, route=route[:900])
+            audit = self.requirement_audits[-1] if self.requirement_audits else {}
+            if rid in (audit.get("stated") or ()) and audit.get("source") == (
+                    self._source_fingerprint() if self.project else None):
+                # A defect the auditor found in the behaviour itself stands
+                # beside the debt (cycle18: a genuine product defect and held
+                # evidence on one requirement); settling the debt does not fix
+                # it, and fixing it does not settle the debt.
+                route = ("the auditor's own NOT MET on the behaviour (its reason above) is a finding: a repair task "
+                         f"covering {rid} fixes it. Separately, " + route)
+            return dict(kind="execution debt", challengeable=False, route=route[:1200])
         typed_debt = [o for o in self.evidence_obligations
                       if any(r[0] == rid for r in o.get("requirements") or ()) and not o.get("superseded_by")
                       and delivery.purpose_of(o) != "acceptance"
@@ -12978,6 +15215,9 @@ class Session:
                          # another source, gate or environment left the typed
                          # row unexecuted while the prompts showed no debt).
                          gate=_gate_identity(self._current_gate()), environment=self._environment_id())
+            # The source the report was made on (cycle10 correction): only a
+            # repeat on this exact source can be the same report.
+            entry["source"] = self._source_fingerprint() if self.project else None
             # What the item names, bound now so a later genuine execution
             # can discharge it (evidence lifecycle batch, 2026-10-29).
             self._bind_not_run(entry)
@@ -12988,6 +15228,25 @@ class Session:
                 # 6674444836 added; old persisted gaps are still read).
                 self._note(f"task {task}: {role} said it could not read {', '.join(_pure_reading(item))}; "
                            "reading is not a check, so nothing is held for it")
+                continue
+            claimed = re.findall(r"R\d+", declared.group(1).upper()) if declared else []
+            prior = None if claimed else self._inherited_not_run(entry)
+            if prior is not None:
+                # A repeat of another task's standing item about files this
+                # task did not change is that item, not a new obligation of
+                # this task (cycle10: one free-text 'tests/test_http.py live
+                # HTTP acceptance' line from t3 was re-filed by t5, t6 and t7
+                # and held each task's unrelated requirements).
+                repeat = dict(task=task, role=role, author=key, item=entry["item"], why=entry["why"],
+                              after_check=entry["after_check"], of=prior.get("oid"), owner=prior.get("task"),
+                              requirements_covered=list(self._current_covers))
+                if not any(r["task"] == task and r["item"] == repeat["item"] and r["after_check"] == repeat["after_check"]
+                           for r in self.inherited_not_run):
+                    self.inherited_not_run.append(repeat)
+                    prior.setdefault("repeated_by", []).append(dict(task=task, role=role, after_check=repeat["after_check"]))
+                    self._note(f"task {task}: {role} repeated {prior.get('oid') or prior.get('task')}'s NOT RUN item "
+                               f"about files it did not change ({_display_item(entry['item'])[:100]}); kept with "
+                               f"{prior.get('task')}'s item, not a new obligation")
                 continue
             self._associate_not_run(entry, re.findall(r"R\d+", declared.group(1).upper()) if declared else ())
             # A report after a check is a new report: an earlier run cannot
@@ -13005,6 +15264,51 @@ class Session:
                 # it is recorded, so no route promises a run that cannot
                 # discharge it (cycle02, completion-cycle01 O15).
                 entry["executable"] = self._not_run_executable(entry)
+
+    def _inherited_not_run(self, entry: dict) -> Optional[dict]:
+        """The standing NOT RUN item of an earlier task that ``entry`` is the
+        same report of, or None (cycle10; root review of f7fc186, PR73
+        6723584415: equal path sets inherited a different scenario about the
+        same test file, and a repeat after the application under test
+        changed). Every one of these must hold, and anything unknown keeps
+        the report as this task's own debt:
+
+        - the whole item is the same text (whitespace and case aside), and
+          its binding (kind, scenario, cases, problem) is the same, with no
+          scenario of this task in it;
+        - it names at least one path, and the reporting seat names no
+          requirement for it (``| for: R<n>`` is the caller's to check);
+        - it was reported under the same gate and environment;
+        - the project's source fingerprint, now, equals the one recorded
+          with the earlier report, both known, so nothing the scenario
+          exercises has changed since (application code included); and
+        - this task's measured changes, where the harness has them, are
+          empty.
+
+        Such a repeat is linked to its owner and adds no obligation; a
+        report that differs in any of these is a new report."""
+        binding = entry.get("binding") or {}
+        if binding.get("scenario") or not _item_paths(str(entry.get("item") or "")):
+            return None
+        source = entry.get("source")
+        if not source:
+            return None
+        if self._task_changed_files(self._active_spec):
+            return None
+        text = " ".join(str(entry.get("item") or "").lower().split())
+
+        def same_binding(other: dict) -> bool:
+            keys = ("kind", "scenario", "cases", "problem")
+            return all((other.get("binding") or {}).get(k) == binding.get(k) for k in keys)
+        for prior in self._standing_not_run():
+            if (prior.get("task") == entry.get("task") or prior.get("kind") == "skipped" or not prior.get("oid")
+                    or prior.get("association_claimed")):
+                continue
+            if (" ".join(str(prior.get("item") or "").lower().split()) == text and same_binding(prior)
+                    and prior.get("gate") == entry.get("gate") and prior.get("environment") == entry.get("environment")
+                    and prior.get("source") == source):
+                return prior
+        return None
 
     def _associate_not_run(self, entry: dict, declared=()) -> None:
         """Which of the task's covered requirements a NOT RUN item holds
@@ -13230,7 +15534,26 @@ class Session:
             if binding["problem"]:
                 self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
             return
-        scenarios = list(dict.fromkeys(re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", item)))
+        scenarios, range_problems, item_ids = self._not_run_scenario_ids(entry, item)
+        if range_problems:
+            # An undefined, reversed or ambiguous range binds nothing and says
+            # why (cycle22): never its endpoints, never a dropped middle.
+            binding.update(kind="scenario", scenario=None, problem="; ".join(range_problems)[:300])
+            entry["binding"], entry["cases"] = binding, []
+            self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
+        if scenarios and _UNRUNNABLE_CLAIM.search(item_ids):
+            # A claim a passing run cannot establish beside the scenarios it
+            # names (run21 O70: "mutation detection and P1-P4 HTTP
+            # acceptance"): held as written; the suite passing never shows a
+            # mutant was detected.
+            binding.update(kind="mixed", scenario=", ".join(scenarios),
+                           problem=("names a claim a passing run cannot establish ("
+                                    + _UNRUNNABLE_CLAIM.search(item_ids).group(0).lower()
+                                    + ") beside its scenarios; held as written"))
+            entry["binding"], entry["cases"] = binding, []
+            self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
         explicit = _cited_cases(item)
         rest = _CASE_CITATION.sub(" ", item)
         names = list(dict.fromkeys(m.group(1) for m in _CASE_NAME.finditer(rest)))
@@ -13294,6 +15617,85 @@ class Session:
         entry["cases"] = list(binding["cases"])
         if binding["problem"]:
             self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+
+    def _not_run_scenario_ids(self, entry: dict, item: str):
+        """``(scenarios, problems, text)``: the scenario ids a NOT RUN item
+        names, with inclusive ranges ``P<a>-P<b>`` (ASCII hyphen or en dash)
+        expanded only when every id in the range is a scenario the reporting
+        task declares (cycle22; run21 t8 wrote "P1–P4", which bound P1 and P4
+        and dropped P2 and P3, while "P1-P4" bound nothing). A reversed,
+        single-point, chained or partly undeclared range is a problem and
+        binds nothing. ``text`` is the item with ranges replaced by their
+        ids, for the later grammars."""
+        declared = {r.get("proof_id") for r in self.evidence_obligations
+                    if r.get("task") == entry.get("task") and r.get("kind") == "acceptance"
+                    and r.get("proof_id") and not r.get("superseded_by")}
+        problems, expanded = [], []
+
+        def expand(match):
+            whole = " ".join(match.group(0).split())
+            if match.group(3) is not None:
+                problems.append(f"{whole} chains more than one range; name each range or scenario on its own")
+                return " "
+            low, high = int(match.group(1)), int(match.group(2))
+            if low >= high:
+                problems.append(f"{whole} is not an increasing range")
+                return " "
+            ids = [f"P{n}" for n in range(low, high + 1)]
+            missing = [i for i in ids if i not in declared]
+            if missing:
+                problems.append(f"{whole} names {', '.join(missing)}, which this task does not declare")
+                return " "
+            expanded.extend(ids)
+            return " " + " ".join(ids) + " "
+        text = _SCENARIO_RANGE.sub(expand, item)
+        ids = list(dict.fromkeys(re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", text)))
+        return ids, problems, text
+
+    def _bound_cases_gone(self, entry: dict) -> List[str]:
+        """The exact cases a case-bound NOT RUN item names that no longer
+        exist on the current source (cycle22; run21 O37: the case was
+        renamed, the replacement passed in every later receipt, and the item
+        read as runnable forever). Gone only when both hold: the exact-case
+        resolver (``_resolve_case_ids``) finds no definition, and the latest
+        check passed on the current source with a complete run whose own
+        record shows executed cases, none of them this one. Anything unknown
+        (no such run, an unreadable file, a case that still executes or a
+        failing run) is not gone, so a runnable or failed case still needs
+        its execution or repair. Computed from the source as it is, never
+        cached on the item, so a resume reads the same."""
+        if entry.get("kind") == "skipped" or (entry.get("binding") or {}).get("kind") != "case":
+            return []
+        cases = [str(c) for c in entry.get("cases") or ()]
+        if not cases or not self.project or not self.checks:
+            return []
+        current = self._source_fingerprint()
+        check = self.checks[-1]
+        if not current or check.get("source") != current or not check.get("passed"):
+            return []
+        cache = getattr(self, "_gone_cache", None)
+        if cache is None or cache.get("source") != current or cache.get("check") != len(self.checks):
+            runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
+            passed = set().union(*(_run_passed_cases(r) for r in runs)) if runs else set()
+            cache = self._gone_cache = dict(source=current, check=len(self.checks), passed=passed, cases={})
+        if not cache["passed"]:
+            return []
+        gone = []
+        for case in cases:
+            if case not in cache["cases"]:
+                cache["cases"][case] = case not in cache["passed"] and bool(self._resolve_case_ids([case])[1])
+            if cache["cases"][case]:
+                gone.append(case)
+        return gone
+
+    def _not_run_runnable(self, entry: dict) -> bool:
+        """Whether a check can discharge the item as it stands now: the
+        recorded decision (``executable``), and none of its bound cases gone
+        from the current source (``_bound_cases_gone``). Every reader of
+        "runnable" asks this, so the route notes, the editing decision and
+        the DONE declaration plan agree."""
+        executable = entry.get("executable") if "executable" in entry else self._not_run_executable(entry)
+        return bool(executable) and not self._bound_cases_gone(entry)
 
     def _rebind_not_run(self, task) -> None:
         """A scenario-bound NOT RUN item follows its scenario's binding: when
@@ -13472,7 +15874,9 @@ class Session:
         declaration (its cases cleared, execution and sufficiency reset)
         and no earlier valid binding satisfies it; when it names none, the
         whole reply's declaration is invalid and every scenario of the task
-        is reset. A later reply of only well-formed lines restores a
+        is reset. A whole, valid one-case line naming a scenario the task
+        never declared is the one exception (cycle16): it is recorded as a
+        problem, binds nothing and resets nothing else. A later reply of only well-formed lines restores a
         binding; a scenario a reply does not mention keeps its binding. A
         binding is a claim of where the proof lives, never execution or
         sufficiency."""
@@ -13484,6 +15888,7 @@ class Session:
         bound: Dict[str, List[str]] = {}
         invalid: Dict[str, str] = {}
         whole_invalid = []
+        undeclared = []
         for match in _PROVES_ANY.finditer(reply or ""):
             body = match.group(1).strip()
             well = _PROVES_BODY.fullmatch(body)
@@ -13499,7 +15904,16 @@ class Session:
                 continue
             pid, case = well.group(1), well.group(2).strip().strip("`")
             if pid not in mine:
-                whole_invalid.append(f"{pid}: not a scenario of this task")
+                known = _CASE_CITATION.fullmatch(case)
+                if known is not None and is_test_path(known.group(1)):
+                    # A whole, valid one-case line naming a scenario the task
+                    # never declared (cycle16, cycle15 t4's P8): the line is
+                    # refused and binds nothing, and it does not reset the
+                    # declared scenarios it never named. Anything less than a
+                    # valid case keeps the whole-reply reset below.
+                    undeclared.append(f"{pid}: not a scenario of this task; nothing was bound for it")
+                else:
+                    whole_invalid.append(f"{pid}: not a scenario of this task")
                 continue
             cited = _CASE_CITATION.fullmatch(case)
             if cited is None or not is_test_path(cited.group(1)):
@@ -13512,7 +15926,7 @@ class Session:
                 invalid[pid] = f"duplicate PROVES line for {case[:80]}"
                 continue
             bound[pid].append(case)
-        problems = [f"{pid}: {why}" for pid, why in invalid.items()] + whole_invalid
+        problems = [f"{pid}: {why}" for pid, why in invalid.items()] + whole_invalid + undeclared
         reset = set(mine) if whole_invalid else set(invalid)
         for pid in sorted(reset):
             record = mine[pid]
@@ -13851,6 +16265,25 @@ class Session:
             out = ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
                    + "\nA requirement whose only evidence is a file listed under this heading is NOT MET, and so is "
                    "a requirement an item listed under this heading holds: name what did not run.")
+        # The auditor never judges its own restatement (``_judge_restated``
+        # ignores the line and ``_audit_required_ids`` does not ask for it):
+        # those items are shown apart with the seat that judges them, so the
+        # prompt never asks for a line nobody reads (cycle18).
+        auditor = self._auditor()
+        others = [e for e in awaiting if auditor is not None
+                  and (e["restatements"][-1] or {}).get("author") == auditor]
+        awaiting = [e for e in awaiting if not any(e is o for o in others)]
+        if others:
+            out += ("\n\n## Executed restatements another seat judges (harness records)\n"
+                    + "\n".join(f"- task {e['task']} ({e['role']}) reported NOT RUN: {_display_item(e['item'])}"
+                                 + (f" (holds {', '.join(e['requirements'])})" if e["requirements"] else "")
+                                 + f"; restated by {(e['restatements'][-1] or {}).get('task')} ({auditor}) as "
+                                 f"{', '.join(e.get('cases') or [])}; " + self._restatement_status(e)
+                                 for e in others)
+                    + f"\nThe auditor's seat ({auditor}) wrote these restatements, so its line does not judge them and "
+                    "none is asked for here; each is judged by the seat named above. A requirement such an item holds "
+                    "stays not met until an independent seat's current SUFFICIENT for it is on record; a current "
+                    "INSUFFICIENT above stands as written.")
         if awaiting:
             rows = []
             for entry in awaiting:
@@ -13859,7 +16292,7 @@ class Session:
                             f"{_display_item(entry['item'])}" + (f" - {entry['why']}" if entry["why"] else "")
                             + (f" (holds {', '.join(entry['requirements'])})" if entry["requirements"] else "")
                             + f"; restated by {last.get('task')} ({last.get('author')}) as "
-                            f"{', '.join(entry.get('cases') or [])}")
+                            f"{', '.join(entry.get('cases') or [])}" + _replaced_note(entry))
             out += ("\n\n## Executed restatements awaiting your judgment (harness records)\n" + "\n".join(rows)
                     + "\nEach item above was restated as exact cases, and the harness's own complete passing run on "
                     "the current source executed every one of them. Judge each only by your own line '<O-id>: "
@@ -13965,7 +16398,7 @@ class Session:
         texts = self.memory.ledger.requirements
         out = []
         for rid, (met, why) in list((original if original is not None else found).items()):
-            if not met or rid not in audited or not _error_clause(texts.get(rid, "")):
+            if not met or rid not in audited or not _behavioural_error(texts.get(rid, "")):
                 continue
             if self._executed_cases(_cited_cases(why), rid=rid):
                 continue
@@ -14197,8 +16630,8 @@ class Session:
         """Standing NOT RUN items ``task`` reported or took over that name
         nothing a check can run and are not restated yet."""
         return [e for e in self._standing_not_run() if e.get("oid") and self._not_run_owned(e, task)
-                and not e.get("restatements")
-                and not (e.get("executable") if "executable" in e else self._not_run_executable(e))]
+                and (not e.get("restatements") or self._bound_cases_gone(e))
+                and not self._not_run_runnable(e)]
 
     # -- scope-blocked repair routing (cycle04) ---------------------------------
     def _scope_path_problem(self, spec, raw: str) -> Tuple[str, bool]:
@@ -14677,6 +17110,22 @@ class Session:
         revisions = self._requirement_revisions()
         return {rid: int(revisions.get(rid, 1)) for rid in sorted(entry.get("requirements") or [])}
 
+    def _restated_current(self, entry: dict) -> bool:
+        """Whether a restated item's recorded judgment, of either verdict,
+        is current and independent: on exactly its current cases, by a seat
+        that did not write the restatement, on the current source and under
+        the current revisions (the identity ``_restated_judged`` requires,
+        without its verdict). A current INSUFFICIENT is a decision already
+        made, never a missing one (root review of c69fb36)."""
+        judged = entry.get("restated_judgment") or {}
+        last = (entry.get("restatements") or [{}])[-1]
+        current = self._source_fingerprint() if self.project else None
+        return bool(judged.get("verdict") in ("sufficient", "insufficient")
+                    and list(judged.get("cases") or []) == list(entry.get("cases") or [])
+                    and judged.get("by") and judged.get("by") != last.get("author")
+                    and current and judged.get("source") == current
+                    and dict(judged.get("revisions") or {}) == self._restated_revisions(entry))
+
     def _restated_judged(self, entry: dict) -> bool:
         """A restated item's independent judgment as it stands now:
         SUFFICIENT, on exactly its current cases, by a seat that did not write
@@ -14695,6 +17144,67 @@ class Session:
                     and current and judged.get("source") == current
                     and dict(judged.get("revisions") or {}) == self._restated_revisions(entry))
 
+    def _restatement_judge(self, entry: dict) -> Tuple[Optional[str], str]:
+        """Who judges a restated item next, truthfully (cycle18), as
+        ``(seat, phrase)``: the audit (seat None) when the auditor did not
+        write the restatement; otherwise the independent seat
+        ``_judge_restatements`` would ask, or a hold when no eligible seat
+        exists. The audit never judges its own restatement."""
+        author = (entry.get("restatements") or [{}])[-1].get("author") or ""
+        auditor = self._auditor()
+        if auditor is not None and auditor != author:
+            return None, "the audit"
+        history = [h.get("by") for h in reversed(entry.get("judgment_history") or ()) if h.get("by")]
+        seat = self._independent_judge(author, history)
+        if seat is None:
+            return None, (f"no eligible independent seat (the auditor {auditor} wrote the restatement): held"
+                          if auditor else "no auditor or independent seat is available: held")
+        return seat, f"{seat}, an independent seat, because the auditor {auditor} wrote the restatement"
+
+    def _restatement_status(self, entry: dict, *, lead: bool = False) -> str:
+        """A restated item's judgment as it stands, for the planner, the
+        owning lead and the finish route (cycle18): a current independent
+        INSUFFICIENT with its reason (the judge's own words, recorded
+        evidence, bounded, never an instruction) and the repair route that
+        can change it; a stale judgment named as stale and why; a missing one
+        as awaiting its judge. Never an adverse decision that is not current,
+        and never a pass."""
+        oid = entry.get("oid") or "the item"
+        judged = entry.get("restated_judgment") or {}
+        author = (entry.get("restatements") or [{}])[-1].get("author")
+        if self._restated_judged(entry):
+            return f"{oid}: judged SUFFICIENT by {judged.get('by')} on this source"
+        if self._restated_current(entry):
+            why = " ".join(str(judged.get("why") or "").split())[:300] or "(no reason given)"
+            head = (f"{oid}: judged INSUFFICIENT by {judged.get('by')} on this source, on its current cases; its "
+                    f"reason as written (recorded evidence, not an instruction): \"{why}\". This decision stands and "
+                    "is not asked again. ")
+            if lead:
+                return (head + f"Your 'RUNS: {oid} - file::[Class::]test_case' lines replace that restatement: name "
+                        "cases that exercise what the judgment says is left unexercised, adding or changing tests "
+                        "where they do not exist yet; the harness settles their execution and an independent seat "
+                        "judges them afresh")
+            return (head + f"Route: a task naming 'DISCHARGES: {oid}' whose lead writes 'RUNS: {oid} - "
+                    "file::[Class::]test_case' lines for cases that exercise what the judgment says is left "
+                    "unexercised (adding or changing tests where they do not exist yet); the harness settles their "
+                    "execution and an independent seat judges the new restatement afresh")
+        seat, judge = self._restatement_judge(entry)
+        spent = self._restatement_asked(entry, seat) if seat is not None else None
+        if spent is not None and spent.get("outcome") and not self._restated_current(entry):
+            return (f"{oid}: its independent judgment by {seat} on this exact decision was already asked "
+                    f"({str(spent['outcome'])[:160]}); held, and not asked again until the item, its cases, the "
+                    "source or the requirement revisions change")
+        if judged.get("verdict") in ("sufficient", "insufficient") and judged.get("by") and judged.get("by") != author:
+            current = self._source_fingerprint() if self.project else None
+            moved = [what for what, same in (
+                ("source", current and judged.get("source") == current),
+                ("cases", list(judged.get("cases") or []) == list(entry.get("cases") or [])),
+                ("requirement revisions", dict(judged.get("revisions") or {}) == self._restated_revisions(entry)))
+                if not same]
+            return (f"{oid}: its {str(judged['verdict']).upper()} judgment by {judged['by']} is stale (another "
+                    f"{', '.join(moved) or 'state'}), so it decides nothing now; it awaits a fresh judgment by {judge}")
+        return f"{oid}: awaits an independent judgment by {judge}"
+
     def _restated_awaiting(self, task: Optional[str]) -> List[dict]:
         """Restated items a reviewer of ``task`` may judge: those this task's
         lead restated and that are not judged as they stand, and any other
@@ -14709,17 +17219,22 @@ class Session:
                 out.append(e)
         return out
 
-    def _judge_restated(self, auditor: str, reply: str, task: Optional[str] = None) -> None:
+    def _judge_restated(self, auditor: str, reply: str, task: Optional[str] = None, *,
+                        oids: Optional[Sequence[str]] = None) -> None:
         """An independent seat's own '<O-id>: SUFFICIENT|INSUFFICIENT <why>'
         line on a restated NOT RUN item (cycle02): whether the restated cases
         exercise the whole reported behaviour. The restating task's reviewer
         (``task``: its review or recheck) or the audit; recorded on the item
         with the cases judged and the source. A line on an item not restated,
-        or by the restatement's author, judges nothing."""
+        or by the restatement's author, judges nothing. With ``oids``, only
+        those items are read: a seat asked about a set judges exactly that
+        set, and a line about any other item is not applied (cycle18)."""
         restated = ([e for e in self.unexecuted_acceptance if e.get("restatements") and e.get("oid")]
                     if task is None else self._restated_awaiting(task))
         ids = [e["oid"] for e in restated]
         restated = [e for e in restated if ids.count(e["oid"]) == 1]
+        if oids is not None:
+            restated = [e for e in restated if e["oid"] in set(oids)]
         if not restated:
             return
         explicit, conflicts = judgment.sufficiency_reading(reply or "", [e["oid"] for e in restated])
@@ -14747,6 +17262,7 @@ class Session:
             last = e["restatements"][-1] or {}
             lines.append(f"- {e['oid']} (reported by {e['task']}): NOT RUN: {_display_item(e['item'])[:300]}"
                          + (f" - {e['why'][:160]}" if e.get("why") else "")
+                         + _replaced_note(e)
                          + (f"; restated by this task's lead as {', '.join(e.get('cases') or [])}"
                             if last.get("task") == task else
                             f"; restated by {last.get('task')}'s lead as {', '.join(e.get('cases') or [])}; its "
@@ -14764,9 +17280,26 @@ class Session:
         stale."""
         if row.get("kind") == "not_run":
             entry = next((e for e in self.unexecuted_acceptance if e.get("oid") == row.get("oid")), None)
-            if entry is None or entry.get("restatements") or self._discharging_check(entry) is not None:
+            if entry is not None and entry.get("restatements") and self._discharging_check(entry) is None:
+                # A restated item's judgment as it stands, and who judges it
+                # next (cycle18): a current adverse decision carries its
+                # reason and the repair route; stale or missing is said so.
+                if self._discharge_record(entry) is not None or self._restated_current(entry):
+                    return "; " + self._restatement_status(entry)
                 return ""
-            if not (entry.get("executable") if "executable" in entry else self._not_run_executable(entry)):
+            if entry is None or self._discharging_check(entry) is not None:
+                return ""
+            gone = self._bound_cases_gone(entry)
+            if gone:
+                return (f"; its bound case {', '.join(gone)} is no longer defined on the current source and the latest "
+                        "complete passing run did not execute it, so no run clears it; route: 'RUNS: "
+                        f"{row['oid']} - file::[Class::]test_case' lines for exact current cases, from its own task's "
+                        f"lead or from a task naming 'DISCHARGES: {row['oid']}' whose lead writes them, settled "
+                        "against a complete passing run on the current source and judged by an independent seat "
+                        "against everything the item originally reported; nothing is matched for you")
+            if entry.get("restatements"):
+                return ""
+            if not self._not_run_runnable(entry):
                 return (f"; names nothing a check can run: no repair run clears it; route: 'RUNS: {row['oid']} - "
                         f"file::[Class::]test_case' lines from its own task's lead, or a task naming 'DISCHARGES: "
                         f"{row['oid']}' whose lead writes them, judged by an independent seat")
@@ -14810,6 +17343,12 @@ class Session:
             return ""
         lines = [f"- {e['oid']} (reported by {e['task']}, holds {', '.join(e.get('requirements') or [])}): "
                  f"NOT RUN: {_display_item(e['item'])[:400]}" + (f" - {e['why'][:200]}" if e.get("why") else "")
+                 # A current independent INSUFFICIENT on the restatement this
+                 # task replaces: what the judge said is left unexercised,
+                 # as evidence for the new cases (cycle18).
+                 + (f"\n  current restatement as {', '.join(e.get('cases') or [])}: "
+                    + self._restatement_status(e, lead=True)
+                    if e.get("restatements") and self._restated_current(e) and not self._restated_judged(e) else "")
                  for e in items]
         return ("## NOT RUN items this task takes over\n" + "\n".join(lines)
                 + "\nFor each, once the cases that exercise the whole reported behaviour exist in the project's "
@@ -15001,6 +17540,30 @@ class Session:
             obligation = delivery.refresh(obligation, current_source=current_source, current_requirements=revisions,
                                           current_gate=current_gate, current_environment=environment)
             receipt = self._obligation_receipt(record) if obligation.runner is not None else None
+            if (receipt is None and obligation.runner is None and record.get("kind") == "not_run"
+                    and (record.get("modality") or "test") == "test"):
+                # A NOT RUN row registered when the gate did not yet name what
+                # it reports gets no runner, while its item can still be
+                # discharged later by the harness's own complete passing run
+                # naming every path whole (cycle13 O59/O63/O64: the items read
+                # discharged, the rows read missing, and the rows lowered
+                # R14-R17). The row asks the same decision the item uses
+                # (``_obligation_receipt`` over ``_discharge_record``,
+                # re-derived from the recorded checks, never a stored marker);
+                # only a decision on the row's own gate, environment and
+                # requirement revisions gives it the gate as runner, and
+                # ``delivery.discharge`` then checks every identity as for
+                # any other row.
+                decided = self._obligation_receipt(record)
+                if (decided is not None and decided.get("runner") == "gate" and decided.get("passed")
+                        and (decided.get("gate") or "") == (current_gate or "")
+                        and (decided.get("environment") or "") == environment
+                        and (decided.get("gate") or "") == (obligation.gate or "")
+                        and all(int(revisions.get(rid, 1)) == int(rev) for rid, rev in obligation.requirements)):
+                    obligation = replace(obligation, runner="gate")
+                    record = dict(record, runner_basis=(f"the harness's own run {decided['run']} in {decided['id']} "
+                                                        "executed what this report names, after it was registered"))
+                    receipt = decided
             # A receipt from a check under a gate or in an environment that
             # is no longer the effective one discharges nothing now, even
             # though it matched the obligation when it ran.
@@ -15502,8 +18065,9 @@ class Session:
         for rid in self.memory.ledger.requirements:
             parts = []
             held = [e for e in standing if rid in (e.get("requirements") or ())]
-            if any(e.get("cases") or (e.get("executable") if "executable" in e else self._not_run_executable(e))
-                   for e in held):
+            # A bound case gone from the current source is settled by a
+            # declaration of exact current cases, not by an edit (cycle22).
+            if any(self._not_run_runnable(e) for e in held):
                 self._blockers_need_editing = True
             if held:
                 parts.append("NOT RUN: " + "; ".join(f"{e['task']}: {_display_item(e['item'])[:100]}" for e in held))
@@ -15586,7 +18150,7 @@ class Session:
         counts = Counter(e.get("oid") for e in self.unexecuted_acceptance if e.get("oid"))
         plan: Dict[str, dict] = {}
 
-        def owner_of(owner: str) -> Tuple[Optional[dict], str]:
+        def owner_of(owner: str, *, rows: bool = False) -> Tuple[Optional[dict], str]:
             if not owner:
                 return None, "an item's owning task is unknown"
             lead = self._owner_lead(owner)
@@ -15594,10 +18158,13 @@ class Session:
                 return None, f"no lead seat is on record for {owner}"
             if not self._available(lead):
                 return None, f"{owner}'s lead {lead} is unavailable"
-            if lead == auditor:
-                # Its restatement could never be judged independently: the
-                # audit ignores a judgment by the restatement's own author.
-                return None, f"{owner}'s lead {lead} is the auditor, so its declaration could not be judged independently"
+            if lead == auditor and (rows or self._independent_judge(lead) is None):
+                # The audit ignores a judgment by the restatement's own
+                # author. A NOT RUN restatement can still be judged by another
+                # eligible independent seat (cycle14, ``_judge_restatements``);
+                # a scenario row's sufficiency is the audit's alone.
+                return None, (f"{owner}'s lead {lead} is the auditor, so its declaration could not be judged "
+                              "independently" + ("" if rows else " and no other independent seat is eligible"))
             # What the task did, as its close-out recorded it (the dispatch
             # text is not kept past the task).
             closed = next((h for h in reversed(self.history) if getattr(h, "task_id", None) == owner), None)
@@ -15611,9 +18178,10 @@ class Session:
                     return {}, f"{rid} is held by skipped cases ({_display_item(entry['item'])[:80]}); only execution settles them"
                 if not oid or counts[oid] != 1:
                     return {}, f"a NOT RUN item holding {rid} has no unique id"
-                if entry.get("cases") or entry.get("restatements"):
+                gone = self._bound_cases_gone(entry)
+                if (entry.get("cases") or entry.get("restatements")) and not gone:
                     return {}, f"{oid} is bound to cases; only their execution settles it"
-                if entry.get("executable") if "executable" in entry else self._not_run_executable(entry):
+                if self._not_run_runnable(entry):
                     return {}, f"{oid} names something a check can run"
                 slot, why = owner_of(self._declaration_owner(entry))
                 if slot is None:
@@ -15635,7 +18203,7 @@ class Session:
                 if (row.get("kind") != "acceptance" or (row.get("modality") or "test") != "test"
                         or not row.get("proof_id")):
                     return {}, f"{row['oid']} is not a declared test scenario"
-                slot, why = owner_of(str(row.get("task") or ""))
+                slot, why = owner_of(str(row.get("task") or ""), rows=True)
                 if slot is None:
                     return {}, why
                 if row["proof_id"] not in slot["pids"]:
@@ -15676,6 +18244,243 @@ class Session:
             attempted.append(owner)
         self._refresh_obligations()
         return attempted, ""
+
+    def _independent_judge(self, author: str, preferred=()) -> Optional[str]:
+        """An eligible independent seat to judge a restatement ``author``
+        wrote, or None (cycle14): a brain-trust seat (the recorded judges in
+        ``preferred`` first), available, not the author and not of the
+        author's vendor. A worker seat is never a judge, and no seat is
+        added."""
+        vendor = str(author or "").partition(":")[0]
+        trust = list(self.brain_trust)
+        for seat in dict.fromkeys([*preferred, *trust]):
+            if seat not in trust or seat == author or str(seat).partition(":")[0] == vendor:
+                continue
+            if self._available(seat):
+                return seat
+        return None
+
+    def _judge_restatements(self, site: str) -> List[dict]:
+        """Restated NOT RUN items executed on the current source that no
+        current independent judgment holds and that the auditor may not
+        judge because it wrote the restatement (cycle13 O33, O60: restated by
+        openai:sol, the auditor; claude:opus judged an earlier source, so
+        nothing current could judge them). Each is offered to the eligible
+        independent seat ``_independent_judge`` names, the item's recorded
+        judges first, in one read-only ``recheck`` call per judge for all its
+        items after an admission at the reserve (cycle18: the first ask is an
+        ask, never a completion; it spent the job's one completion, and every
+        later source left the item unjudgeable). Each item's decision (judge,
+        restatement author, item, cases, source, gate, environment,
+        revisions) is asked at most once for the job, whatever the outcome.
+        The call's bound identity (``_judgment_binding``) is taken before it
+        and compared after it; a change voids the reply. The answer is read
+        by ``_judge_restated`` for exactly the asked ids: SUFFICIENT or
+        INSUFFICIENT per id, on exactly the current cases and source. Only an
+        arrived reply that leaves an asked id without a single verdict line
+        buys the job's shared completion (``_complete_judgment``), with that
+        reply kept as its raw, for exactly the ids it lacked. Anything else
+        (no eligible seat, no admission, refused, capped, stopped, void)
+        leaves the item held, with the reason recorded on
+        ``restatement_judgments``. A current independent judgment of either
+        verdict is never asked again: only a missing or stale one (another
+        source, cases or revisions) is eligible."""
+        auditor = self._auditor()
+        pending = [e for e in self._standing_not_run()
+                   if e.get("oid") and e.get("restatements") and not self._restated_judged(e)
+                   and self._discharge_record(e) is not None
+                   and (auditor is None or auditor == (e["restatements"][-1] or {}).get("author"))]
+        if not pending:
+            return []
+        source = self._source_fingerprint() if self.project else None
+        groups: Dict[str, List[dict]] = {}
+        done = []
+        for entry in [e for e in pending if self._restated_current(e)]:
+            # A current independent INSUFFICIENT on these exact cases, source
+            # and revisions is the decision: it stands as held debt and is
+            # never asked again (root review of c69fb36). Recorded once.
+            judged = entry["restated_judgment"]
+            held = dict(oids=[entry["oid"]], judge=judged.get("by"), source=source,
+                        outcome=f"held: {judged.get('by')}'s current INSUFFICIENT stands; not asked again")
+            said = any(all(r.get(k) == v for k, v in held.items()) for r in self.restatement_judgments)
+            # This route's own answered INSUFFICIENT already records it.
+            answered = any(entry["oid"] in (r.get("insufficient") or ()) and r.get("judge") == held["judge"]
+                           and r.get("source") == source for r in self.restatement_judgments)
+            if not (said or answered):
+                self.restatement_judgments.append(dict(held, site=site))
+                done.append(self.restatement_judgments[-1])
+        pending = [e for e in pending if not self._restated_current(e)]
+        for entry in pending:
+            author = (entry["restatements"][-1] or {}).get("author") or ""
+            history = [h.get("by") for h in reversed(entry.get("judgment_history") or ()) if h.get("by")]
+            judge = self._independent_judge(author, history)
+            if judge is None:
+                held = dict(oids=[entry["oid"]], judge=None, source=source,
+                            outcome=f"no eligible independent seat to judge {author}'s restatement; held")
+                if not any(all(r.get(k) == v for k, v in held.items()) for r in self.restatement_judgments):
+                    self.restatement_judgments.append(dict(held, site=site))
+                    done.append(self.restatement_judgments[-1])
+                continue
+            groups.setdefault(judge, []).append(entry)
+        asked = {k for r in self.restatement_judgments for k in (r.get("keys") or {}).values()}
+        gate, environment = _gate_identity(self._current_gate()), self._environment_id()
+        for judge, items in groups.items():
+            # One decision per item: the judge, the restatement's author, the
+            # item, its cases, the source, gate and environment its execution
+            # was read on, and the revisions of what it holds. An item asked
+            # once is never asked again in a regrouped call, whatever came of
+            # the ask.
+            keys = {e["oid"]: self._restatement_decision_key(e, judge) for e in items}
+            items = [e for e in items if keys[e["oid"]] not in asked]
+            if not items:
+                continue
+            oids = [e["oid"] for e in items]
+            keys = {oid: keys[oid] for oid in oids}
+            decision = hashlib.sha256(json.dumps(sorted(keys.values())).encode()).hexdigest()[:32]
+            record = dict(site=site, oids=oids, judge=judge, source=source, gate=gate, environment=environment,
+                          decision=decision, keys=keys, asked=False, outcome="")
+            self.restatement_judgments.append(record)
+            done.append(record)
+            if self._budget() is not None:
+                verdict = self._admit_plan("restatement-judgment",
+                                           [delivery.PlanStage(f"restatement judgment by {judge}", "reserve")],
+                                           scope="restatement-judgment")
+                if not verdict.feasible:
+                    record["outcome"] = f"not attempted: {str(verdict.detail)[:200]}; held"
+                    continue
+            prompt = self._restatement_judgment_prompt(items)
+            self._ask_restatement_judgment(record, judge, items, prompt)
+        for record in done:
+            self._note(f"restatement judgment ({site}) of {', '.join(record['oids'])} by {record.get('judge')}: "
+                       f"{record['outcome']}")
+        if done:
+            self._refresh_obligations()
+        return done
+
+    def _restatement_decision_key(self, entry: dict, judge: str) -> str:
+        """One restatement judgment decision (cycle18): the judge, the
+        restatement's author, the item, its cases, the source, the gate and
+        environment its execution was read under, and the revisions of the
+        requirements it holds. Equal keys are the same decision, asked at
+        most once for the job; the judgment it yields is current only while
+        ``_restated_current`` holds (source, cases, revisions, judge), and
+        execution on the current gate and environment is
+        ``_discharge_record``'s, which an item must pass to be asked."""
+        return hashlib.sha256(json.dumps(dict(
+            judge=judge, author=(entry.get("restatements") or [{}])[-1].get("author"),
+            source=self._source_fingerprint() if self.project else None,
+            gate=_gate_identity(self._current_gate()), environment=self._environment_id(), oid=entry.get("oid"),
+            item=entry.get("item"), cases=list(entry.get("cases") or []),
+            revisions=self._restated_revisions(entry)), sort_keys=True).encode()).hexdigest()[:32]
+
+    def _restatement_asked(self, entry: dict, judge: str) -> Optional[dict]:
+        """The record of this exact decision's ask, if it was made."""
+        key = self._restatement_decision_key(entry, judge)
+        return next((r for r in reversed(self.restatement_judgments)
+                     if key in (r.get("keys") or {}).values()), None)
+
+    def _restatement_judgment_prompt(self, items: List[dict]) -> str:
+        """The independent restatement judgment's one prompt: the goal, the
+        requirements the items hold, and each item as reported, restated and
+        executed (harness facts), with the one line form per asked id."""
+        lines = []
+        for e in items:
+            record_ = self._discharge_record(e) or {}
+            lines.append(f"- {e['oid']} (reported by {e['task']}, holds {', '.join(e.get('requirements') or [])}): "
+                         f"NOT RUN: {_display_item(e['item'])[:400]}" + (f" - {e['why'][:200]}" if e.get("why") else "")
+                         + f"; restated by {(e['restatements'][-1] or {}).get('task')}'s lead as "
+                         f"{', '.join(e.get('cases') or [])}; executed and passed on this source in check "
+                         f"{int(record_.get('index', -1)) + 1}" + _replaced_note(e))
+        texts = self._requirement_texts_now()
+        held = sorted({r for e in items for r in e.get("requirements") or ()})
+        return ("You are asked for an independent judgment of restated NOT RUN items; the seat that wrote them "
+                "cannot judge them.\n\n"
+                + "## Original goal (verbatim)\n\n" + self.memory.goal.strip()
+                + "\n\n## Requirements these items hold (verbatim)\n\n"
+                + "\n".join(f"{r}: {texts.get(r, '')}" for r in held)
+                + "\n\n## NOT RUN items restated as cases that need an independent judgment\n" + "\n".join(lines)
+                + "\n\nThe project in your working directory is the delivered work. You did not write these "
+                  "restatements. For each item give one line '<O-id>: SUFFICIENT <how these cases exercise "
+                  "the whole reported behaviour>' or '<O-id>: INSUFFICIENT <what they leave unexercised>'. Judge "
+                  "the cases against everything the item reported, not whether they pass: the harness settled "
+                  "execution itself. Only lines for the ids listed above are read, one line per id; nothing else "
+                  "is asked, and requirements are the audit's.")
+
+    @staticmethod
+    def _restatement_unread(reply: str, oids: Sequence[str]) -> List[str]:
+        """The asked ids a judgment reply gives no single verdict line for:
+        no line, or two or more (a conflict)."""
+        verdicts, conflicts = judgment.sufficiency_reading(reply or "", list(oids))
+        return [oid for oid in oids if oid not in verdicts or oid in conflicts]
+
+    def _ask_restatement_judgment(self, record: dict, judge: str, items: List[dict], prompt: str) -> None:
+        """One independent judge's first ask for its admitted items, and its
+        strict reading (cycle18). The decision is already on the record, so
+        it is never asked again whatever happens here. A cap, a finish hold,
+        a transport or refusal stop, an empty reply or a bound identity that
+        moved during the call leaves every item held and says which; nothing
+        is completed after no reply. Lines are applied to exactly the asked
+        ids. An arrived reply that leaves an asked id without a single
+        verdict buys the job's shared completion once, for exactly those ids,
+        with the reply that arrived kept as its raw."""
+        oids = list(record["oids"])
+        spec = SimpleNamespace(task_id="restatement-judgment")
+        binding = self._judgment_binding(spec, judge, "recheck")
+        record.update(asked=True, identity=binding["identity"])
+        self.store.put(json.dumps(record, default=str), kind="restatement-judgment-intent", author="harness")
+        try:
+            with invocation(spec.task_id, "recheck"):
+                reply = self._invoke_model(judge, prompt)
+        except TurnLimitReached:
+            record["outcome"] = "capped: no verdict; held"
+            return
+        except FinishReserved as exc:
+            self._finish_refused(None, f"restatement judgment by {judge}", exc)
+            record["outcome"] = "refused to keep the finish; held"
+            return
+        except ProviderError as exc:
+            # A refusal, a transport failure or a permission block: recorded,
+            # and the item held. Its message can carry vendor text, so it is
+            # kept as a private artifact and only its type is exported.
+            record["outcome"] = f"stopped: {type(exc).__name__}; held"
+            record["error_artifact"] = self.store.put(str(exc), kind=f"restatement-judgment-error:{judge}",
+                                                      author="harness").id
+            return
+        reply = reply if isinstance(reply, str) else ""
+        record["reply_artifact"] = self.store.put(reply, kind=f"restatement-judgment:{judge}", author=judge).id
+        after = self._judgment_binding(spec, judge, "recheck")
+        if after != binding:
+            changed = sorted(k for k in binding if k != "identity" and binding[k] != after.get(k))
+            record["outcome"] = f"void: the bound identity changed during the call ({', '.join(changed)}); held"
+            return
+        if not reply.strip():
+            record["outcome"] = "the reply was empty: no verdict; held"
+            return
+        self._judge_restated(judge, reply, oids=oids)
+        lacking = self._restatement_unread(reply, oids)
+        if lacking:
+            answer = None
+            try:
+                answer = self._complete_judgment(
+                    spec, judge, "restatement", reply, [f"one line for each of {', '.join(lacking)}"],
+                    role="recheck", prompt=prompt, outcome=self.run_outcome)
+            except ProviderError:
+                pass  # recorded on the completion's own record, as the review route records it
+            completion = next((r for r in reversed(self.judgment_completions)
+                               if r.get("task") == spec.task_id and r.get("seat") == judge), {})
+            if answer is not None:
+                self._judge_restated(judge, answer, oids=lacking)
+                self._settle_completion(spec, judge, "restatement", not self._restatement_unread(answer, lacking),
+                                        outcome=self.run_outcome)
+            record["completion"] = dict(asked=list(lacking), outcome=completion.get("outcome"),
+                                        raw_artifact=completion.get("raw_artifact"),
+                                        reply_artifact=completion.get("reply_artifact"),
+                                        judgment=completion.get("judgment"))
+        judged = [e["oid"] for e in items if self._restated_judged(e)]
+        adverse = [e["oid"] for e in items if (e.get("restated_judgment") or {}).get("verdict") == "insufficient"
+                   and (e.get("restated_judgment") or {}).get("by") == judge and self._restated_current(e)]
+        record.update(outcome="answered", sufficient=judged, insufficient=adverse,
+                      unanswered=[o for o in oids if o not in judged and o not in adverse])
 
     def _declaration_decision(self, owner: str, oids, pids) -> str:
         """What one DONE declaration decides: the owner, the source, gate and
@@ -15730,7 +18535,14 @@ class Session:
         if items:
             lines.append("NOT RUN items of your task that name nothing a check can run:")
             lines += [f"- {e['oid']}: {_display_item(e['item'])[:300]}" + (f" - {str(e.get('why'))[:160]}"
-                                                                            if e.get("why") else "") for e in items]
+                                                                            if e.get("why") else "")
+                      # A bound case gone from the source (cycle22): said
+                      # so, so the declaration names current exact cases for
+                      # everything the original item reported; the harness
+                      # never pairs the old name with a new one.
+                      + (f" (its bound case {', '.join(self._bound_cases_gone(e))} is no longer defined on the "
+                         "current source; name the current cases that exercise everything this item reported, "
+                         "if they exist)" if self._bound_cases_gone(e) else "") for e in items]
         if rows:
             lines.append("Proof scenarios of your task whose bound case no longer exists:")
             for row in rows:
@@ -16038,9 +18850,40 @@ class Session:
             # evidence, so the cap asks as before.
             return ""
         blocked = self._deterministic_blockers()
+        if blocked and self._explicit_tasks is None:
+            # Declaration-only debt is offered to its owners before the cap
+            # decides nothing could settle it (cycle05 trial t7).
+            self._declare_at_cap()
+            blocked = self._deterministic_blockers()
         if not blocked:
             return ""
         return "; ".join(f"{r}: {why[:200]}" for r, why in blocked.items())[:600]
+
+    def _declare_at_cap(self) -> None:
+        """The DONE declaration route at the task cap: the same plan, the
+        same one call per owner and decision, the same reserve pricing
+        against what is left after the held finish, no task slot. Kept on
+        ``done_gates`` with site ``cap`` when a call was made, or once per
+        source and reason when none could be."""
+        blocked = self._deterministic_blockers()
+        if not blocked:
+            return
+        declared, why = self._done_declarations(blocked)
+        # A restatement the auditor's own seat wrote is offered to another
+        # independent seat at the cap as at DONE (cycle14); once per decision.
+        self._judge_restatements("cap")
+        source = self._source_fingerprint() if self.project else None
+        if declared is None:
+            if any(g.get("site") == "cap" and g.get("source") == source and g.get("declaration") == why
+                   for g in self.done_gates):
+                return
+            self.done_gates.append(dict(site="cap", blocked=dict(blocked), audit_asked=True, source=source,
+                                        declaration=why))
+            return
+        held = self._deterministic_blockers()
+        self.done_gates.append(dict(site="cap", blocked=dict(blocked), still_held=dict(held), audit_asked=True,
+                                    source=self._source_fingerprint() if self.project else None,
+                                    declaration=f"asked {', '.join(declared)}; still held: {', '.join(held) or 'none'}"))
 
     def _lower_unexecuted(self, found: dict) -> List[dict]:
         """Turn a MET into NOT MET where the record shows its acceptance did
@@ -16442,7 +19285,7 @@ class Session:
         return "\n".join(lines) + "\n\n"
 
     def _recover_judgment(self, spec, peer: str, kind: str, *, role: str, prompt: str, task=None, outcome=None,
-                          exc=None, raw: str = "", gaps=()) -> Tuple[Optional[str], dict]:
+                          exc=None, raw: str = "", gaps=(), review_source=None) -> Tuple[Optional[str], dict]:
         """A required review or recheck by ``peer`` that did not finish (its
         call reached the round cap: ``exc``; or a reply arrived without a
         valid verdict: ``raw`` and ``gaps``). The occurrence is recorded with
@@ -16476,7 +19319,7 @@ class Session:
         missing = [str(g) for g in gaps] or ["a verdict: the previous call stopped at its round cap"]
         reply = self._complete_judgment(spec, peer, kind, raw or "", missing, role=role, prompt=prompt, task=task,
                                         outcome=outcome, context=self._recovery_context(spec, peer, record),
-                                        recovery_record=record)
+                                        recovery_record=record, review_source=review_source)
         last = (record.get("attempts") or [{}])[-1]
         if str(last.get("outcome") or "").startswith("not attempted"):
             # Decided on what was actually available: no completion was made.
@@ -16968,7 +19811,7 @@ class Session:
         elif names & {"DependencyTreeChanged", "DependencyIdentityUnavailable", "EvidenceIdentityMismatch",
                       "JobStoreUnavailable", "CheckpointRefused"}:
             cls = "integrity"
-        elif names & {"CapabilityUnavailable", "ProviderRefusal"}:
+        elif names & {"CapabilityUnavailable", "ProviderRefusal", "PermissionBlocked"}:
             cls = "permission"
         elif names & {"KeyboardInterrupt", "CancelledError"}:
             cls = "cancelled"
@@ -17047,7 +19890,7 @@ class Session:
 
     def _complete_judgment(self, spec, peer: str, kind: str, raw: str, gaps: List[str], *, role: str,
                            prompt: str, task: Optional[TaskMemory] = None, outcome=None, context: str = "",
-                           recovery_record: Optional[dict] = None) -> Optional[str]:
+                           recovery_record: Optional[dict] = None, review_source=None) -> Optional[str]:
         """One same-seat judgment completion for an ARRIVED reply that is not
         a judgment (strategy reset, 2026-10-16). Returns the seat's new reply,
         or None when nothing new may be relied on.
@@ -17103,7 +19946,7 @@ class Session:
         ask += (f"It lacked: {missing}. The work and the source are unchanged. Give your judgment now in the "
                 "required form below; judge the work itself.\n\n")
         try:
-            with invocation(spec.task_id, role):
+            with invocation(spec.task_id, role, review_source=review_source):
                 reply = self._invoke_model(peer, ask + prompt)
         except TurnLimitReached:
             record["outcome"] = "capped: no verdict"
@@ -17848,6 +20691,7 @@ class Session:
                          + f"): {r['claim'][:140]}"
                          + (f" [{self._scope_route_text(r['task'], r['scope_paths'])}]" if r.get("scope_paths")
                             else "")
+                         + self._standing_reason_note(r)
                          for r in open_findings)
         return obligations.View(requirements=requirements, tasks=tuple(tasks), evidence=evidence,
                                 judgments=judgments, capacity=capacity, notes=tuple(notes))
@@ -18064,6 +20908,69 @@ class Session:
         return [f["id"] for f in self.findings
                 if f["status"] == "open" and (rid is None or rid in f["requirements"])]
 
+    def _normalize_resolves(self, spec):
+        """Read a RESOLVES line by its typed ids before admission (cycle10,
+        PR73 6722947726: the planner wrote ``RESOLVES: R17 (audit), R24
+        (audit)`` for a repair of what the final audit found not met, every
+        id was read as an unknown finding, and the sendbacks spent the
+        correction allowance until the run stalled). A parenthesised
+        annotation is not an id and is dropped. A requirement id whose only
+        hold is the audit's NOT MET (no open finding names it) is the
+        COVERS route the DONE refusal names, so it moves to COVERS and the
+        same independent audit judges the repair. Everything else stays on
+        the line for ``_resolves_problem``: a finding id, a requirement held
+        by an open finding (its typed ids are named back), one that is not
+        NOT MET, one that is not listed, and any malformed token. The line
+        as written and what moved are kept on ``resolves_normalized``."""
+        if not self.config.requirements_ledger:
+            return spec
+        text = spec.description or ""
+        matches = list(_RESOLVES.finditer(text))
+        if len(matches) != 1:
+            return spec
+        match = matches[0]
+        raw = match.group(1)
+        dropped = re.findall(r"\([^()]*\)", raw)
+        tokens = [t for t in re.split(r"[\s,]+", re.sub(r"\([^()]*\)", " ", raw).strip()) if t]
+        ledger = self.memory.ledger
+        moved = []
+        for token in tokens:
+            if (re.fullmatch(r"R\d+", token) and token in ledger.requirements
+                    and str(ledger.requirement_status.get(token) or "").startswith("NOT MET")
+                    and not self._open_findings_for(token) and token not in moved):
+                moved.append(token)
+        # A finding the registry holds closed is no longer resolvable: the
+        # id is dropped and recorded, and the task stands or falls on its
+        # COVERS and ordinary admission. Nothing reopens it (cycle10: the
+        # planner was shown a frozen close-out listing RFT4-14 unresolved).
+        closed_reviews = {r["fid"] for r in self.review_findings if r.get("closed")}
+        closed_audit = {f["id"] for f in self.findings if f.get("status") not in (None, "open")}
+        closed = [t for t in dict.fromkeys(tokens) if t in closed_reviews or t in closed_audit]
+        if not moved and not dropped and not closed:
+            return spec
+        kept = [t for t in tokens if t not in moved and t not in closed]
+        # A line left with no id is kept empty, so it is refused as naming
+        # none; one whose ids all moved is gone.
+        line = ("RESOLVES: " + ", ".join(kept)) if kept else ("" if moved or closed else "RESOLVES:")
+        body = text[:match.start()] + line + text[match.end():]
+        if moved:
+            cover = _COVERS.search(body)
+            if cover:
+                have = re.findall(r"R\d+", cover.group(1))
+                ids = have + [r for r in moved if r not in have]
+                body = body[:cover.start()] + "COVERS: " + ", ".join(ids) + body[cover.end():]
+            else:
+                body = body.rstrip() + "\nCOVERS: " + ", ".join(moved)
+        self.resolves_normalized.append(dict(task=spec.task_id, written=raw.strip()[:300], moved_to_covers=moved,
+                                             annotations=[d[:80] for d in dropped], kept=kept,
+                                             closed_dropped=closed))
+        self._note(f"{spec.task_id}: RESOLVES read by typed ids"
+                   + (f"; {', '.join(moved)} (held NOT MET by the audit) moved to COVERS" if moved else "")
+                   + (f"; {', '.join(closed)} already closed on the registry, dropped (not reopened)"
+                      if closed else "")
+                   + (f"; annotation(s) {', '.join(dropped)} dropped" if dropped else ""))
+        return replace(spec, description=body.strip())
+
     def _resolves_problem(self, resolves, covers, spec) -> str:
         """Why a RESOLVES line cannot stand, before any lead call; "" if it can."""
         if resolves is None:
@@ -18076,6 +20983,23 @@ class Session:
             return f"RESOLVES names a finding twice: {', '.join(resolves)}."
         by_id = {f["id"]: f for f in self.findings}
         reviews = {r["fid"]: r for r in self.review_findings}
+        requirements = [r for r in resolves if re.fullmatch(r"R\d+", r) and r not in by_id and r not in reviews]
+        if requirements:
+            # A requirement id is never read as a finding (cycle10); what is
+            # left here is one the record does not hold NOT MET by the audit
+            # alone (``_normalize_resolves`` moved those to COVERS).
+            parts = []
+            for rid in requirements:
+                owing = self._open_findings_for(rid)
+                if rid not in self.memory.ledger.requirements:
+                    parts.append(f"{rid} is not a listed requirement")
+                elif owing:
+                    parts.append(f"{rid} is held by open finding(s) {', '.join(owing)}: name those in RESOLVES "
+                                 f"and {rid} in COVERS")
+                else:
+                    state = str(self.memory.ledger.requirement_status.get(rid) or "open")
+                    parts.append(f"{rid} is a requirement ({state[:60]}), not a finding: name it in COVERS")
+            return ("RESOLVES names only finding ids (F<n>, RFT<task>-<n>); " + "; ".join(parts) + ".")
         unknown = [r for r in resolves if r not in by_id and r not in reviews]
         if unknown:
             return f"RESOLVES names findings that do not exist: {', '.join(unknown)}."
@@ -18143,6 +21067,36 @@ class Session:
                 "paths the repair needs, or name the task again as written to proceed (sent back once).")
 
     def _findings_prompt(self) -> str:
+        return self._open_findings_prompt() + self._closed_findings_note()
+
+    def _closed_findings_note(self) -> str:
+        """The findings the registry holds closed now, by id, with their
+        judge (cycle10 run 20261108T163004Z: t4's close-out, frozen in the
+        append-only ledger, listed RFT4-14 as unresolved; the post-merge
+        recheck closed it; the planner prompt carried only the close-out,
+        and two tasks naming it were refused as already resolved until the
+        correction allowance stopped the run). The ledger stays as written:
+        this block is the current disposition, and says so."""
+        if not (self.config.requirements_ledger and self.memory.ledger.requirements):
+            return ""
+        closed = [f"{r['fid']}: {str(r.get('state') or 'closed').upper()} by "
+                  f"{((r.get('history') or [{}])[-1] or {}).get('author') or 'unknown'}"
+                  for r in self.review_findings if r.get("closed")]
+        closed += [f"{f['id']}: resolved by {f.get('resolved_by') or 'unknown'}" for f in self.findings
+                   if f.get("status") not in (None, "open")]
+        if not closed:
+            return ""
+        shown = closed[-20:]
+        return ("\n\n--- FINDINGS CLOSED NOW (the registry, current) ---\n"
+                "These findings are closed on the registry as of this prompt. A close-out or ledger entry "
+                "above that lists one of them as unresolved or open is history from when that task closed. "
+                "RESOLVES names only open findings; a task still needed for a closed finding's area is "
+                "ordinary work under COVERS, and a RESOLVES naming a closed id has that id dropped and is "
+                "recorded, never reopened.\n"
+                + ("" if len(closed) <= 20 else f"({len(closed) - 20} earlier closed ids not shown.)\n")
+                + "\n".join(f"- {line}" for line in shown))
+
+    def _open_findings_prompt(self) -> str:
         opened = [f for f in self.findings if f["status"] == "open"]
         # Review ids are named only where RESOLVES can take them (the
         # requirements ledger on) and their claims are shown (the
@@ -18174,8 +21128,21 @@ class Session:
                 "with no overflow and are approved by the cross-vendor design review. A failed-check "
                 "finding resolves when the resolving task's own integration check passes and it "
                 "closes with no new finding; its failed cases and output are under 'Failed checks still "
-                "standing' below, and its output artifact is named on its line.\n" + "\n".join(lines)
+                "standing' below, and its output artifact is named on its line. " + _REPAIR_OUTCOME_RULE
+                + "\n" + "\n".join(lines)
                 + ("\n\n" + self._review_resolves_note(reviews) if reviews else ""))
+
+    def _standing_reason_note(self, record: dict) -> str:
+        """The planner's view of an open review finding's standing question
+        (cycle16, cycle15 RFT4-11: t6 and t7 were planned from a 140-character
+        claim while the owner's recheck said which declared scenarios were
+        missing). Data from the record, bounded, attributed and labelled;
+        the owner still judges closure."""
+        reason = self._standing_reason(record, limit=_STANDING_REASON_CHARS)
+        if reason is None:
+            return ""
+        return (f"\n  standing reason, as {reason['author']} last wrote it ({reason['role']}, {reason['where']}; "
+                f"recorded, not a verdict): {reason['why']}")
 
     def _review_resolves_note(self, reviews: List[dict]) -> str:
         """The open review findings RESOLVES may name, by id only: their
@@ -18191,7 +21158,7 @@ class Session:
                 "finding inherits it, and the same recheck follows its clean close without naming it. On a "
                 "survey run a RESOLVES naming a finding raised on a capped, failed or unmerged task is a "
                 "recovery and is charged to the recovery allowance, once with any CONTINUES; naming only "
-                "findings on closed work is ordinary coverage and is not charged."
+                "findings on closed work is ordinary coverage and is not charged. " + _MISSING_SCENARIO_RULE
                 + self._owed_resolves_note(reviews))
 
     def _owed_resolves_note(self, reviews: List[dict]) -> str:
@@ -18757,21 +21724,59 @@ class Session:
                 record["inherited_by"] = inherited + [spec.task_id]
 
     def _inherited_findings_block(self, spec) -> str:
-        """For the lead that continues a task: the open review findings on
-        the work it takes over, by id and as written. They are the
-        predecessor's reviewer's to close, after this task closes clean."""
-        records = self._inherited_review_findings(spec)
+        """For the lead of a task that continues work or resolves review
+        findings: exactly the open review findings this task is to resolve,
+        by id and as written, with the reason each one's own author last
+        kept it open (``_resolution_findings_block``, cycle16)."""
+        return self._resolution_findings_block(spec)
+
+    def _resolution_targets_of(self, spec) -> List[dict]:
+        """The open review findings this task resolves: those its own RESOLVES
+        named and those it inherits by the CONTINUES its own dispatch record
+        holds (never another task's working state, and nothing for a task
+        with no record); one per id, in that order. Only findings this session holds open; a parallel child
+        holds none, so it is shown none (RESOLVES is not admitted in a batch)."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        if outcome is None:
+            # No dispatch record for this task: nothing is its to resolve.
+            return []
+        reviews = {r["fid"]: r for r in self.review_findings if not r.get("closed")}
+        named = [reviews[fid] for fid in (getattr(outcome, "resolves", None) or ()) if fid in reviews]
+        out = list(named)
+        # Its own recorded CONTINUES only, "" when it continues nothing: the
+        # helper would otherwise fall back to the session's working
+        # ``_continues``, which may be another task's (root review of
+        # b592380). Settlement and admission keep their own reading.
+        for record in self._inherited_review_findings(spec, getattr(outcome, "continues", "") or ""):
+            if all(record["fid"] != r["fid"] for r in out):
+                out.append(record)
+        return out
+
+    def _resolution_findings_block(self, spec) -> str:
+        """The open review findings this task resolves, for its lead (cycle16;
+        before, only a CONTINUES with a capped or failed predecessor showed
+        them, and a RESOLVES lead saw only the planner's description). Each
+        is shown as its reviewer wrote it, with that reviewer's latest
+        standing reason where one stands. Nothing here is the lead's to
+        close."""
+        records = self._resolution_targets_of(spec)
         if not records:
             return ""
-        lines = [f"- {r['fid']} (raised by {r['author']} on {r['task']}): {(r.get('text') or r['claim'])[:600]}"
-                 for r in records]
-        return ("## Open review findings on the work you continue\n" + "\n".join(lines)
-                + "\nThese were raised on the work this task takes over and are still open. Where one is a "
-                "defect of that work inside this task's permitted paths, address it as part of the remaining "
-                "work. A finding that opens with SCENARIO or EVIDENCE is about the plan's scenario text or "
-                "about execution the harness has not shown, not about the code, and is not yours to answer. "
-                "After this task closes clean, the reviewer who raised each finding rechecks it against the "
-                "finished work: do not mark any of them resolved yourself, and do not report one as done.")
+        lines = []
+        for r in records:
+            lines.append(f"- {r['fid']} (raised by {r['author']} on {r['task']}): {(r.get('text') or r['claim'])[:600]}")
+            reason = self._standing_reason(r, limit=600)
+            if reason is not None:
+                lines.append(f"  {r['author']}'s latest judgment ({reason['role']}, {reason['where']}) kept it open: "
+                             f"{reason['why']}")
+        return ("## Open review findings this task resolves\n" + "\n".join(lines)
+                + "\nThese are still open. Where one is a defect inside this task's permitted paths, address it as "
+                "part of this task. Where it says declared scenarios are missing, bind each scenario this task "
+                "declares for it with PROVES lines; you cannot add a scenario. A finding that opens with SCENARIO "
+                "or EVIDENCE is about the plan's scenario text or about execution the harness has not shown, not "
+                "about the code, and is not yours to answer. After this task closes clean, the reviewer who raised "
+                "each finding rechecks it against the finished work: do not mark any of them resolved yourself, "
+                "and do not report one as done.")
 
     def _review_resolution_targets(self, spec) -> Tuple[List[str], List[dict]]:
         """``(named, inherited)``: the open review finding ids this task's
@@ -19107,9 +22112,16 @@ class Session:
         RESOLVES whose owner rechecked and did not accept it, or that was
         left again without its owner's verdict in an unchanged decision state
         (``_decision_state``), stops FindingsUnresolved; a recheck that was never asked is pending work
-        held like the rest (cycle01, PR73 6702597850). A capped
-        or failed task never reaches this policy: its close continues to the
-        planner by its own rule."""
+        held like the rest (cycle01, PR73 6702597850).
+
+        Where it applies (cycle15, corrected to the code): a capped or failed
+        serial task never reaches it, since the serial loop hands that task
+        back to the planner under the turn-limit breaker. A parallel batch
+        always reaches it after its merge, whatever its children did: capped
+        children are merged and owed, their findings counted here like any
+        other, and a child that was not merged (a raised call, a refusal, a
+        permission block) leaves an open finding no review debt holds, so the
+        batch stops FindingsOpen."""
         record = dict(closed=sorted(closed), slot_left=bool(slot_left), debt_recorded=bool(debt_recorded),
                       stop=None, holds=[], reasons=[])
         check_failed = bool(self.checks) and not self.checks[-1].get("passed")
@@ -19454,9 +22466,9 @@ class Session:
         if record:
             blocks.append(_handoff_note(record))
             paths.extend(record.get("changed") or [])
-            inherited = self._inherited_findings_block(spec)
-            if inherited:
-                blocks.append(inherited)
+        resolving = self._resolution_findings_block(spec)
+        if resolving:
+            blocks.append(resolving)
         taken = self._discharges_block(spec)
         if taken:
             blocks.append(taken)
@@ -19551,6 +22563,9 @@ class Session:
             boundary = boundary_note(self._covered_texts()).strip()
             if boundary:
                 parts.append(boundary)
+            history = self._audit_history([rid for rid, _ in self._covered_texts()]).strip()
+            if history:
+                parts.append(history)
         map_block = self._map_block()
         if map_block:
             parts.append(map_block)
@@ -19579,6 +22594,8 @@ class Session:
             parts.append(_AUTHORITY_ORDER + " " + _CONTRACT_BOUNDARY_RULE)
         if self._writes() and spec.scope and spec.scope.proofs:
             parts.append(TEST_SUBSTANCE_RULE)
+        if any(self._test_command_requirement(r) for r in getattr(self, "_current_covers", []) or []):
+            parts.append(_TEST_COMMAND_RULE)
         parts.append(worker_menu())
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
@@ -19629,6 +22646,14 @@ class Session:
         if lead is None:
             parts.append("Consults are not available in this task; decide with your own judgment "
                          "or commission a worker.")
+        if self.config.repository_policy is not None:
+            parts.append(
+                "If this task's role packet (the '## Role packet' section) is too small for what the task needs, "
+                "for example its reference notes are cut where you need them, you may ask once for a larger "
+                "allowance for this task. Reply with only these three lines: 'PACKET EXTENSION: <bytes>', "
+                "'NECESSARY: <the content and what it is for>' and 'WHY NOT SHORTER: <why less would lose required "
+                "context>'. The orchestrator decides and its answer comes back to you; your request grants "
+                "nothing, and one request per task is served.")
         if lead is not None:
             consultables = [p for p in self.brain_trust if p != lead]
             names = ", ".join(
@@ -19686,10 +22711,31 @@ class Session:
 
     def _collaborator_prompt_text(self, spec: TaskSpec, draft: str, peer: str, label, *,
                                   since: Optional[dict] = None) -> str:
+        blind = spec.kind == TaskKind.REVIEW and (since is not None or not self.project)
+        work = ("This is your first, blind review of the task's source and goal. Another seat's findings "
+                "are withheld until your independent read is complete. Inspect the source yourself; "
+                "report your own findings rather than reviewing or validating another review. The lead "
+                "will receive both reads afterward to reconcile them.\n\n"
+                if blind else f"Current work:\n{draft}\n\n")
+        current_work = "" if blind else (
+            (_DESIGN_REVIEW_LENS + (self._design_note or "") if self._collaboration_applicable(spec) else "")
+            + self._changed_originals_note()
+            + self._proof_rows(spec)
+            + self._restated_review_block(spec)
+            + (self._scope_size_note(spec, audience="reviewer") if self._writes() else "")
+            + self._sibling_note()
+            + self._inspection_note(spec, peer, "review")
+            + self._measured_change(
+                since, "## The change under review, as the harness measured it",
+                "Start from this change: it is the work as it is on disk, whatever an account above says. "
+                "Read other files where a finding depends on them (a caller, a counterpart, a test, code "
+                "the changed lines run); do not spend rounds re-reading unchanged files to rediscover "
+                "what this diff already shows.",
+                "The source is unchanged since this task began."))
         return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task: {spec.description}\n\n"
-            f"Current work:\n{draft}\n\n"
-            f"You are {label.label if label else peer}, contributing an independent "
+            + work
+            + f"You are {label.label if label else peer}, contributing an independent "
             "read. Report everything you find with a severity and a confidence; do "
             "not filter to only the important ones. Filtering happens downstream, "
             "and a reviewer told to be selective suppresses its own findings. "
@@ -19706,23 +22752,9 @@ class Session:
             f"Otherwise end your reply with exactly one line, {_REVIEW_COMPLETE}, once you have "
             "read the whole work and reported everything. A reply with no BLOCKING finding and "
             "no such line is recorded as an unfinished review."
-            + _review_subject_note(spec)
-            + (_DESIGN_REVIEW_LENS + (self._design_note or "")
-               if self._collaboration_applicable(spec) else "")
-            + self._changed_originals_note()
-            + self._goal_authority(peer)
-            + self._proof_rows(spec)
-            + self._restated_review_block(spec)
-            + (self._scope_size_note(spec, audience="reviewer") if self._writes() else "")
-            + self._sibling_note()
-            + self._inspection_note(spec, peer, "review")
-            + self._measured_change(
-                since, "## The change under review, as the harness measured it",
-                "Start from this change: it is the work as it is on disk, whatever an account above says. "
-                "Read other files where a finding depends on them (a caller, a counterpart, a test, code "
-                "the changed lines run); do not spend rounds re-reading unchanged files to rediscover "
-                "what this diff already shows.",
-                "The source is unchanged since this task began.")
+            + _review_subject_note(spec, blind=blind)
+            + self._goal_authority(peer, source_only=blind)
+            + current_work
             + self._review_turn_budget_note(peer)
         )
 
@@ -19882,7 +22914,8 @@ class Session:
                 + self.memory.goal.strip()
                 + ("\n\n## Original requirements this task covers (verbatim)\n\n"
                    + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else "")
-                + boundary_note(covered))
+                + boundary_note(covered)
+                + self._audit_history([rid for rid, _ in covered]))
 
     def _writer_goal(self) -> str:
         """The goal block for an editing call after the draft (r11 on
@@ -19900,7 +22933,7 @@ class Session:
                   "as before, and a condition outside them goes to the record as a line 'BLOCKER: "
                   "<condition>', never an edit there.")
 
-    def _goal_authority(self, peer: str = "") -> str:
+    def _goal_authority(self, peer: str = "", *, source_only: bool = False) -> str:
         """The original goal, verbatim, and the original text of the
         requirements the current task covers, for every task review.
 
@@ -19919,14 +22952,16 @@ class Session:
                   "finding even when the task text omits it. It grants nothing: the task's permitted "
                   "paths, edits and commands bind as before, and a finding that needs a change outside "
                   "them stays open as a finding, never a reason to edit there. " + _AUTHORITY_ORDER + " "
-                + _CONTRACT_BOUNDARY_RULE
+                + _PROTOCOL_RULE + " " + _CONTRACT_BOUNDARY_RULE
                 + ("\n\nFor each covered requirement give one line 'R<n>: MET - <file>:<line>' naming "
                    "where the source meets every condition of it, including what it says must happen "
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
                    "finding. A review that leaves a covered requirement without such a line is recorded "
                    "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
                    "only by those lines. " + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE if covered else "")
-                + (" " + _PROBE_RULE if covered and self._probe_applies(peer) else ""))
+                + (" " + _BOUNDARY_NOTE_RULE if any(_behavioural_error(t) for _, t in covered) else "")
+                + (" " + _TEST_COMMAND_RULE if any(self._test_command_requirement(r) for r, _ in covered) else "")
+                + (" " + _PROBE_RULE if covered and not source_only and self._probe_applies(peer) else ""))
 
     def _probe_applies(self, key: str) -> bool:
         return bool(self._probe_checks(key))
@@ -19999,6 +23034,34 @@ class Session:
             self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=named,
                                           association=association, text=text, source=source))
 
+    def _review_notes_grouped(self, rows: List[dict], current) -> str:
+        """The same observations, each distinct text once (cycle13): texts
+        are grouped only when they are identical character for character, so
+        whitespace a note quotes stays material; every task, reviewer,
+        requirement association and source label that raised it is listed
+        with it, each as recorded, never merged into one reading; the shared
+        explanation is said once in the header. Nothing is dropped or cut."""
+        groups: Dict[str, List[dict]] = {}
+        for n in rows:
+            groups.setdefault(n["text"], []).append(n)
+
+        def raised(n: dict) -> str:
+            about = (f"about {', '.join(n['requirements'])}" if n.get("association", "named") == "named" else
+                     f"naming no requirement (the task covered {', '.join(n['requirements'])}; which one, if any, "
+                     "it concerns is uncertain)")
+            where = ("the current source" if n.get("source") and n["source"] == current
+                     else "an earlier source (it may no longer hold)")
+            return f"{n['task']} review by {n.get('peer') or 'unknown'}, {about}, written about {where}"
+        lines = [f"- raised by {'; '.join(raised(n) for n in group)}: {text}" for text, group in groups.items()]
+        return ("\n\n## Earlier task-review observations on these requirements (harness record, not verdicts)\n"
+                "Each line is one observation's exact text, after every review that raised it, with what that review "
+                "said it was about and the source it was written about. None was marked blocking and none was "
+                "rechecked.\n"
+                + "\n".join(lines)
+                + "\nA reviewer raised each of these without blocking on it. Reconcile each against the goal "
+                "and the current source yourself: an observation is neither a finding nor an approval, and "
+                "the reviewer's reason for not blocking binds nothing.")
+
     def _review_notes_block(self, audited: dict) -> str:
         """The carried review observations on the requirements judged, each
         labelled with whether it was written about the current source."""
@@ -20008,6 +23071,8 @@ class Session:
         rows = [n for n in self.review_notes if set(n["requirements"]) & set(audited)]
         if not rows:
             return ""
+        if getattr(self, "_compact_audit_packet", True):
+            return self._review_notes_grouped(rows, current)
         lines = [f"- {n['task']} review, "
                  + (f"about {', '.join(n['requirements'])}, " if n.get("association", "named") == "named" else
                     f"naming no requirement (the task covered {', '.join(n['requirements'])}; which one, if "
@@ -20069,7 +23134,7 @@ class Session:
                         else set())
         held = []
         for rid, rest in _met_lines(note).items():
-            if verdicts.get(rid) is not True or rid not in texts or not _error_clause(texts[rid]):
+            if verdicts.get(rid) is not True or rid not in texts or not _behavioural_error(texts[rid]):
                 continue
             cited = _cited_cases(rest)
             if set(cited) & demonstrated or self._executed_cases(cited):
@@ -20245,11 +23310,13 @@ class Session:
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
         joined = "\n\n".join(notes)
+        resolving = self._resolution_findings_block(spec)
         return (
             f"Task: {spec.description}\n\n"
             f"Your draft:\n{draft}\n\n"
             f"Independent reviews of it:\n{joined}\n\n"
-            "Revise your work. Address every finding explicitly: fix it, or "
+            + (resolving + "\n\n" if resolving else "")
+            + "Revise your work. Address every finding explicitly: fix it, or "
             "rebut it with a reason -- silence is not a response. A finding "
             "you cannot decide goes to the record as an open question, not "
             "into the void." + _COUNTERPART_FIX + " "
@@ -20392,10 +23459,49 @@ class Session:
             out.append(record)
         return out
 
+    def _standing_reason(self, record: dict, *, limit: int) -> Optional[dict]:
+        """The reason a review finding's own author last gave for keeping it
+        open, or None: the one reading the owner's recheck, the planner and
+        the resolving lead all use (cycle16, PR73 6737404225). Only the
+        latest judged entry is read; an older reason is never resurrected
+        past a newer RESOLVED, another seat's entry or any other state. It is
+        kept as written, bounded to ``limit`` characters, with its role and
+        whether it was given on this source, an earlier one or an unrecorded
+        one; it is that author's question as it stood, never a verdict."""
+        latest = next((h for h in reversed(record.get("history") or ()) if h.get("state") != "unjudged"), None)
+        if not (latest and latest.get("state") == delivery.UNRESOLVED and latest.get("author") == record.get("author")
+                and str(latest.get("why") or "").strip()):
+            return None
+        current = self._source_fingerprint() if self.project else None
+        digest = str(latest.get("source_digest") or "")
+        where = ("on this same source" if current and digest == current else
+                 "on an earlier source" if digest else "on an unrecorded source")
+        return dict(author=record.get("author"), role=latest.get("role"), where=where,
+                    why=str(latest["why"]).strip()[:limit])
+
     def _finding_lines(self, records: List[dict]) -> str:
         """Each finding by id, in the reviewer's own words (the whole line as
-        written, basis and impact segments included)."""
-        return "\n".join(f"- {r['fid']}: {r.get('text') or r['claim']}" for r in records)
+        written, basis and impact segments included), and, where its author's
+        latest judgment kept it open with a reason, that reason as written:
+        the question still standing (cycle10 run 20261108T163004Z: RFT4-14's
+        penultimate recheck said the CLI test did not isolate transitive
+        conflicts and asked for indirect-only cases; the post-merge recheck
+        was shown only the original claim about missing scenarios and closed
+        it on a generic citation). Which answer suffices stays the
+        reviewer's; the harness only keeps the question in front of it."""
+        lines, standing = [], False
+        for r in records:
+            lines.append(f"- {r['fid']}: {r.get('text') or r['claim']}")
+            reason = self._standing_reason(r, limit=1200)
+            if reason is not None:
+                lines.append(f"  your latest judgment ({reason['role']}, {reason['where']}) kept it open: "
+                             f"{reason['why']}")
+                standing = True
+        if standing:
+            lines.append("Where your latest judgment kept a finding open with a reason, that reason is the question "
+                         "still standing: a RESOLVED line answers it, naming the executed case or file that now shows "
+                         "what you said was missing; otherwise the finding stays UNRESOLVED.")
+        return "\n".join(lines)
 
     def _apply_review_reading(self, spec, peer: str, role: str, reading, binding_before: dict, *,
                               call: str = "") -> List[dict]:
@@ -20551,7 +23657,9 @@ class Session:
             # taken, so the identity the judge is handed is the one compared.
             instructions = self._recheck_instructions(ids)
             binding = self._judgment_binding(spec, peer, "recheck")
+            history = self._audit_history([(r.get("requirement") or [None])[0] for r in mine])
             prompt = (self._role_packet(spec, 'reviewer') + '\n\n' + self._finding_contract(mine) + '\n\n' +
+                      (history.strip() + '\n\n' if history else '') +
                       f"Task: {spec.description}\n\n"
                       f"You reviewed this work and raised these findings:\n{self._finding_lines(mine)}\n\n"
                       + self._routing_facts(mine)
@@ -20693,10 +23801,51 @@ class Session:
                 entry = next((c for c in reversed(self.scenario_corrections) if record["fid"] in c.get("findings", [])),
                              None)
                 why = (entry or {}).get("why") or (entry or {}).get("answer") or ""
+                typed = record.get("typed") or {}
+                tid = typed.get("task")
+                now = ""
+                if tid and tid != getattr(self._active_spec, "task_id", None):
+                    proof = {p["id"]: p for p in (getattr(self._prior_scope(tid), "proofs", None) or ())}.get(
+                        typed.get("proof_id"))
+                    if proof is not None:
+                        now = (f" Scenario {tid}:{typed['proof_id']} of the earlier task {tid} now reads: operation: "
+                               f"{proof['operation']}; state: {proof['state']}; expect: {proof['expect']}.")
                 lines.append(f"- {record['fid']}: the planner's answer was: {route[len('scenario:'):].strip()}"
-                             + (f" ({why[:300]})" if why else "") + ". The proof rows above show the scenario as it "
-                             "now stands; judge the declared text, not the code, for this finding.")
+                             + (f" ({why[:300]})" if why else "") + "." + now + " The proof rows show the scenario as "
+                             "it now stands; judge the declared text, not the code, for this finding.")
+        lines += self._declaration_facts(records)
         return ("Harness routing facts for your findings:\n" + "\n".join(lines) + "\n\n") if lines else ""
+
+    def _declaration_facts(self, records: List[dict]) -> List[str]:
+        """For the recheck of a finding the harness routed to the lead's
+        binding declaration: what the lead declared after the revised work
+        the reviewer is shown, with its provenance, and what the harness's
+        own run on this exact source then showed (cycle05 trial t6: the
+        recheck saw only the revision, read P1's PROVES as absent and asked
+        for its truthful NOT RUN to be deleted). Facts only: the finding is
+        the reviewer's, nothing here resolves it, and a declaration on
+        another source is not shown."""
+        current = self._source_fingerprint() if self.project else None
+        out = []
+        for record in records:
+            for route in self.evidence_routes:
+                if (route.get("finding") != record["fid"] or not str(route.get("action", "")).startswith(
+                        "binding requested") or not route.get("declared") or route.get("source") != current):
+                    continue
+                ran = [f"execution {e}" + (f" (receipt {', '.join(rs)})" if rs else "")
+                       for e, rs in zip(route.get("execution_after") or [], route.get("receipts_after") or [], strict=False)]
+                out.append(
+                    f"- {record['fid']}: after the revised work below, the task's lead {route.get('author')} declared in "
+                    f"a read-only declaration call on this exact source"
+                    + (f" (artifact {route['declaration_artifact']})" if route.get("declaration_artifact") else "")
+                    + ": " + "; ".join(f"'{line}'" for line in route["declared"])
+                    + f". The harness then settled {route.get('proof_id')} against its own runs on this source: "
+                    + ("; ".join(ran) or "no execution recorded")
+                    + ". This declaration is the lead's current binding for that scenario; where the revised work "
+                    "says otherwise about it, the declaration is the later account. A NOT RUN or failure the revised "
+                    "work reports is the lead's own working copy, not the harness's approved execution shown here. "
+                    "Judge whether the declared case proves the scenario; your finding stays yours to settle.")
+        return out
 
     def _read_restatement(self, spec, record: dict, why: str) -> None:
         """A recheck's UNRESOLVED text that is a complete typed claim is the
@@ -20824,6 +23973,16 @@ class Session:
                         continue
                     record.update(route="unroutable", route_note=miss)
                     plan["unroutable"].append(record)
+                elif detail.get("task") and detail["task"] != spec.task_id:
+                    # An earlier task's scenario, named with its task (cycle22):
+                    # the same planner correction, only when the record holds it.
+                    why = self._prior_scenario_problem(spec, detail["task"], detail["proof_id"])
+                    if why:
+                        record.update(route="unroutable", typed=detail, route_note=why)
+                        plan["unroutable"].append(record)
+                    else:
+                        record.update(route="scenario", typed=detail)
+                        plan["scenario"].append(record)
                 elif detail["proof_id"] not in mine:
                     record.update(route="unroutable", typed=detail,
                                   route_note=f"names scenario {detail['proof_id']}, which this task does not declare")
@@ -20938,6 +24097,7 @@ class Session:
         source = self._source_fingerprint() if self.project else None
         before = {r["oid"]: (r.get("binding"), r.get("execution")) for r in self.evidence_obligations}
         outcome, reply = "", ""
+        declaration_artifact, kept = None, []
         if not lead:
             outcome = "not requested: no lead seat is known for this task"
         else:
@@ -20974,7 +24134,8 @@ class Session:
                 outcome = "not requested: refused to keep the finish"
             else:
                 task.record("assistant", f"[{lead}] {reply}")
-                task.keep(reply, kind="proof-binding", author=lead)
+                ref = task.keep(reply, kind="proof-binding", author=lead)
+                declaration_artifact = getattr(ref, "id", None)
                 kept, dropped = [], []
                 for match in _PROVES_ANY.finditer(reply or ""):
                     named = _PROVES_PID.match(match.group(1))
@@ -21003,9 +24164,70 @@ class Session:
                 cases=[c for r in rows for c in (after.get(r["oid"], {}).get("cases") or [])],
                 execution_before=[before.get(r["oid"], (None, None))[1] for r in rows],
                 execution_after=[after[r["oid"]].get("execution") for r in rows if r["oid"] in after],
-                source=source))
+                receipts_after=[list(after[r["oid"]].get("receipts") or []) for r in rows if r["oid"] in after],
+                declared=[line for line in kept if (m := _PROVES_PID.match(line.split(":", 1)[1])) and m.group(1) == pid],
+                declaration_artifact=declaration_artifact, source=source))
             self._note(f"task {spec.task_id}: {record['fid']} ({pid} binds no case) went to {lead}'s binding "
                        f"declaration: {outcome}; {record['author']} rechecks it")
+
+    def _fold_note(self, spec, records: List[dict]) -> str:
+        """What the editor revision is asked to declare when the bundle's
+        binding stage is folded into it (cycle22): each scenario a finding
+        says binds no case or binds invalidly, with its text and binding as
+        measured, and the binding rule. Read from this reply by the editing
+        readers (``_record_proves``, ``_record_runs``) with the lead's own
+        authority; the reviewer who raised each finding still rechecks it."""
+        pids = sorted({r["typed"]["proof_id"] for r in records})
+        lines = []
+        for pid in pids:
+            for row in self._scenario_rows(spec, pid):
+                told = dict(row.get("scenario") or ())
+                lines.append(f"- {pid}: {told.get('operation') or row.get('behavior') or ''} | state: "
+                             f"{told.get('state') or ''} | expect: {told.get('expect') or ''} (binding now: "
+                             f"{row.get('binding') or 'none declared'})")
+        claims = "".join(f"- {r['fid']} ({r['author']}): {str(r.get('claim') or '')[:400]}\n" for r in records)
+        return ("\n\n## Scenarios of your task that bind no case, or bind invalidly\n" + "\n".join(lines)
+                + "\nThe review findings that named them:\n" + claims + PROVES_RULE
+                + " In this same reply, after your edits, add one line 'PROVES: P<n> - file::[Class::]test_case' per "
+                "case that proves each scenario above, naming cases that exist in the project's tests as they stand "
+                "after your edits. The harness settles each case only against a check it runs on the source this "
+                "reply leaves; the reviewer who raised the finding judges whether it proves the scenario. No "
+                "separate declaration call is made for these scenarios.")
+
+    def _settle_folded(self, spec, lead, reply: str) -> None:
+        """Record the folded binding declaration once the editor revision
+        returned: the same route record a separate declaration call leaves
+        (``_request_bindings``), so a later round on the same state is the
+        same request, with the bindings as the revision left them. Their
+        execution is settled on the post-edit source by the checks that run
+        after it, never by a run before the edit."""
+        pending = getattr(self, "_fold_pending", None)
+        if not pending or pending.get("task") != spec.task_id:
+            return
+        self._fold_pending = None
+        self._refresh_obligations()
+        before = pending["before"]
+        after = {r["oid"]: r for r in self.evidence_obligations}
+        source = self._source_fingerprint() if self.project else None
+        declared = [m.group(0).strip() for m in _PROVES_ANY.finditer(reply or "")]
+        for record in pending["records"]:
+            pid = record["typed"]["proof_id"]
+            rows = self._scenario_rows(spec, pid)
+            mine = [line for line in declared if (m := _PROVES_PID.match(line.split(":", 1)[1])) and m.group(1) == pid]
+            self.evidence_routes.append(dict(
+                task=spec.task_id, finding=record["fid"], proof_id=pid, reviewer=record["author"],
+                action=(f"binding requested from {lead or 'no lead'} in the fix revision: "
+                        + ("declared" if mine else "no PROVES line for a requested scenario")),
+                author=lead, folded=True,
+                binding_before=[before.get(r["oid"], (None, None))[0] for r in rows],
+                binding_after=[after[r["oid"]].get("binding") for r in rows if r["oid"] in after],
+                cases=[c for r in rows for c in (after.get(r["oid"], {}).get("cases") or [])],
+                execution_before=[before.get(r["oid"], (None, None))[1] for r in rows],
+                execution_after=[after[r["oid"]].get("execution") for r in rows if r["oid"] in after],
+                receipts_after=[list(after[r["oid"]].get("receipts") or []) for r in rows if r["oid"] in after],
+                declared=mine, declaration_artifact=None, source=source))
+            self._note(f"task {spec.task_id}: {record['fid']} ({pid} binds no case) was declared in {lead}'s fix "
+                       f"revision; {record['author']} rechecks it")
 
     def _scenario_allowance(self, spec, pid: str) -> bool:
         """Whether the planner may still be asked to correct scenario ``pid``
@@ -21039,7 +24261,8 @@ class Session:
                 out.append(record)
         return out
 
-    def _serve_plan_findings(self, spec, task, plan: dict, labels: dict, *, lead: Optional[str] = None):
+    def _serve_plan_findings(self, spec, task, plan: dict, labels: dict, *, lead: Optional[str] = None,
+                             fold: bool = False):
         """Answer the routed findings before any editor call: the harness
         runs the task's checks on the current source if it has not (the
         same observation a review gets; a run already recorded on these
@@ -21047,7 +24270,14 @@ class Session:
         asked once for the scenario corrections. Returns the spec, with its
         scenarios as corrected. Nothing here closes a finding: the reviewer
         who raised it re-checks it against what is now shown."""
-        if plan.get("binding"):
+        if plan.get("binding") and fold:
+            # The editor revision this bundle already buys declares the
+            # bindings itself (cycle22): no separate declaration call, and
+            # the bindings settle on the source the revision leaves.
+            self._fold_pending = dict(task=spec.task_id, records=list(plan["binding"]), lead=lead,
+                                      before={r["oid"]: (r.get("binding"), r.get("execution"))
+                                              for r in self.evidence_obligations})
+        elif plan.get("binding"):
             self._request_bindings(spec, task, plan["binding"], lead)
         if plan["evidence"]:
             before = {r["oid"]: r.get("execution") for r in self.evidence_obligations}
@@ -21105,20 +24335,43 @@ class Session:
         proofs = {p["id"]: p for p in (getattr(scope, "proofs", None) or ())}
         texts = self._requirement_texts_now()
         by_pid: Dict[str, List[dict]] = {}
+        prior: Dict[str, Tuple[str, str]] = {}
         for record in records:
-            by_pid.setdefault(record["typed"]["proof_id"], []).append(record)
+            typed = record["typed"]
+            tid = typed.get("task")
+            if tid and tid != spec.task_id:
+                # An earlier task's scenario (cycle22): keyed by its task, so
+                # it can never stand for this task's scenario of the same id.
+                key = f"{tid}:{typed['proof_id']}"
+                found = self._prior_scope(tid)
+                current = {p["id"]: p for p in (getattr(found, "proofs", None) or ())}.get(typed["proof_id"])
+                if current is None:
+                    continue
+                proofs[key] = current
+                prior[key] = (tid, typed["proof_id"])
+                by_pid.setdefault(key, []).append(record)
+            else:
+                by_pid.setdefault(typed["proof_id"], []).append(record)
         asked = sorted(pid for pid in by_pid if pid in proofs)
         if not asked:
             return spec
         # The allowance is spent per scenario, by the asking: a reply that
         # keeps, refuses or garbles it is still the one correction it got.
         for pid in asked:
-            self._scenario_corrected.add(f"{spec.task_id}:{pid}")
+            self._scenario_corrected.add(pid if pid in prior else f"{spec.task_id}:{pid}")
         blocks = []
         for pid in asked:
             proof = proofs[pid]
-            blocks.append(f"Scenario {pid} as declared: operation: {proof['operation']}; state: {proof['state']}; "
-                          f"expect: {proof['expect']}; in {proof['location']}; evidence: {proof.get('evidence', 'test')}")
+            if pid in prior:
+                tid = prior[pid][0]
+                blocks.append(f"Scenario {pid} of the earlier task {tid} (closed; its lead {self._owner_lead(tid)} keeps "
+                              "its binding, and only this scenario's text is in question) as it now stands: "
+                              f"operation: {proof['operation']}; state: {proof['state']}; expect: {proof['expect']}; "
+                              f"in {proof['location']}; evidence: {proof.get('evidence', 'test')}")
+            else:
+                blocks.append(f"Scenario {pid} as declared: operation: {proof['operation']}; state: {proof['state']}; "
+                              f"expect: {proof['expect']}; in {proof['location']}; evidence: "
+                              f"{proof.get('evidence', 'test')}")
             blocks.append("Requirements it shows (verbatim, not open to change here):\n"
                           + "\n".join(f"{rid}: {texts.get(rid, '')}" for rid in proof["requirements"]))
             for record in by_pid[pid]:
@@ -21135,6 +24388,8 @@ class Session:
                   + "\n\nReply with lines for the scenarios named above and nothing else. Each line "
                   "carries the operation first and any explanation after it, never mixed:\n"
                   "SCENARIO P<n>: <operation|state|expect>: <the corrected text only> | because: <why, optional>"
+                  " (an earlier task's scenario keeps its task in the id exactly as named above, "
+                  "'SCENARIO t<k>:P<n>: ...')"
                   " -- adopt the proposal or write a narrower correct text. A scenario's operation, state and "
                   "expect are read together: when the contradiction involves more than one of them, write one line "
                   "per field that changes, for the same scenario, and they are applied together as one revision or "
@@ -21177,7 +24432,9 @@ class Session:
             # 2026-10-28): the text before ' | because: ' is what is bounded
             # and applied; the explanation is kept on the record.
             operation, explanation = _split_explanation(m.group(3))
-            lines.setdefault(m.group(1).upper(), []).append((m.group(2).lower(), operation, explanation))
+            raw = m.group(1)
+            key = (f"{raw.split(':')[0].lower()}:{raw.split(':')[1].upper()}" if ":" in raw else raw.upper())
+            lines.setdefault(key, []).append((m.group(2).lower(), operation, explanation))
         for pid in asked:
             distinct = list(dict.fromkeys((verb, text) for verb, text, _ in lines.get(pid, [])))
             explanations = [why for _, _, why in lines.get(pid, []) if why]
@@ -21203,7 +24460,8 @@ class Session:
                 several = len(changes) > 1
                 problem = next(((f"{field}: {p}" if several else p) for field, p in
                                 ((f, _scenario_text_problem(t, proof[f])) for f, t in changes.items()) if p), "")
-                problem = problem or self._correction_packet_problem(spec, pid, changes)
+                problem = problem or (self._prior_packet_problem(*prior[pid], changes) if pid in prior
+                                      else self._correction_packet_problem(spec, pid, changes))
                 if problem:
                     self._record_scenario_correction(spec, pid, by_pid[pid], status=f"refused: {problem}", reply=reply,
                                                      by=seat.key, field=", ".join(changes),
@@ -21211,8 +24469,12 @@ class Session:
                                                                if several else text)[:600],
                                                      explanation=explanation)
                     continue
-                spec = self._apply_scenario_correction(spec, pid, changes, findings=[r["fid"] for r in by_pid[pid]],
-                                                       by=seat.key)
+                if pid in prior:
+                    self._apply_prior_scenario_correction(*prior[pid], changes, findings=[r["fid"] for r in by_pid[pid]],
+                                                          by=seat.key, raised_in=spec.task_id)
+                else:
+                    spec = self._apply_scenario_correction(spec, pid, changes,
+                                                           findings=[r["fid"] for r in by_pid[pid]], by=seat.key)
                 self._record_scenario_correction(
                     spec, pid, by_pid[pid], status="corrected", reply=reply, by=seat.key, field=", ".join(changes),
                     before="; ".join(f"{f}: {proof[f]}" for f in changes) if several else proof[verb],
@@ -21243,6 +24505,121 @@ class Session:
                                                  reply=reply, by=seat.key)
         return spec
 
+    def _prior_scenario_problem(self, spec, tid: str, pid: str) -> str:
+        """Why an earlier task's scenario ``tid:pid`` cannot take the
+        planner's correction, or "" (cycle22). It must be a scenario of an
+        earlier closed task of this run, still standing on the record, not
+        corrected once already, whose owning lead is on record and
+        reachable, and whose dispatched scope the record keeps. Anything
+        else stays held for its reviewer; nothing is cleared."""
+        closed = {getattr(h, "task_id", None) for h in self.history}
+        if tid == spec.task_id or tid not in closed:
+            return f"names task {tid}, which is not an earlier closed task of this run"
+        rows = [r for r in self.evidence_obligations if r.get("task") == tid and r.get("proof_id") == pid
+                and r.get("kind") == "acceptance" and not r.get("superseded_by")]
+        if not rows:
+            return f"{tid} has no standing scenario {pid} on the record"
+        if tid in self._scenario_corrected or f"{tid}:{pid}" in self._scenario_corrected:
+            return f"scenario {tid}:{pid} was already corrected once; a second correction is not routed"
+        lead = self._owner_lead(tid)
+        if not lead or not self._available(lead):
+            return (f"{tid}'s owning lead {lead or '(none on record)'} is not reachable, so its scenario {pid} "
+                    "stays held as declared")
+        if self._prior_scope(tid) is None:
+            return f"{tid}'s dispatched scope is not on record, so its scenario {pid} cannot be revised"
+        return ""
+
+    def _prior_scope(self, tid: str):
+        """An earlier task's scope as dispatched (its frozen contract), with
+        each scenario's text as it stands now on its rows (earlier
+        corrections included), or None when the record does not hold it."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == tid and o.contract), None)
+        data = (outcome.contract or {}).get("scope") if outcome is not None else None
+        if not isinstance(data, dict) or not data.get("proofs"):
+            return None
+        proofs = []
+        for proof in data["proofs"]:
+            row = next((r for r in reversed(self.evidence_obligations) if r.get("task") == tid
+                        and r.get("proof_id") == proof.get("id") and r.get("kind") == "acceptance"
+                        and not r.get("superseded_by")), None)
+            now = dict((str(k), str(v)) for k, v in (row.get("scenario") or [])) if row is not None else {}
+            proofs.append(dict(proof, **{k: now[k] for k in ("operation", "state", "expect") if k in now}))
+        try:
+            return TaskScope(permitted_paths=tuple(data.get("permitted_paths") or ()),
+                             forbidden_paths=tuple(data.get("forbidden_paths") or ()),
+                             intended_result=str(data.get("intended_result") or ""),
+                             acceptance=tuple(data.get("acceptance") or ()), max_lines=data.get("max_lines"),
+                             review_only=data.get("edits") == "none", capture=data.get("capture"),
+                             exact=bool(data.get("exact")), estimate=data.get("estimate"), proofs=tuple(proofs))
+        except (TypeError, ValueError):
+            return None
+
+    def _prior_packet_problem(self, tid: str, pid: str, changes: dict) -> str:
+        """The size bound an earlier task's corrected scenario meets: that
+        task's role packets, built from its scope with the correction, within
+        its own allowance (its granted extension if it ran under one, else
+        the policy default). Nothing is applied here."""
+        policy = self.config.repository_policy
+        scope = self._prior_scope(tid)
+        if policy is None or scope is None:
+            return ""
+        trial = replace(scope, proofs=tuple(dict(p, **changes) if p["id"] == pid else p for p in scope.proofs))
+        granted = [int(r.get("granted") or 0) for r in self.packet_requests
+                   if r.get("task") == tid and r.get("state") == "granted"]
+        allowance = max(granted) if granted else policy.packet_limit
+        needed = max(policy.packet_needed(policy.scope(trial), role) for role in ("lead", "reviewer"))
+        if needed > allowance:
+            return (f"the corrected text puts {tid}'s role packet over its allowance ({needed:,} bytes against "
+                    f"{allowance:,})")
+        return ""
+
+    def _apply_prior_scenario_correction(self, tid: str, pid: str, changes: dict, *, findings: List[str], by: str,
+                                         raised_in: str) -> None:
+        """Put an earlier task's corrected scenario text in force on its own
+        rows (cycle22), exactly as a task's own correction does: the prior
+        text, execution and judgment kept as lineage, execution and
+        sufficiency start again and are settled from the receipts on record
+        and judged afresh; the requirements, location, evidence kind,
+        binding and scenario id stay the earlier task's. Its frozen contract
+        and outcome are not touched, and no other scenario or task moves. A
+        granted packet extension of that task records the revision."""
+        new = None
+        for row in self.evidence_obligations:
+            if (row.get("task") != tid or row.get("proof_id") != pid or row.get("kind") != "acceptance"
+                    or row.get("superseded_by")):
+                continue
+            scenario = dict((str(k), str(v)) for k, v in (row.get("scenario") or []))
+            lineage = list(row.get("scenario_lineage") or [])
+            first = next(iter(changes))
+            lineage.append(dict(field=", ".join(changes), before=scenario.get(first), after=changes[first],
+                                fields={f: dict(before=scenario.get(f), after=t) for f, t in changes.items()},
+                                findings=list(findings), finding=findings[0] if findings else None, by=by,
+                                raised_in=raised_in, owner_lead=self._owner_lead(tid),
+                                behavior=row.get("behavior"), scenario=[list(x) for x in row.get("scenario") or []],
+                                execution=row.get("execution"), sufficiency=row.get("sufficiency"),
+                                judged_by=row.get("judged_by", ""), receipts=list(row.get("receipts") or [])))
+            scenario.update(changes)
+            new = scenario
+            item = (f"{pid}: {scenario.get('operation')}; given {scenario.get('state')}; expect "
+                    f"{scenario.get('expect')}; in {scenario.get('location')}")
+            row.update(scenario=sorted(scenario.items()), behavior=item[:300],
+                       entry=dict(row.get("entry") or {}, item=item), scenario_lineage=lineage,
+                       execution="missing", sufficiency="unjudged", judged_by="", judged_binding="", receipts=[],
+                       source_digest=None, discharged_cases=None,
+                       reason=f"scenario corrected by the planner on {raised_in}'s review; executed and judged afresh")
+            self._sync_obligation(row)
+        scope = self._prior_scope(tid)
+        for request in self.packet_requests:
+            if request.get("task") == tid and request.get("state") == "granted" and scope is not None:
+                request.setdefault("revisions", []).append(dict(
+                    fingerprint=self._packet_fingerprint(TaskSpec(task_id=tid, description="", kind="backend",
+                                                                  complexity="simple", scope=scope)),
+                    by="prior-task scenario correction", proof=pid, findings=list(findings), corrected_by=by,
+                    raised_in=raised_in))
+        self._refresh_obligations()
+        self._note(f"task {raised_in}: earlier task {tid}'s scenario {pid} corrected by {by}"
+                   + (f" ({', '.join(f'{k}: {v}' for k, v in changes.items())[:160]})" if new else ""))
+
     def _record_scenario_correction(self, spec, pid: str, records: List[dict], *, status: str, reply: str, **detail) -> None:
         entry = dict(task=spec.task_id, proof_id=pid, findings=[r["fid"] for r in records],
                      reviewers=sorted({r["author"] for r in records}), status=status,
@@ -21264,8 +24641,11 @@ class Session:
         trial = replace(spec, scope=replace(scope, proofs=tuple(
             dict(p, **changes) if p["id"] == pid else p for p in scope.proofs)))
         try:
+            # Measured against the task's own allowance: the default, or the
+            # orchestrator's grant this task runs under.
+            allowance = self._packet_allowance(spec)
             for role in self._packet_roles(spec):
-                self._role_packet(trial, role)
+                self._role_packet(trial, role, limit=allowance)
         except Exception as exc:  # noqa: BLE001 -- the packet builder's own refusal, named
             return (f"the corrected text puts this task's role packet over its limit, which the declaration met "
                     f"({str(exc)[:160]})")
@@ -21283,9 +24663,16 @@ class Session:
         are one revision, one lineage entry carrying every field's original
         and replacement."""
         scope = spec.scope
+        grant = self._packet_grant_for(spec)
         proofs = [dict(p, **changes) if p["id"] == pid else p for p in scope.proofs]
         new = next(p for p in proofs if p["id"] == pid)
         spec = replace(spec, scope=replace(scope, proofs=tuple(proofs)))
+        if grant is not None:
+            # The grant follows a reviewed correction it was measured against
+            # (_correction_packet_problem), on the record: never silently.
+            grant.setdefault("revisions", []).append(dict(
+                fingerprint=self._packet_fingerprint(spec), by="scenario correction", proof=pid,
+                findings=list(findings), corrected_by=by))
         if getattr(self._active_spec, "task_id", None) == spec.task_id:
             self._active_spec = spec
         item = f"{pid}: {new['operation']}; given {new['state']}; expect {new['expect']}; in {new['location']}"
@@ -22191,6 +25578,114 @@ class Session:
         result = self._join_original_tests(gate, result, current)
         return self._skip_baseline(gate, result, current)
 
+    def _test_migrations(self, names, current: dict, receipts, *, request=False) -> Dict[str, dict]:
+        """Exact, human-approved test changes whose replacement cases ran.
+
+        A passing edited suite does not authorize replacing its old tests.
+        A concrete approval binds the goal, original bytes and delivered bytes;
+        changing the file again requires a new decision. No model can approve.
+        """
+        from .design_evidence import EvidenceIdentityMismatch
+        from .integration import declared_cases, test_change_authorizations, test_change_problems
+        from .project import Project
+        owner = getattr(self, "_authority_parent", None) or self
+        decisions = owner.test_change_decisions
+        approved = {}
+        for name in names:
+            original, delivered = (self._original_tests or {}).get(name), current.get(name)
+            if original is None or delivered is None:
+                continue
+            digest = hashlib.sha256(delivered).hexdigest()
+            original_digest = hashlib.sha256(original).hexdigest()
+            existing = next((d for d in reversed(decisions)
+                             if d.get("path") == name and d.get("current_sha256") == digest
+                             and d.get("original_sha256") == original_digest
+                             and d.get("goal") == self.memory.goal), None)
+            if existing is not None:
+                if existing.get("status") == "approved" and not test_change_problems(
+                        existing, original, current, receipts):
+                    existing["checked_source"] = self._source_fingerprint()
+                    approved[name] = existing
+                continue
+            configured = next((dict(d) for d in getattr(self.config, "test_changes", ())
+                               if d["path"] == name), None)
+            proposal = configured
+            if proposal is None and request and self.config.ask_operator is not None:
+                old_cases = declared_cases(name, original)
+                new_cases = declared_cases(name, delivered)
+                if new_cases is None and name.endswith(".py"):
+                    import ast
+                    try:
+                        tree = ast.parse(delivered)
+                        if not any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                   and n.name.startswith("test_") for n in ast.walk(tree)):
+                            new_cases = []
+                    except (SyntaxError, ValueError):
+                        pass
+                if not old_cases or new_cases is None:
+                    continue
+                proposal = dict(goal=self.memory.goal, path=name, original_sha256=original_digest,
+                                current_sha256=digest,
+                                reason="Operator review of a test change against the verbatim goal",
+                                cases=[dict(case=c, action="replace" if new_cases else "retire",
+                                            replacements=[dict(path=name, case=c)] if c in new_cases else
+                                            [dict(path=name, case=n) for n in new_cases]) for c in old_cases])
+            if proposal is None or proposal["original_sha256"] != original_digest:
+                continue
+            if proposal.get("current_sha256") not in (None, digest):
+                continue
+            proposal["current_sha256"] = digest
+            envelope = dict(schema_version=1, goal=self.memory.goal,
+                            changes=[{k: v for k, v in proposal.items() if k != "goal"}])
+            try:
+                proposal = dict(test_change_authorizations(envelope, goal=self.memory.goal, root=self.project,
+                                                          originals=self._original_tests)[0])
+            except ValueError:
+                continue
+            problems = test_change_problems(proposal, original, current, receipts)
+            if problems:
+                continue
+            preapproved = bool(configured and configured.get("current_sha256") == digest)
+            if not preapproved and (not request or self.config.ask_operator is None):
+                continue
+            request_id = hashlib.sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest()
+            answer = "exact delivered bytes supplied by the operator"
+            if not preapproved:
+                import difflib
+                diff = "".join(difflib.unified_diff(original.decode("utf-8", errors="replace").splitlines(True),
+                                                    delivered.decode("utf-8", errors="replace").splitlines(True),
+                                                    fromfile=f"original/{name}", tofile=f"delivered/{name}"))
+                # Never ask a human to approve a silently truncated change.
+                if len(diff.encode()) > 64_000:
+                    self._note(f"Test change {name} needs an exact --test-changes authorization; "
+                               "its full diff exceeds the interactive review limit.")
+                    continue
+                question = (f"The edited tests pass, but run-start tests conflict with the delivered code. "
+                            f"Approve this exact test change only if it implements your requested behavior. "
+                            f"Other files' original checks remain required.\n\nGoal (verbatim):\n{self.memory.goal}"
+                            f"\n\nProposed case changes:\n{json.dumps(proposal, indent=2)}\n\nFull diff:\n{diff}"
+                            f"\nReply exactly APPROVE TEST CHANGE {request_id} to authorize these bytes; "
+                            "any other answer declines the change.")
+                answer = str(self.config.ask_operator(question))
+                owner.memory.ledger.rulings.append(f"Test change {request_id} for {name}: {answer}")
+                # The approval never applies to bytes that moved while the question was open.
+                if Project(self.project, exclude=self.config.project_excludes).contents() != current:
+                    raise EvidenceIdentityMismatch("Project changed during test-change approval; approval not applied.")
+            accepted = preapproved or answer.strip() == f"APPROVE TEST CHANGE {request_id}"
+            original_artifact = self.store.put(original.decode("utf-8", errors="replace"),
+                                               kind="test-change-original", author="harness").id
+            delivered_artifact = self.store.put(delivered.decode("utf-8", errors="replace"),
+                                                kind="test-change-delivered", author="harness").id
+            decision = dict(proposal, id=request_id, status="approved" if accepted else "declined",
+                            approval="operator exact bytes" if preapproved else "operator reply",
+                            answer=answer, original_artifact=original_artifact, delivered_artifact=delivered_artifact,
+                            checked_source=self._source_fingerprint())
+            decisions.append(decision)
+            owner._publish_authority()
+            if accepted:
+                approved[name] = decision
+        return approved
+
     def _command_keys(self, gate) -> dict:
         """Receipt id to the command's identity (id, argv, cwd), so a baseline
         measured once serves every gate object that runs the same command (a
@@ -22249,6 +25744,10 @@ class Session:
         repaired = self._repaired(changed, current)
         # A failing check stays an ordinary failure with its own attribution;
         # the repaired cases are judged on a check that passed.
+        migration_receipts = result.receipts or (dict(status="passed" if result.passed else "failed",
+                                                     required=True, cases=result.cases, report=result.report),)
+        migrated = self._test_migrations(changed, current, migration_receipts) if result.passed else {}
+        repaired = [n for n in repaired if n not in migrated]
         if repaired and result.passed:
             problems = self._repair_check(repaired, current, result.receipts or (dict(
                 status="passed" if result.passed else "failed", required=True, cases=result.cases),), task)
@@ -22260,16 +25759,17 @@ class Session:
                                output=f"{result.output}\n\n{text}"[-8_000:], receipts=tuple(result.receipts) + (
                                    GateReceipt(id="repair-check", status="failed", reason="; ".join(problems)[:300],
                                                required=True),))
-        if repaired:
-            changed = [n for n in changed if n not in repaired]
+        if repaired or migrated:
+            changed = [n for n in changed if n not in repaired and n not in migrated]
             if not changed:
                 if result.passed:
-                    self._note(f"task {task}: authorized repair(s) {', '.join(repaired)} keep their original "
-                               "cases, executed; no other run-start test file changed")
+                    self._note(f"task {task}: authorized test changes in {', '.join([*repaired, *migrated])}; "
+                               "their required cases executed; no other run-start test file changed")
                 return result
         with self._operation("original tests", inputs=dict(task=task, gate=_gate_identity(gate), changed=changed),
                              effects=("run-check",)) as op:
-            baseline, problem = run_original_tests(gate, self.project, originals, current, keep=repaired)
+            baseline, problem = run_original_tests(gate, self.project, originals, current,
+                                                   keep=[*repaired, *migrated])
             op["result"] = dict(passed=None if baseline is None else baseline.passed, problem=problem)
         self._verify_dependencies(f"during original tests ({task})")
         drift = self._source_drift(current)
@@ -22283,6 +25783,11 @@ class Session:
             task=task, changed=changed, added=added, passed=None if baseline is None else baseline.passed,
             problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)
                                        for r in (baseline.receipts if baseline else ())]))
+        if baseline is not None and not baseline.passed and result.passed and not skipped:
+            approved = self._test_migrations(changed, current, migration_receipts, request=True)
+            if approved:
+                self.original_test_runs[-1]["superseded_tests"] = {n: d["id"] for n, d in approved.items()}
+                return self._join_original_tests(gate, result, current)
         for receipt in skipped:
             self._unverified_once(f"Task {task}: {receipt.id} did not run against the run-start "
                                              f"test files: {receipt.reason}")
@@ -22353,6 +25858,14 @@ class Session:
         if not changed:
             return ""
         repaired = self._repaired(changed, current)
+        last = self.checks[-1] if self.checks else {}
+        migrated = (self._test_migrations(changed, current, last.get("receipts") or (dict(
+            status="passed", required=True, cases=last.get("cases") or {}, report=last.get("report")),))
+                    if last.get("passed") and last.get("source") == self._source_fingerprint() else {})
+        repaired = [n for n in repaired if n not in migrated]
+        changed = [n for n in changed if n not in migrated]
+        if not changed:
+            return ""
         if repaired:
             # The delivered bytes of each repaired file must be bytes a check
             # already showed keeping every original case, executed.
@@ -22374,7 +25887,7 @@ class Session:
         cached = getattr(self, "_done_original_tests", None)
         if cached and cached[0] == key:
             return cached[1]
-        refusal = self._run_original_tests_at_done(current, changed, keep=tuple(repaired))
+        refusal = self._run_original_tests_at_done(current, changed, keep=tuple([*repaired, *migrated]))
         self._done_original_tests = (key, refusal)
         return refusal
 
@@ -22682,26 +26195,29 @@ def _design_fix_delivery(already: str) -> str:
     )
 
 
-def _review_subject_note(spec: TaskSpec) -> str:
-    """Keep "this review is wrong" apart from "the thing reviewed is wrong".
+def _review_subject_note(spec: TaskSpec, *, blind: bool = True) -> str:
+    """A completed blind audit can correctly find its subject unready.
 
-    When the task *is* a review, the work under critique is a review document,
-    and its correct conclusion may well be that its subject is not ready. A
-    reviewer that marks the subject's defects BLOCKING turns a finished review
-    into a revision obligation it can never discharge -- the defects are in
-    something this task is not allowed to touch, and in a read-only run is not
-    permitted to touch either. The 2026-09-13 probe came out right anyway, and
-    that outcome is worth protecting deliberately rather than by luck.
+    The counterpart has not seen the lead's report yet, so it cannot judge
+    that report's claims or omissions. Its source findings go to the lead's
+    reconciliation, without turning this audit into an implementation task.
     """
     if spec.kind != TaskKind.REVIEW:
         return ""
+    if not blind:
+        return (
+            " This task delivers a review report. Judge the supplied report against the source: a missed "
+            "problem, a wrong claim or an unsupported conclusion is a defect in the report. A subject "
+            "that is not ready can still have a complete and successful review; do not require its "
+            "implementation to be repaired to complete this review. Do not ask for the subject to be fixed."
+        )
     return (
-        " This task is itself a review. BLOCKING means a defect in the review "
-        "-- a missed problem, a wrong claim, unsupported evidence. A defect the "
-        "review correctly reports in the thing it reviewed is not a blocker "
-        "here: a review that concludes its subject is not ready is a complete "
-        "and successful review, not an unfinished one. Do not ask for the "
-        "subject to be fixed."
+        " This task delivers a review report. In this blind first read, report the subject's defects "
+        "as findings to include in the combined report; do not judge claims or omissions in the "
+        "withheld lead report. BLOCKING here means something prevents completing this review "
+        "adequately, such as essential source or evidence being unavailable. A review that concludes "
+        "its subject is not ready is a complete and successful review, not an unfinished one. "
+        "Do not ask for the subject to be fixed."
     )
 
 

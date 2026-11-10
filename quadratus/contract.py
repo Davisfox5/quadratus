@@ -90,7 +90,10 @@ class TaskContract:
     authority: Tuple[Tuple[str, str], ...] = ()
     capabilities: Tuple[str, ...] = ()    # readiness probes that passed at run start
     required_checks: Tuple[str, ...] = ()
-    intended_state: Optional[str] = None  # canonical JSON: capture page and steps
+    #: Canonical JSON: harness capture page/steps, or a versioned self-capture
+    #: subject and its explicit continuation lineage. Older unknown states
+    #: remain None and cannot discharge another task's design obligations.
+    intended_state: Optional[str] = None
     acceptance: Tuple[str, ...] = ()
     required: Required = field(default_factory=Required)
     allowed_next: Tuple[str, ...] = ()
@@ -126,6 +129,41 @@ class TaskContract:
 
 def canonical(value) -> Optional[str]:
     return None if value is None else json.dumps(value, sort_keys=True)
+
+
+def self_capture_state(task_id: str, *, goal: str, requirements, scope: dict,
+                       predecessor: Optional[dict] = None) -> dict:
+    """Bind self-captured evidence to the UI claim its continuation takes over.
+
+    The URL is not known before a self-capturing lead runs. The subject is
+    therefore the goal and covered requirement texts, with any declared
+    visual state. Without numbered requirements, the scope's result and
+    acceptance define that claim. Permitted paths, size estimates and test bindings
+    may change in a continuation; a different visual claim may not.
+
+    Only an explicit continuation of a recorded, versioned self-capture
+    contract inherits its lineage. A legacy None carries no identity to
+    inherit, and harness-capture contracts keep their existing state rules.
+    """
+    claims = sorted((str(rid), str(text)) for rid, text in requirements)
+    captures = [{k: p.get(k) for k in ("operation", "state", "expect", "location", "requirements")}
+                for p in scope.get("proofs") or () if p.get("evidence") == "capture"]
+    subject = dict(goal=hashlib.sha256(goal.encode()).hexdigest(), requirements=claims,
+                   capture=scope.get("capture"),
+                   scenarios=sorted(captures, key=lambda p: json.dumps(p, sort_keys=True)))
+    if not claims:
+        subject["declared"] = dict(result=scope.get("intended_result"),
+                                   acceptance=scope.get("acceptance") or [])
+    # Use JSON's own shape on both sides, including after checkpoint restore.
+    subject = json.loads(canonical(subject))
+    previous = (predecessor or {}).get("intended_state")
+    required = (predecessor or {}).get("required") or {}
+    if (isinstance(previous, dict) and type(previous.get("self_capture")) is int
+            and previous["self_capture"] == 1 and isinstance(required, dict)
+            and isinstance(previous.get("task"), str) and previous["task"]
+            and previous.get("subject") == subject and required.get("design_evidence") == "self"):
+        return json.loads(canonical(previous))
+    return dict(self_capture=1, task=task_id, subject=subject)
 
 
 def stages_for(required: Required, intent: str) -> Tuple[str, ...]:

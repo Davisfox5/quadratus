@@ -52,7 +52,9 @@ def test_the_scope_line_form_and_path_rules_are_stated():
     assert '"max_lines": ' + str(TASK_SIZE_GUIDE) in text and "never squeezed" in text
     assert "no greater than" not in text and "an overrun stops the task" not in text
     assert "one correction" in text and "not DONE, ASK or FETCH" in text
-    assert "20,000 bytes" in text
+    # The size bound is the role packet's, stated per run (cycle21,
+    # tests/lifecycle/test_cycle21_dispatch_intake.py); no fixed number here.
+    assert "20,000 bytes" not in text
 
 
 def test_the_capture_rules_are_stated_from_the_validator_constants():
@@ -286,3 +288,16 @@ def test_the_bounded_editor_role_does_not_offer_lead_channels():
         else inspect.getsource(runtime)
     assert "may be returned alone before the patch" not in source
     assert "cannot hire, consult or fetch" in source
+
+
+def test_the_early_rejection_scenario_is_stated_in_the_scenario_grammar_the_parser_reads(tmp_path):
+    """Cycle18 (PR73 6742757517, 5b): guidance only, in the planner's
+    scenario declaration, worded in the keys the proof parser accepts."""
+    from quadratus.scope import PROOF_KEYS
+    rule = S._EARLY_REJECTION_SCENARIO_RULE
+    assert rule in S._SCOPE_REQUEST
+    for key in ("operation", "expect"):
+        assert key in PROOF_KEYS and f"whose {key} is" in rule
+    with_writes = _orchestrator_prompt(tmp_path / "w", project=str(tmp_path), allow_writes=True)
+    assert rule in with_writes
+    assert rule not in _orchestrator_prompt(tmp_path / "r"), "no scenarios are declared without a SCOPE request"

@@ -534,13 +534,13 @@
     {
       "completed": false,
       "done_accepted": false,
-      "stop_reason": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the task why one cannot be done. Work preserved.",
+      "stop_reason": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the [... 29 more characters]. Work preserved.",
       "result_error": null,
       "stop_fact": {
         "kind": "unverified",
         "legacy": "RequirementsUnmet",
         "detail": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again s",
-        "full": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the task why one cannot be done. Work preserved."
+        "full": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the [... 29 more characters]. Work preserved."
       },
       "stops": [
         "RequirementsUnmet"

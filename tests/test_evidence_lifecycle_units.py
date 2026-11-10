@@ -268,12 +268,16 @@ def test_the_lead_is_told_the_identity_forms_the_harness_can_discharge(tmp_path)
     """The prompt sentence beside its parser (_bind_not_run): the forms the
     guidance names are exactly the forms the binding reads."""
     import inspect
-    text = inspect.getsource(Session._configured_checks_guidance) if hasattr(Session, "_configured_checks_guidance") \
-        else inspect.getsource(Session)
-    assert "'NOT RUN: P<n> - <why>' for a declared scenario, " in text
-    assert "'NOT RUN: <file>::<Class>::<test> - <why>' for a case, or 'NOT RUN: <file>::<Class> - <why>' " in text
-    assert "a report naming none of these is " in text
-    assert "kept as written and nothing can discharge it" in text
+
+    from quadratus import runtime
+    from quadratus.scope import NOT_RUN_RULE
+    # One sentence (cycle22): the planner's note and every editing call
+    # carry the same rule, so the editing seat is told the forms too.
+    assert "+ NOT_RUN_RULE" in inspect.getsource(Session) and "+ NOT_RUN_RULE" in inspect.getsource(runtime)
+    assert "'P<n>' for a declared scenario of this task" in NOT_RUN_RULE
+    assert "'<file>::[<Class>::]<test>' for a case, '<file>::<Class>' for a whole test class" in NOT_RUN_RULE
+    assert "A report naming none of these" in NOT_RUN_RULE
+    assert "is kept as written, holds the requirements it serves and nothing can discharge it" in NOT_RUN_RULE
 
 
 # -- 2. sufficiency is read from the auditor's own verdicts and a prior judgment stands ----------------
@@ -411,7 +415,9 @@ def test_a_typed_receipt_of_exactly_the_named_command_on_the_current_identity_is
         "it executed no cases": _receipt_check(session, "python3 -m pytest -q", cases=(), output="no tests ran"),
         "it skipped 1 case(s)": _receipt_check(session, "python3 -m pytest -q", output="1 passed, 1 skipped", skipped=1),
         "it has failures": _receipt_check(session, "python3 -m pytest -q", counts=dict(failed=1)),
-        "it ran a selection, not the whole command": _receipt_check(session, "python3 -m pytest -q", selection="-k add"),
+        # The true reason (cycle17): the selection came from outside argv.
+        "a test selection from the environment or configuration applies to it":
+            _receipt_check(session, "python3 -m pytest -q", selection="-k add"),
         "its skips are unknown": _receipt_check(session, "python3 -m pytest -q", counts={"skipped": None}),
     }
     del negatives["its skips are unknown"]["report"]["counts"]["skipped"]  # the receipt shares the report

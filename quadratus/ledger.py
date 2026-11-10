@@ -34,6 +34,7 @@ eventually be summarised out of existence.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
@@ -144,7 +145,7 @@ class Ledger:
         if rid in self.decisions:
             return True
         later = self.rulings[self.ambiguous_since.get(rid, 0):]
-        if any(rid in r for r in later):
+        if any(re.search(rf"\b{re.escape(rid)}\b", r) for r in later):
             return True
         open_ids = [r for r in self.ambiguous if r not in self.decisions]
         return bool(later) and open_ids == [rid]

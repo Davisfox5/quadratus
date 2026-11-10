@@ -125,6 +125,10 @@ def test_inheritance_follows_the_continuation_chain_and_reaches_the_lead(tmp_pat
     assert [r["fid"] for r in session._inherited_review_findings(spec, "t2")] == ["RFT1-1", "RFT2-1"]
     assert session.review_findings[0]["inherited_by"] == ["t3"] and "inherited_by" not in session.review_findings[2]
     session._continues = "t2"
+    # The lead's block reads t3's own dispatch record (root review of
+    # b592380), which run_task writes before any lead prompt is built.
+    session.task_outcomes.append(TaskOutcome(task_id="t3", intent="implementation", lead="x", covers=["R1"],
+                                             continues="t2"))
     block = session._inherited_findings_block(spec)
     assert "RFT1-1 (raised by claude:opus on t1)" in block and "RFT2-1 (raised by openai:sol on t2)" in block
     assert "do not mark any of them resolved yourself" in block

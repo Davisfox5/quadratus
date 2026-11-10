@@ -78,7 +78,7 @@ def test_a_capped_close_holds_its_open_finding_and_resolves_settles_by_the_origi
     assert "do not exist" not in prompt and "TASK SENT BACK" not in replay.of("orchestrator")[2].prompt
     # The continuing lead was handed the finding as written, never told to clear it.
     lead = [c for c in replay.of("lead") if c.task == "t2"][0].prompt
-    assert "## Open review findings on the work you continue" in lead and "RFT1-1" in lead
+    assert "## Open review findings this task resolves" in lead and "RFT1-1" in lead
     assert "do not mark any of them resolved yourself" in lead
     # One recheck call by the reviewer who raised it, on the resolving task's final source.
     rechecks = [c for c in replay.of("recheck") if c.task == "t2"]

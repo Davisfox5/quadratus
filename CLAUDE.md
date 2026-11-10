@@ -3122,6 +3122,408 @@ Key design decisions already settled:
     allowance, a refusal or a provider failure leaves the omission as it was;
     nothing is inferred from a requirement's MET. The audit record keeps
     `reply_artifact`, `required`, `omitted` and `completion`.
+  - *Trial corrections* (root's assessment of 20261108T050923Z-c63988ae,
+    PR73 6718066718).
+    - A recheck after a binding declaration is told, as a routing fact
+      (`_declaration_facts`), what the lead declared after the revised work,
+      the declaration artifact, the source, and the harness's execution
+      with its receipt on that source. It says that a NOT RUN in the revised
+      work is the lead's own copy, and that the finding stays the reviewer's.
+      The t6 recheck saw only the revision and asked for a truthful NOT RUN
+      to be deleted.
+    - A requirement whose whole claim is that a named test command passes
+      needs no proof scenario (`_TEST_COMMAND_RULE`, stated to
+      the planner, and to the lead and reviewers that cover one). The
+      harness's exact receipt is cited and the audit judges it. It stays NOT
+      MET when no configured check runs the command. t5/t6 built a test that
+      ran the suite inside itself. Classification is conservative
+      (`_test_command_requirement`; root review of 63fbef7, PR73 6718399838):
+      exactly one command, of a runner's own shape (`_test_runner_shape`:
+      `pytest` or `python -m pytest|unittest` with only options,
+      `discover`, test paths or `tests`; exactly `npm test` or `make test`),
+      and every other word in run-and-pass vocabulary (`_PASS_ONLY_WORDS`).
+      A runner name as an application argument, a `-k` selection, or any
+      behaviour beside the command keeps the scenario.
+    - The task cap reaches the declaration route (`_declare_at_cap`) before
+      it skips the goal question as known incomplete, and before the final
+      audit. It uses the same plan, decision accounting and pricing, with no
+      slot. Records go on `done_gates` with site `cap`.
+    - `_ERROR_CLAUSE` reads a returned 4xx/5xx status and "does not exist"
+      as error language, so an unknown-ID 404 requirement reaches the 2**63
+      boundary candidate. The review lens names a value one layer accepts
+      and a later one cannot represent. `_PROTOCOL_RULE` (audit and review)
+      reads requirements under the named protocol's semantics, for example
+      no body on HEAD.
+- **A typed overload on a read-only call is re-sent, boundedly; nothing else
+  is** (cycle06 run 20261108T075040Z-4454b282, PR73 6719287741). The
+  planner's Claude CLI answered "API Error: 529 Overloaded" with zero usage.
+  `_extract_claude_result` raised a plain ProviderError and `_generate_once`
+  rethrows every ProviderError, so the run ended with 32 calls, 2.36M tokens
+  and 3 slots left.
+  - *The one retried failure.* A claude error envelope whose status is 529
+    (`api_error_status`, or the client's own "API Error: 529" line,
+    `_envelope_status`) and that carries usage is `TransientOverload`. A
+    model's prose is never read for it, and a 5xx other than 529 is not one.
+  - *When it is re-sent* (`_generate_once`, `_transient_wait`):
+    - at most `MAX_TRANSIENT_RETRIES` (2) times, and never past
+      `max_retries`, so a summary view's single attempt stays single;
+    - only on a call that cannot write, so it is never an ambiguous replay;
+    - only with settled usage;
+    - only when the budget leaves an attempt beyond the finishing calls
+      still held, and the wait is under half the wall time left after the
+      finish hold.
+  - *What a re-send is.* The same seat, model, role and prompt; no other
+    model or API key. Each re-send is its own admitted attempt (reserve,
+    settle, ledger row, finish hold). The re-sent row carries
+    `retry_wait_seconds` and `retry_cause: overloaded`.
+  - *Unchanged.* TurnLimitReached, refusals, PartialWorkSuspected, window
+    and auth exhaustion, unknown usage and every other ProviderError keep
+    their behaviour.
+- **A documentation assertion about behaviour is not the behaviour**
+  (cycle07 run 20261108T091024Z-75154efd, PR73 6720016289). R23 was "README
+  documents the new Store methods, HTTP endpoints and CLI commands,
+  including the refusal rules, without narrowing the contract". Every
+  reading proof for it was refused because `_error_clause` matched
+  "refusal", and the final task was sent back until the correction budget
+  stopped the run. The audit lowering and the review hold read the same word
+  and would have demanded an executed case for a README. This was a guard
+  design failure, a keyword promoted to an unconditional stop. It is
+  corrected by classification, not by a larger cap.
+  - *The reading* (`_behaviour_text`, `_behavioural_error`). A clause
+    whose subject is documentation the work writes (a README, the docs or
+    documentation, a changelog, a guide or manual, a named .md/.rst/.adoc
+    file) with a documenting verb, or a clause starting with the
+    imperative Document/Describe/Explain, asserts what that text says. Only
+    its confident part is removed:
+    - the documenting verb's own object, up to the first
+      `_SEGMENT_BOUNDARY` (a comma or semicolon, and/or/but/while/whereas/
+      then/so that/ensure/which/whose);
+    - later segments that open with an `_OBJECT_CONTINUATION` word
+      (including, such as, with, without, for, of, in, as, ...).
+
+    A coordinated item (and, or, a comma) also continues the object when it
+    carries no `_PREDICATE` (an auxiliary or modal, or a runtime verb form
+    such as rejects, returns, raises, exits, answers). So "including refusal
+    rules and invalid ID responses" is a noun list (root review of 621df07,
+    PR73 6720918371). A segment opened by a subordinator (but, while, then,
+    ensure, ...), or carrying a predicate, is a claim. It stays, with
+    everything after it, and the error rule applies to it. Root's review of
+    06c708d (PR73 6720550674) found "and API rejects", "and the HTTP API
+    rejects", ", while the service rejects" and "and ensure ... are
+    rejected" discarded under the earlier grammar. The remaining
+    uncertainty is stated: the predicate list is lexical, so a coordinated
+    item whose only verb is outside it ("and the API emits 400") is read as
+    a noun.
+  - *Consumers.* All of these read `_behavioural_error`:
+    - `_proof_problem`, for reading and capture evidence;
+    - `_lower_unexercised_errors`, the audit;
+    - `_hold_unexercised_errors`, the review;
+    - `boundary_classes`.
+
+    A refused reading proof names each behavioural requirement, quotes the
+    behaviour it asserts, and says the claim takes an executed scenario
+    while the documentation claim keeps reading evidence.
+  - *Unchanged.*
+    - Reading evidence still needs a documentation-file location.
+    - A behaviour in docs, or a mixed requirement, still needs an executed
+      case.
+    - Sufficiency stays with the original judges.
+    - The covers-correction allowance is unchanged.
+  - *Prompts.* The planner's reading rule and `_EXECUTED_ERROR_RULE` state
+    the same distinction.
+- **A pure suite-pass claim is read in its ordinary forms and reaches the
+  audit on the gate's own receipt** (cycle08 run 20261108T121411Z-720c5d46,
+  PR73 6721926382).
+  - *What happened.* R17 was "All existing tests keep passing and `python3
+    -m unittest discover -s tests` passes on the delivered source". It was
+    read as a behaviour for the one word "keep". t6 was sent back, and the
+    re-plan reported 148,417 tokens. The planner then dropped R17 and R21
+    from COVERS, and DONE stopped on "not covered" while the gate's unittest
+    run on the delivered source was passing. t7's terminal route was 95,181
+    tokens short, less than that re-plan.
+  - *Vocabulary.* `_PASS_ONLY_WORDS` now carries ordinary grammatical
+    variants: keep, continue, still, remain, stay, also, both, each, after,
+    to, change, passed, ran, executed, complete, current, final, clean.
+    Words that change the claim stay outside it (unchanged, preserved, a
+    behaviour, a value, an endpoint).
+  - *Actionable refusal.* A requirement that names a runner-shaped command
+    but claims more is refused with the words it claims besides the command
+    (`_test_command_extra_words`). The message says to give that claim a
+    scenario and keep the requirement in COVERS.
+  - *Coverage from the receipt* (`_cover_by_receipt`, at DONE and at the
+    cap, before the coverage check). A pure test-command requirement that no
+    task covered and no audit found NOT MET is covered for the audit by
+    `_command_receipt_citation`. That is the exact command, run whole and
+    passed on the current source, gate and environment, with cases executed
+    and none skipped. A missing, stale, failed, filtered or skipping receipt
+    covers nothing. The fact is the receipt; the MET is the independent
+    audit's, and a NOT MET goes back to the planner as before. Kept on
+    `receipt_coverage` (result.json, checkpoint).
+- **A repair is read by typed ids, a bare command by its own words, and a
+  repeated limitation is inherited** (cycle09 terminal, PR73 6722947726).
+  - *RESOLVES with requirement ids* (`_normalize_resolves`, before COVERS
+    is read). The planner wrote `RESOLVES: R17 (audit), R24 (audit)` for
+    what the final audit held NOT MET; every token was an unknown finding
+    and the sendbacks spent the correction allowance until RunStalled. A
+    parenthesised annotation is dropped. A requirement id whose only hold is
+    the audit's NOT MET (no open finding names it) moves to COVERS, which
+    is the route the DONE refusal names, and the same independent audit
+    judges the repair. Any other requirement id stays and is refused with
+    its typed route: held by open findings (named back), not NOT MET, or
+    not listed. A line left with no id is refused as naming none. Kept on
+    `resolves_normalized` (result.json, checkpoint). The DONE refusal says
+    RESOLVES names only finding ids. Caps and the allowance are unchanged.
+  - *Bare commands* (`_command_words`, `_RUNNER_VALUED`). An unquoted
+    command is the runner, its options, a valued option's operand, paths and
+    patterns, unittest's `discover`, and `test` after npm or make. It stops
+    at the first other word, so "successfully", "cleanly" and the like are
+    prose, and the extracted argv is the command's identity for the receipt.
+    A `-k` selection, an application command and a mixed claim stay
+    scenarios.
+  - *Inherited NOT RUN* (`_inherited_not_run`; corrected after root's
+    review of f7fc186, PR73 6723584415). Equal path sets inherited a
+    different scenario about the same test file, and a repeat made after the
+    application under test changed. A repeat is now the same report only
+    when all of these hold:
+    - the whole item text and its binding are the same;
+    - it names a path and no `| for:` requirement;
+    - the gate and environment are the same;
+    - the source fingerprint recorded with the earlier report (each entry's
+      `source`) equals the current one, both known;
+    - this task's measured changes, where the harness has them, are empty.
+    Such a repeat is kept on `inherited_not_run` and as `repeated_by` on
+    the original, with no new obligation and no declaration call. Anything
+    different or unknown is the task's own report and holds its own
+    requirements. That debt still reaches its owning lead through the DONE
+    declaration route, one call per owner.
+  - *Declarations before the coverage gate.* DONE's declaration route and
+    the cap's `_declare_at_cap` now run before the "not covered" refusal,
+    once per DONE. In cycle09 an uncovered or audit-NOT-MET requirement
+    refused DONE first and `done_declarations` stayed empty. The plan's own
+    rules decide as before: a mixed set with editing debt asks nobody, and
+    nothing is met without the audit.
+- **The planner sees the registry as it is now, a recheck sees the question
+  still standing, and a population clause is part of a command claim**
+  (cycle10 run 20261108T163004Z, PR73 6724518561).
+  - *Current dispositions* (`_closed_findings_note`). t4's close-out, frozen
+    in the append-only ledger, listed RFT4-14 as unresolved. The post-merge
+    recheck then closed it, but the planner prompt still carried only the
+    close-out. t5 and t6 named the id in RESOLVES, were refused as "already
+    resolved", and the shared correction allowance stopped the run with
+    three slots left.
+    - The ledger stays as written. The findings section now ends with the
+      findings the registry holds closed, with their judge, labelled as
+      current, with the close-outs above labelled as history.
+    - `_normalize_resolves` drops a closed id (review or audit) from
+      RESOLVES and records it (`closed_dropped`). The task then stands on
+      its COVERS and ordinary admission; nothing reopens and nothing is
+      judged.
+    - An unknown id is never dropped. The same reading runs in a parallel
+      batch.
+  - *The question still standing* (`_finding_lines`). RFT4-14's author kept
+    it open at its penultimate recheck with a concrete counterexample (no
+    indirect-only case). The post-merge recheck packet showed only the
+    original claim, and it closed on a generic citation.
+    - Every recheck packet (in-task, settlement, post-merge) now carries the
+      author's latest UNRESOLVED reason, with whether it was made on this
+      source or an earlier one, and says a RESOLVED answers it.
+    - What answers it stays the reviewer's. The history keeps both
+      judgments, and an adverse verdict binds as before.
+  - *Population clauses* (`_population_clause`, `_population_problem`). An
+    "including …" clause after a test-command claim is read by grammar.
+    - Its items are noun phrases headed by a test noun (test, case, suite,
+      file, module), optionally "in <path>", or bare test paths. "tests for
+      malformed JSON" or "tests that check …" stay behaviours with
+      scenarios.
+    - Such a requirement needs no scenario. The receipt covers it only when
+      that receipt's own executed case identities show every named file,
+      every new test case for "new"/"added" tests (at least one), or every
+      test file in the project for any other phrase, as a superset.
+    - New tests are new cases, not new files (root review of c653d94, PR73
+      6725376982: a case appended to an existing test file was refused as
+      "the run added no test file"). `_new_case_problems` reads the cases each
+      Python test file defines (`_python_case_defs`, static) at run start
+      (`_original_tests`) and now:
+      - a name a file did not define at run start is new;
+      - a name whose body is that of a run-start case now gone from its
+        file is that test renamed, not new;
+      - each new case must be among the receipt's executed ids;
+      - a changed file whose cases cannot be read (not Python, or not
+        parseable) is named as unknown;
+      - changed bytes alone are not a new test.
+    - A Markdown code span is a command only when it starts with a runner
+      (`_command_rest`). A backticked path beside a backticked command is a
+      path; two command spans, or a command span beside an unquoted second
+      command, are refused.
+    - A run with no case identity shows nothing. A missing file, no added
+      test, or an unexecuted file stays debt, and the DONE refusal names
+      exactly what the receipt lacks.
+- **An audit's question travels with its requirement, and refusals stay
+  goal-bounded at every seat** (cycle11 run 20261108T191017Z-f99f6e43,
+  root's reconciliation in PR73 6726933807). The run ended at the 8-task cap
+  with R16 NOT MET. Each audit found one more defect of R16 and R18 (post-
+  commit reads, then boundary evidence, then a malformed ordinary header),
+  and `requirement_audits` held every question while no later prompt showed
+  one.
+  - *History transport* (`_audit_history`). Earlier audits' own NOT MET
+    words, for the requirements a call is about, reach:
+    - the draft lead, the revision and every later editing call (through
+      `_goal_block`);
+    - the reviewer, the in-task recheck and the settlement or post-merge
+      recheck (for the requirements of the findings rechecked);
+    - every later audit, which is told to judge afresh.
+
+    The rules for what is shown:
+    - It is read from `requirement_audits` only; there is no second history.
+    - Only the auditor's own words appear (`stated_reasons`, now recorded
+      whole); a harness lowering is not a counterexample.
+    - Entries are deduplicated, with the auditor, the source (this one or
+      earlier), the requirement revision (`revisions`, recorded per audit;
+      "revised since" when it moved), the reply artifact, a later MET, and
+      a decision or ruling naming the requirement.
+    - It is bounded by one shared total of 6,000 characters that includes
+      the header, decisions, rulings and the omission line (root review of
+      b54a28c: the first entry of every requirement was admitted after the
+      bound was spent, and 23 requirements rendered 24,515 characters).
+      - Each requirement enters as a unit: its newest entry with every
+        decision or ruling naming it, so an older condition is never shown
+        without what supersedes it.
+      - Older entries (up to 3 per requirement) fill what is left.
+      - Explanations are 500 characters, and the example is kept apart up
+        to 400 with an explicit artifact pointer past that.
+      - A decision or ruling over 600 characters is named with where to read
+        it, never cut.
+      - Whatever does not fit is counted in one bounded line: the counts, at
+        most eight ids per list, and the audit-reply artifacts to retrieve.
+    - It is labelled as historical questions: not current findings, not
+      proof, no owner or finding transferred, nothing reopened.
+    - A parallel child reads its parent's audits. The new fields ride in
+      `requirement_audits`, which the checkpoint already carries.
+  - *Goal-bounded parsing.* The shared lens now says a parser or library
+    can accept input the requirement calls invalid, not only raise on it.
+    The goal decides what is invalid and what must stay accepted, and an
+    input the goal leaves unspecified is never one that must be refused.
+    `_EXECUTED_ERROR_RULE`, which the auditor gets, carries the same
+    caveat: an implementation-exposed representation the goal leaves
+    unspecified is a candidate risk, never a rejection to require. Executed
+    rejecting-path evidence for real error requirements is unchanged.
+  - *Basis as provenance* (`_not_met_basis`, root's adjustment). The audit's
+    NOT MET line asks for `basis:` (the goal, requirement or ruling words
+    contradicted, and how) and `evidence:` (executed reproduction, source
+    reading, or untested risk).
+    - The harness records what was stated and which texts any quoted words
+      occur in (`bases`). A match validates nothing, and no match discards
+      nothing.
+    - A missing basis is labelled for the planner ("no basis stated; the
+      verdict stands"). It costs no extra call and adds no gate or MET
+      shortcut. The existing completion and challenge paths are unchanged.
+  - *BOUNDARY notes.* For a covered error requirement the reviewer is
+    offered an optional line `BOUNDARY R<n>: <layers checked> - <case or
+    file:line> (executed | read)`.
+    - It is recorded on `boundary_notes` (8 per reply, 400 characters each;
+      result.json, checkpoint, merged back from parallel children).
+    - The audit is shown each note, or "none stated", as observations.
+    - A note is never proof or a gate, and never makes a clean review
+      unfinished (`_clean_goal_review`).
+- **The audit packet states each record once** (cycle12 run
+  20261108T231038Z-c546ec92, root's reconciliation).
+  - *What happened.* The run stopped on `call_token_ceiling`: the third
+    audit reported 504,836 tokens against the 500,000 per-call ceiling.
+    Its 114,325-character prompt carried 47,266 characters of evidence
+    obligations and 44,619 of task-review observations. Repetition plausibly
+    contributes; no saving is claimed until it is measured. Separately, the
+    audit's R17 NOT MET (a malformed field name reaching mutation) was a real
+    defect.
+  - *Obligations* (`_behavior_is_generated`). A behaviour that is exactly
+    the summary generated from its own scenario is replaced by "scenario P<n>
+    (stated once below)".
+    - Shown whole: a legacy row, a behaviour that differs in any character,
+      and any row whose scenario is over the render bound (the "leave
+      unjudged" line stays).
+  - *Superseded rows* (`_superseding_rows`). A superseded row names the row
+    that holds its scenario now, and keeps everything of its own: task,
+    requirements, modality, runner, execution, its pre-supersession reason,
+    sufficiency and judge, and bound cases that differ.
+    - `superseded_by` is a task id, so the successor must be that task's
+      single acceptance row with the same scenario (proof id aside), the
+      same requirement revisions and the same modality, followed through a
+      chain with no revisit.
+    - No successor, two candidates, a cycle, or a successor whose scenario
+      is not shown keeps the full row.
+    - Only a row whose own behaviour is exactly its generated summary and
+      whose own scenario (its own proof id and bound cases) is shown may
+      refer to a successor. A distinct claim, or an own scenario over the
+      bound, keeps the full row with its "leave unjudged" line (root review
+      of 10a9433: the compact line dropped a distinct adverse claim). The
+      line names the predecessor's own proof id beside the successor's.
+    - Required lines, supersession and judgment are unchanged.
+  - *Review observations* (`_review_notes_grouped`).
+    - Texts identical character for character are listed once. Whitespace
+      is never normalized, since a quoted input can depend on it.
+    - Every raising review is kept: task, reviewer, its own association
+      (named, or "naming no requirement") and its source label.
+    - The repeated explanation moved to the header. Nothing is dropped or
+      cut.
+  - *History wording.* For editing and reviewing seats, the history asks
+    them to identify the rule the goal entitles at that input layer, hold it
+    across its cases, and keep the forms it allows accepted. It adds no
+    requirement and guarantees nothing.
+  - *`tools/audit_packet_size.py`.* Offline, read-only and call-free. It
+    reads the committed checkpoint, restores it onto a bare Session (an
+    empty private project folder, the saved audit source as the identity,
+    no provider), and renders the compared sections with the old renderer
+    (`_compact_audit_packet = False`) and the new one, like for like. It
+    reports characters per section and missing required row ids, and writes
+    only outside the run folder.
+    - It never claims to reconstruct the historical prompt; `state_match`
+      lists the mismatches.
+    - It refuses a stateless checkpoint.
+- **One execution truth, and a restatement the auditor wrote has a judge**
+  (cycle14, root's reconciliation of the cycle13 run, PR73 6731607762).
+  - *Split truth.* O59, O63 and O64 were path-only NOT RUN items registered
+    while the gate did not name their file. The final `public-pytest`
+    receipt named the file whole, so each item read discharged, yet its
+    typed row kept `runner: null, execution: missing` and lowered R14 to
+    R17. `_refresh_obligations` never asked a runnerless row for a receipt.
+    Such a row now asks the item's own decision (`_obligation_receipt` over
+    `_discharge_record`, read from the recorded checks, never a stored
+    marker). It takes the gate as runner only when that decision is on its
+    own gate, environment and requirement revisions and its own task's
+    item, and it records `runner_basis`; `delivery.discharge` then checks
+    every identity as before. A filtered, failed, skipping, caseless or
+    optional run, another file, a production path, another source, gate,
+    environment or revision, a check before the report, or a marker alone
+    gives no runner.
+  - *Same-author dead end.* O60 was restated by `openai:sol`, the auditor;
+    the old `claude:opus` SUFFICIENT was on an earlier source, and the DONE
+    declaration refused "lead is the auditor". The declaration is now
+    refused for that reason only when no other independent seat is
+    eligible (a scenario row's lead still is, since its sufficiency is the
+    audit's). At DONE, the final check and the cap,
+    `_judge_restatements` offers each executed, unjudged restatement the
+    auditor wrote to `_independent_judge`: a brain-trust seat, recorded
+    judges first, available, not the author, not of its vendor, never a
+    worker. One read-only `recheck` call per judge covers all its items,
+    admitted at the reserve, on the shared judgment allowance
+    (`_complete_judgment`), and its answer is read only after the binding
+    held (the generic recheck hook skips it). Each item's decision (judge,
+    item, cases, source, revisions) is asked once for the job, across
+    resumes and parallel merges (`restatement_judgments`, checkpointed and
+    in `result.json`). No eligible seat, no allowance, a cap, a stop, an
+    INSUFFICIENT line or no line leaves the item held with the reason
+    recorded. Self-judgment stays void, a stale judgment is never reused,
+    the auditor is not rotated, and no seat, task or write grant is added.
+    A current independent INSUFFICIENT (`_restated_current`: same cases,
+    source and revisions, not the author) is the decision: it stays held,
+    is recorded once and is never asked again (root review of c69fb36: the
+    route read it as missing and a new call could replace it). Only a
+    missing or stale judgment is eligible.
+  - *Guidance.* `_REPAIR_OUTCOME_RULE` (in the DONE refusal and the open
+    findings) asks a repair to state the goal's outcome and the class of
+    cause, never a narrower condition one reproduction showed. The review
+    lens asks a seat checking a failure-class mapping to read where the
+    framework or server can refuse that input before the code's own
+    handling, and the forms the goal keeps valid. No new gate.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
@@ -4121,6 +4523,339 @@ Key design decisions already settled:
   continues in the task on only the open findings (each shown with its
   original text) instead of a continuation task re-sending the bundle;
   no cap, budget or allowance grew.
+
+- **A headless permission block is a denial, and a restricted seat is told
+  its readers** (cycle15, root's reconciliation of the cycle14 terminal,
+  PR73 6734704072). cycle14 t5, `grok:worker` as a restricted editing seat in
+  a source copy, opened README.md through Fetch on a `file://` URL. Grok
+  printed `permission required: Fetch: <target> was not run, as a headless
+  run cannot ask for approval`, the turn came back cancelled with nothing
+  changed, and the record called it transport with "its files are kept".
+  - *Diagnostic.* `_extract_grok_permission_block` reads only that exact
+    stderr line into `{tool, scheme, headless_approval, target_digest}`. The
+    raw target stays in the private stderr tail, never in a message, record
+    or prompt. A failed turn with the line raises `PermissionBlocked`
+    (`providers.py`, class `denial`). A refusal, a cap and an authentication
+    failure keep their own types first. The block rides on the invocation
+    row (`safe_diagnostics`), the task fact and the failed handoff.
+  - *Never retried.* The draft handler re-raises it before any lead recovery,
+    so an unpinned serial lead gets no fallback rung. A worker's block stops
+    as raised instead of going back to the lead to reissue. In a batch the
+    child stays unmerged and stops `FindingsOpen` like a refusal. The terminal
+    record classes it `permission` (protective), after integrity and
+    uncertain writes. An unmerged child that changed nothing says "it changed
+    no files".
+  - *Guidance.* `CLISpec.local_read_tools` (grok: read_file, grep, list_dir,
+    all already in `restricted_args`) puts one sentence in a restricted
+    seat's copy prompt (`runtime.local_read_rule`). It says to read files
+    with those tools by relative path, never through a web or fetch tool or
+    a `file://` URL, and to report a denied action without retrying it
+    another way. Argv, tools and approvals are unchanged. Whether `read_file`
+    runs headless on grok 1.0.62 is not proven; the next fresh run shows it.
+  - `_close_policy`'s docstring now says what happens: serial capped or
+    failed tasks re-plan before it; a batch always reaches it.
+
+- **The owner's standing question reaches the planner and the resolving
+  lead** (cycle16, root's reconciliation of the cycle15 terminal, PR73
+  6737404225). In cycle15, RFT4-11's owner rechecks said which declared
+  scenarios were missing. The planner, the only seat that admits a scenario,
+  saw a 140-character claim, so t7 declared P1 to P9 without them. Its lead
+  could bind only declared scenarios, and the owner was rightly adverse.
+  - `_standing_reason` is the one reading for the owner's recheck, the
+    planner and the lead. It takes only the latest judged history entry,
+    which must be by the finding's own author, UNRESOLVED and non-empty. An
+    older reason is never resurrected past a newer RESOLVED or another
+    seat's entry. It is labelled with the same, an earlier or an unrecorded
+    source.
+  - The planner view's open-review lines carry it, bounded to
+    `_STANDING_REASON_CHARS` (400), attributed and marked "recorded, not a
+    verdict". `_MISSING_SCENARIO_RULE` says a missing-scenario finding is
+    resolved only by a task whose SCOPE declares a scenario per missing
+    behaviour. The planner stays the only admitter and the owner the only
+    closer.
+  - `_resolution_findings_block` shows a lead (draft, revision) exactly its
+    own RESOLVES targets, read from its own dispatch record and never from
+    another task's working state, plus inherited CONTINUES findings, once
+    each, with the reason. A parallel child holds none, since RESOLVES is
+    refused in a batch.
+  - `_record_proves`: a whole, valid one-case line naming an undeclared
+    `P<n>` is recorded as a problem, binds nothing and no longer resets the
+    declared bindings (cycle15 t4's P8 wiped P1 to P7). Every other
+    malformed, scenario-less, non-test or non-case line still fails closed.
+  - A planner may still ignore the context; the owner's adverse verdict
+    still stops `FindingsUnresolved`.
+
+- **An exact `unittest discover` receipt is a command citation, and only
+  that** (cycle17, root's reconciliation of the cycle16 terminal, PR73
+  6740463929). R21 named `python3 -m unittest discover -s tests`, and the
+  frozen gate ran exactly that and passed 66 cases. The citation refused it
+  as "a selection" because `runner_of` names no runner for `discover` and
+  `config_selection` records that as unknown selection, and the planner then
+  asked Davis a configuration question the record answered.
+  - `integration.unittest_discover_command` is a strict shape:
+    `python[N[.M]] -m unittest discover`, the plain runner flags, the report
+    annotation, and `-s`/`-p`/`-t` (short with a separate value, long with a
+    separate or `=` value), each at most once with a non-empty value.
+    Anything else (`-k`, a positional, an attached short value, an unknown
+    option, a wrapper) is not the shape. It names no runner, file or case.
+  - `_check_runs` keeps `filtered` and `files` as they were, so discover
+    still discharges no NOT RUN path, case, class, scenario or skip fact. It
+    adds `command_reasons` / `command_filtered`: argv filters, external
+    selection, deselection and an unrecognised runner. The only exception
+    is that the exact `RUNNER_UNKNOWN` diagnostic, as a whole element, is
+    dropped for that shape. `-t` still counts as an argv selection flag, a
+    narrow false negative. A record without the field keeps the file-level
+    refusal.
+  - `_command_receipt_citation` reads the command reasons and says which
+    fact holds, naming only the receipt id and the requirement's public
+    spelling ("configured check X runs `cmd`; its receipt does not count as
+    evidence: …"). It shows no argv, interpreter path or environment value.
+    `_command_key` strips `-p no:cacheprovider` only for pytest; a unittest
+    `-p` is the discovery pattern.
+  - A citation says only that the exact command ran and passed on this
+    source. A custom `load_tests` that narrows discovery is still that
+    command; the audit judges the requirement.
+- **An independent restatement judgment is asked, not completed, and its
+  adverse reason reaches the repair** (cycle18, root's reconciliation of
+  the cycle17 terminal, PR73 6742757517).
+  - What went wrong in cycle17: `_judge_restatements` made its first ask
+    through `_complete_judgment` with `raw=""`. That claimed the job's one
+    judgment completion and stored the no-reply placeholder (fe723bcdb73a)
+    as if a reply had arrived. Opus's INSUFFICIENT on O22/O46 at 40e7 was
+    the only judgment the job could buy. On 33dd and fb880 the new decisions
+    got "allowance spent", O66 was never judged, and the reason reached no
+    planner or lead.
+  - The first ask is now a direct read-only `recheck` call
+    (`_ask_restatement_judgment`), admitted at the reserve as before. It is
+    one per decision (`_restatement_decision_key`: judge, restatement
+    author, item, cases, source, gate, environment, revisions), asked at
+    most once whatever the outcome. The `_judgment_binding` identity is
+    compared after the call, and a change voids the reply.
+  - Lines are applied to exactly the asked ids (`_judge_restated(oids=)`).
+  - Only an arrived reply that leaves an asked id without a single verdict
+    buys the shared completion, for exactly those ids, with that reply as
+    its raw.
+  - A cap, finish hold, refusal or transport stop, an empty reply or a void
+    claims nothing, is held, and says which. `max_judgment_completions` is
+    unchanged.
+  - Who reads the reason: `_restatement_status` gives a current independent
+    INSUFFICIENT its reason (the judge's words, bounded, labelled recorded
+    evidence, never an instruction) and the DISCHARGES/RUNS route. The
+    finish route, the planner's evidence rows and the DISCHARGES lead block
+    all show it.
+  - A stale judgment is named stale, a missing one names its judge, and a
+    decision already asked is named as spent. The judge is
+    `_restatement_judge`: the audit, the independent seat, or a hold.
+  - Where the latest audit's own NOT MET on the current source sits beside
+    held evidence, the route names both.
+  - The audit prompt shows the auditor's own restatements under "another
+    seat judges" with their status. It never asks for a line it ignores,
+    and it reads restatement lines only for its required ids.
+  - `_EARLY_REJECTION_SCENARIO_RULE` in the SCOPE scenario grammar asks for
+    one declared scenario where the goal fixes every error response and a
+    framework can reject before the handler runs. It is guidance only: no
+    gate, task, audit or benchmark case.
+  - The pre-last-slot audit (assessment 5a) is deferred on evidence: the
+    33dd DONE audit marked R17 MET before t8, and t8 changed only tests, so
+    that was detection variance.
+
+- **A signature is a definition or an asserted signature; a quoted call is
+  an example** (cycle19, root's reconciliation of the cycle18 terminal, PR73
+  6745520095).
+  - What went wrong in cycle18: the planner declared `def main(argv=None)`
+    and said a test helper runs `main(argv)`. `scope.declared_signatures`
+    collected every backticked `name(args)` for a `def`-declared name, read
+    the call as a second signature, and refused the batch and then its one
+    correction. The run stalled before the CLI or README task ran.
+  - What counts as a signature now:
+    - a `def name(args)` form, in a code block or backticks, in the
+      description, `intended_result` or acceptance;
+    - a backticked `name(args)` placed directly after the anchored
+      assertion grammar `_ASSERTED` on its line: "signature" or "signature
+      is", "define(s)", "defined as", "declare(s)", "declared as", "make it".
+      These are the historical attempt-2, acceptance and f6 forms.
+  - Everything else is an invocation or example and is never collected,
+    including a deliberately wrong call a negative test expects to raise.
+    No call-fit or binding rule was added: a call's validity is the task's
+    behaviour to test.
+  - Real assertions are compared exactly as normalised text, so a rename or
+    changed default still conflicts.
+  - A form whose parentheses do not parse as a parameter list
+    (`_parameter_list`: static `ast`, bounded, nothing executed) states
+    nothing and is skipped. That covers elisions and placeholders.
+  - Unchanged limits: no class or module resolution (two methods of one
+    name are one name), qualified calls are never the declared name, and
+    nested parentheses are not read.
+  - The refusal message and `_SCOPE_REQUEST` both state the distinction.
+    The one-correction bound is unchanged.
+
+- **A clipped finish reason names where it is whole; quotes pair; an audit
+  may name up to three examples** (cycle20, root's reconciliation of the
+  cycle19 terminal, PR73 6748219666).
+  - Clipped reasons, before: the DONE send-back and `finish_routing` cut
+    each reason at 300 characters in silence and named no artifact, so the
+    planner could not FETCH the rest.
+  - Clipped reasons, now: `_shown_reason` keeps the 300-character payload
+    (`_FINISH_REASON_CHARS`) and adds `[... N more characters in <what> <id>;
+    read it whole with FETCH: <id>]`. `finish_routing` gains `why_omitted`,
+    `why_artifact` and `why_source`.
+  - Where the pointer points (`_reason_source`, `_audit_text_artifact`):
+    the audit reply or its completion reply that holds those exact words.
+    A harness-written or revised reason is stored as its own artifact,
+    named "the reason as recorded". The history head uses the same check,
+    and a stored id that does not hold the words reads unavailable.
+  - The terminal summary (`completion_decision._why`) keeps whole lines
+    within 400 characters. It cuts a line at a word, never inside a
+    provenance label, keeps the requirement id, and says where each whole
+    reason is.
+  - Quotes in a basis: `_QUOTED_SPAN` pairs its marks. Straight and curly
+    double quotes are read, and single quotes only at word boundaries; an
+    apostrophe inside a word (goal's, isn't) never opens or closes a span.
+  - Why the quote fix: the old pattern read "the goal's rule" as a quote
+    and reported spans no text contains. This did not cause cycle19's
+    label; that basis quoted a literal ellipsis, honestly absent, and no
+    fuzzy match was added.
+  - Audit examples: the NOT MET form allows up to `_AUDIT_EXAMPLES` (3)
+    distinct examples found, separated by ` | `, in the same call. There is
+    no minimum, the grammar is unchanged, and the effect on a live run is
+    unproven.
+
+- **What dispatch would refuse is refused at intake, before any charge**
+  (cycle21, root's reconciliation of the cycle20 terminal, PR73
+  6751283026).
+  - What went wrong in cycle20: t8's role packet (the P1-P9 SCOPE, kept as
+    `tests/lifecycle/cycle20_t8_scope.json`) was refused for size only in
+    `_prepare_dispatch`, after slot 8 was charged. The run stopped with no
+    correction, admission or lead. Earlier, t7 named `readme.md` while the
+    file is `README.md`, and was refused at merge after the whole task.
+  - Packet size: `policy.role_packet` raises `PacketTooLarge` (a
+    `PolicyError`, same message). It carries `needed`, `limit` and the
+    scope's parts (`TaskScope.component_bytes`), measured by the builder's
+    shared `_packet_contract`. Bytes are UTF-8 and exclusions are exempt, as
+    before.
+  - Intake check: `Session._packet_problem` builds every required packet
+    the dispatch would, with the same `policy.scope`, `_packet_roles`,
+    `_role_packet` and cap. A size refusal goes back to the planner, serial
+    and batch, on the shared `_covers_corrections` allowance, before the
+    slot, recovery or listed-task marks, the admission or any call. The
+    send-back gives measured sizes; `packet_refusals` records it.
+  - Unchanged: other policy refusals stop at dispatch as before, and no
+    scope or checklist text is cut.
+  - Backstop: a `PacketTooLarge` that still reaches dispatch before the
+    task's admission (and before `_dispatch_prepared` names it) is recorded
+    not started and uncharged. `_unmark_not_started` undoes its recovery
+    charge, listed-task ran mark and takeover. After admission it stays
+    charged.
+  - The prompt: `_scope_request` states the policy's `packet_limit` and
+    measured `packet_overhead`. The old "well under 20,000 bytes" was the
+    no-policy packet's limit (`_FALLBACK_PACKET_BYTES`), stated only when
+    no policy applies.
+  - Path spelling: `_path_case_problem` / `_case_collision` send back a
+    SCOPE path that differs only in letter case from an existing path.
+    Spellings come from `os.listdir` as stored, never `Path.exists`, so a
+    case-insensitive host gives the same answer. A glob component ends the
+    walk, links are not followed, ambiguity names nothing, and a spelling
+    in an excluded or forbidden path is not disclosed. Nothing is corrected.
+  - `repo_scan` names the README as stored (`readme_name`).
+  - Command label: `_without_command_label` drops one parenthetical that
+    only labels the command, "(configured unittest check)" or "(the
+    required test command)", inside `_command_rest`, so detection and the
+    correction's extra words agree. Any other word keeps the claim mixed:
+    "(configured database check)", another runner's name, a filter or a
+    second label.
+
+- **A task may carry a larger role packet only under a granted extension**
+  (Davis, 2026-11-09: "the orchestrator should have latitude to extend that
+  if the lead can show justification for it").
+  - The default stays: the policy's `packet_limit` (12,000, and a policy
+    still cannot set its default past 24,000). A task's allowance is passed
+    to the builder as `limit`, so that clamp does not bound a grant.
+  - Intake (`_packet_problem`, serial and per batch block): over the
+    default, the task's lead is asked once per task and scope
+    (`_packet_justify`, role `packet-justification`, a declaration-capped
+    call in a source copy with no role packet). It answers `PACKET
+    EXTENSION: <bytes>` with `NECESSARY:` and `WHY NOT SHORTER:`, or
+    `PACKET NARROW:`. A justified request goes to the planner in the
+    send-back with its id; only the planner's own `PACKET GRANT: <id>
+    <bytes> | because: <reason>` line grants it (from the measured need to
+    the lead's request, within the ceiling). `PACKET REFUSE` refuses it.
+    Lines are read from the planner's reply only (`_read_packet_decisions`);
+    a grant the lead wrote, an unknown id, another task's id or an id
+    measured on a different scope applies nothing. Nothing is charged
+    before the grant. The send-back carrying a new justified request is the
+    protocol's step, paid by its call, and spends no correction for a
+    task's first two requests (`_PACKET_FREE_REQUESTS`; the run's correction
+    allowance is never reset, so it would otherwise stall the fourth task
+    that needs an extension). A repeat, a malformed or narrowing answer, an
+    undecided request or a refusal named again spends one.
+  - The grant is bound to its task id and the scope fingerprint it measured
+    (`_packet_fingerprint`, roles plus the rendered scope). Every packet of
+    that task, any role, serial or batch child, correction or resume, is
+    built under it (`_role_packet` → `_packet_allowance`). A reviewed
+    scenario correction is measured against it and recorded as a revision.
+    A later task, a batch sibling or a changed scope needs its own request.
+  - The ceiling (`_packet_ceiling`) is the run's own bound: half of what one
+    round of a capped call is planned to spend (per-call threshold ×
+    `TURN_CAP_MARGIN` / lead turns, or `TURN_CONTEXT_TOKENS`), at the
+    meter's bytes per token. That is 100,000 bytes on the canonical 500k
+    per call and 8 derived rounds. Over it, or when
+    `_packet_budget_problem` finds no room, no request is made.
+  - During a task the lead may ask once in its draft (the same three
+    lines); the seated orchestrator decides in one bounded call
+    (`_serve_packet_request`).
+  - On the record: `result.json` `packet_extensions` (requests with
+    justification, decision lines, grant, reasons, revisions; rejected
+    decision lines), the task outcome's `packet_allowance`, and the
+    checkpoint. A listed task has no orchestrator and gets no grant.
+
+- **Four settlement routes from run21's terminal** (cycle22, root's
+  reconciliation of assessment 6754811165).
+  - *A renamed case is declaration debt* (O37). A case-bound NOT RUN item
+    whose bound case is gone (`_bound_cases_gone`) reads as not runnable
+    (`_not_run_runnable`, the one reader every route uses). Gone means both:
+    - the exact-case resolver finds no definition;
+    - the latest check passed on the current source with a complete run
+      whose cases exclude it.
+    Anything unknown, failing, skipped, filtered or still executing stays
+    runnable and needs its execution or repair. Effects:
+    - the route note names `RUNS`/`DISCHARGES`;
+    - `_blockers_need_editing` is not set for it;
+    - the DONE declaration plan asks its owning lead (or a DISCHARGES
+      taker) for exact current cases, settled on the receipt already on
+      record (no new run, no slot), with the replaced cases kept on the
+      restatement;
+    - an independent judge is told to judge against the whole original item.
+    Nothing is aliased or deleted.
+  - *The editing seat is told the NOT RUN forms* (`scope.NOT_RUN_RULE`, the
+    same sentence the planner gets). `P<a>-P<b>` with an ASCII hyphen or an
+    en dash binds the full inclusive range only when every id is declared
+    by the reporting task. A reversed, single-point, chained or partly
+    undeclared range binds nothing and says why. A mutation claim beside
+    scenarios stays held: a passing suite never shows a mutant was detected.
+  - *A binding stage folds into an editor revision in the same bundle*
+    (`_folds_binding`, read by both the admission and the serve):
+    - the revision prompt names the unbound or invalid scenarios
+      (`_fold_note`);
+    - its PROVES/RUNS lines are read by the editing readers, and the route
+      is recorded after it (`_settle_folded`);
+    - bindings settle on the post-edit source.
+    Run21 t8's scenario + binding + editor + recheck + resolution-recheck
+    bundle is four calls. Without an editor the separate declaration call
+    stays. Both rechecks always run.
+  - *A later reviewer may name an earlier task's scenario*, `SCENARIO
+    t<k>:P<n>`; an unqualified `P<n>` is always the reviewing task's own.
+    - The planner corrects it once through the ordinary bundle, on that
+      task's own rows only (`_apply_prior_scenario_correction`): lineage
+      with `raised_in` and the owner lead, execution and sufficiency reset
+      and re-settled, requirements, location, evidence kind, binding and
+      id unchanged.
+    - The frozen contract and outcome are untouched. The packet is measured
+      against that task's own allowance (its grant if any, recorded as a
+      revision).
+    - Not routed: no earlier closed task, no standing row, already
+      corrected, an unreachable owner, or a scope not on record. Each stays
+      held for its reviewer.
+    - The raising reviewer rechecks, shown the corrected text.
 
 ## How development is coordinated
 

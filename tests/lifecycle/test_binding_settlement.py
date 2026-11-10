@@ -163,22 +163,25 @@ def test_a_bound_case_with_missing_execution_still_goes_to_the_harness(tmp_path,
 
 @pytest.mark.requirements_ledger
 def test_a_binding_with_a_code_finding_is_settled_on_the_revised_source_not_the_stale_run(tmp_path, monkeypatch):
-    """Mixed round: the binding is declared, then the editor's revision
-    changes the source. The run the binding first settled on is stale; the
-    recheck is shown a run on the revised source."""
+    """Mixed round: the binding and a code finding in one bundle. Since
+    cycle22 the editor revision the bundle already buys declares the binding
+    itself (no separate declaration call, which used to settle on the
+    pre-edit run the revision then made stale); the row settles on the
+    revised source and the recheck is shown that run."""
     def revision(call, replay):
+        assert "Scenarios of your task that bind no case, or bind invalidly" in call.prompt
         H.write(call, {"tests/test_app.py": SKIP_TESTS.replace("@pytest.mark.skip(reason='not yet')\n", "")})
-        return 'Added the negative case.\nCHANGED: ["tests/test_app.py"]'
+        return f'Added the negative case.\nPROVES: P1 - {CASE}\nCHANGED: ["tests/test_app.py"]'
     seen, calls, replay = _run(tmp_path, monkeypatch, "mixed", binding_reply=f"PROVES: P1 - {CASE}",
                                collaborator=lambda c, r: f"{UNBOUND}\n{CODE}{MET}",
                                recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED shown on this source"),
                                revision=revision)
+    assert replay.of("proof-binding") == [], "no separate declaration call beside the revision"
     route = _route(replay)
     record = H.result_json(replay)
-    assert route["execution_after"] == ["ran"] and route["source"] == record["review_checks"][0]["source"]
+    assert route["folded"] and route["declared"] == [f"PROVES: P1 - {CASE}"]
     (row,) = _acceptance(replay)
-    assert row["source_digest"] == record["source_fingerprint"] != route["source"], \
-        "the row's execution is on the revised source, never the earlier run"
+    assert row["source_digest"] == record["source_fingerprint"], "the row's execution is on the revised source"
     assert replay.result.completed, replay.result.error
 
 

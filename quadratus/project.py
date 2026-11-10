@@ -71,7 +71,8 @@ class Project:
                              and (parent / d).resolve() not in self.exclude)
             for name in sorted(names):
                 path = parent / name
-                if (name in _SKIP or path.is_symlink() or path.resolve() in self.exclude
+                if (name in _SKIP or path.is_symlink() or not path.is_file()
+                        or path.resolve() in self.exclude
                         or (name.startswith('.env') and name != '.env.example')):
                     continue
                 yield path
@@ -108,12 +109,18 @@ class Project:
 
     def apply_patch(self, patch):
         """Apply an explicitly requested unified diff without granting tools."""
+        from .scope import _diff_lines
+
         # Only text hunks are supported. Strip optional git headers after
         # rejecting extended operations, whose paths don't live in ---/+++.
         if re.search(r'^(?:rename |copy |GIT binary patch|Binary files |old mode |new mode |new file mode 120|deleted file mode 120)', patch, re.MULTILINE):
             raise ProviderError('PATCH supports text file hunks, not renames, binary files or symlinks.')
         patch = re.sub(r'^(?:diff --git |index |new file mode |deleted file mode ).*\n', '', patch, flags=re.MULTILINE)
-        paths = re.findall(r'^(?:---|\+\+\+) (\S+)', patch, re.MULTILINE)
+        # Unified-diff filenames may contain spaces; only a tab separates an
+        # optional timestamp. Validating the first word would let git apply a
+        # different path, including an excluded file below a spaced directory.
+        paths = [line[4:].split('\t', 1)[0] for line, in_hunk in _diff_lines(patch)
+                 if not in_hunk and line.startswith(('--- ', '+++ '))]
         if not paths:
             raise ProviderError('PATCH must contain a unified diff with --- and +++ paths.')
         for raw in paths:

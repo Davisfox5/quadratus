@@ -113,7 +113,7 @@ def test_a_second_contradiction_stalls_instead_of_dispatching(tmp_path):
 
 DIFF = """--- a/app.py
 +++ b/app.py
-@@ -1,2 +1,4 @@
+@@ -1 +1,2 @@
 +def _validate_clip_row(project, cols, row):
 +    return None, []
 -old = 1

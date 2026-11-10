@@ -38,6 +38,8 @@ PRECEDENCE = ("refusal", "security", "integrity", "denial", "operator", "budget"
 #: handoff, never a product repair.
 _EXCEPTION_CLASS = {
     "ProviderRefusal": "refusal",
+    #: A tool call a headless CLI could not get approved (cycle15).
+    "PermissionBlocked": "denial",
     "PartialWorkStopped": "integrity",
     "PartialWorkSuspected": "integrity",
     "DependencyTreeChanged": "integrity",
@@ -160,6 +162,10 @@ class TaskOutcome:
     #: {"from", "to", "reason", "failure"}. The contract's owner never changes;
     #: the last "to" is the owner actually invoked.
     owner_changes: List[dict] = field(default_factory=list)
+    #: The role packet allowance the task ran under when it was not the
+    #: policy's default (Davis, 2026-11-09): the lead's request and
+    #: justification, the orchestrator's grant and reason, and the sizes.
+    packet_allowance: Optional[dict] = None
     #: Places where a legacy applicability decision disagreed with the
     #: contract's derived requirement. Recorded, never acted on (phase 2).
     mismatches: List[str] = field(default_factory=list)
@@ -202,9 +208,11 @@ class TaskOutcome:
     def unsatisfied(self) -> List[str]:
         """The contract's mandatory edges this task did not satisfy (not
         attempted, or attempted and failed). Reporting only in phase 2."""
-        if not self.contract:
+        if not isinstance(self.contract, dict):
             return []
         required = self.contract.get("required") or {}
+        if not isinstance(required, dict):
+            return []
         wanted = []
         if required.get("checks"):
             wanted.append("checks")
@@ -376,7 +384,7 @@ def _dispatch_missing(task: TaskOutcome) -> List[str]:
         missing.append(f"{tid}.contract")
     else:
         missing += _contract_missing(task)
-        if task.contract.get("owner") != owner:
+        if isinstance(task.contract, dict) and task.contract.get("owner") != owner:
             missing.append(f"{tid}.contract owner {task.contract.get('owner')!r} is not the dispatched "
                            f"owner {owner!r}")
     expected = owner
