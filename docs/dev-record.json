@@ -3354,7 +3354,36 @@
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "codex: All four fixes implemented on current development base9d28125 with provider-free positive/negative controls and independent review of affected boundaries. The main release receives compatible adapted counterparts; no unfinished PR73 architecture is merged to main. Final connected regression/CI evidence is recorded externally in stage-b/human-coherence-fixes-20261109/pending.json. Frozen round22 evidence, its successful original-head result, owner closeout and pause remain unchanged; these fixes have no live acceptance claim."
+        "codex: All four fixes implemented on current development base9d28125 with provider-free positive/negative controls and independent review of affected boundaries. The main release receives compatible adapted counterparts; no unfinished PR73 architecture is merged to main. Final connected regression/CI evidence is recorded externally in stage-b/human-coherence-fixes-20261109/pending.json. Frozen round22 evidence, its successful original-head result, owner closeout and pause remain unchanged; these fixes have no live acceptance claim.",
+        "codex: Prepared exact development source d8f5c7a054fee625dace894db0b94a8defc8f609; 89 connected new regression controls passed and Ruff clean. Compatible main source5487561223e97b9390116aeeb22f4c6dff160c85 passed80 connected controls and Ruff. Reconciled main ancestry while retaining the reviewed newer development source; only coordination metadata differs from d8f5c7a. Push and exact-head CI not yet confirmed; no milestone or live acceptance claim."
+      ]
+    },
+    {
+      "id": "T-human-coherence-main-20261109",
+      "purpose": "Compatible main backport of the four Davis-authorized human-coherence fixes, based on current main without unfinished PR73 architecture. Preserve frozen round22 acceptance and milestone candidate.",
+      "base": "4b68306014384123e38ae6f98d5046d5cab1273b",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/contract.py",
+        "quadratus/runtime.py",
+        "quadratus/delegation.py",
+        "quadratus/integration.py",
+        "quadratus/project_run.py",
+        "quadratus/cli.py",
+        "tools/truth_check.py",
+        "tests",
+        "docs/PROJECT_WORKFLOW.md"
+      ],
+      "author": "codex",
+      "reviewer": "independent-codex",
+      "state": "claimed",
+      "claimed_at": "2026-11-10T03:21:02Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "codex: Compatible release backport of all four authorized fixes. Adapted existing main lifecycle/channel protocols only, preserving old default behavior and all original checks for unrelated files. Narrow independent reviews found no regression; provider-free positive/negative controls passed per area. Final connected regression and exact-head CI evidence belongs in stage-b/human-coherence-fixes-20261109/pending.json. No engine milestone advancement or new live run."
       ]
     }
   ],
