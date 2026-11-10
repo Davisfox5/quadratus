@@ -97,6 +97,7 @@ from .routing import (
 )
 from .run_budget import FinishReserved, finishing
 from .scope import (
+    NOT_RUN_RULE,
     PROVES_RULE,
     TEST_SUBSTANCE_RULE,
     ScopeReport,
@@ -2178,6 +2179,26 @@ def _complete_run(run: dict) -> bool:
 _ITEM_DISPLAY_CHARS = 300
 
 
+def _folds_binding(plan: dict, editor: bool) -> bool:
+    """Whether a correction bundle's binding declaration rides in the editor
+    revision the same bundle already buys (cycle22; run21 t8's bundle needed
+    5 calls with 4 left, and its separate declaration settled on the
+    pre-edit source the revision then changed). The one decision both the
+    admission (``_fix_cycle_stages``) and the serve read."""
+    return bool(plan.get("binding")) and bool(editor)
+
+
+def _replaced_note(entry: dict) -> str:
+    """For a judge of a restated NOT RUN item that was bound to exact cases
+    before (cycle22: a renamed case): which cases the restatement replaced,
+    so the new cases are judged against the whole original claim."""
+    previous = [str(c) for c in ((entry.get("restatements") or [{}])[-1] or {}).get("previous", {}).get("cases") or ()]
+    if not previous:
+        return ""
+    return (f" (replacing {', '.join(previous)}, the case(s) it was bound to before; judge the new cases against "
+            "everything the original item reported, not against the old name)")
+
+
 def _display_item(item: str) -> str:
     item = str(item or "")
     if len(item) <= _ITEM_DISPLAY_CHARS:
@@ -2710,7 +2731,12 @@ _TYPED_FINDING_FORMS = (
     "corrected scenario, and no code is rewritten for it. A bound case the harness has not shown executed "
     "on this exact source, with nothing else wrong with it, is an evidence gap, not a code finding: report "
     "it as 'BLOCKING: EVIDENCE P<n> - <what is not shown> | basis: P<n> | impact: contract'; the harness runs "
-    "the checks it can and you re-check the row.")
+    "the checks it can and you re-check the row. A scenario of an earlier task of this run, still standing "
+    "on the record, whose text contradicts its own requirement, is named with that task: 'BLOCKING: SCENARIO "
+    "t<k>:P<n> - <the contradiction> | proposal: <operation|state|expect>: <the corrected text> | basis: R<n> "
+    "| impact: contract'. The planner corrects it once or keeps it, you re-check it, its requirements, "
+    "location, evidence kind and binding stay the earlier task's, and its evidence is settled and judged "
+    "afresh; an unqualified P<n> is always this task's own.")
 #: The separator a reviewer or planner writes between a scenario id and
 #: the text after it: a hyphen, an en dash, an em dash, a minus sign or a
 #: colon (close family, 2026-10-26: Sol's SCENARIO claim on
@@ -2720,18 +2746,28 @@ _TYPED_FINDING_FORMS = (
 _TYPED_SEP = r"(?:-|\u2013|\u2014|\u2212|:)"
 #: Scenario ids are ASCII ``P`` plus ASCII digits only: ``\d`` would read
 #: other scripts' digits, and an id the task never declared is unbound.
-_SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*\|\s*proposal\s*:\s*"
+#: An earlier task's scenario is named with its task, ``t<k>:P<n>`` (cycle22),
+#: so a later reviewer's t7:P1 can never be read as its own task's P1.
+_SCENARIO_CLAIM = re.compile(r"^\s*SCENARIO\s+(?:(t[0-9]+):)?(P[0-9]+)\s*" + _TYPED_SEP
+                             + r"\s*(.*?)\s*\|\s*proposal\s*:\s*"
                              r"(operation|state|expect)\s*:\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
 _EVIDENCE_CLAIM = re.compile(r"^\s*EVIDENCE\s+(P[0-9]+)\s*" + _TYPED_SEP + r"\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
 #: Line-bounded on purpose: ``\s*`` would cross the newline after a blank
 #: field and read the next line as the corrected text (root's control,
 #: 2026-10-26: ``SCENARIO P1: state:`` followed by a P2 line or by prose
 #: was recorded as corrected with that next line as P1's state).
-_SCENARIO_REPLY = re.compile(r"^[ \t]*SCENARIO[ \t]+(P[0-9]+)[ \t]*:[ \t]*(operation|state|expect|KEEP|REQUIREMENT)\b"
+_SCENARIO_REPLY = re.compile(r"^[ \t]*SCENARIO[ \t]+((?:t[0-9]+:)?P[0-9]+)[ \t]*:[ \t]*"
+                             r"(operation|state|expect|KEEP|REQUIREMENT)\b"
                              r"[ \t]*" + _TYPED_SEP + r"?[ \t]*(.*?)[ \t]*$", re.IGNORECASE | re.MULTILINE)
 #: A claim that opens like a typed one. Read only to say why it did not
 #: type, never to route it.
-_TYPED_HEAD = re.compile(r"^\s*(SCENARIO|EVIDENCE)\s+(P\S*)", re.IGNORECASE)
+_TYPED_HEAD = re.compile(r"^\s*(SCENARIO|EVIDENCE)\s+((?:t[0-9]+:)?P\S*)", re.IGNORECASE)
+#: An inclusive scenario range in a NOT RUN item, ASCII hyphen or en dash,
+#: with a third endpoint captured so a chain is refused (cycle22).
+_SCENARIO_RANGE = re.compile(r"(?<![\w./:-])P([0-9]+)[ \t]*[-\u2013][ \t]*P([0-9]+)"
+                             r"(?:[ \t]*[-\u2013][ \t]*P([0-9]+))?(?![\w./:-])")
+#: A claim no passing run establishes, beside scenarios in a NOT RUN item.
+_UNRUNNABLE_CLAIM = re.compile(r"\b(?:mutation|mutations|mutant|mutants)\b", re.IGNORECASE)
 
 
 #: A review finding's standing reason, as the planner sees it (cycle16).
@@ -2775,8 +2811,10 @@ def _typed_finding(claim: str):
     not reach the editor either is ``_typed_near_miss``."""
     match = _SCENARIO_CLAIM.match(claim or "")
     if match:
-        fields = dict(proof_id=match.group(1).upper(), reason=match.group(2).strip(),
-                      field=match.group(3).lower(), proposal=match.group(4).strip())
+        fields = dict(proof_id=match.group(2).upper(), reason=match.group(3).strip(),
+                      field=match.group(4).lower(), proposal=match.group(5).strip())
+        if match.group(1):
+            fields["task"] = match.group(1).lower()
         if fields["reason"] and fields["proposal"]:
             return "scenario", fields
         return None, None
@@ -2799,7 +2837,7 @@ def _typed_near_miss(claim: str) -> str:
     if not head or _typed_finding(claim)[0] is not None:
         return ""
     kind = head.group(1).upper()
-    if not re.fullmatch(r"(?i)P[0-9]+", head.group(2).rstrip(":.,;")):
+    if not re.fullmatch(r"(?i)(?:t[0-9]+:)?P[0-9]+", head.group(2).rstrip(":.,;")):
         return f"a {kind} claim whose scenario id ({head.group(2)[:20]}) is not P followed by digits"
     if kind == "SCENARIO":
         if "|" not in (claim or "") or not re.search(r"(?i)\|\s*proposal\s*:", claim or ""):
@@ -7403,7 +7441,8 @@ class Session:
                 cycle = self._admit_plan(spec.task_id,
                                          self._fix_cycle_stages(spec, blocking, editor=plan["editor"],
                                                                 correction=bool(plan["scenario"]),
-                                                                binding=bool(plan["binding"])),
+                                                                binding=bool(plan["binding"])
+                                                                and not _folds_binding(plan, plan["editor"])),
                                          scope="fix-cycle", wall_extra=wall_extra, wall_known=wall_known)
                 admitted = cycle.feasible
                 if not admitted:
@@ -7414,13 +7453,16 @@ class Session:
                     refused = FinishReserved(f"{spec.task_id}: the correction the review selected cannot be paid whole")
                     refused.recorded = True
                     raise refused
-                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead)
+                fold = _folds_binding(plan, plan["editor"])
+                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead, fold=fold)
                 self._fix_cycle_now = 1
                 if not plan["editor"]:
                     # Every finding went to the planner or the harness: no
                     # editing call; the reviewers re-check what is now shown.
                     revision = draft
                 else:
+                    if fold:
+                        revision_prompt += self._fold_note(spec, plan["binding"])
                     try:
                         revision = self._edit(lead, revision_prompt)
                     except TurnLimitReached as exc:
@@ -7459,6 +7501,7 @@ class Session:
                 if plan["editor"]:
                     task.record("assistant", revision)
                     task.keep(revision, kind="revision")
+                    self._settle_folded(spec, lead, revision)
                 unresolved = self._recheck_blocking(
                     spec, blocking, revision, task, labels=labels
                 )
@@ -7483,7 +7526,8 @@ class Session:
                     extra = self._admit_plan(spec.task_id,
                                              self._fix_cycle_stages(spec, unresolved, editor=bool(actionable),
                                                                     correction=bool(plan["scenario"]),
-                                                                    binding=bool(plan["binding"])),
+                                                                    binding=bool(plan["binding"])
+                                                                    and not _folds_binding(plan, bool(actionable))),
                                              scope="fix-cycle", wall_extra=wall_extra, wall_known=wall_known)
                     if not extra.feasible:
                         self._finish_refused(spec, "fix round", FinishReserved(
@@ -7492,14 +7536,18 @@ class Session:
                         break
                 self._count("revision")
                 self._fix_cycle_now = cycles + 1
-                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead)
+                fold = _folds_binding(plan, bool(actionable))
+                spec = self._serve_plan_findings(spec, task, plan, labels, lead=lead, fold=fold)
                 pending = [(p, n) for p, n in blocking
                            if any(up == p and ((up, v) in actionable or _finding_id(v) in routed_now)
                                   for up, v in unresolved)]
                 if actionable:
                     try:
                         revision = self._edit(lead, self._fix_prompt(spec, revision,
-                                                                     [(labels[p], v) for p, v in actionable]))
+                                                                     [(labels[p], v) for p, v in actionable])
+                                              + (self._fold_note(spec, plan["binding"]) if fold else ""))
+                        if fold:
+                            self._settle_folded(spec, lead, revision)
                     except TurnLimitReached as exc:
                         handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels,
                                                                 stage="fix",
@@ -10286,11 +10334,7 @@ class Session:
                 "drop it and do not prescribe it: ASK, naming the command and the configured checks as "
                 "a configuration conflict. A lead that cannot run a case where it works (a sandbox "
                 "that denies a socket, a missing dependency) reports it by identity, so the harness's "
-                "own run can discharge it: 'NOT RUN: P<n> - <why>' for a declared scenario, "
-                "'NOT RUN: <file>::<Class>::<test> - <why>' for a case, or 'NOT RUN: <file>::<Class> - <why>' "
-                "for a whole test class (discharged only by a check that collects that file whole and shows "
-                "every method of the class passed); a report naming none of these is "
-                "kept as written and nothing can discharge it.")
+                "own run can discharge it; every editing call is told the same rule: " + NOT_RUN_RULE)
 
     def _verification_note(self) -> str:
         """The orchestrator's view of the harness's own verification."""
@@ -14368,8 +14412,16 @@ class Session:
             for e in standing:
                 oid = e.get("oid") or "the item"
                 cases = ", ".join(e.get("cases") or [])
-                executable = e.get("executable") if "executable" in e else self._not_run_executable(e)
-                if e.get("restatements") and self._discharge_record(e) is not None:
+                executable = self._not_run_runnable(e)
+                gone = self._bound_cases_gone(e)
+                if gone:
+                    parts.append(f"{oid}: its bound case {', '.join(gone)} is no longer defined on the current "
+                                 "source; a run never clears it. Route: its own task's lead (or a task naming "
+                                 f"'DISCHARGES: {oid}') restates it with 'RUNS: {oid} - file::[Class::]test_case' "
+                                 "lines for exact current cases; the harness settles them from a complete passing "
+                                 "run on the current source and an independent seat judges whether they exercise "
+                                 "everything the item originally reported")
+                elif e.get("restatements") and self._discharge_record(e) is not None:
                     # Who judges it and what stands, truthfully (cycle18): the
                     # audit never judges its own restatement, and a current
                     # adverse judgment carries its reason and repair route.
@@ -15385,7 +15437,26 @@ class Session:
             if binding["problem"]:
                 self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
             return
-        scenarios = list(dict.fromkeys(re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", item)))
+        scenarios, range_problems, item_ids = self._not_run_scenario_ids(entry, item)
+        if range_problems:
+            # An undefined, reversed or ambiguous range binds nothing and says
+            # why (cycle22): never its endpoints, never a dropped middle.
+            binding.update(kind="scenario", scenario=None, problem="; ".join(range_problems)[:300])
+            entry["binding"], entry["cases"] = binding, []
+            self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
+        if scenarios and _UNRUNNABLE_CLAIM.search(item_ids):
+            # A claim a passing run cannot establish beside the scenarios it
+            # names (run21 O70: "mutation detection and P1-P4 HTTP
+            # acceptance"): held as written; the suite passing never shows a
+            # mutant was detected.
+            binding.update(kind="mixed", scenario=", ".join(scenarios),
+                           problem=("names a claim a passing run cannot establish ("
+                                    + _UNRUNNABLE_CLAIM.search(item_ids).group(0).lower()
+                                    + ") beside its scenarios; held as written"))
+            entry["binding"], entry["cases"] = binding, []
+            self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+            return
         explicit = _cited_cases(item)
         rest = _CASE_CITATION.sub(" ", item)
         names = list(dict.fromkeys(m.group(1) for m in _CASE_NAME.finditer(rest)))
@@ -15449,6 +15520,85 @@ class Session:
         entry["cases"] = list(binding["cases"])
         if binding["problem"]:
             self._note(f"task {entry.get('task')}: NOT RUN item not bound ({binding['problem']}): {item[:80]}")
+
+    def _not_run_scenario_ids(self, entry: dict, item: str):
+        """``(scenarios, problems, text)``: the scenario ids a NOT RUN item
+        names, with inclusive ranges ``P<a>-P<b>`` (ASCII hyphen or en dash)
+        expanded only when every id in the range is a scenario the reporting
+        task declares (cycle22; run21 t8 wrote "P1–P4", which bound P1 and P4
+        and dropped P2 and P3, while "P1-P4" bound nothing). A reversed,
+        single-point, chained or partly undeclared range is a problem and
+        binds nothing. ``text`` is the item with ranges replaced by their
+        ids, for the later grammars."""
+        declared = {r.get("proof_id") for r in self.evidence_obligations
+                    if r.get("task") == entry.get("task") and r.get("kind") == "acceptance"
+                    and r.get("proof_id") and not r.get("superseded_by")}
+        problems, expanded = [], []
+
+        def expand(match):
+            whole = " ".join(match.group(0).split())
+            if match.group(3) is not None:
+                problems.append(f"{whole} chains more than one range; name each range or scenario on its own")
+                return " "
+            low, high = int(match.group(1)), int(match.group(2))
+            if low >= high:
+                problems.append(f"{whole} is not an increasing range")
+                return " "
+            ids = [f"P{n}" for n in range(low, high + 1)]
+            missing = [i for i in ids if i not in declared]
+            if missing:
+                problems.append(f"{whole} names {', '.join(missing)}, which this task does not declare")
+                return " "
+            expanded.extend(ids)
+            return " " + " ".join(ids) + " "
+        text = _SCENARIO_RANGE.sub(expand, item)
+        ids = list(dict.fromkeys(re.findall(r"(?<![\w./:-])(P[0-9]+)(?![\w./:-])", text)))
+        return ids, problems, text
+
+    def _bound_cases_gone(self, entry: dict) -> List[str]:
+        """The exact cases a case-bound NOT RUN item names that no longer
+        exist on the current source (cycle22; run21 O37: the case was
+        renamed, the replacement passed in every later receipt, and the item
+        read as runnable forever). Gone only when both hold: the exact-case
+        resolver (``_resolve_case_ids``) finds no definition, and the latest
+        check passed on the current source with a complete run whose own
+        record shows executed cases, none of them this one. Anything unknown
+        (no such run, an unreadable file, a case that still executes or a
+        failing run) is not gone, so a runnable or failed case still needs
+        its execution or repair. Computed from the source as it is, never
+        cached on the item, so a resume reads the same."""
+        if entry.get("kind") == "skipped" or (entry.get("binding") or {}).get("kind") != "case":
+            return []
+        cases = [str(c) for c in entry.get("cases") or ()]
+        if not cases or not self.project or not self.checks:
+            return []
+        current = self._source_fingerprint()
+        check = self.checks[-1]
+        if not current or check.get("source") != current or not check.get("passed"):
+            return []
+        cache = getattr(self, "_gone_cache", None)
+        if cache is None or cache.get("source") != current or cache.get("check") != len(self.checks):
+            runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
+            passed = set().union(*(_run_passed_cases(r) for r in runs)) if runs else set()
+            cache = self._gone_cache = dict(source=current, check=len(self.checks), passed=passed, cases={})
+        if not cache["passed"]:
+            return []
+        gone = []
+        for case in cases:
+            if case not in cache["cases"]:
+                cache["cases"][case] = case not in cache["passed"] and bool(self._resolve_case_ids([case])[1])
+            if cache["cases"][case]:
+                gone.append(case)
+        return gone
+
+    def _not_run_runnable(self, entry: dict) -> bool:
+        """Whether a check can discharge the item as it stands now: the
+        recorded decision (``executable``), and none of its bound cases gone
+        from the current source (``_bound_cases_gone``). Every reader of
+        "runnable" asks this, so the route notes, the editing decision and
+        the DONE declaration plan agree."""
+        executable = entry.get("executable") if "executable" in entry else self._not_run_executable(entry)
+        return bool(executable) and not self._bound_cases_gone(entry)
 
     def _rebind_not_run(self, task) -> None:
         """A scenario-bound NOT RUN item follows its scenario's binding: when
@@ -16045,7 +16195,7 @@ class Session:
                             f"{_display_item(entry['item'])}" + (f" - {entry['why']}" if entry["why"] else "")
                             + (f" (holds {', '.join(entry['requirements'])})" if entry["requirements"] else "")
                             + f"; restated by {last.get('task')} ({last.get('author')}) as "
-                            f"{', '.join(entry.get('cases') or [])}")
+                            f"{', '.join(entry.get('cases') or [])}" + _replaced_note(entry))
             out += ("\n\n## Executed restatements awaiting your judgment (harness records)\n" + "\n".join(rows)
                     + "\nEach item above was restated as exact cases, and the harness's own complete passing run on "
                     "the current source executed every one of them. Judge each only by your own line '<O-id>: "
@@ -16383,8 +16533,8 @@ class Session:
         """Standing NOT RUN items ``task`` reported or took over that name
         nothing a check can run and are not restated yet."""
         return [e for e in self._standing_not_run() if e.get("oid") and self._not_run_owned(e, task)
-                and not e.get("restatements")
-                and not (e.get("executable") if "executable" in e else self._not_run_executable(e))]
+                and (not e.get("restatements") or self._bound_cases_gone(e))
+                and not self._not_run_runnable(e)]
 
     # -- scope-blocked repair routing (cycle04) ---------------------------------
     def _scope_path_problem(self, spec, raw: str) -> Tuple[str, bool]:
@@ -17015,6 +17165,7 @@ class Session:
             last = e["restatements"][-1] or {}
             lines.append(f"- {e['oid']} (reported by {e['task']}): NOT RUN: {_display_item(e['item'])[:300]}"
                          + (f" - {e['why'][:160]}" if e.get("why") else "")
+                         + _replaced_note(e)
                          + (f"; restated by this task's lead as {', '.join(e.get('cases') or [])}"
                             if last.get("task") == task else
                             f"; restated by {last.get('task')}'s lead as {', '.join(e.get('cases') or [])}; its "
@@ -17039,9 +17190,19 @@ class Session:
                 if self._discharge_record(entry) is not None or self._restated_current(entry):
                     return "; " + self._restatement_status(entry)
                 return ""
-            if entry is None or entry.get("restatements") or self._discharging_check(entry) is not None:
+            if entry is None or self._discharging_check(entry) is not None:
                 return ""
-            if not (entry.get("executable") if "executable" in entry else self._not_run_executable(entry)):
+            gone = self._bound_cases_gone(entry)
+            if gone:
+                return (f"; its bound case {', '.join(gone)} is no longer defined on the current source and the latest "
+                        "complete passing run did not execute it, so no run clears it; route: 'RUNS: "
+                        f"{row['oid']} - file::[Class::]test_case' lines for exact current cases, from its own task's "
+                        f"lead or from a task naming 'DISCHARGES: {row['oid']}' whose lead writes them, settled "
+                        "against a complete passing run on the current source and judged by an independent seat "
+                        "against everything the item originally reported; nothing is matched for you")
+            if entry.get("restatements"):
+                return ""
+            if not self._not_run_runnable(entry):
                 return (f"; names nothing a check can run: no repair run clears it; route: 'RUNS: {row['oid']} - "
                         f"file::[Class::]test_case' lines from its own task's lead, or a task naming 'DISCHARGES: "
                         f"{row['oid']}' whose lead writes them, judged by an independent seat")
@@ -17807,8 +17968,9 @@ class Session:
         for rid in self.memory.ledger.requirements:
             parts = []
             held = [e for e in standing if rid in (e.get("requirements") or ())]
-            if any(e.get("cases") or (e.get("executable") if "executable" in e else self._not_run_executable(e))
-                   for e in held):
+            # A bound case gone from the current source is settled by a
+            # declaration of exact current cases, not by an edit (cycle22).
+            if any(self._not_run_runnable(e) for e in held):
                 self._blockers_need_editing = True
             if held:
                 parts.append("NOT RUN: " + "; ".join(f"{e['task']}: {_display_item(e['item'])[:100]}" for e in held))
@@ -17919,9 +18081,10 @@ class Session:
                     return {}, f"{rid} is held by skipped cases ({_display_item(entry['item'])[:80]}); only execution settles them"
                 if not oid or counts[oid] != 1:
                     return {}, f"a NOT RUN item holding {rid} has no unique id"
-                if entry.get("cases") or entry.get("restatements"):
+                gone = self._bound_cases_gone(entry)
+                if (entry.get("cases") or entry.get("restatements")) and not gone:
                     return {}, f"{oid} is bound to cases; only their execution settles it"
-                if entry.get("executable") if "executable" in entry else self._not_run_executable(entry):
+                if self._not_run_runnable(entry):
                     return {}, f"{oid} names something a check can run"
                 slot, why = owner_of(self._declaration_owner(entry))
                 if slot is None:
@@ -18130,7 +18293,7 @@ class Session:
                          f"NOT RUN: {_display_item(e['item'])[:400]}" + (f" - {e['why'][:200]}" if e.get("why") else "")
                          + f"; restated by {(e['restatements'][-1] or {}).get('task')}'s lead as "
                          f"{', '.join(e.get('cases') or [])}; executed and passed on this source in check "
-                         f"{int(record_.get('index', -1)) + 1}")
+                         f"{int(record_.get('index', -1)) + 1}" + _replaced_note(e))
         texts = self._requirement_texts_now()
         held = sorted({r for e in items for r in e.get("requirements") or ()})
         return ("You are asked for an independent judgment of restated NOT RUN items; the seat that wrote them "
@@ -18275,7 +18438,14 @@ class Session:
         if items:
             lines.append("NOT RUN items of your task that name nothing a check can run:")
             lines += [f"- {e['oid']}: {_display_item(e['item'])[:300]}" + (f" - {str(e.get('why'))[:160]}"
-                                                                            if e.get("why") else "") for e in items]
+                                                                            if e.get("why") else "")
+                      # A bound case gone from the source (cycle22): said
+                      # so, so the declaration names current exact cases for
+                      # everything the original item reported; the harness
+                      # never pairs the old name with a new one.
+                      + (f" (its bound case {', '.join(self._bound_cases_gone(e))} is no longer defined on the "
+                         "current source; name the current cases that exercise everything this item reported, "
+                         "if they exist)" if self._bound_cases_gone(e) else "") for e in items]
         if rows:
             lines.append("Proof scenarios of your task whose bound case no longer exists:")
             for row in rows:
@@ -23527,9 +23697,18 @@ class Session:
                 entry = next((c for c in reversed(self.scenario_corrections) if record["fid"] in c.get("findings", [])),
                              None)
                 why = (entry or {}).get("why") or (entry or {}).get("answer") or ""
+                typed = record.get("typed") or {}
+                tid = typed.get("task")
+                now = ""
+                if tid and tid != getattr(self._active_spec, "task_id", None):
+                    proof = {p["id"]: p for p in (getattr(self._prior_scope(tid), "proofs", None) or ())}.get(
+                        typed.get("proof_id"))
+                    if proof is not None:
+                        now = (f" Scenario {tid}:{typed['proof_id']} of the earlier task {tid} now reads: operation: "
+                               f"{proof['operation']}; state: {proof['state']}; expect: {proof['expect']}.")
                 lines.append(f"- {record['fid']}: the planner's answer was: {route[len('scenario:'):].strip()}"
-                             + (f" ({why[:300]})" if why else "") + ". The proof rows above show the scenario as it "
-                             "now stands; judge the declared text, not the code, for this finding.")
+                             + (f" ({why[:300]})" if why else "") + "." + now + " The proof rows show the scenario as "
+                             "it now stands; judge the declared text, not the code, for this finding.")
         lines += self._declaration_facts(records)
         return ("Harness routing facts for your findings:\n" + "\n".join(lines) + "\n\n") if lines else ""
 
@@ -23690,6 +23869,16 @@ class Session:
                         continue
                     record.update(route="unroutable", route_note=miss)
                     plan["unroutable"].append(record)
+                elif detail.get("task") and detail["task"] != spec.task_id:
+                    # An earlier task's scenario, named with its task (cycle22):
+                    # the same planner correction, only when the record holds it.
+                    why = self._prior_scenario_problem(spec, detail["task"], detail["proof_id"])
+                    if why:
+                        record.update(route="unroutable", typed=detail, route_note=why)
+                        plan["unroutable"].append(record)
+                    else:
+                        record.update(route="scenario", typed=detail)
+                        plan["scenario"].append(record)
                 elif detail["proof_id"] not in mine:
                     record.update(route="unroutable", typed=detail,
                                   route_note=f"names scenario {detail['proof_id']}, which this task does not declare")
@@ -23877,6 +24066,65 @@ class Session:
             self._note(f"task {spec.task_id}: {record['fid']} ({pid} binds no case) went to {lead}'s binding "
                        f"declaration: {outcome}; {record['author']} rechecks it")
 
+    def _fold_note(self, spec, records: List[dict]) -> str:
+        """What the editor revision is asked to declare when the bundle's
+        binding stage is folded into it (cycle22): each scenario a finding
+        says binds no case or binds invalidly, with its text and binding as
+        measured, and the binding rule. Read from this reply by the editing
+        readers (``_record_proves``, ``_record_runs``) with the lead's own
+        authority; the reviewer who raised each finding still rechecks it."""
+        pids = sorted({r["typed"]["proof_id"] for r in records})
+        lines = []
+        for pid in pids:
+            for row in self._scenario_rows(spec, pid):
+                told = dict(row.get("scenario") or ())
+                lines.append(f"- {pid}: {told.get('operation') or row.get('behavior') or ''} | state: "
+                             f"{told.get('state') or ''} | expect: {told.get('expect') or ''} (binding now: "
+                             f"{row.get('binding') or 'none declared'})")
+        claims = "".join(f"- {r['fid']} ({r['author']}): {str(r.get('claim') or '')[:400]}\n" for r in records)
+        return ("\n\n## Scenarios of your task that bind no case, or bind invalidly\n" + "\n".join(lines)
+                + "\nThe review findings that named them:\n" + claims + PROVES_RULE
+                + " In this same reply, after your edits, add one line 'PROVES: P<n> - file::[Class::]test_case' per "
+                "case that proves each scenario above, naming cases that exist in the project's tests as they stand "
+                "after your edits. The harness settles each case only against a check it runs on the source this "
+                "reply leaves; the reviewer who raised the finding judges whether it proves the scenario. No "
+                "separate declaration call is made for these scenarios.")
+
+    def _settle_folded(self, spec, lead, reply: str) -> None:
+        """Record the folded binding declaration once the editor revision
+        returned: the same route record a separate declaration call leaves
+        (``_request_bindings``), so a later round on the same state is the
+        same request, with the bindings as the revision left them. Their
+        execution is settled on the post-edit source by the checks that run
+        after it, never by a run before the edit."""
+        pending = getattr(self, "_fold_pending", None)
+        if not pending or pending.get("task") != spec.task_id:
+            return
+        self._fold_pending = None
+        self._refresh_obligations()
+        before = pending["before"]
+        after = {r["oid"]: r for r in self.evidence_obligations}
+        source = self._source_fingerprint() if self.project else None
+        declared = [m.group(0).strip() for m in _PROVES_ANY.finditer(reply or "")]
+        for record in pending["records"]:
+            pid = record["typed"]["proof_id"]
+            rows = self._scenario_rows(spec, pid)
+            mine = [line for line in declared if (m := _PROVES_PID.match(line.split(":", 1)[1])) and m.group(1) == pid]
+            self.evidence_routes.append(dict(
+                task=spec.task_id, finding=record["fid"], proof_id=pid, reviewer=record["author"],
+                action=(f"binding requested from {lead or 'no lead'} in the fix revision: "
+                        + ("declared" if mine else "no PROVES line for a requested scenario")),
+                author=lead, folded=True,
+                binding_before=[before.get(r["oid"], (None, None))[0] for r in rows],
+                binding_after=[after[r["oid"]].get("binding") for r in rows if r["oid"] in after],
+                cases=[c for r in rows for c in (after.get(r["oid"], {}).get("cases") or [])],
+                execution_before=[before.get(r["oid"], (None, None))[1] for r in rows],
+                execution_after=[after[r["oid"]].get("execution") for r in rows if r["oid"] in after],
+                receipts_after=[list(after[r["oid"]].get("receipts") or []) for r in rows if r["oid"] in after],
+                declared=mine, declaration_artifact=None, source=source))
+            self._note(f"task {spec.task_id}: {record['fid']} ({pid} binds no case) was declared in {lead}'s fix "
+                       f"revision; {record['author']} rechecks it")
+
     def _scenario_allowance(self, spec, pid: str) -> bool:
         """Whether the planner may still be asked to correct scenario ``pid``
         of this task: once per scenario (close family, 2026-10-26; before,
@@ -23909,7 +24157,8 @@ class Session:
                 out.append(record)
         return out
 
-    def _serve_plan_findings(self, spec, task, plan: dict, labels: dict, *, lead: Optional[str] = None):
+    def _serve_plan_findings(self, spec, task, plan: dict, labels: dict, *, lead: Optional[str] = None,
+                             fold: bool = False):
         """Answer the routed findings before any editor call: the harness
         runs the task's checks on the current source if it has not (the
         same observation a review gets; a run already recorded on these
@@ -23917,7 +24166,14 @@ class Session:
         asked once for the scenario corrections. Returns the spec, with its
         scenarios as corrected. Nothing here closes a finding: the reviewer
         who raised it re-checks it against what is now shown."""
-        if plan.get("binding"):
+        if plan.get("binding") and fold:
+            # The editor revision this bundle already buys declares the
+            # bindings itself (cycle22): no separate declaration call, and
+            # the bindings settle on the source the revision leaves.
+            self._fold_pending = dict(task=spec.task_id, records=list(plan["binding"]), lead=lead,
+                                      before={r["oid"]: (r.get("binding"), r.get("execution"))
+                                              for r in self.evidence_obligations})
+        elif plan.get("binding"):
             self._request_bindings(spec, task, plan["binding"], lead)
         if plan["evidence"]:
             before = {r["oid"]: r.get("execution") for r in self.evidence_obligations}
@@ -23975,20 +24231,43 @@ class Session:
         proofs = {p["id"]: p for p in (getattr(scope, "proofs", None) or ())}
         texts = self._requirement_texts_now()
         by_pid: Dict[str, List[dict]] = {}
+        prior: Dict[str, Tuple[str, str]] = {}
         for record in records:
-            by_pid.setdefault(record["typed"]["proof_id"], []).append(record)
+            typed = record["typed"]
+            tid = typed.get("task")
+            if tid and tid != spec.task_id:
+                # An earlier task's scenario (cycle22): keyed by its task, so
+                # it can never stand for this task's scenario of the same id.
+                key = f"{tid}:{typed['proof_id']}"
+                found = self._prior_scope(tid)
+                current = {p["id"]: p for p in (getattr(found, "proofs", None) or ())}.get(typed["proof_id"])
+                if current is None:
+                    continue
+                proofs[key] = current
+                prior[key] = (tid, typed["proof_id"])
+                by_pid.setdefault(key, []).append(record)
+            else:
+                by_pid.setdefault(typed["proof_id"], []).append(record)
         asked = sorted(pid for pid in by_pid if pid in proofs)
         if not asked:
             return spec
         # The allowance is spent per scenario, by the asking: a reply that
         # keeps, refuses or garbles it is still the one correction it got.
         for pid in asked:
-            self._scenario_corrected.add(f"{spec.task_id}:{pid}")
+            self._scenario_corrected.add(pid if pid in prior else f"{spec.task_id}:{pid}")
         blocks = []
         for pid in asked:
             proof = proofs[pid]
-            blocks.append(f"Scenario {pid} as declared: operation: {proof['operation']}; state: {proof['state']}; "
-                          f"expect: {proof['expect']}; in {proof['location']}; evidence: {proof.get('evidence', 'test')}")
+            if pid in prior:
+                tid = prior[pid][0]
+                blocks.append(f"Scenario {pid} of the earlier task {tid} (closed; its lead {self._owner_lead(tid)} keeps "
+                              "its binding, and only this scenario's text is in question) as it now stands: "
+                              f"operation: {proof['operation']}; state: {proof['state']}; expect: {proof['expect']}; "
+                              f"in {proof['location']}; evidence: {proof.get('evidence', 'test')}")
+            else:
+                blocks.append(f"Scenario {pid} as declared: operation: {proof['operation']}; state: {proof['state']}; "
+                              f"expect: {proof['expect']}; in {proof['location']}; evidence: "
+                              f"{proof.get('evidence', 'test')}")
             blocks.append("Requirements it shows (verbatim, not open to change here):\n"
                           + "\n".join(f"{rid}: {texts.get(rid, '')}" for rid in proof["requirements"]))
             for record in by_pid[pid]:
@@ -24005,6 +24284,8 @@ class Session:
                   + "\n\nReply with lines for the scenarios named above and nothing else. Each line "
                   "carries the operation first and any explanation after it, never mixed:\n"
                   "SCENARIO P<n>: <operation|state|expect>: <the corrected text only> | because: <why, optional>"
+                  " (an earlier task's scenario keeps its task in the id exactly as named above, "
+                  "'SCENARIO t<k>:P<n>: ...')"
                   " -- adopt the proposal or write a narrower correct text. A scenario's operation, state and "
                   "expect are read together: when the contradiction involves more than one of them, write one line "
                   "per field that changes, for the same scenario, and they are applied together as one revision or "
@@ -24047,7 +24328,9 @@ class Session:
             # 2026-10-28): the text before ' | because: ' is what is bounded
             # and applied; the explanation is kept on the record.
             operation, explanation = _split_explanation(m.group(3))
-            lines.setdefault(m.group(1).upper(), []).append((m.group(2).lower(), operation, explanation))
+            raw = m.group(1)
+            key = (f"{raw.split(':')[0].lower()}:{raw.split(':')[1].upper()}" if ":" in raw else raw.upper())
+            lines.setdefault(key, []).append((m.group(2).lower(), operation, explanation))
         for pid in asked:
             distinct = list(dict.fromkeys((verb, text) for verb, text, _ in lines.get(pid, [])))
             explanations = [why for _, _, why in lines.get(pid, []) if why]
@@ -24073,7 +24356,8 @@ class Session:
                 several = len(changes) > 1
                 problem = next(((f"{field}: {p}" if several else p) for field, p in
                                 ((f, _scenario_text_problem(t, proof[f])) for f, t in changes.items()) if p), "")
-                problem = problem or self._correction_packet_problem(spec, pid, changes)
+                problem = problem or (self._prior_packet_problem(*prior[pid], changes) if pid in prior
+                                      else self._correction_packet_problem(spec, pid, changes))
                 if problem:
                     self._record_scenario_correction(spec, pid, by_pid[pid], status=f"refused: {problem}", reply=reply,
                                                      by=seat.key, field=", ".join(changes),
@@ -24081,8 +24365,12 @@ class Session:
                                                                if several else text)[:600],
                                                      explanation=explanation)
                     continue
-                spec = self._apply_scenario_correction(spec, pid, changes, findings=[r["fid"] for r in by_pid[pid]],
-                                                       by=seat.key)
+                if pid in prior:
+                    self._apply_prior_scenario_correction(*prior[pid], changes, findings=[r["fid"] for r in by_pid[pid]],
+                                                          by=seat.key, raised_in=spec.task_id)
+                else:
+                    spec = self._apply_scenario_correction(spec, pid, changes,
+                                                           findings=[r["fid"] for r in by_pid[pid]], by=seat.key)
                 self._record_scenario_correction(
                     spec, pid, by_pid[pid], status="corrected", reply=reply, by=seat.key, field=", ".join(changes),
                     before="; ".join(f"{f}: {proof[f]}" for f in changes) if several else proof[verb],
@@ -24112,6 +24400,121 @@ class Session:
                                                                                  "the scenario stays as declared",
                                                  reply=reply, by=seat.key)
         return spec
+
+    def _prior_scenario_problem(self, spec, tid: str, pid: str) -> str:
+        """Why an earlier task's scenario ``tid:pid`` cannot take the
+        planner's correction, or "" (cycle22). It must be a scenario of an
+        earlier closed task of this run, still standing on the record, not
+        corrected once already, whose owning lead is on record and
+        reachable, and whose dispatched scope the record keeps. Anything
+        else stays held for its reviewer; nothing is cleared."""
+        closed = {getattr(h, "task_id", None) for h in self.history}
+        if tid == spec.task_id or tid not in closed:
+            return f"names task {tid}, which is not an earlier closed task of this run"
+        rows = [r for r in self.evidence_obligations if r.get("task") == tid and r.get("proof_id") == pid
+                and r.get("kind") == "acceptance" and not r.get("superseded_by")]
+        if not rows:
+            return f"{tid} has no standing scenario {pid} on the record"
+        if tid in self._scenario_corrected or f"{tid}:{pid}" in self._scenario_corrected:
+            return f"scenario {tid}:{pid} was already corrected once; a second correction is not routed"
+        lead = self._owner_lead(tid)
+        if not lead or not self._available(lead):
+            return (f"{tid}'s owning lead {lead or '(none on record)'} is not reachable, so its scenario {pid} "
+                    "stays held as declared")
+        if self._prior_scope(tid) is None:
+            return f"{tid}'s dispatched scope is not on record, so its scenario {pid} cannot be revised"
+        return ""
+
+    def _prior_scope(self, tid: str):
+        """An earlier task's scope as dispatched (its frozen contract), with
+        each scenario's text as it stands now on its rows (earlier
+        corrections included), or None when the record does not hold it."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == tid and o.contract), None)
+        data = (outcome.contract or {}).get("scope") if outcome is not None else None
+        if not isinstance(data, dict) or not data.get("proofs"):
+            return None
+        proofs = []
+        for proof in data["proofs"]:
+            row = next((r for r in reversed(self.evidence_obligations) if r.get("task") == tid
+                        and r.get("proof_id") == proof.get("id") and r.get("kind") == "acceptance"
+                        and not r.get("superseded_by")), None)
+            now = dict((str(k), str(v)) for k, v in (row.get("scenario") or [])) if row is not None else {}
+            proofs.append(dict(proof, **{k: now[k] for k in ("operation", "state", "expect") if k in now}))
+        try:
+            return TaskScope(permitted_paths=tuple(data.get("permitted_paths") or ()),
+                             forbidden_paths=tuple(data.get("forbidden_paths") or ()),
+                             intended_result=str(data.get("intended_result") or ""),
+                             acceptance=tuple(data.get("acceptance") or ()), max_lines=data.get("max_lines"),
+                             review_only=data.get("edits") == "none", capture=data.get("capture"),
+                             exact=bool(data.get("exact")), estimate=data.get("estimate"), proofs=tuple(proofs))
+        except (TypeError, ValueError):
+            return None
+
+    def _prior_packet_problem(self, tid: str, pid: str, changes: dict) -> str:
+        """The size bound an earlier task's corrected scenario meets: that
+        task's role packets, built from its scope with the correction, within
+        its own allowance (its granted extension if it ran under one, else
+        the policy default). Nothing is applied here."""
+        policy = self.config.repository_policy
+        scope = self._prior_scope(tid)
+        if policy is None or scope is None:
+            return ""
+        trial = replace(scope, proofs=tuple(dict(p, **changes) if p["id"] == pid else p for p in scope.proofs))
+        granted = [int(r.get("granted") or 0) for r in self.packet_requests
+                   if r.get("task") == tid and r.get("state") == "granted"]
+        allowance = max(granted) if granted else policy.packet_limit
+        needed = max(policy.packet_needed(policy.scope(trial), role) for role in ("lead", "reviewer"))
+        if needed > allowance:
+            return (f"the corrected text puts {tid}'s role packet over its allowance ({needed:,} bytes against "
+                    f"{allowance:,})")
+        return ""
+
+    def _apply_prior_scenario_correction(self, tid: str, pid: str, changes: dict, *, findings: List[str], by: str,
+                                         raised_in: str) -> None:
+        """Put an earlier task's corrected scenario text in force on its own
+        rows (cycle22), exactly as a task's own correction does: the prior
+        text, execution and judgment kept as lineage, execution and
+        sufficiency start again and are settled from the receipts on record
+        and judged afresh; the requirements, location, evidence kind,
+        binding and scenario id stay the earlier task's. Its frozen contract
+        and outcome are not touched, and no other scenario or task moves. A
+        granted packet extension of that task records the revision."""
+        new = None
+        for row in self.evidence_obligations:
+            if (row.get("task") != tid or row.get("proof_id") != pid or row.get("kind") != "acceptance"
+                    or row.get("superseded_by")):
+                continue
+            scenario = dict((str(k), str(v)) for k, v in (row.get("scenario") or []))
+            lineage = list(row.get("scenario_lineage") or [])
+            first = next(iter(changes))
+            lineage.append(dict(field=", ".join(changes), before=scenario.get(first), after=changes[first],
+                                fields={f: dict(before=scenario.get(f), after=t) for f, t in changes.items()},
+                                findings=list(findings), finding=findings[0] if findings else None, by=by,
+                                raised_in=raised_in, owner_lead=self._owner_lead(tid),
+                                behavior=row.get("behavior"), scenario=[list(x) for x in row.get("scenario") or []],
+                                execution=row.get("execution"), sufficiency=row.get("sufficiency"),
+                                judged_by=row.get("judged_by", ""), receipts=list(row.get("receipts") or [])))
+            scenario.update(changes)
+            new = scenario
+            item = (f"{pid}: {scenario.get('operation')}; given {scenario.get('state')}; expect "
+                    f"{scenario.get('expect')}; in {scenario.get('location')}")
+            row.update(scenario=sorted(scenario.items()), behavior=item[:300],
+                       entry=dict(row.get("entry") or {}, item=item), scenario_lineage=lineage,
+                       execution="missing", sufficiency="unjudged", judged_by="", judged_binding="", receipts=[],
+                       source_digest=None, discharged_cases=None,
+                       reason=f"scenario corrected by the planner on {raised_in}'s review; executed and judged afresh")
+            self._sync_obligation(row)
+        scope = self._prior_scope(tid)
+        for request in self.packet_requests:
+            if request.get("task") == tid and request.get("state") == "granted" and scope is not None:
+                request.setdefault("revisions", []).append(dict(
+                    fingerprint=self._packet_fingerprint(TaskSpec(task_id=tid, description="", kind="backend",
+                                                                  complexity="simple", scope=scope)),
+                    by="prior-task scenario correction", proof=pid, findings=list(findings), corrected_by=by,
+                    raised_in=raised_in))
+        self._refresh_obligations()
+        self._note(f"task {raised_in}: earlier task {tid}'s scenario {pid} corrected by {by}"
+                   + (f" ({', '.join(f'{k}: {v}' for k, v in changes.items())[:160]})" if new else ""))
 
     def _record_scenario_correction(self, spec, pid: str, records: List[dict], *, status: str, reply: str, **detail) -> None:
         entry = dict(task=spec.task_id, proof_id=pid, findings=[r["fid"] for r in records],

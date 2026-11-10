@@ -78,6 +78,7 @@ from .latest import Resolution, resolve_model
 from .project import Project
 from .providers import LLMProvider, ProviderError, TurnLimitReached, build_provider
 from .registry import VENDORS, canonical_key, resolve
+from .scope import NOT_RUN_RULE
 from .usage import UsageMeter
 
 log = logging.getLogger(__name__)
@@ -669,10 +670,8 @@ class Fleet:
                     "so add new tests to a file or folder a listed command already runs. "
                     + inspection_tools(model_key) + " If an ungranted command is denied, "
                     "do not retry variants, delegate it or use another tool to execute it. "
-                    "Report each check or acceptance step you could not run on its own line "
-                    "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
-                    "with the edits and available evidence; a NOT RUN line keeps the requirement it "
-                    "serves open until a check runs it. "
+                    + NOT_RUN_RULE + " Put NOT RUN lines above the closing CHANGED line, and finish "
+                    "with the edits and available evidence. "
                     "Do not change permissions."
                 )
             before = self.project.contents()

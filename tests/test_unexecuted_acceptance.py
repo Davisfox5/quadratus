@@ -145,7 +145,8 @@ def test_prose_is_not_parsed_and_the_editing_call_is_told_the_line(tmp_path):
     import inspect
 
     from quadratus import runtime
-    assert "'NOT RUN: <command or file> - <why>'" in inspect.getsource(runtime)
+    from quadratus.scope import NOT_RUN_RULE
+    assert "+ NOT_RUN_RULE" in inspect.getsource(runtime) and "'NOT RUN: <item> - <why>'" in NOT_RUN_RULE
 
 
 def test_editing_calls_record_their_not_run_lines(tmp_path):

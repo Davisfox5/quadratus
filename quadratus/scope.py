@@ -463,6 +463,23 @@ PROVES_RULE = (
     "measured reason is returned to you, and the correction is the corrected line(s)."
 )
 
+#: How an editing seat names what it could not run, so the harness's own
+#: complete run can discharge it (cycle22; run21 t8: the editing seat was told
+#: only 'NOT RUN: <command or file>' while the identity forms were stated to
+#: the planner alone, and "unittest on delivered source" bound nothing). The
+#: same sentence goes to the planner and to every editing call.
+NOT_RUN_RULE = (
+    "Report each check or acceptance step you could not run on its own line 'NOT RUN: <item> - <why>', "
+    "naming exactly what did not run: 'P<n>' for a declared scenario of this task (an inclusive range "
+    "'P<a>-P<b>' binds only when every scenario in it is declared), '<file>::[<Class>::]<test>' for a case, "
+    "'<file>::<Class>' for a whole test class (discharged only by a check that collects that file whole and "
+    "shows every method of the class passed), or a test file or the exact command. The harness's own "
+    "complete run on the current source discharges an item named this way, with no further run by you. A "
+    "report naming none of these (a whole suite in words, a reason in place of an identity, an unreadable "
+    "case) is kept as written, holds the requirements it serves and nothing can discharge it; a claim a "
+    "passing run cannot establish, such as mutation detection, stays held beside any scenarios it names."
+)
+
 #: What a delivered test must do, stated for the author and the judge
 #: alike. The same run's independent source finding: a generated
 #: standard-library-only test forbade every module import and held a loop

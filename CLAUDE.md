@@ -4808,6 +4808,55 @@ Key design decisions already settled:
     decision lines), the task outcome's `packet_allowance`, and the
     checkpoint. A listed task has no orchestrator and gets no grant.
 
+- **Four settlement routes from run21's terminal** (cycle22, root's
+  reconciliation of assessment 6754811165).
+  - *A renamed case is declaration debt* (O37). A case-bound NOT RUN item
+    whose bound case is gone (`_bound_cases_gone`) reads as not runnable
+    (`_not_run_runnable`, the one reader every route uses). Gone means both:
+    - the exact-case resolver finds no definition;
+    - the latest check passed on the current source with a complete run
+      whose cases exclude it.
+    Anything unknown, failing, skipped, filtered or still executing stays
+    runnable and needs its execution or repair. Effects:
+    - the route note names `RUNS`/`DISCHARGES`;
+    - `_blockers_need_editing` is not set for it;
+    - the DONE declaration plan asks its owning lead (or a DISCHARGES
+      taker) for exact current cases, settled on the receipt already on
+      record (no new run, no slot), with the replaced cases kept on the
+      restatement;
+    - an independent judge is told to judge against the whole original item.
+    Nothing is aliased or deleted.
+  - *The editing seat is told the NOT RUN forms* (`scope.NOT_RUN_RULE`, the
+    same sentence the planner gets). `P<a>-P<b>` with an ASCII hyphen or an
+    en dash binds the full inclusive range only when every id is declared
+    by the reporting task. A reversed, single-point, chained or partly
+    undeclared range binds nothing and says why. A mutation claim beside
+    scenarios stays held: a passing suite never shows a mutant was detected.
+  - *A binding stage folds into an editor revision in the same bundle*
+    (`_folds_binding`, read by both the admission and the serve):
+    - the revision prompt names the unbound or invalid scenarios
+      (`_fold_note`);
+    - its PROVES/RUNS lines are read by the editing readers, and the route
+      is recorded after it (`_settle_folded`);
+    - bindings settle on the post-edit source.
+    Run21 t8's scenario + binding + editor + recheck + resolution-recheck
+    bundle is four calls. Without an editor the separate declaration call
+    stays. Both rechecks always run.
+  - *A later reviewer may name an earlier task's scenario*, `SCENARIO
+    t<k>:P<n>`; an unqualified `P<n>` is always the reviewing task's own.
+    - The planner corrects it once through the ordinary bundle, on that
+      task's own rows only (`_apply_prior_scenario_correction`): lineage
+      with `raised_in` and the owner lead, execution and sufficiency reset
+      and re-settled, requirements, location, evidence kind, binding and
+      id unchanged.
+    - The frozen contract and outcome are untouched. The packet is measured
+      against that task's own allowance (its grant if any, recorded as a
+      revision).
+    - Not routed: no earlier closed task, no standing row, already
+      corrected, an unreachable owner, or a scope not on record. Each stays
+      held for its reviewer.
+    - The raising reviewer rechecks, shown the corrected text.
+
 ## How development is coordinated
 
 `docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on
