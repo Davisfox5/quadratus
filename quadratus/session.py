@@ -4373,6 +4373,11 @@ _OWED_REVIEW_GRAMMAR = (
     "BLOCKING finding and no such line is recorded as an unfinished review and settles nothing.")
 
 
+#: The review batch's words for a capped review or verification, kept in the
+#: owed-review reason so a record written either way reads the same.
+_CAP_NO_VERDICT = " (it did not finish within its turn cap)"
+
+
 def _review_disposition(note: str, capped: bool, rids) -> str:
     """How one review ended, in the record's words, for a factual close-out."""
     if capped:
@@ -8088,6 +8093,7 @@ class Session:
                     capped.add(peer)
                     note = self._capped_review(spec, peer, "review", exc)
                     self._owe_review(spec, peer, "review", f"stopped at {exc.turns or 'its'} rounds with no verdict"
+                                     + _CAP_NO_VERDICT
                                      + ("; its completion gave none either" if recovered is not None else ""),
                                      role="collaborator", record=rv)
             if peer not in capped:
@@ -9770,7 +9776,7 @@ class Session:
                                      event=self._call_event(spec.task_id, "verifier", verifier), exc=exc)
             rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
             self._owe_review(spec, verifier, "verification", f"stopped at {exc.turns or 'its'} rounds with "
-                             "no verdict", role="verifier", record=rv)
+                             "no verdict" + _CAP_NO_VERDICT, role="verifier", record=rv)
         # Complete here means the seat answered; whether the answer accepts
         # is decided by the verdict readers, as before.
         self._record_review(spec, verifier, "verifier", verdict or "", complete=verdict is not None,
