@@ -791,7 +791,12 @@ _NEEDS_REQUEST = (
 )
 
 
-_UI_PATH = re.compile(r"(?i)(^|/)(templates|static|components|pages|views|styles?)/|\.(html?|css|scss|sass|less|jsx|tsx|vue|svelte)$")
+#: The file types that render, written once: the suffix half of ``_UI_PATH``,
+#: the after-the-fact rule (``_rendered_file``) and the sentence that states
+#: it (``_UNDECLARED_RENDER_RULE``) are all built from this.
+_RENDERED_SUFFIXES = ("html", "htm", "css", "scss", "sass", "less", "jsx", "tsx", "vue", "svelte")
+_UI_FILE = re.compile(r"\.(" + "|".join(_RENDERED_SUFFIXES) + r")$", re.I)
+_UI_PATH = re.compile(r"(^|/)(templates|static|components|pages|views|styles?)/|" + _UI_FILE.pattern, re.I)
 
 
 def _renders(path) -> bool:
@@ -802,6 +807,22 @@ def _renders(path) -> bool:
     declare permitted_paths=["static"])."""
     text = str(path)
     return bool(_UI_PATH.search(text) or _UI_PATH.search(text.rstrip("/") + "/"))
+
+
+def _rendered_file(path) -> bool:
+    """Whether a file a task changed is itself rendered: its own type is one
+    of ``_RENDERED_SUFFIXES`` and it is not a test or test-support file.
+
+    Narrower than ``_renders`` on purpose. That one reads a declared scope,
+    where a UI folder is a statement of intent. This one reads what changed
+    under a scope that named nothing rendered, and there a folder name says
+    nothing about the file: app/views/user.py, pages/api/x.ts and
+    tests/pages/login.py each ended a finished task as unrendered design work
+    (review 1110, engine 1). A test page or an HTML fixture is not shown to a
+    user, so it is not design work either."""
+    from .integration import is_test_support
+    text = str(path)
+    return bool(_UI_FILE.search(text)) and not is_test_support(text)
 
 
 def is_design_task(spec) -> bool:
@@ -1875,16 +1896,27 @@ def _read_requirements(reply: str):
     return found, rest
 
 
+def _covers_ids(text) -> List[str]:
+    """The requirement ids a task text claims: every id on every ``COVERS:``
+    line, in the order written, each once.
+
+    The one reading of a COVERS declaration. The task's own record
+    (``_read_covers``) and an operator list's claims (``Session.run``) both
+    come from here: read apart, the record said a task covered R2 while the
+    run said nobody claimed it, and the run completed with R2 never audited
+    (review 1110, engine 2)."""
+    return list(dict.fromkeys(rid for line in _COVERS.findall(text or "") for rid in re.findall(r"R\d+", line)))
+
+
 def _read_covers(spec):
     """Split the ``COVERS: R1, R3`` lines off a task.
 
     More than one line is one declaration: every id, in the order written,
     each once. The first line used to be read and all of them deleted, so
     "COVERS: R1" and a later "COVERS: R4" dropped R4 without a word."""
-    found = _COVERS.findall(spec.description or "")
-    if not found:
+    if not _COVERS.search(spec.description or ""):
         return [], spec
-    ids = list(dict.fromkeys(rid for line in found for rid in re.findall(r"R\d+", line)))
+    ids = _covers_ids(spec.description)
     description = _COVERS.sub("", spec.description).strip()
     return ids, replace(spec, description=description or spec.description)
 
@@ -1942,6 +1974,32 @@ def _scope_path(path) -> str:
     compared equal: a parallel task scoped to "env" that changed ".env"
     passed the merge's own scope test."""
     return PurePosixPath(str(path)).as_posix()
+
+
+def _cited_path(token) -> str:
+    """A path as an auditor wrote it, in the form project paths are compared
+    in: a leading "./" or "/" dropped as a prefix, then ``_scope_path``. ""
+    for one that names nothing inside the project (empty, or a ".." part).
+
+    ``lstrip("./")`` strips characters, not a prefix, so a citation of
+    ".storybook/main.js" was looked up as "storybook/main.js": never found,
+    or found as another file that carried that name (review 1110, engine 4)."""
+    text = str(token)
+    while text.startswith(("./", "/")):
+        text = text[1:] if text.startswith("/") else text[2:]
+    path = _scope_path(text)
+    return "" if path in ("", ".") or ".." in path.split("/") else path
+
+
+def _repeat_key(spec) -> tuple:
+    """What "the same task" means to the repeat check: the task's words
+    together with the paths its scope permits.
+
+    The words alone are not the task. SCOPE is read off the text before it
+    is compared, so one instruction given for a.py and then for b.py read as
+    the same task named twice and stalled the run (review 1110, engine 3)."""
+    paths = getattr(getattr(spec, "scope", None), "permitted_paths", None) or ()
+    return (spec.description, tuple(sorted({_scope_path(p) for p in paths})))
 
 
 def _literal_paths(scope) -> Optional[set]:
@@ -2415,6 +2473,12 @@ class Session:
         #: The rest of a batch that could not run in parallel for want of
         #: budget: run one at a time, in order, with no orchestrator call.
         self._serial_queue: List[TaskSpec] = []
+        #: While such a batch runs: what was named before its reply, which
+        #: each of its tasks is compared with, and its tasks dispatched so far.
+        #: The orchestrator named the batch once; the harness replaying it one
+        #: task at a time is not the orchestrator naming a task again.
+        self._serial_prior: tuple = ()
+        self._serial_named: tuple = ()
         self._leads_by_vendor: dict = {}
         self._batch: List[TaskSpec] = []
         self.parallel_batches: List[dict] = []
@@ -2422,8 +2486,9 @@ class Session:
         #: never from the length of the history: a parallel child that failed
         #: or was not merged leaves no history entry, and its id is still spent.
         self._ids_issued = 0
-        #: The task texts dispatched in the previous round (one task, or every
-        #: block of a batch). Naming one of them again is the same-task stall.
+        #: The tasks dispatched in the previous round (one task, or every
+        #: block of a batch), each as its ``_repeat_key``: its text with its
+        #: scope's paths. Naming one of them again is the same-task stall.
         self._named_last: tuple = ()
         self._design_note = ""
         #: Evidence files the current task's review calls are handed.
@@ -6241,9 +6306,9 @@ class Session:
             self._explicit_tasks = listed
             self.explicit = dict(listed=len(listed), ran=[], invalid=None, goal_judged=False)
             # Claims come from the operator list and survive audit status changes.
-            self._explicit_claims = {rid for text in listed
-                                     for match in [_COVERS.search(text)] if match
-                                     for rid in re.findall(r"R\d+", match.group(1))}
+            # Read as the task's own record reads them (``_covers_ids``), so a
+            # requirement a listed task claims is always one the audit judges.
+            self._explicit_claims = {rid for text in listed for rid in _covers_ids(text)}
             problems = self._task_list_problems(listed)
             if problems:
                 # Every problem at once, before the dependency watch, the
@@ -6354,6 +6419,8 @@ class Session:
         # orchestrator call (Codex on #42, 357d40a P2).
         while used < max_tasks or self._explicit_list_spent():
             used += 1
+            # Whether this task belongs to a batch that is running one at a time.
+            queued = False
             if self._explicit_tasks is not None:
                 spec = self._next_explicit_task()
             elif self._serial_queue and self._queue_stands():
@@ -6362,6 +6429,7 @@ class Session:
                 spec = self._serial_queue.pop(0)
                 if spec.task_id != self._next_task_id():
                     spec = replace(spec, task_id=self._next_task_id())
+                queued = True
                 self._note(f"running {spec.task_id} next, from the batch that is running one task at a time")
             else:
                 if self._serial_queue:
@@ -6387,6 +6455,9 @@ class Session:
                 self._note(f"parallel batch of {len(batch)} not run in parallel: {short}. "
                            "Running the same tasks one at a time.")
                 self._serial_queue, batch = list(batch[1:]), None
+                # One reply named all of them: what it is compared with is
+                # what was named before it.
+                queued, self._serial_prior, self._serial_named = True, self._named_last, ()
             if batch:
                 used += len(batch) - 1
                 if not self._run_batch(batch):
@@ -6437,9 +6508,23 @@ class Session:
             # One reading of the task's directive lines, shared with every
             # block of a parallel batch (Session._read_directives); the
             # send-backs below stay the serial loop's own.
-            named = spec.description
+            named = _repeat_key(spec)
+            if queued:
+                # A task of a batch running one at a time is compared with
+                # what was named before that batch, as every block is when
+                # the batch runs at once, and never with its own batch: the
+                # harness is replaying one reply, and two of its blocks read
+                # alike stalled the run on its second task (review 1110,
+                # engine 3).
+                self._named_last = self._serial_prior
             intake = self._read_directives(spec)
-            self._named_last = (named,)
+            if queued:
+                # What the next reply is compared with: every task of the
+                # batch dispatched so far, the whole batch once it is through.
+                self._serial_named = (*self._serial_named, named)
+                self._named_last = self._serial_named
+            else:
+                self._named_last = (named,)
             continues, spec, covers, resolves = intake.continues, intake.spec, intake.covers, intake.resolves
             problem = intake.problem if intake.refused == "covers" else ""
             if problem:
@@ -7012,8 +7097,10 @@ class Session:
         paths, and a parent folder ("app") names nothing rendered, so a
         backend task scoped that way could ship a template or a stylesheet
         with no capture and no design review (review 1110, session first
-        half 5). Only the paths a task changed can settle it. The contract
-        is fixed at dispatch and carries no capture declaration to render
+        half 5). Only the paths a task changed can settle it, and of those
+        only a file that is itself a rendered type and is no test file
+        (``_rendered_file``): a folder name alone settles nothing here. The
+        contract is fixed at dispatch and carries no capture declaration to render
         from, so nothing is captured after the fact: the task is left with
         the design debt a declared design task with no renders is left with
         (the same open finding, the same record, the same named stop), whose
@@ -7037,7 +7124,7 @@ class Session:
             return
         state = self._inspect_partial_edits(self._task_before, stopped=False)
         inherited = self._undeclared_predecessor_changes()
-        rendered = sorted({path for path in [*(state.get("changed") or []), *inherited] if _renders(path)})
+        rendered = sorted({path for path in [*(state.get("changed") or []), *inherited] if _rendered_file(path)})
         if not rendered:
             return
         named = ", ".join(rendered[:8]) + (f" and {len(rendered) - 8} more" if len(rendered) > 8 else "")
@@ -7620,7 +7707,7 @@ class Session:
         tier on, and no preview to capture from. A block that asks for one of
         those is refused here rather than run without it.
         """
-        if spec.description in self._named_last:
+        if _repeat_key(spec) in self._named_last:
             raise RunStalled(
                 f"the orchestrator named the same task twice in a row: "
                 f"{spec.description!r}. The last close-out did not move "
@@ -7820,7 +7907,7 @@ class Session:
         # these are the texts a repeat next round is measured against.
         for named in specs:
             self._issue_task_id(named.task_id)
-        self._named_last = tuple(named.description for named in specs)
+        self._named_last = tuple(_repeat_key(named) for named in specs)
         self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _ in parsed))
         project = Project(self.project, exclude=self.config.project_excludes)
         base = project.contents()
@@ -8000,7 +8087,10 @@ class Session:
                            "are not shown to be of the delivered source")
             else:
                 own = _literal_paths(spec.scope) or set()
-                hit = sorted(path for path in moved if path.strip("./") in own)
+                # Through ``_scope_path``, as ``own`` is built: stripping "./"
+                # as characters turned ".storybook/x.html" into another name,
+                # and that child's renders stood (review 1110, engine 4).
+                hit = sorted(path for path in moved if _scope_path(path) in own)
                 if not hit:
                     continue
                 # With no fix round spent, a check command itself moved the file.
@@ -8307,7 +8397,7 @@ class Session:
         root = Path(self.project)
         found = []
         for token in re.findall(r"[\w./-]+\.[A-Za-z]\w*", text):
-            path = token.split("::")[0].lstrip("./")
+            path = _cited_path(token.split("::")[0])
             if path and (root / path).is_file():
                 found.append(path)
         names = re.findall(r"\btest_\w+", text)
@@ -11674,10 +11764,15 @@ _WORKER_RECOVERY = (
 #: difficulty ladder across the subscriptions.
 #: What the orchestrator is told about ``Session._undeclared_design_work``:
 #: design work is settled by the files a task changed, not only by its label.
+#: The file types are quoted from ``_RENDERED_SUFFIXES``, the list
+#: ``_rendered_file`` reads, so the sentence cannot name a file the rule
+#: leaves alone or leave out one it counts.
 _UNDECLARED_RENDER_RULE = (
-    "A task of any kind that changes a rendered file (template, page, component, stylesheet, markup) "
+    "A task of any kind that changes a rendered file ("
+    + ", ".join("." + s for s in _RENDERED_SUFFIXES[:-1]) + " or ." + _RENDERED_SUFFIXES[-1]
+    + "; not a test file or under a test folder) "
     "names that file or its UI folder in SCOPE: one that changes it under a parent folder alone gets "
-    "no capture, and is left with an open finding that no render was reviewed."
+    "no capture and an open finding that no render was reviewed."
 )
 
 #: The label vocabulary, stated once and shared by the task request and the
@@ -11723,14 +11818,17 @@ _KIND_REQUEST = _kind_request_text()
 #: The same slot when a decider labels every task (decider_labels="all"):
 #: the orchestrator is asked to leave the label out, and the harness's
 #: decider answers kind and difficulty from the task text. The same
-#: control-verb rules on the first lines still apply.
+#: control-verb rules on the first lines still apply, and so does the
+#: rendered-file rule: it reads SCOPE and the files changed, never the label,
+#: so this run's orchestrator is held to it and is told it (review 1110,
+#: engine 1: it was held to it and told nothing).
 _DECIDER_LABELS_REQUEST = (
     "Do not begin your reply with a KIND line: this run's routing decider labels each "
     "task's kind and difficulty from the task text you write, so write the task on the "
     "first line. In the first "
     f"{MAX_PREFACE_LINES} lines no line may begin with ASK:, FETCH:, CONSULT or WORKER, and "
     "no line may be the bare word DONE, because each is read as that control verb rather "
-    "than as your task."
+    "than as your task. " + _UNDECLARED_RENDER_RULE
 )
 
 
