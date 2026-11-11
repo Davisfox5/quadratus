@@ -276,7 +276,10 @@ def test_no_declared_checks_leaves_only_the_operators_own(tmp_path, monkeypatch,
         cli.main([GOAL, "--project", str(tmp_path), *flags])
         capsys.readouterr()
         newest = max((tmp_path / ".quadratus" / "runs").iterdir(), key=lambda p: p.stat().st_mtime_ns)
-        return [gate["argv"] for gate in json.loads((newest / "gate-plan.json").read_text())]
+        # The commands: a declined run's plan ends with one entry that names
+        # the choice and is not a command (tests/test_review1110_glue2.py).
+        return [gate["argv"] for gate in json.loads((newest / "gate-plan.json").read_text())
+                if not gate.get("declined")]
 
     assert any(argv[1:3] == ["-m", "pytest"] for argv in plan()), "the project's own check is run by default"
     assert plan("--no-declared-checks") == []
@@ -334,7 +337,8 @@ def test_the_real_run_button_carries_the_trust_section_to_the_runner(tmp_path, m
     seen = _form_runner(monkeypatch, tmp_path)
     demo = gui.build_interface(Settings())
     block = _callback(demo, "run_selected")
-    assert [getattr(b, "label", None) for b in block.inputs][-3:] == list(gui.TRUST_LABELS.values())
+    # The Trust section's inputs (four since the watched-paths box), then the Contests choice.
+    assert [getattr(b, "label", None) for b in block.inputs][-5:] == [*gui.TRUST_LABELS.values(), gui.CONTEST_LABEL]
     # goal, folder, writes, check, mode, tasks, paths, forbid, repairs, neutral, profile, extra, probes
     common = ("goal", str(tmp_path), True, "", "adversarial", 10, "", "", "", False, "", "", "")
     limits = (False, 24, 500_000, 900, 2, 0, 0, 0)
@@ -369,7 +373,7 @@ def test_opening_a_project_clears_the_trust_section(tmp_path, monkeypatch):
     assert [getattr(b, "label", None) for b in cleared.outputs] == list(gui.TRUST_LABELS.values())
     assert not cleared.inputs
     values = cleared.fn()
-    assert values == ("", False, False)
+    assert values == ("", False, False, False)
     # What the section holds after that is the form that chose nothing.
     common = ("goal", str(tmp_path), True, "", "adversarial", 10, "", "", "", False, "", "", "")
     list(_callback(demo, "run_selected").fn(*common, False, 24, 500_000, 900, 2, 0, 0, 0, *values))

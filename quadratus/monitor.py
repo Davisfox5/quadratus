@@ -74,6 +74,9 @@ ROLE_STAGES: Dict[str, str] = {
     "lead": "draft",
     "direct": "draft",
     "security-fix": "draft",
+    # A contest's one judge call (quadratus.contest.JUDGE_ROLE): it picks
+    # between two drafts, so the task is still at its draft.
+    "judge": "draft",
     "revision": "review",
     "verifier": "review",
     "collaborator": "review",

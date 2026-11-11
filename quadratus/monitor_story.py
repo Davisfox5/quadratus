@@ -23,6 +23,7 @@ from .monitor import (
 ROLE_LABELS = {
     'orchestrator': 'Planning the next step', 'requirements-review': 'Reviewing the plan',
     'lead': 'Building the change', 'direct': 'Building the change',
+    'judge': 'Choosing between two drafts',
     'collaborator': 'Reviewing the change', 'verifier': 'Checking the fix',
     'revision': 'Making corrections', 'recheck': 'Checking the corrections', 'design-review': 'Reviewing screenshots',
     'design-fix': 'Correcting the interface', 'gate-fix': 'Correcting a failed test',

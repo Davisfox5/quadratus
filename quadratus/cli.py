@@ -109,6 +109,8 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     withheld = _withheld_line()
     if withheld:
         print(f">> {withheld}", flush=True)
+    if getattr(args, "baseline", None):
+        return _run_baseline(goal, args, settings)
     if args.project:
         from .project import Project
         from .project_run import run_project
@@ -136,6 +138,8 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 **({"run_limits": limits} if limits is not None else {}),
                 **({"session_options": options} if options else {}),
                 **_trust(args),
+                # Only when contests are on: "off" is the call made before.
+                **({"compete": args.compete} if getattr(args, "compete", None) not in (None, "off") else {}),
                 direct_tier=bool(getattr(args, "direct_tier", False)),
                 tasks=_task_list(getattr(args, "tasks", None)),
                 progress=lambda message: print(f">> {message}", flush=True),
@@ -146,6 +150,8 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         except (ValueError, ProviderError, OSError) as exc:
             print(f"Error: {exc}")
             return 1
+        except KeyboardInterrupt as exc:
+            return _interrupted(exc)
         print(result.report)
         print(f"\nSource diff: {result.run_dir / 'changes.diff'}")
         if args.output:
@@ -167,6 +173,86 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     except _StateBusy as exc:
         print(_c(f"\nError: {exc}", Fore.RED, True))
         return 1
+
+
+#: The exit status of a run the operator interrupted, as a shell reports it.
+INTERRUPTED = 130
+
+
+def _interrupted(exc) -> int:
+    """Say where an interrupted run's record is, and end with status 130.
+
+    ``run_project`` and ``run_baseline`` write the whole record and then pass
+    an interrupt on when it landed while the call transcripts were copied
+    (``project_run.RunInterrupted``, which carries the result). Uncaught, it
+    ended the command in a traceback that never named the run folder. An
+    interrupt with no result landed before any record existed."""
+    result = getattr(exc, "result", None)
+    run_dir = getattr(result, "run_dir", None)
+    if run_dir is None:
+        print("\nInterrupted before a run record was written.")
+        return INTERRUPTED
+    print(f"\nInterrupted. The run record was written first: {run_dir}")
+    print(f"Report: {Path(run_dir) / 'report.md'}")
+    print(f"Source diff: {Path(run_dir) / 'changes.diff'}")
+    return INTERRUPTED
+
+
+def _baseline_status(result) -> tuple:
+    """``(exit status, closing line)`` for a finished baseline run.
+
+    Never the project run's "0 means complete": a baseline is not judged.
+    1 when the run stopped, 2 when its last check failed or no check ran,
+    and 0 only when it ran to its end and its last check passed, which says
+    that much and nothing about the goal. Read from the run's own record."""
+    import json
+    if result.error:
+        return 1, f"The baseline stopped: {result.error.splitlines()[0][:300]}"
+    try:
+        record = json.loads((Path(result.run_dir) / "result.json").read_text(encoding="utf-8"))
+        gate = record["baseline"]["gate"]
+        passed, configured = gate.get("passed"), gate.get("configured")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return 2, "The baseline's record could not be read, so its last check is unknown."
+    if passed is True:
+        return 0, "The baseline ran to its end and its last check passed. The goal was not judged."
+    if passed is False:
+        return 2, "The baseline's last check failed. The goal was not judged."
+    return 2, ("No check ran, so nothing was test-verified. The goal was not judged."
+               if not configured else "No check result was recorded. The goal was not judged.")
+
+
+def _run_baseline(goal: str, args: argparse.Namespace, settings: Settings) -> int:
+    """One model alone on the project (``quadratus.baseline``): the
+    measurement arm beside a project run, under the same checks, limits and
+    trust choices. It never ends as "complete"; see :func:`_baseline_status`."""
+    from .baseline import run_baseline
+    from .project import Project
+    try:
+        limits, _ = _run_limits(args)
+        project = Project.open(args.project, clone_url=args.clone or '', branch=args.branch or '')
+        result = run_baseline(
+            goal, project, settings, model=args.baseline, check=args.check or '',
+            extra_checks=getattr(args, "extra_check", None) or (),
+            readiness=getattr(args, "readiness", None), state_dir=args.state_dir,
+            forbid=args.forbid, declared_paths=args.declared_paths,
+            fix_rounds=args.fix_rounds,
+            **({"run_limits": limits} if limits is not None else {}),
+            **_trust(args),
+            progress=lambda message: print(f">> {message}", flush=True),
+        )
+    except (ValueError, ProviderError, OSError) as exc:
+        print(f"Error: {exc}")
+        return 1
+    except KeyboardInterrupt as exc:
+        return _interrupted(exc)
+    print(result.report)
+    print(f"\nSource diff: {result.run_dir / 'changes.diff'}")
+    if args.output:
+        Path(args.output).write_text(result.report, encoding='utf-8')
+    status, line = _baseline_status(result)
+    print(f"\n{line}")
+    return status
 
 
 class _StateBusy(ProviderError):
@@ -373,6 +459,8 @@ def _trust(args) -> dict:
         chosen["allow_project_agent_config"] = True
     if getattr(args, "no_declared_checks", False):
         chosen["declared_checks"] = False
+    if getattr(args, "accept_watched_paths", False):
+        chosen["accept_watched_paths"] = True
     return chosen
 
 
@@ -443,6 +531,22 @@ _NEEDS = {
     "monitor": "{names} can only be used with --monitor",
 }
 
+#: The flags a ``--baseline`` run reads, by parser dest. One model does the
+#: whole goal in one call, so everything about planning, routing, review and
+#: capture has nothing to act on, and a flag not listed here is refused with
+#: ``--baseline`` by name. A new flag is refused there until it is listed.
+_BASELINE_READS = frozenset({
+    "output", "project", "clone", "branch", "state_dir", "check", "extra_check", "readiness",
+    "declared_paths", "forbid", "allow_writes", "neutral_preferences", "policy_preview",
+    "trust_project_policy", "allow_project_agent_config", "no_declared_checks", "accept_watched_paths",
+    "max_calls", "max_reported_tokens", "wall_seconds", "max_concurrent_workers",
+    "reserve_tokens_per_call", "max_tokens_per_call", "lead_max_turns",
+    "baseline", "fix_rounds", "status", "probe", "probe_all", "verbose",
+})
+
+#: ``--compete`` choices (contest.COMPETE_MODES; a test holds the two equal).
+_COMPETE_MODES = ("off", "complex")
+
 #: How much of a task description an external decider is sent, for the
 #: --decider help (decisions.TASK_TEXT_LIMIT; a test holds the two equal).
 _DECIDER_TEXT_LIMIT = 8_000
@@ -452,6 +556,8 @@ _DECIDER_TEXT_LIMIT = 8_000
 #: holds them equal to policy.TRUST_ENV and project_watch.ALLOW_AGENT_CONFIG_ENV.
 _TRUST_ENV = "QUADRATUS_TRUST_PROJECT_POLICY"
 _AGENT_CONFIG_ENV = "QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG"
+#: The same for the watched-paths acceptance (project_watch.ACCEPT_WATCHED_PATHS_ENV).
+_WATCHED_ENV = "QUADRATUS_ACCEPT_WATCHED_PATHS"
 
 #: Monitor flags only the served page reads: the one-screen status checks no
 #: host name and takes no folder from a request.
@@ -460,7 +566,7 @@ _SERVE_ONLY = ("allow_host", "allow_project")
 #: Parse-time defaults are None so a flag that was typed can be told from one
 #: that was not; the real defaults are filled in once the line is accepted.
 _DEFAULTS = {"max_tasks": 20, "mode": "adversarial", "decider": "rule",
-             "decider_labels": "unstated", "history": 10}
+             "decider_labels": "unstated", "history": 10, "fix_rounds": 1}
 
 #: The run-limit flags by the field each fills (run_budget.LIMIT_FIELDS). The
 #: same names label a refused value, so the error says which flag to fix.
@@ -572,6 +678,16 @@ def _misplaced(parser, args) -> str:
         "monitor": False,
     }
     problems = []
+    if args.baseline:
+        # Pipeline-only flags are named by their own rule below.
+        unread = [_flag_name(a) for a in given if a.dest not in _BASELINE_READS and a.needs != "pipeline"]
+        if unread:
+            problems.append(
+                "--baseline runs one model alone on the whole goal, with no orchestrator, reviewer or "
+                f"capture: it does not use {', '.join(unread)}")
+    elif any(a.dest == "fix_rounds" for a in given):
+        problems.append("--fix-rounds requires --baseline: it is how many fix calls a failing check "
+                        "may buy the one model")
     for need, wording in _NEEDS.items():
         unmet = [a for a in given if a.needs == need and not met[need]]
         if not unmet:
@@ -597,6 +713,9 @@ def _launch_problem(args) -> str:
     if args.max_parallel_tasks is not None and not args.allow_writes:
         return ("--max-parallel-tasks requires --allow-writes: tasks run in parallel only when "
                 "edits are enabled")
+    if getattr(args, "compete", None) == "complex" and not args.allow_writes:
+        return ("--compete complex requires --allow-writes: each draft is made in a private copy of "
+                "a project that may be edited, and without edits no contest could form")
     gap = mode_audit_gap(args.mode)
     if gap:
         from .session import SessionConfig
@@ -834,6 +953,27 @@ def build_parser() -> argparse.ArgumentParser:
             "added beside them or run in their place. --policy-preview reads it too."
         ),
     )
+    flag(
+        engine, "--accept-watched-paths", needs="project", action="store_true",
+        help=(
+            "Start although the last run on this project recorded a change to a path outside the "
+            "measured source that no task may change (a git hook, an env file, a link, vendor agent "
+            "configuration) and that change is still in place. Such a project is otherwise refused "
+            "before any model call, with each path named: inspect them first. Accepts them for this "
+            f"run only. Same as {_WATCHED_ENV}=1."
+        ),
+    )
+    flag(
+        engine, "--compete", needs="project", choices=_COMPETE_MODES, default=None,
+        help=(
+            "Contests (default off). With 'complex', each task routed at complex difficulty is "
+            "drafted twice, by two models from different vendors that cannot see each other's work, "
+            "each in its own private copy of the project; measured facts pick the draft that is "
+            "merged (finished, inside its scope, your checks), and a third model is asked once only "
+            "when they tie. Costs about one extra draft per contested task, and needs --allow-writes. "
+            "The routed lead's own refusal still stops the run."
+        ),
+    )
     flag(engine, "--path", needs="project", dest="declared_paths", action="append", default=[],
          help="Declare a narrow project-relative path; whole-project dot is refused. Repeat as needed.")
     flag(engine, "--forbid", needs="project", action="append", default=[],
@@ -843,6 +983,34 @@ def build_parser() -> argparse.ArgumentParser:
               "still run unskipped; every other original test is restored. Repeat as needed.")
     flag(engine, "--test-changes", needs="project", metavar="FILE",
          help="Operator-authored exact goal-bound test replacements/retirements as JSON.")
+
+    solo = parser.add_argument_group(
+        "baseline",
+        "Measure the pipeline against one model working alone: the same project, goal, checks, "
+        "limits and trust choices, one write-granted call, and nothing judged.",
+    )
+    flag(
+        solo, "--baseline", needs="project", metavar="MODEL", default=None,
+        help=(
+            "Run MODEL alone on the goal in --project instead of the session engine (a roster key "
+            "of an unrestricted seat, for example claude:opus). It implies write access to the "
+            "project: the model edits your files, with or without --allow-writes. It gets one "
+            "call, then your checks; no orchestrator, reviewer, worker or close-out call is made. "
+            "The goal is not judged and the run never reports complete: exit status 0 means only "
+            "that it ran to its end and its last check passed, 1 that it stopped, 2 that its last "
+            "check failed or no check ran. Reads --check, --extra-check, --readiness, --path, "
+            "--forbid, --state-dir, the run limits, --lead-max-turns and the trust flags; any "
+            "other engine flag is refused. Compare runs with tools/compare_runs.py."
+        ),
+    )
+    flag(
+        solo, "--fix-rounds", needs="project", type=_whole(0), default=None, metavar="N",
+        help=(
+            "With --baseline: how many more calls a failing check may buy, each with the check's "
+            "output (default 1, the one fix round a lead gets; 0 for none). Only a failure the "
+            "application can repair buys one."
+        ),
+    )
 
     limits = parser.add_argument_group(
         "run limits",
@@ -988,8 +1156,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             # Each only when given. --no-declared-checks is read too: the
             # preview is of the run this line would start, and that run would
             # not have the project's own check.
+            # A baseline always edits, so its preview is of a writing run.
             plan = preview_policy(args.project, args.declared_paths, forbid=args.forbid,
-                                  writing=args.allow_writes,
+                                  writing=args.allow_writes or bool(args.baseline),
                                   **({"trust_project_policy": args.trust_project_policy}
                                      if args.trust_project_policy else {}),
                                   **({"declared_checks": False} if args.no_declared_checks else {}))

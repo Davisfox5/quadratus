@@ -52,8 +52,13 @@ from .deptree import DEPENDENCY_DIRS
 from .project import Project
 from .project_run import (
     ProjectResult,
+    RunInterrupted,
     _calls_by_task,
+    _child_environment_record,
     _collect_traces,
+    _declared_checks_lines,
+    _declared_checks_record,
+    _decline_declared_checks,
     _extra_gate_commands,
     _fleet_for,
     _gate_for,
@@ -62,8 +67,14 @@ from .project_run import (
     _preferences_record,
     _project_lock,
     _refuse_agent_config,
+    _refuse_scratch_in_project,
+    _refuse_standing_watch_findings,
     _selected_limits,
     _state_folder,
+    _sweep_stale_scratch,
+    _trust_record,
+    _watch_record,
+    _watch_report_lines,
 )
 from .repo_scan import scan_repo
 from .run_budget import RunBudget
@@ -177,17 +188,21 @@ def fix_prompt(goal, gate_text, scope, used, fix_rounds, rounds="") -> str:
 def run_baseline(goal, project, settings, *, model, check='', extra_checks=(), gates=None,
                  run_limits=None, state_dir=None, fix_rounds=1, forbid=(), declared_paths=(),
                  progress=None, readiness=None, trust_project_policy=None,
-                 allow_project_agent_config=False, declared_checks=True):
+                 allow_project_agent_config=False, declared_checks=True, accept_watched_paths=False):
     """Run ``model`` alone on ``goal`` in ``project`` and record what happened.
 
     ``check``, ``extra_checks``, ``gates``, ``run_limits``, ``state_dir``,
     ``forbid``, ``declared_paths``, ``readiness``, ``trust_project_policy``,
-    ``allow_project_agent_config`` and ``declared_checks`` mean what they
-    mean to ``run_project``. ``fix_rounds`` is how many more editing calls a
-    failing gate may buy (0 for none).
+    ``allow_project_agent_config``, ``declared_checks`` and
+    ``accept_watched_paths`` mean what they mean to ``run_project``.
+    ``fix_rounds`` is how many more editing calls a failing gate may buy (0
+    for none).
 
     Returns a ``ProjectResult`` whose ``completed`` is always False: the run
-    is not judged here. ``error`` names what stopped it, if anything did.
+    is not judged here. ``error`` names what stopped it, if anything did. An
+    interrupt that lands while the call transcripts are copied is passed on
+    as ``RunInterrupted`` once the record is written, as ``run_project``
+    passes it on.
     """
     from .policy import load_policy
     from .scope import TaskScope
@@ -200,12 +215,14 @@ def run_baseline(goal, project, settings, *, model, check='', extra_checks=(), g
     if not isinstance(project, Project):
         project = Project(project)
     state = _state_folder(project, state_dir)
+    # The preflights a project run makes, by its own helpers: a scratch root
+    # inside the project, vendor agent configuration, and a watched path the
+    # last run (of either kind) left changed.
+    _refuse_scratch_in_project(project)
     agent_config = _refuse_agent_config(project, allow_project_agent_config, progress)
-    scan = None
-    if not declared_checks:
-        scan = dataclasses.replace(scan_repo(project.root), check_command=None, declared_checks=[])
-    policy = load_policy(project.root, forbid=forbid, scan=scan,
-                         trust_project_policy=trust_project_policy)
+    watched_accepted = _refuse_standing_watch_findings(project, state, accept_watched_paths, progress)
+    policy = load_policy(project.root, forbid=forbid, trust_project_policy=trust_project_policy,
+                         **({} if declared_checks else {'declared_checks': False}))
     # The whole goal is one call here, so the task-size ceiling does not
     # apply; the path protections do, exactly as a task's scope carries them.
     scope = TaskScope(permitted_paths=tuple(declared_paths or ()),
@@ -216,9 +233,11 @@ def run_baseline(goal, project, settings, *, model, check='', extra_checks=(), g
         from .readiness import probes_from
         probes = probes_from(readiness, project.root)
     with _project_lock(project):
+        _sweep_stale_scratch(progress)
         return _baseline(goal, project, settings, model=model, state=state, check=check, extras=extras,
                          gates=gates, run_limits=run_limits, fix_rounds=fix_rounds, progress=progress,
                          policy=policy, scope=scope, agent_config=agent_config,
+                         watched_accepted=watched_accepted,
                          declared_checks=declared_checks, probes=probes)
 
 
@@ -245,7 +264,7 @@ def _ready(probes, project, watch, store, receipts):
     """The operator's readiness probes, once, before any model call, as the
     session runs them: a failure is an operator handoff with no call made,
     and a probe may not change project source or a dependency tree."""
-    from .readiness import CapabilityProbeFailed, run_probes
+    from .readiness import CapabilityProbeFailed, failure_message, run_probes
     before = project.fingerprint()
     receipts.extend(run_probes(probes, project.root))
     for receipt in receipts:
@@ -259,13 +278,12 @@ def _ready(probes, project, watch, store, receipts):
         raise RuntimeError('A readiness probe changed project source; it must only observe.')
     failed = [r for r in receipts if not r['passed']]
     if failed:
-        raise CapabilityProbeFailed(
-            f"readiness probe {failed[0]['id']} failed ({failed[0]['reason']}); no model call was made. "
-            f"Output tail: {failed[0]['output'][-400:]}")
+        raise CapabilityProbeFailed(failure_message(failed[0]))
 
 
 def _baseline(goal, project, settings, *, model, state, check, extras, gates, run_limits, fix_rounds,
-              progress, policy, scope, agent_config, declared_checks, probes=(), fleet_type=None):
+              progress, policy, scope, agent_config, declared_checks, probes=(), fleet_type=None,
+              watched_accepted=()):
     from .deptree import DependencyGuard, DependencyWatch
     from .integration import CheckUnattributable, attribute, original_tests, selection_sections
     from .run_activity import RunActivity
@@ -279,10 +297,10 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
     progress = activity
     activity.record('run-started', goal=str(goal)[:4000], mode=MODE, model=model)
     before = project.contents()
-    scan = scan_repo(project.root)
+    scan, declined = scan_repo(project.root), None
     if not declared_checks:
-        scan = dataclasses.replace(scan, check_command=None, declared_checks=[], interpreter_note='')
-    gate, plan = _gate_for(project, check, extras, gates, scan, run_dir, progress)
+        scan, declined = _decline_declared_checks(scan)
+    gate, plan = _gate_for(project, check, extras, gates, scan, run_dir, progress, declined=declined)
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
@@ -476,11 +494,17 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
         'trace': {'calls': len(traces), **({'interrupted': True} if trace_interrupted else {}),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None)},
         'decisions': [], 'in_flight': in_flight, 'policy_preview': preview,
+        'declared_checks': _declared_checks_record(declined),
+        'trust': _trust_record(policy, agent_config, _declared_checks_record(declined), watched_accepted),
+        'child_environment': _child_environment_record(),
         'budget': budget.snapshot() if budget else None,
         'selected_limits': selected,
         'original_test_runs': original_runs,
         'unexecuted_acceptance': not_run,
         'watch_findings': list(getattr(fleet, 'watch_findings', []) or []),
+        # In a project run's own shape: the next run's preflight, of either
+        # kind, reads this to refuse a watched path this call left changed.
+        'project_watch': _watch_record(fleet),
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope, 'changed': r.changed,
@@ -493,7 +517,12 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
     write_private(run_dir / 'result.json', json.dumps(record, indent=2))
     write_private(run_dir / 'delegation.md', delegation.render_report())
     tighten_files(run_dir)
-    return ProjectResult(False, report, run_dir, diff, error)
+    result = ProjectResult(False, report, run_dir, diff, error)
+    if trace_interrupted:
+        # The record is whole. The operator's interrupt goes on to the caller
+        # as a project run's does, so a loop over baselines stops here.
+        raise RunInterrupted(result)
+    return result
 
 
 def _not_run_lines(reply):
@@ -631,6 +660,8 @@ def _report(record, run_dir, diff, meter, delegation, traces):
              + f"; {info['seconds']} s.", '',
              f"Fix calls after a failing check: {info['fix_rounds_used']} of {info['fix_rounds']} allowed.", '',
              f"The model was given {FEEDBACK}.", '']
+    lines += _watch_report_lines(record['project_watch'])
+    lines += _declared_checks_lines(record['declared_checks'])
     if record['error']:
         lines += [f"Stopped ({info['stop_cause']}): {record['error']}", '']
     lines += ['Source changes are saved in the project folder.' if diff else

@@ -3990,10 +3990,8 @@ class Session:
             raise PartialWorkStopped("A readiness probe changed project source; it must only observe.")
         failed = [r for r in receipts if not r["passed"]]
         if failed:
-            first = failed[0]
-            raise CapabilityProbeFailed(
-                f"readiness probe {first['id']} failed ({first['reason']}); no model call was made. "
-                f"Output tail: {first['output'][-400:]}")
+            from .readiness import failure_message
+            raise CapabilityProbeFailed(failure_message(failed[0]))
 
     def _direct_refusal(self, spec, outcome=None) -> str:
         """Why a requested direct tier is refused, or "" when admitted. Every
@@ -5015,7 +5013,15 @@ class Session:
         anything outside them kept as an artifact, never merged. A stop that
         is the run's own (``_stops_the_run``: a spent budget, an interrupt, a
         denied capability, a failure nothing names) still stops the run,
-        whoever met it, after the work it would lose is kept."""
+        whoever met it, after the work it would lose is kept.
+
+        One stop is the routed lead's alone (``_never_replaced``): its policy
+        refusal or denied capability stops the run exactly as it does with a
+        single lead, whatever the challenger delivered. The challenger's
+        draft is not merged in its place and stays on record as an artifact.
+        A challenger's refusal only loses the contest, and a routed lead that
+        failed in an ordinary way (a cap, a transport failure) can still be
+        replaced by a usable challenger draft."""
         import concurrent.futures
 
         from . import contest as rules
@@ -5071,12 +5077,21 @@ class Session:
                 # is read with; any other stop is one draft losing.
                 if exc is not None and _stops_the_run(exc):
                     fatal = fatal or exc
+            # The routed lead's refusal or denied capability stops the run as
+            # it does with one lead: no re-plan repairs either and a refusal
+            # is never rerouted, so no other draft stands in for its own,
+            # whatever the challenger delivered.
+            held = entries["routed"].get("error")
+            held = held if _never_replaced(held) else None
+            fatal = fatal or held
             if fatal is None and all(rules.usable(entries[role]) for role in roles):
                 try:
                     fatal = self._contest_gates(spec, entries, children)
                 except BaseException as exc:  # noqa: BLE001 -- raised below, once the work is kept
                     fatal = exc
             winner, decided_by = rules.decide_measured(entries["routed"], entries["challenger"])
+            if held is not None:
+                winner, decided_by = None, rules.ROUTED_STOP
             if winner is None and not decided_by:
                 one, other = entries["routed"], entries["challenger"]
                 if one["changed"] == other["changed"] and all(
@@ -5130,6 +5145,8 @@ class Session:
             self._contest_loser = (spec.task_id, entries[loser]["diff"])
         self._note(f"task {spec.task_id}: contest "
                    + (f"won by {models[winner]} (decided by {decided_by})" if winner
+                      else f"ended by the routed lead's own stop ({type(held).__name__}), which stops the run "
+                           "as it does with one lead; no draft was merged in its place" if held is not None
                       else "produced no usable draft; the routed lead's own result stands"))
         if winner is None:
             task.keep(json.dumps(record), kind="contest", author="harness")
@@ -11140,8 +11157,21 @@ def _stops_the_run(exc: BaseException) -> bool:
     merged; in a contest that draft loses. Everything else is: a spent
     budget, an interrupt, a denied capability, dependency integrity, and any
     failure nothing names, which is handed to the operator as it was raised
-    (map J27) and never read as one draft losing."""
+    (map J27) and never read as one draft losing. A contest's routed lead is
+    held to one rule more (``_never_replaced``)."""
     return not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled))
+
+
+def _never_replaced(exc) -> bool:
+    """Whether a contest's routed lead ended on a stop a single-lead run
+    never replaces the lead for: a policy refusal or a denied capability.
+
+    Both are among the stops no re-plan repairs, and a refusal is never
+    rerouted. Before this a refused routed lead lost on completion and the
+    challenger's draft was merged, so turning contests on was a quiet way
+    around a refusal the run would otherwise have stopped on. Only the
+    routed lead: a challenger's refusal is that draft losing, as before."""
+    return isinstance(exc, (ProviderRefusal, CapabilityUnavailable))
 
 
 def _delivers(reply: str, trust) -> bool:

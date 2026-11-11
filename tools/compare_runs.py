@@ -7,8 +7,9 @@ from ``quadratus`` and calls no model, like ``tools/truth_check.py``, whose own
 ``judge`` gives the truth-check verdict here; its rules are not repeated.
 
 For each run it prints the mode, the models that were called, calls, reported
-tokens, wall seconds, the stop reason, the final gate with executed, failed
-and skipped counts, the truth-check verdict, requirements audited met where
+tokens, wall seconds, the stop reason, whether the run changed any source, the
+final gate with executed, failed and skipped counts, the truth-check verdict,
+requirements audited met where
 the mode has an audit, and, where a grade is given, graders passed of total
 and reported tokens per grader-passed requirement. Then the differences
 between the first run and each other one.
@@ -42,7 +43,7 @@ NUMBERS = (("calls", "calls"), ("reported_tokens", "reported tokens"), ("wall_se
            ("requirements_met", "requirements audited met"), ("grader_passed", "graders passed"),
            ("tokens_per_passed_requirement", "tokens per grader-passed requirement"))
 WORDS = (("mode", "mode"), ("models", "models"), ("claim", "claim"), ("stop_reason", "stop reason"),
-         ("gate", "final gate"), ("truth_check", "truth check"))
+         ("source_changed", "source changed"), ("gate", "final gate"), ("truth_check", "truth check"))
 
 
 def _truth_check():
@@ -133,6 +134,15 @@ def _stop(record) -> str:
     budget = record.get("budget")
     stop = budget.get("stop_reason") if isinstance(budget, dict) else None
     return f"budget: {_first_line(stop)}" if stop else "none recorded"
+
+
+def _source_changed(record) -> str:
+    """Whether the run left any source change, as its record says: "yes",
+    "no", or unknown when the record does not say. A final gate that passed
+    on a run that changed nothing describes the starting source, so the two
+    are printed side by side."""
+    changed = record.get("source_changed")
+    return {True: "yes", False: "no"}.get(changed, UNKNOWN) if isinstance(changed, bool) else UNKNOWN
 
 
 def _usage(run_dir: Path, record):
@@ -275,7 +285,8 @@ def summarize(run_dir, grade=None) -> dict:
     record = _json(run_dir / "result.json")
     out = dict(run=str(run_dir), mode=UNKNOWN, models=UNKNOWN, calls=UNKNOWN, reported_tokens=UNKNOWN,
                unknown_usage_calls=UNKNOWN, wall_seconds=UNKNOWN, model_seconds=UNKNOWN, claim=UNKNOWN,
-               stop_reason=UNKNOWN, gate=UNKNOWN, gate_executed=UNKNOWN, gate_failed=UNKNOWN,
+               stop_reason=UNKNOWN, source_changed=UNKNOWN, gate=UNKNOWN, gate_executed=UNKNOWN,
+               gate_failed=UNKNOWN,
                gate_skipped=UNKNOWN, requirements_met=UNKNOWN, requirements_listed=UNKNOWN, audit=UNKNOWN)
     if record is None:
         out["problem"] = "no readable result.json"
@@ -283,6 +294,7 @@ def summarize(run_dir, grade=None) -> dict:
     out.update(usage)
     if record is not None:
         out.update(mode=_mode(record), claim=_claim(record), stop_reason=_stop(record),
+                   source_changed=_source_changed(record),
                    wall_seconds=_wall(run_dir, record), **_gate(record), **_audit(record))
         if usage["models"] == UNKNOWN and isinstance(record.get("model"), str) and record["model"]:
             out["models"] = record["model"]
@@ -365,7 +377,8 @@ def render(result: dict) -> str:
         lines += [f"  mode: {run['mode']}", f"  models: {run['models']}", f"  calls: {_show(run['calls'])}",
                   f"  reported tokens: {tokens}", f"  wall seconds: {_show(run['wall_seconds'])}",
                   f"  model seconds: {_show(run['model_seconds'])}", f"  claim: {run['claim']}",
-                  f"  stop reason: {run['stop_reason']}", f"  final gate: {gate}",
+                  f"  stop reason: {run['stop_reason']}", f"  source changed: {run['source_changed']}",
+                  f"  final gate: {gate}",
                   f"  truth check: {run['truth_check']}" + (f" ({reasons})" if reasons else ""),
                   f"  requirements audited met: {met}", f"  graders: {grade}",
                   f"  tokens per grader-passed requirement: {per}", ""]

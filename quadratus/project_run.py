@@ -39,6 +39,18 @@ class ProjectResult:
     error: str = ''
 
 
+class RunInterrupted(KeyboardInterrupt):
+    """The operator's interrupt, passed on once the run's record is written.
+
+    A KeyboardInterrupt, so a driver that loops over runs stops on it as it
+    did. ``result`` is the finished run's ProjectResult: the record is whole
+    and on disk, and a caller that catches the interrupt can say where."""
+
+    def __init__(self, result):
+        super().__init__('interrupted after the run record was written')
+        self.result = result
+
+
 @contextmanager
 def _project_lock(project):
     folder = project.root / '.quadratus'
@@ -160,24 +172,18 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     if not isinstance(project, Project):
         project = Project(project)
     state = _state_folder(project, state_dir)
-    # Before anything is created there: copies made inside the project would
-    # be measured and reviewed as its source.
-    from .providers import scratch_inside, sweep_scratch
-    misplaced = scratch_inside(project.root)
-    if misplaced:
-        raise ValueError(misplaced + ' Nothing was run and no model was called.')
+    _refuse_scratch_in_project(project)
 
     repair_tests = _repair_tests(project.root, repair_tests, forbid)
     test_changes = _test_changes(project.root, test_changes, goal=goal, forbid=forbid)
     agent_config = _refuse_agent_config(project, allow_project_agent_config, progress)
-    _refuse_standing_watch_findings(project, state, accept_watched_paths, progress)
-    scan = None
-    if not declared_checks:
-        # The built-in policy names the scanned check as a gate; with the
-        # project's declarations declined it is built from a scan without them.
-        scan = dataclasses.replace(scan_repo(project.root), check_command=None, declared_checks=[])
-    policy = load_policy(project.root, forbid=forbid, scan=scan,
-                         trust_project_policy=trust_project_policy)
+    watched_accepted = _refuse_standing_watch_findings(project, state, accept_watched_paths, progress)
+    # The built-in policy names the scanned check as a gate; with the
+    # project's declarations declined it is built from a scan without them,
+    # and says the operator declined (policy.load_policy).
+    policy = load_policy(project.root, forbid=forbid, scan=None,
+                         trust_project_policy=trust_project_policy,
+                         **({} if declared_checks else {'declared_checks': False}))
     if declared_paths:
         from .scope import TaskScope
         if default_scope is not None:
@@ -194,11 +200,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         from .readiness import probes_from
         probes = probes_from(readiness, project.root)
     with _project_lock(project):
-        # What a killed run left under the scratch root, a day old or more.
-        swept = sweep_scratch()
-        if swept and progress:
-            progress(f'Removed {len(swept)} leftover scratch folder(s) or file(s) from earlier runs, '
-                     'each more than 24 hours old.')
+        _sweep_stale_scratch(progress)
         return _run(goal, project, settings, state=state, allow_writes=allow_writes,
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
                     ask_operator=ask_operator, plan_gate=plan_gate,
@@ -210,7 +212,29 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
                     decider_labels=decider_labels, repair_tests=repair_tests, test_changes=test_changes,
-                    declared_checks=declared_checks, agent_config=agent_config, compete=compete)
+                    declared_checks=declared_checks, agent_config=agent_config, compete=compete,
+                    watched_accepted=watched_accepted)
+
+
+def _refuse_scratch_in_project(project):
+    """Refuse, before anything is created, a scratch root inside the project:
+    copies made there would be measured and reviewed as its source. Shared by
+    every run that edits a project (a project run, a baseline)."""
+    from .providers import scratch_inside
+    misplaced = scratch_inside(project.root)
+    if misplaced:
+        raise ValueError(misplaced + ' Nothing was run and no model was called.')
+
+
+def _sweep_stale_scratch(progress=None):
+    """Remove what a killed run left under the scratch root, a day old or
+    more, and say so. Called under the project lock."""
+    from .providers import sweep_scratch
+    swept = sweep_scratch()
+    if swept and progress:
+        progress(f'Removed {len(swept)} leftover scratch folder(s) or file(s) from earlier runs, '
+                 'each more than 24 hours old.')
+    return swept
 
 
 def _refuse_agent_config(project, allowed=False, progress=None):
@@ -349,7 +373,8 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
     if not isinstance(paths, list) or not paths:
         return []
     way_out = ('Inspect each one, then remove or restore it, or accept them as they are for this run '
-               f'with accept_watched_paths=True (run_project) or {ACCEPT_WATCHED_PATHS_ENV}=1.')
+               'with --accept-watched-paths (accept_watched_paths=True for run_project or run_baseline) '
+               f'or {ACCEPT_WATCHED_PATHS_ENV}=1.')
     try:
         listing = ProjectWatch(project.root, exclude=project.exclude).listing()
     except WatchUnavailable as exc:
@@ -393,6 +418,25 @@ def _watch_record(fleet):
     except Exception:  # noqa: BLE001 -- a record never fails a run
         return dict(findings=[], paths=[], unavailable=True)
     return dict(findings=findings, paths=paths)
+
+
+def _watch_report_lines(watch):
+    """The report's lines for a run's watched-path changes (``_watch_record``),
+    or []. One wording for a project run and a baseline."""
+    if watch['paths']:
+        from .project_watch import ACCEPT_WATCHED_PATHS_ENV, describe
+        named = describe(((w['path'] + (f" [{w['kind']}]" if w['kind'] else '')), w['what']) for w in watch['paths'])
+        return [f"Watched paths changed: an editing call of this run changed {len(watch['paths'])} "
+                f'path(s) outside the measured source that no task may change: {named}. Nothing was '
+                'reverted. The next run on this project is refused while a path still holds that '
+                'content: remove or restore it, or accept it with --accept-watched-paths '
+                f'({ACCEPT_WATCHED_PATHS_ENV}=1). result.json lists each under project_watch.', '']
+    if watch['findings']:
+        return [f"Watched paths changed: {len(watch['findings'])} editing call(s) changed paths outside "
+                "the measured source in a parallel task's own copy of the project. That copy is "
+                'deleted and none of those paths was merged. result.json lists each under '
+                'project_watch.', '']
+    return []
 
 
 def _test_changes(root, raw, *, goal, forbid=(), originals=None):
@@ -602,9 +646,86 @@ def _new_run_dir(state):
     return run_dir
 
 
-def _gate_for(project, check, extras, gates, scan, run_dir, progress=None):
+#: The id of the one ``gate-plan.json`` entry that is not a command: the
+#: operator's choice to decline the project's declared checks.
+DECLINED_CHECKS_ID = 'declared-checks'
+
+
+def _decline_declared_checks(scan):
+    """``(scan, declined)`` for a run whose operator declined the project's
+    declared checks: the scan without them, and the commands that were left
+    out, so the record can say what was declined and not only that nothing
+    was detected."""
+    from .policy import without_declared_checks
+    declined = []
+    for command in ([scan.check_command] if scan.check_command else []) + list(scan.declared_checks or []):
+        if list(command) not in declined:
+            declined.append(list(command))
+    return dataclasses.replace(without_declared_checks(scan), interpreter_note=''), declined
+
+
+def _declared_checks_record(declined):
+    """The operator's choice about the project's declared checks, for
+    ``gate-plan.json`` and ``result.json``. ``declined`` is None when they
+    were used as declared, else the commands that were left out. With the
+    choice unrecorded, a run that declined them and gave no check of its own
+    left an empty gate plan and a policy plan saying no test command was
+    detected."""
+    if declined is None:
+        return dict(declined=False)
+    return dict(declined=True, by='operator', commands=[list(c) for c in declined],
+                note="The operator declined the project's declared checks (--no-declared-checks, "
+                     'declared_checks=False). None of them ran as a check of this run: only the '
+                     "operator's own checks did"
+                     + ('.' if declined else ', and the project declared none that was read.'))
+
+
+def _trust_record(policy, agent_config, declared, watched_accepted=()):
+    """What the operator let a run take on trust, for ``result.json``: the
+    project's own policy file and whether it was approved, the vendor agent
+    configuration files allowed at the start, whether the project's declared
+    checks were declined, and the watched paths the last run left changed
+    that were accepted for this one. Each was a progress line or a refusal
+    and nothing a reader of the record could find afterwards."""
+    return dict(
+        project_policy=dict(in_project=bool(getattr(policy, 'explicit', False)),
+                            approved=bool(getattr(policy, 'approved', False)),
+                            sha256=str(getattr(policy, 'source_sha256', '') or '')),
+        agent_config_allowed=sorted(str(name) for name in (agent_config or {})),
+        declared_checks_declined=bool((declared or {}).get('declined')),
+        watched_paths_accepted=[dict(path=str(s.get('path')), kind=str(s.get('kind') or ''),
+                                     what=str(s.get('what') or ''))
+                                for s in watched_accepted or () if isinstance(s, dict)])
+
+
+def _child_environment_record():
+    """The environment variables no check, preview, probe or vendor CLI of
+    this run was given, by name and never by value (quadratus.child_env), so
+    a skipped credential-gated test or a failed check can be explained from
+    the record. Never raises."""
+    try:
+        from .child_env import PASS_VARIABLE, withheld_names
+        return dict(withheld=[str(name) for name in withheld_names()], keep_with=PASS_VARIABLE)
+    except Exception:  # noqa: BLE001 -- a record never fails a run
+        return dict(withheld=[], unavailable=True)
+
+
+def _declared_checks_lines(record):
+    """The report's line for declined declared checks, or []."""
+    if not record.get('declined'):
+        return []
+    return [f"Declared checks: declined by the operator (--no-declared-checks). "
+            f"{len(record.get('commands') or [])} command(s) the project declares did not run as a "
+            "check of this run; result.json lists them under declared_checks.", '']
+
+
+def _gate_for(project, check, extras, gates, scan, run_dir, progress=None, declined=None):
     """The run's gate and its plan: ``(gate or None, plan)``. The plan is
-    written to ``gate-plan.json`` and told to the operator here."""
+    written to ``gate-plan.json`` and told to the operator here.
+    ``declined`` is the commands the operator declined with the project's
+    declared checks (None when they were not declined); the file then ends
+    with one entry that says so, which is not a command and is not in the
+    plan returned."""
     command = shlex.split(check) if check else scan.check_command
     gates = _merge_extras(list(gates), extras) if gates is not None else _gate_plan(command, extras, scan)
     plan = [dict(id=g.id, argv=list(g.argv), cwd=g.cwd, required=g.required, minimum_tests=g.minimum_tests)
@@ -619,9 +740,15 @@ def _gate_for(project, check, extras, gates, scan, run_dir, progress=None):
         g['note'] = scan.interpreter_note
     # Shown to the operator before any task, and kept with the run. Never put
     # into a model prompt: a gate command can name an examiner path.
-    write_private(run_dir / 'gate-plan.json', json.dumps(plan, indent=2))
+    choice = _declared_checks_record(declined)
+    written = plan + ([dict(id=DECLINED_CHECKS_ID, argv=[], cwd='.', required=False, minimum_tests=None,
+                            **choice)] if choice['declined'] else [])
+    write_private(run_dir / 'gate-plan.json', json.dumps(written, indent=2))
     if progress:
         progress('Checks: ' + ('; '.join(f"{g['id']}: {' '.join(g['argv'])}" for g in plan) or 'none'))
+        if choice['declined']:
+            progress(f"The project's declared checks were declined by the operator: {len(declined)} "
+                     'declared command(s) not run.')
         if fallback:
             progress(scan.interpreter_note)
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
@@ -694,7 +821,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
          decider=None, decider_labels="unstated", repair_tests=(), test_changes=None,
-         declared_checks=True, agent_config=None, compete="off"):
+         declared_checks=True, agent_config=None, compete="off", watched_accepted=()):
     run_dir = _new_run_dir(state)
     from .run_activity import RunActivity
     activity = RunActivity(run_dir, progress)
@@ -708,12 +835,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
     map_notices = _report_map(code_map, progress, 0)
     seed_map(scan, code_map)
+    declined = None
     if not declared_checks:
         # The operator's own checks only: nothing the project declares is
         # added beside them or run in their place. The map above still says
         # what the project declares; that is a fact about it, not a gate.
-        scan = dataclasses.replace(scan, check_command=None, declared_checks=[], interpreter_note='')
-    gate, plan = _gate_for(project, check, extras, gates, scan, run_dir, progress)
+        scan, declined = _decline_declared_checks(scan)
+    gate, plan = _gate_for(project, check, extras, gates, scan, run_dir, progress, declined=declined)
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
@@ -828,19 +956,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
              f'Edits: {"enabled" if allow_writes else "disabled"}', '',
              f'Run files: {run_dir}', '']
     watch = _watch_record(fleet)
-    if watch['paths']:
-        from .project_watch import ACCEPT_WATCHED_PATHS_ENV, describe
-        named = describe(((w['path'] + (f" [{w['kind']}]" if w['kind'] else '')), w['what']) for w in watch['paths'])
-        lines += [f"Watched paths changed: an editing call of this run changed {len(watch['paths'])} "
-                  f'path(s) outside the measured source that no task may change: {named}. Nothing was '
-                  'reverted. The next run on this project is refused while a path still holds that '
-                  'content: remove or restore it, or accept it with accept_watched_paths '
-                  f'({ACCEPT_WATCHED_PATHS_ENV}=1). result.json lists each under project_watch.', '']
-    elif watch['findings']:
-        lines += [f"Watched paths changed: {len(watch['findings'])} editing call(s) changed paths outside "
-                  "the measured source in a parallel task's own copy of the project. That copy is "
-                  'deleted and none of those paths was merged. result.json lists each under '
-                  'project_watch.', '']
+    lines += _watch_report_lines(watch)
+    declared = _declared_checks_record(declined)
+    lines += _declared_checks_lines(declared)
     if preview:
         lines += [f"Default family: {preview['primary_family']}", '',
                   f"Policy plan: {preview['hash']}", '']
@@ -941,6 +1059,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'decisions': list(getattr(session, 'decisions', []) or []) if session else [],
         'in_flight': in_flight,
         'policy_preview': preview,
+        # The operator's choice about the project's own declared checks, and
+        # the commands left out when they were declined.
+        'declared_checks': declared,
+        # What the operator let this run take on trust, in one place.
+        'trust': _trust_record(policy, agent_config, declared, watched_accepted),
+        'child_environment': _child_environment_record(),
         'policy_plans': getattr(session, 'policy_plans', []),
         'budget': budget.snapshot() if budget else None,
         'selected_limits': selected,
@@ -980,12 +1104,14 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # The folder has been owner-only since it was made, so this is the file's
     # own mode catching up, not the first protection.
     tighten_files(run_dir)
+    result = ProjectResult(completed, report, run_dir, diff, error)
     if trace_interrupted:
         # The record above is whole. The interrupt is the operator's, so it
         # goes on to whoever called: a series driver that loops over runs
-        # must stop here, and an absorbed Ctrl-C started its next run.
-        raise KeyboardInterrupt
-    return ProjectResult(completed, report, run_dir, diff, error)
+        # must stop here, and an absorbed Ctrl-C started its next run. It
+        # carries the result, so a caller can say where the record is.
+        raise RunInterrupted(result)
+    return result
 
 
 def _append_scoreboard(state, run_id, contests, reviewers, progress=None):

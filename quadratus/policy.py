@@ -515,7 +515,23 @@ class RepositoryPolicy:
                        forbidden_paths=tuple(dict.fromkeys([*scope.forbidden_paths, *deny])))
 
 
-def load_policy(root, *, forbid=(), scan=None, trust_project_policy=None):
+#: Why the built-in policy has no unit-tests gate: the project declares no
+#: test command, or it declares one and the operator declined it. The two
+#: read differently because they are different facts about the run.
+NO_TEST_COMMAND = 'No test command detected'
+DECLINED_TEST_COMMAND = ("The project declares a test command; the operator declined the project's "
+                         'declared checks (--no-declared-checks), so it is not run')
+
+
+def without_declared_checks(scan):
+    """``scan`` as a run that declines the project's declared checks reads
+    it: no check command and no declared checks. One rule for the run, the
+    baseline and the preview."""
+    from dataclasses import replace
+    return replace(scan, check_command=None, declared_checks=[])
+
+
+def load_policy(root, *, forbid=(), scan=None, trust_project_policy=None, declared_checks=True):
     """The project's policy, or the built-in one when it carries none.
 
     ``trust_project_policy`` is the operator's approval of one exact
@@ -523,6 +539,12 @@ def load_policy(root, *, forbid=(), scan=None, trust_project_policy=None):
     ``QUADRATUS_TRUST_PROJECT_POLICY`` environment variable instead. A policy
     that only narrows needs no approval; one that grants anything
     (:func:`policy_grants`) without it raises :class:`PolicyUntrusted`.
+
+    ``declared_checks`` False is a run that declines the project's own
+    declared checks: the built-in policy is built from a scan without them
+    (:func:`without_declared_checks`), and where that leaves out a test
+    command the project does declare, the absent gate says the operator
+    declined it. It used to say no test command was detected.
     """
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
@@ -531,6 +553,10 @@ def load_policy(root, *, forbid=(), scan=None, trust_project_policy=None):
     path = root / POLICY_FILE
     explicit = path.exists() or path.is_symlink()
     scan = scan or scan_repo(root)
+    declined = False
+    if not declared_checks:
+        declined = bool(scan.check_command)
+        scan = without_declared_checks(scan)
     approved, digest = False, ''
     if explicit:
         _path(POLICY_FILE, root)
@@ -557,7 +583,8 @@ def load_policy(root, *, forbid=(), scan=None, trust_project_policy=None):
         capability['deny_write'] = list(dict.fromkeys([*capability['deny_write'], *BUILTIN_DENY_WRITE]))
     else:
         gates = [{'id': 'scope', 'runner': 'builtin:scope', 'required': True}]
-        bindings = {'unit-tests': {'absent': True, 'because': 'No test command detected'}}
+        bindings = {'unit-tests': {'absent': True,
+                                   'because': DECLINED_TEST_COMMAND if declined else NO_TEST_COMMAND}}
         if scan.check_command:
             gates.append({'id': 'unit-tests', 'runner': 'command', 'required': True,
                           'argv': scan.check_command, 'cwd': '.', 'minimum_tests': 1})
@@ -595,17 +622,13 @@ def preview_policy(root, paths=(), *, forbid=(), writing=False, trust_project_po
 
     ``declared_checks`` False previews a run that declines the project's own
     declared checks (``run_project(declared_checks=False)``): the built-in
-    policy is built from a scan without them, as that run builds it. The
+    policy is built from a scan without them, as that run builds it
+    (``load_policy(declared_checks=False)``, the one rule for both). The
     preview used to list the scanned check for such a run all the same.
     """
-    scan = None
-    if not declared_checks:
-        from dataclasses import replace
-        folder = Path(root).expanduser().resolve()
-        if folder.is_dir():  # load_policy reports a folder that is not there
-            scan = replace(scan_repo(folder), check_command=None, declared_checks=[])
-    return load_policy(root, forbid=forbid, scan=scan,
-                       trust_project_policy=trust_project_policy).resolve(paths, writing=writing)
+    return load_policy(root, forbid=forbid, trust_project_policy=trust_project_policy,
+                       **({} if declared_checks else {'declared_checks': False})
+                       ).resolve(paths, writing=writing)
 
 
 def render_preview(plan):

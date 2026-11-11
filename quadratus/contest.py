@@ -44,6 +44,7 @@ from .verdicts import unstyled
 __all__ = [
     "COMPETE_MODES",
     "JUDGE_ROLE",
+    "ROUTED_STOP",
     "RULES",
     "append_scoreboard",
     "decide_measured",
@@ -69,6 +70,13 @@ JUDGE_ROLE = "judge"
 #: What can decide a contest, in the order each is tried. The first that
 #: separates the two drafts decides and is recorded as ``decided_by``.
 RULES = ("completed", "scope", "gate", "judge", "size", "default")
+
+#: ``decided_by`` when no rule was tried: the routed lead's own draft call
+#: ended in a policy refusal or a denied capability. Those stop a single-lead
+#: run and no re-plan repairs them, so the run stops the same way here,
+#: whatever the challenger delivered. No draft is merged in the routed
+#: lead's place; the challenger's stays on record as an artifact.
+ROUTED_STOP = "routed lead's stop"
 
 #: Gate outcomes on a draft's copy, best first.
 _GATE_RANK = {"passed": 2, "failed": 1, "not_run": 0}
@@ -281,6 +289,10 @@ def ledger_line(record: dict) -> str:
     drafts = record.get("drafts") or []
     names = " and ".join(str(d.get("model")) for d in drafts)
     winner = record.get("winner_model")
+    if not winner and record.get("decided_by") == ROUTED_STOP:
+        return (f"contest: two blind drafts ({names}); the routed lead's own draft call ended in a "
+                "refusal or a denied capability, which stops the run as it does with one lead, so "
+                "no draft was merged in its place")
     if not winner:
         return (f"contest: two blind drafts ({names}); neither was usable, so the routed "
                 "lead's own result stood")

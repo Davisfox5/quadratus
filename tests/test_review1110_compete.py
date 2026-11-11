@@ -741,9 +741,12 @@ def test_a_winning_draft_that_changed_no_file_still_brings_its_not_run_lines(tmp
 @pytest.mark.parametrize("stop, kind", [(ProviderError("entrant is down"), "transport"),
                                         (ProviderRefusal("declined by policy"), "refusal")])
 def test_an_entrant_that_raises_does_not_lose_the_other_draft_or_stop_the_run(tmp_path, stop, kind):
-    """A transport error or a refusal is that draft's own result, as it is a
-    parallel child's: the other draft wins and the run goes on."""
-    for broken, winner in ((SOL, OPUS), (OPUS, SOL)):
+    """A transport error is that draft's own result, as it is a parallel
+    child's: the other draft wins and the run goes on. A refusal is too when
+    it is the challenger's. The routed lead's refusal stops the run, as it
+    does with one lead (integrator's ruling; tests/test_review1110_glue2.py)."""
+    refused = isinstance(stop, ProviderRefusal)
+    for broken, winner in ((SOL, OPUS),) if refused else ((SOL, OPUS), (OPUS, SOL)):
         script = Script([_task(), "DONE"], {OPUS: _sub(), SOL: _sub(), GROK: _sub(), broken: _raises(stop)})
         session, project = _session(tmp_path / broken.replace(":", "-"), script, compete="complex")
         session.run(max_tasks=3)
@@ -754,20 +757,26 @@ def test_an_entrant_that_raises_does_not_lose_the_other_draft_or_stop_the_run(tm
         assert lost["error"] == f"{type(stop).__name__}: {stop}", "the record keeps what ended the draft"
         assert next(d for d in record["drafts"] if d["model"] == winner)["error"] == ""
         assert "def sub" in (project / "calc.py").read_text() and session.completed
+    if refused:
+        return
     # The routed lead's own stop is on the task's record, as recovered history.
     facts = [fact for fact in session.task_outcomes[-1].facts if "in its contest copy" in fact.detail]
     assert len(facts) == 1 and facts[0].recovered and str(stop) in facts[0].detail
     assert facts[0].kind == kind
 
 
-@pytest.mark.parametrize("stop", [RuntimeError("entrant exploded"),
-                                  CapabilityUnavailable("denied a command the harness requires")])
-@pytest.mark.parametrize("broken, kept", [(SOL, OPUS), (OPUS, SOL)])
+@pytest.mark.parametrize("stop, broken, kept", [
+    (RuntimeError("entrant exploded"), SOL, OPUS),
+    (RuntimeError("entrant exploded"), OPUS, SOL),
+    (CapabilityUnavailable("denied a command the harness requires"), SOL, OPUS),
+])
 def test_a_run_level_stop_in_an_entrant_stops_the_run_with_the_other_draft_kept(tmp_path, stop, broken, kept):
     """A denied capability, or a failure no outcome class names, is the run's
     stop whoever met it, by the rule a parallel child's stop is read with:
     never absorbed as one draft losing. The usable draft is merged first, so
-    it is not lost with the copy."""
+    it is not lost with the copy. One case is stricter and is held in
+    tests/test_review1110_glue2.py: the routed lead's own denied capability,
+    where no draft stands in for its own (integrator's ruling)."""
     script = Script([_task(), "DONE"], {OPUS: _sub(), SOL: _sub(), GROK: _sub(), broken: _raises(stop)})
     session, project = _session(tmp_path, script, compete="complex")
     with pytest.raises(type(stop), match=str(stop)):

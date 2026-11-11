@@ -34,6 +34,10 @@ import sys
 from pathlib import Path
 
 DECIDERS = ("completed", "scope", "gate", "judge", "size", "default")
+#: What a contest records when the routed lead's own refusal or denied
+#: capability stopped the run and no draft was taken (contest.ROUTED_STOP;
+#: spelled here because this tool imports nothing from the engine).
+ROUTED_STOP = "routed lead's stop"
 #: How much of one scoreboard is read. A record far past this is not one a
 #: run wrote.
 MAX_BYTES = 64 * 1024 * 1024
@@ -95,11 +99,13 @@ def summarise(rows) -> dict:
                 continue
             for draft in drafts:
                 entry = models.setdefault(draft["model"], dict(
-                    contests=0, won=0, lost=0, no_winner=0,
+                    contests=0, won=0, lost=0, no_winner=0, routed_stop=0,
                     won_by={k: 0 for k in DECIDERS}, lost_by={k: 0 for k in DECIDERS}))
                 entry["contests"] += 1
                 if not isinstance(winner, str) or not winner:
-                    entry["no_winner"] += 1
+                    # Two ways a contest has no winner: neither draft was
+                    # usable, or the routed lead's own stop ended the run.
+                    entry["routed_stop" if decided == ROUTED_STOP else "no_winner"] += 1
                     continue
                 side = "won" if draft["model"] == winner else "lost"
                 entry[side] += 1
@@ -137,7 +143,9 @@ def render(summary, skipped) -> str:
         entry = summary["models"][model]
         lines.append(f"  {model}: {entry['contests']} entered, {entry['won']} won{_how(entry['won_by'])}, "
                      f"{entry['lost']} lost{_how(entry['lost_by'])}"
-                     + (f", {entry['no_winner']} with no usable draft" if entry["no_winner"] else ""))
+                     + (f", {entry['no_winner']} with no usable draft" if entry["no_winner"] else "")
+                     + (f", {entry['routed_stop']} ended by the routed lead's refusal or denied capability"
+                        if entry["routed_stop"] else ""))
     lines += ["", "Reviews (BLOCKING findings raised, and what the re-check said of them)"]
     if not summary["reviewers"]:
         lines.append("  none recorded")

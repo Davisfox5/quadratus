@@ -744,6 +744,20 @@ def solo(out: Path, *, model: str, only: Optional[str] = None, fix_rounds: int =
                 started = time.perf_counter()
                 try:
                     cell.update(launcher(cell, packet), state="ran")
+                except KeyboardInterrupt as exc:
+                    # A baseline writes its record and then passes on an
+                    # interrupt that landed while it copied transcripts. The
+                    # arm stops as it does for one the baseline absorbed: the
+                    # stop is recorded before the interrupt goes on, so no
+                    # later launch starts the next cell without an override.
+                    kept = getattr(getattr(exc, "result", None), "run_dir", None)
+                    why = f"{STOP_INTERRUPTED}: the operator interrupted {name}; no further cell was launched"
+                    cell.update(state="interrupted", error=why, completed=False,
+                                seconds=round(time.perf_counter() - started, 1), finished_at=now(),
+                                **({"run_dir": str(kept)} if kept else {}))
+                    record["stopped"] = dict(reason=why, after=name, at=now())
+                    save()
+                    raise
                 except Exception as exc:  # noqa: BLE001 -- a failed cell is a result
                     cell.update(state="failed", error=f"{type(exc).__name__}: {exc}"[:500])
                 cell.update(seconds=round(time.perf_counter() - started, 1), finished_at=now())

@@ -49,11 +49,31 @@ _DIFF_FILE = re.compile(r"^(?:\+\+\+|---) (.+)$")
 _PATH = re.compile(r"[\w./-]+\.\w+")
 
 
+def _check_records(value):
+    """``(checks, problem)`` for a record's ``checks``: the list when it is a
+    list of objects, else an empty list and why nothing was read from it. A
+    record is written by a run this tool does not control, so its shape is
+    read before any field of it is."""
+    if value is None:
+        return [], ""
+    if not isinstance(value, list):
+        return [], (f"the record's checks are not a list (found {type(value).__name__}), so no check "
+                    "was read from it")
+    strays = sum(1 for check in value if not isinstance(check, dict))
+    if strays:
+        return [], (f"{strays} of the record's {len(value)} check(s) are not check records, so no check "
+                    "was read from it")
+    return value, ""
+
+
 def _last_check(record):
     """The latest check the workflow recorded, with the source it ran on."""
     latest = None
-    for task in (record.get("workflow") or {}).get("tasks") or []:
-        for check in task.get("checks") or []:
+    workflow = record.get("workflow")
+    tasks = workflow.get("tasks") if isinstance(workflow, dict) else None
+    for task in tasks if isinstance(tasks, list) else []:
+        checks = task.get("checks") if isinstance(task, dict) else None
+        for check in checks if isinstance(checks, list) else []:
             latest = check
     return latest
 
@@ -388,8 +408,26 @@ def _test_change_approvals(record, run_dir, project):
 
 
 def judge(run_dir, project=None) -> dict:
+    """The verdict on one run folder. Never raises on what the record holds:
+    a record that is not shaped as a run record is unverified, with why, and
+    whatever it had already shown as failed still counts."""
     run_dir = Path(run_dir)
     failed, unshown = [], []
+    try:
+        early = _judge(run_dir, project, failed, unshown)
+    except (AttributeError, TypeError, KeyError, IndexError, ValueError) as exc:
+        early = None
+        unshown.append(f"the record is not shaped as a run record ({type(exc).__name__}: {str(exc)[:120]}), "
+                       "so the rest of it was not read")
+    if early is not None:
+        return early
+    verdict = NOT_MET if failed else UNVERIFIED if unshown else VERIFIED
+    return dict(verdict=verdict, run=str(run_dir), not_met=failed, unverified=unshown)
+
+
+def _judge(run_dir, project, failed, unshown):
+    """Read the record into ``failed`` and ``unshown``. Returns a finished
+    verdict only when there is no record to read."""
     try:
         record = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
         if not isinstance(record, dict):
@@ -415,7 +453,11 @@ def judge(run_dir, project=None) -> dict:
         failed.append("work was still in flight when the run stopped")
     if record.get("failed_tasks"):
         failed.append(f"failed tasks: {', '.join(map(str, record['failed_tasks']))[:200]}")
-    checks = record.get("checks") or []
+    checks, misshapen = _check_records(record.get("checks"))
+    if misshapen:
+        unshown.append(misshapen)
+        # Every later reader of the record's checks gets the list just read.
+        record = dict(record, checks=checks)
     if checks and not checks[-1].get("passed"):
         failed.append(f"the last check failed: {str(checks[-1].get('command'))[:160]}")
     requirements = record.get("requirements") or {}
@@ -431,12 +473,15 @@ def judge(run_dir, project=None) -> dict:
         unshown.append("explicit task list: the listed tasks ran, the goal was never judged")
     if record.get("turn_limited_tasks"):
         unshown.append(f"turn-limited tasks: {', '.join(map(str, record['turn_limited_tasks']))[:200]}")
-    if not checks:
+    if not checks and not misshapen:
         unshown.append("no check ran")
     last = _last_check(record)
-    if checks and last is None:
+    if last is not None and not isinstance(last, dict):
+        unshown.append("the latest check the workflow recorded is not a check record")
+        last = None
+    elif checks and last is None:
         unshown.append("the checks carry no record of the source they ran on")
-    elif last is not None:
+    if last is not None:
         if not last.get("passed"):
             unshown.append("the latest recorded check did not pass")
         if not last.get("source") or last.get("source") != record.get("source_fingerprint"):
@@ -495,6 +540,14 @@ def judge(run_dir, project=None) -> dict:
     for finding in record.get("findings") or []:
         if finding.get("status") == "open":
             unshown.append(f"open finding {finding.get('id')}: {str(finding.get('message'))[:120]}")
+    # A path outside the measured source that an editing call of this run
+    # changed (a git hook, an env file, a link). No diff or check covers it.
+    watch = record.get("project_watch")
+    watched = watch.get("paths") if isinstance(watch, dict) else None
+    if isinstance(watched, list) and watched:
+        named = ", ".join(str(w.get("path")) for w in watched[:5] if isinstance(w, dict))
+        unshown.append(f"an editing call changed {len(watched)} watched path(s) outside the measured "
+                       f"source, which no diff or check covers: {named[:160]}")
     designs = record.get("design_checks") or []
     for design in designs:
         task = design.get("task")
@@ -510,9 +563,7 @@ def judge(run_dir, project=None) -> dict:
         unshown.append("no changes.diff, so UI changes cannot be ruled out")
     elif _ui_files(diff) and not designs:
         unshown.append(f"UI files changed with no capture evidence: {', '.join(_ui_files(diff))[:200]}")
-
-    verdict = NOT_MET if failed else UNVERIFIED if unshown else VERIFIED
-    return dict(verdict=verdict, run=str(run_dir), not_met=failed, unverified=unshown)
+    return None
 
 
 def render(result: dict) -> str:

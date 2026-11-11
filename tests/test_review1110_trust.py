@@ -1341,11 +1341,15 @@ def test_declared_checks_off_runs_only_the_operators_own_checks(tmp_path, monkey
     plan, _ = _gate_plan_of(root, monkeypatch, check="true")
     assert [g["id"] for g in plan] == ["check", "declared-npm", f"declared-{Path(sys.executable).name}-1"]
     shutil.rmtree(root / ".quadratus")
+    # The plan's last entry names the operator's choice and is not a command
+    # (tests/test_review1110_glue2.py); the commands are the entries before it.
     plan, _ = _gate_plan_of(root, monkeypatch, check="true", declared_checks=False)
-    assert [(g["id"], g["argv"]) for g in plan] == [("check", ["true"])]
+    assert [(g["id"], g["argv"]) for g in plan if not g.get("declined")] == [("check", ["true"])]
     shutil.rmtree(root / ".quadratus")
     plan, _ = _gate_plan_of(root, monkeypatch, declared_checks=False)
-    assert plan == [], "nothing the project declares stands in for a check the operator did not give"
+    assert [g for g in plan if not g.get("declined")] == [], (
+        "nothing the project declares stands in for a check the operator did not give")
+    assert [(g["id"], g["argv"]) for g in plan] == [("declared-checks", [])]
     shutil.rmtree(root / ".quadratus")
     plan, _ = _gate_plan_of(root, monkeypatch)
     assert [g["argv"][:2] for g in plan] == [["npm", "test"], [sys.executable, "-m"]], "the default is unchanged"

@@ -604,10 +604,20 @@ def test_compare_runs_reads_past_lists_that_are_not_lists(tmp_path):
     assert row['audit'] == 'no audit on record' and compare_runs.render(compare_runs.compare([folder, folder]))
 
 
-def test_compare_runs_has_no_verdict_for_a_record_the_truth_check_cannot_read(tmp_path):
+def test_compare_runs_has_no_verdict_for_a_record_the_truth_check_cannot_read(tmp_path, monkeypatch):
     folder = tmp_path / 'run'
     folder.mkdir()
     (folder / 'result.json').write_text('{"mode": "baseline", "checks": "x", "budget": 3, "baseline": []}')
+    # The truth check now answers for this record itself (unverified, with why).
+    row = compare_runs.summarize(folder)
+    assert row['truth_check'] == truth_check.UNVERIFIED and row['gate'] == 'unknown'
+    assert any('not a list' in reason for reason in row['truth_check_reasons'])
+
+    # The comparison still has no verdict of its own when that tool fails.
+    def broken(run_dir, project=None):
+        raise RuntimeError('truth check failed')
+
+    monkeypatch.setattr(compare_runs._truth_check(), 'judge', broken)
     row = compare_runs.summarize(folder)
     assert row['truth_check'] == 'unknown' and 'could not read' in row['truth_check_reasons'][0]
     assert row['gate'] == 'unknown' and 'truth check: unknown' in compare_runs.render(

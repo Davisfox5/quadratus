@@ -62,6 +62,20 @@ class CapabilityProbeFailed(RuntimeError):
     handoff, never an application repair."""
 
 
+def failure_message(receipt: dict) -> str:
+    """The handoff for one failed probe receipt, in one wording for a project
+    run and a baseline.
+
+    It ends with the environment variables no probe is given, when there are
+    any: a probe that needs ``DOCKER_HOST`` or a registry token fails with
+    the project's own error, and the names say where to look. Names only,
+    never values."""
+    from .child_env import withheld_notice
+    notice = withheld_notice()
+    return (f"readiness probe {receipt['id']} failed ({receipt['reason']}); no model call was made. "
+            f"Output tail: {receipt['output'][-400:]}" + (f" {notice}" if notice else ""))
+
+
 @dataclass(frozen=True)
 class Probe:
     id: str

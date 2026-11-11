@@ -2370,7 +2370,17 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=(), *, e
     commands = _gate_commands(gate, root)
     if commands is None:
         return None, 'the check commands could not be read for an original-test run'
-    with tempfile.TemporaryDirectory(prefix='quadratus-original-tests-') as directory:
+    # Under the private scratch root, as every other copy the harness makes
+    # is, and not the system temp folder: this copy holds the project's
+    # withheld files, and a vendor sandbox may write under /tmp, where a file
+    # dropped into the copy would run with these tests. A scratch root that
+    # cannot be used means the original tests were not established.
+    from .providers import ProviderError, scratch_root
+    try:
+        scratch = scratch_root()
+    except ProviderError as exc:
+        return None, f'the private scratch folder could not be used for an original-test run ({str(exc)[:300]})'
+    with tempfile.TemporaryDirectory(prefix='quadratus-original-tests-', dir=scratch) as directory:
         copy = Path(directory).resolve()
         for name, data in current.items():
             if is_test_support(name) and name not in originals:

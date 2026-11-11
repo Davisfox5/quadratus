@@ -171,6 +171,7 @@ TRUST_LABELS = {
     'allow_project_agent_config': ('Allow vendor agent configuration in the project '
                                    '(--allow-project-agent-config)'),
     'no_declared_checks': 'Run only my own checks (--no-declared-checks)',
+    'accept_watched_paths': 'Start over watched paths the last run left changed (--accept-watched-paths)',
 }
 TRUST_ALLOWS = {
     'trust_project_policy': ("Allows the project's own .quadratus/policy.json to grant what it asks for "
@@ -181,7 +182,19 @@ TRUST_ALLOWS = {
                                    'hooks and MCP servers as you, without asking.'),
     'no_declared_checks': ('Allows a run without the checks the project itself declares: only the test '
                            'command and the further checks entered above are run.'),
+    'accept_watched_paths': ('Allows the run to start although the last run recorded a change to a path '
+                             'outside the measured source (a git hook, an env file, a link) that is still '
+                             'in place. The refusal names each path: inspect them first.'),
 }
+
+#: The Project form's Contests choice: what the form shows and the value the
+#: shared runner takes (``run_project(compete=...)``, the command line's
+#: ``--compete``). The first is the default and is the run made before.
+CONTEST_LABEL = 'Contests (--compete)'
+CONTEST_CHOICES = (('Off', 'off'), ('Complex tasks: two blind drafts, the better one merged', 'complex'))
+CONTEST_INFO = ('With complex tasks on, each task rated complex is drafted twice by models from different '
+                'vendors, each in a private copy; measured facts pick the draft that is merged. It costs '
+                "about one extra draft per such task and needs 'Allow changes to project files'.")
 
 
 def mode_choices():
@@ -247,17 +260,24 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                    *, forbid=(), declared_paths=(), channel: Optional[OperatorChannel] = None,
                    neutral: bool = False, capture_profile=None, extra_checks=(), readiness=None,
                    run_limits=None, survey=None, repair_tests=(),
-                   trust_project_policy=None, allow_project_agent_config=False, declared_checks=True):
+                   trust_project_policy=None, allow_project_agent_config=False, declared_checks=True,
+                   accept_watched_paths=False, compete='off'):
     """Stream progress while the shared project runner performs model calls.
 
     ``run_limits`` (a RunLimits) and ``survey`` (a SurveyConfig) go to the
     shared runner unchanged; leaving them out is the run this function made
     before they existed: no shared allowance and no recovery tasks.
 
-    The three trust inputs are the command line's ``--trust-project-policy``,
-    ``--allow-project-agent-config`` and ``--no-declared-checks``. Each
-    reaches the runner only when chosen, so a form that leaves the Trust
-    section alone makes the call it made before the section existed.
+    The four trust inputs are the command line's ``--trust-project-policy``,
+    ``--allow-project-agent-config``, ``--no-declared-checks`` and
+    ``--accept-watched-paths``. Each reaches the runner only when chosen, so
+    a form that leaves the Trust section alone makes the call it made before
+    the section existed. ``compete`` is the Contests choice (``--compete``)
+    and reaches the runner only when it is not ``'off'``.
+
+    The runner passes an interrupt on once the run's record is written. It
+    is shown here as an interrupted run with its report, never as a failure
+    with nothing to read.
     """
     import dataclasses
 
@@ -284,6 +304,10 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
         trust['allow_project_agent_config'] = True
     if not declared_checks:
         trust['declared_checks'] = False
+    if accept_watched_paths:
+        trust['accept_watched_paths'] = True
+    contests = {'compete': compete} if compete and compete != 'off' else {}
+    interrupted = False
     with ThreadPoolExecutor(max_workers=1) as pool:
         # ``tasks``, not a second int(max_tasks): that one was unguarded, so a
         # cleared Task limit raised TypeError out of this generator instead
@@ -296,7 +320,7 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                              extra_checks=tuple(extra_checks), readiness=readiness or None,
                              run_limits=run_limits, survey=survey,
                              **({'repair_tests': tuple(repair_tests)} if repair_tests else {}),
-                             **trust,
+                             **trust, **contests,
                              progress=events.put,
                              ask_operator=channel.ask if channel is not None else None)
         while not future.done():
@@ -316,11 +340,21 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                 yield "\n\n".join(notes), '', []
         try:
             result = future.result()
+        except KeyboardInterrupt as exc:
+            # Passed on by the runner once the record was whole
+            # (project_run.RunInterrupted carries the result).
+            result, interrupted = getattr(exc, 'result', None), True
+            if result is None:
+                yield '**Run interrupted** before its record was written.', '', []
+                return
         except Exception as exc:
             yield f"Run failed: {exc}", '', []
             return
     files, problem = downloadable_files(result.run_dir)
     report = result.report + (f"\n\n_{problem}_" if problem else "")
+    if interrupted:
+        report = ('**Run interrupted.** Its record was written first and is in '
+                  f'`{result.run_dir}`.\n\n' + report)
     yield report, result.diff, files
 
 
@@ -525,6 +559,8 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                     max_tasks = gr.Number(value=20, minimum=1, precision=0, label='Task limit')
                 check = gr.Textbox(label='Test or build command (optional)',
                                    placeholder='Auto-detect from the project, or enter a command')
+                contests = gr.Dropdown(list(CONTEST_CHOICES), value='off', label=CONTEST_LABEL,
+                                       info=CONTEST_INFO)
                 with gr.Accordion('UI capture and further checks (optional)', open=False):
                     gr.Markdown('The same operator inputs as the command line. A capture profile lets the '
                                 'harness start your app and capture UI tasks itself; it is validated before '
@@ -581,10 +617,10 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                           're-run, and only while every original case still runs unskipped.')
                 with gr.Accordion('Trust', open=False):
                     gr.Markdown('What this run may take from the project folder on trust: the command '
-                                "line's three trust flags. Left alone, only the two environment settings "
-                                '(QUADRATUS_TRUST_PROJECT_POLICY, QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG) '
-                                'apply. A choice here is for the project that is open: opening a project '
-                                'clears this section.')
+                                "line's four trust flags. Left alone, only the environment settings "
+                                '(QUADRATUS_TRUST_PROJECT_POLICY, QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG, '
+                                'QUADRATUS_ACCEPT_WATCHED_PATHS) apply. A choice here is for the project '
+                                'that is open: opening a project clears this section.')
                     trust_policy = gr.Textbox(label=TRUST_LABELS['trust_project_policy'], lines=1,
                                               placeholder='64 hexadecimal characters',
                                               info=TRUST_ALLOWS['trust_project_policy'])
@@ -593,7 +629,9 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                                      info=TRUST_ALLOWS['allow_project_agent_config'])
                     trust_own_checks = gr.Checkbox(label=TRUST_LABELS['no_declared_checks'], value=False,
                                                    info=TRUST_ALLOWS['no_declared_checks'])
-                trust_inputs = [trust_policy, trust_agent_config, trust_own_checks]
+                    trust_watched = gr.Checkbox(label=TRUST_LABELS['accept_watched_paths'], value=False,
+                                                info=TRUST_ALLOWS['accept_watched_paths'])
+                trust_inputs = [trust_policy, trust_agent_config, trust_own_checks, trust_watched]
                 preview_button = gr.Button('Preview policy')
                 policy_info = gr.Markdown()
                 preview_button.click(policy_preview_ui,
@@ -637,7 +675,7 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                     # section is folded shut, so a box ticked for the last
                     # project would otherwise stay ticked, unseen, for the next
                     # one opened or cloned here.
-                    return '', False, False
+                    return '', False, False, False
 
                 opened.success(clear_trust, outputs=trust_inputs)
 
@@ -645,11 +683,18 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                  profile_path, further, probes, *rest):
                     if not folder:
                         raise gr.Error('Open a project first.')
-                    # The run-limit fields, then the Trust section's three. A
-                    # caller that stops after the limits chose nothing there.
-                    limit_values, trust = rest[:len(limit_inputs)], rest[len(limit_inputs):]
-                    untouched = ('', False, False)
-                    policy_hash, agent_config, own_checks = (*trust, *untouched[len(trust):])[:3]
+                    # The run-limit fields, the Trust section's four, then the
+                    # Contests choice. A caller that stops early chose nothing
+                    # in what it left out.
+                    limit_values, rest = rest[:len(limit_inputs)], rest[len(limit_inputs):]
+                    trust, rest = rest[:len(trust_inputs)], rest[len(trust_inputs):]
+                    untouched = ('', False, False, False)
+                    policy_hash, agent_config, own_checks, watched = (*trust, *untouched[len(trust):])[:4]
+                    compete = (rest[0] if rest else 'off') or 'off'
+                    if compete != 'off' and not writes:
+                        # The command line's refusal, in the form's words.
+                        raise gr.Error("Contests need 'Allow changes to project files': each draft is made "
+                                       'in a private copy of a project that may be edited.')
                     try:
                         run_limits, survey = limits_from_form(*limit_values)
                         # The Task limit is refused here by name, in the words
@@ -674,12 +719,14 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                                             if p.strip()],
                                               trust_project_policy=approval or None,
                                               allow_project_agent_config=bool(agent_config),
-                                              declared_checks=not own_checks)
+                                              declared_checks=not own_checks,
+                                              accept_watched_paths=bool(watched),
+                                              compete=compete)
 
                 run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths,
                                                        forbid_paths, repair_paths, neutral, capture_profile,
                                                        extra_checks, readiness,
-                                                       *limit_inputs, *trust_inputs],
+                                                       *limit_inputs, *trust_inputs, contests],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
                 gr.Markdown('This is a separate chat for snippets. To follow the team working on your project, '
