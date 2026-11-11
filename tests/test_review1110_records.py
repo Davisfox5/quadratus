@@ -726,7 +726,9 @@ def test_a_map_that_fits_goes_into_the_role_packet_as_it_always_did(tmp_path):
 
 def test_a_close_out_cannot_flood_the_map_or_file_a_control_line(tmp_path):
     """second_half 1: 200 notes of 5,000 characters were all stored
-    (1,000,052 characters) and re-sent in every later prompt."""
+    (1,000,052 characters) and re-sent in every later prompt. The harness
+    writes the close-out now (owner ruling, 2026-10-21): no model is asked
+    for one, so nothing a model would answer reaches the map from it."""
     m = CodebaseMap(tmp_path / "map.jsonl")
     flood = "\n".join(f"- area{i}: " + "x" * 5000 for i in range(200))
     rec = Recorder(closeout="SUMMARY: built it\nREASONING: simplest\nMAP NOTES:\n"
@@ -735,22 +737,9 @@ def test_a_close_out_cannot_flood_the_map_or_file_a_control_line(tmp_path):
     s = Session("Build a JSON parser", ArtifactStore(tmp_path / "artifacts"), rec,
                 config=SessionConfig(codebase_map=m))
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert len(m) == M.MAX_NOTES_PER_CALL
-    assert all(len(n.note) <= M.MAX_NOTE_CHARS for n in m.notes)
-    assert (tmp_path / "map.jsonl").stat().st_size < 2_000
-    assert not any("BLOCKING" in n.note or n.topic == "kind" for n in m.notes)
-    assert m.record()["not_kept"] == 198, "2 control lines and 196 notes over the allowance"
-
-
-def test_the_close_out_prompt_states_the_bounds_its_notes_are_held_to(tmp_path):
-    m = CodebaseMap(tmp_path / "map.jsonl")
-    rec = Recorder()
-    s = Session("Build a JSON parser", ArtifactStore(tmp_path / "artifacts"), rec,
-                config=SessionConfig(codebase_map=m))
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert CodebaseMap.NOTE_RULES in closeout
-    assert CodebaseMap.NOTE_RULES is M.NOTE_RULES
+    assert not any("The task is finished" in c["prompt"] for c in rec.calls)
+    assert len(m) == 0 and m.record()["not_kept"] == 0
+    assert not (tmp_path / "map.jsonl").exists() or (tmp_path / "map.jsonl").stat().st_size == 0
 
 
 def test_the_note_rules_are_stated_from_the_constants_the_map_enforces():
