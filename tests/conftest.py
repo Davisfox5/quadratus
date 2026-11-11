@@ -65,6 +65,25 @@ class FakeProvider(LLMProvider):
         return self._is_retryable
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _harness_scratch_stays_in_the_test_tree(tmp_path_factory):
+    """Source copies, prompt files and provider scratch folders go under the
+    private scratch root (``providers.scratch_root``), which by default is
+    in the developer's home. Tests keep theirs in pytest's own temp tree, so
+    a provider a test never cleaned up leaves nothing behind there."""
+    import os
+
+    root = tmp_path_factory.mktemp("quadratus-scratch")
+    os.chmod(root, 0o700)
+    previous = os.environ.get("QUADRATUS_SCRATCH_DIR")
+    os.environ["QUADRATUS_SCRATCH_DIR"] = str(root)
+    yield
+    if previous is None:
+        os.environ.pop("QUADRATUS_SCRATCH_DIR", None)
+    else:
+        os.environ["QUADRATUS_SCRATCH_DIR"] = previous
+
+
 @pytest.fixture
 def settings() -> Settings:
     s = Settings(

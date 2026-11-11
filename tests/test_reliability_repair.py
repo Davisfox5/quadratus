@@ -422,13 +422,18 @@ def test_a_timed_out_read_only_call_is_still_retried():
     assert provider.calls > 1
 
 
-def test_a_rate_limit_on_an_editing_call_is_still_retried():
-    """The vendor never ran it, so nothing partial can exist."""
+def test_a_rate_limit_on_an_editing_call_is_not_retried_by_the_provider():
+    """Was ``..._is_still_retried``, on the reasoning that the vendor never
+    ran the call. The provider cannot know that from the failure's wording: a
+    writing call that edited and then printed a connection error was replayed
+    four times. A call that can write is never re-sent here; the failure
+    carries the typed ``retryable`` fact, and only a caller that measured the
+    project unchanged may send it again (``runtime.Fleet``)."""
     provider = _FakeEditor(allow_writes=True, fail_with=RuntimeError("rate limit reached"))
-    with pytest.raises(ProviderError) as caught:
+    with pytest.raises(PartialWorkSuspected) as caught:
         provider.generate("edit this")
-    assert not isinstance(caught.value, PartialWorkSuspected)
-    assert provider.calls > 1
+    assert provider.calls == 1
+    assert caught.value.retryable is True and caught.value.interrupted is False
 
 
 def test_partial_edits_are_inspected_and_preserved_after_a_stop(tmp_path):

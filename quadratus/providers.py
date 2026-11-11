@@ -15,10 +15,14 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import random
+import stat
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Sequence
 
 log = logging.getLogger(__name__)
@@ -60,10 +64,20 @@ class PartialWorkSuspected(ProviderError):
     to know which kind of stop it was.
     """
 
-    def __init__(self, message: str, *, cause: Optional[Exception] = None) -> None:
+    def __init__(self, message: str, *, cause: Optional[Exception] = None,
+                 interrupted: bool = True, retryable: bool = False) -> None:
         super().__init__(message)
         #: The transport-level exception underneath -- a TimeoutError, usually.
         self.cause = cause
+        #: The call was stopped from outside (a timeout, an output cap) and
+        #: did not fail on its own, so what it had done by then is unknown.
+        #: True unless whoever raises this knows otherwise: the careful
+        #: reading is the default.
+        self.interrupted = interrupted
+        #: The failure underneath carried the typed ``retryable`` fact. The
+        #: provider still does not replay it: only a caller that has measured
+        #: the project unchanged may (``runtime.Fleet``).
+        self.retryable = retryable
 
 
 class ProviderRefusal(ProviderError):
@@ -94,6 +108,101 @@ class ProviderRefusal(ProviderError):
         #: "bio", "reasoning_extraction". None is a valid, permanent state.
         self.category = category
         self.explanation = explanation
+
+
+#: The typed facts a failed call may carry, as attributes on its exception.
+#: They are set where a provider reads the vendor's own envelope or exit
+#: shape (an HTTP status in the CLI's JSON, a line of its stderr), never from
+#: text a model wrote, and they are the only thing retry, replay and
+#: window-exhaustion decisions read. The message of an exception may quote
+#: model narration for a person to read; no decision is made from it.
+#:
+#: ``window_exhausted``: the subscription window is spent. ``retryable``: a
+#: failure that passes (a rate limit, a server error, a dropped connection).
+#: ``auth_invalid``: the sign-in was rejected. ``transport_status``: the HTTP
+#: status the envelope stated, for the record.
+TRANSPORT_FACTS = ("window_exhausted", "retryable", "auth_invalid", "transport_status")
+
+
+def carry_transport_facts(target: BaseException, source: Optional[BaseException]) -> BaseException:
+    """Copy the typed facts from ``source`` onto the error that wraps it.
+
+    A wrapper keeps the message for people and would otherwise drop the facts
+    the decisions read, which is how classification drifted onto the message.
+    """
+    for name in TRANSPORT_FACTS:
+        value = getattr(source, name, None)
+        if value is None or value is False:
+            continue
+        try:
+            setattr(target, name, value)
+        except Exception:  # noqa: BLE001 -- an exception that refuses attributes keeps its own
+            pass
+    return target
+
+
+_scratch_noted = False
+
+
+def scratch_root() -> str:
+    """The private folder harness scratch lives under: source copies handed
+    to review calls, prompt files, the empty folders summary calls run in.
+
+    ``QUADRATUS_SCRATCH_DIR`` when set, else ``~/.cache/quadratus/scratch``.
+    Not the system temp folder, because a vendor sandbox in workspace-write
+    mode may write under ``/tmp`` and ``$TMPDIR``: an editing call steered by
+    text it read could drop a ``conftest.py`` into a concurrent reviewer's
+    copy there, and new files in a copy are that call's own scratch by
+    design, so nothing would flag it.
+
+    Each missing folder on the way is created 0700. The root must be a real
+    folder (not a link) that this user owns and nobody else can enter; one
+    that is not is refused, never repaired and never replaced by the temp
+    folder in silence, and the refusal names the variable that picks another.
+    """
+    global _scratch_noted
+    raw = os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip()
+    way_out = "Set QUADRATUS_SCRATCH_DIR to a folder only you can read and write."
+    try:
+        root = Path(raw).expanduser() if raw else Path.home() / ".cache" / "quadratus" / "scratch"
+    except RuntimeError as exc:  # no home folder to resolve
+        raise ProviderError(f"Cannot place the private scratch folder: {exc}. {way_out}") from exc
+    root = Path(os.path.abspath(root))
+    try:
+        missing, probe = [], root
+        while not os.path.lexists(probe) and probe.parent != probe:
+            missing.append(probe)
+            probe = probe.parent
+        for folder in reversed(missing):
+            try:
+                os.mkdir(folder, 0o700)
+            except FileExistsError:
+                pass  # another run made it first
+        info = os.lstat(root)
+    except OSError as exc:
+        raise ProviderError(f"Cannot prepare the private scratch folder {root}: {exc}. {way_out}") from exc
+    if not stat.S_ISDIR(info.st_mode):
+        raise ProviderError(f"The scratch folder {root} is a link or a file, not a folder. {way_out}")
+    if os.name == "posix":
+        if info.st_uid != os.getuid():
+            raise ProviderError(f"The scratch folder {root} belongs to another user. {way_out}")
+        if info.st_mode & 0o077:
+            raise ProviderError(
+                f"The scratch folder {root} is open to other users (mode "
+                f"{stat.S_IMODE(info.st_mode):o}). Make it private (chmod 700) or name another. {way_out}")
+    if not _scratch_noted:
+        try:
+            inside_temp = root.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())
+        except (OSError, ValueError):
+            inside_temp = False
+        if inside_temp:
+            # Said once, and not as a warning: it is the operator's choice
+            # (or a container whose home is a temp mount), not a fault.
+            _scratch_noted = True
+            log.info(
+                "The scratch folder %s is inside the system temp folder, which a vendor sandbox in "
+                "workspace-write mode can write. %s", root, way_out)
+    return str(root)
 
 
 @dataclass
@@ -160,27 +269,6 @@ class LLMProvider:
 
     def _retryable(self, exc: Exception) -> bool:
         raise NotImplementedError
-
-    def _replay_would_be_unsafe(self, exc: Exception) -> bool:
-        """Whether retrying this failure could re-apply work already done.
-
-        Two conditions together, and both are needed. The call must be able to
-        write -- a read-only review that times out has changed nothing, and
-        re-sending it is a genuine retry. And the failure must be one that
-        leaves the outcome unknown rather than known-failed: a timeout or a
-        cancellation stopped a call that may have finished most of its work,
-        whereas a rate-limit response means the vendor never ran it.
-        """
-        if not getattr(self, "allow_writes", False):
-            return False
-        if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
-            return True
-        text = str(exc).lower()
-        return any(
-            token in text
-            for token in ("timed out", "timeout", "cancelled", "canceled",
-                          "interrupted", "killed")
-        )
 
     # -- helpers -------------------------------------------------------------
     @staticmethod
@@ -374,52 +462,82 @@ class LLMProvider:
                 raise budget_failure
 
     def _generate_once(self, prompt: str, system: str, turns: List[Turn]) -> str:
-        """One model's attempt, with transport retries. Refusals pass through."""
+        """One model's attempt, with transport retries. Refusals pass through.
+
+        A call that can write is never retried here, whatever the failure
+        says. On 2026-09-13 an editing call hit its 900s ceiling with work
+        already saved to disk, and the retry loop began replaying the same
+        writing prompt against a tree that call had already changed: doubling
+        edits, or applying a second pass to a first pass's output. That stop
+        once covered only failures whose text said "timed out" or
+        "cancelled", so a writing call that edited and then printed a
+        connection error was replayed four times. Whether a failed editing
+        call may be replayed is decided by whoever measured the project
+        around it (``runtime.Fleet``), never by the wording of the failure.
+
+        A call that cannot write changed nothing, so re-sending it is a
+        genuine retry: on a timeout, and on a failure that carries the typed
+        ``retryable`` fact (``TRANSPORT_FACTS``).
+        """
         from .run_budget import RunBudgetExceeded
 
+        writes = bool(getattr(self, "allow_writes", False))
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
+            final = attempt >= self.max_retries - 1
             try:
                 text = self._observed_call(prompt, system, turns, attempt + 1)
                 if not text:
                     raise ProviderError(f"{self.label} returned an empty response.")
                 return text
-            except (ProviderError, RunBudgetExceeded):
+            except RunBudgetExceeded:
                 raise
+            except ProviderError as exc:
+                # Final, unless the vendor's own envelope named a failure
+                # that passes (a rate limit, a server error).
+                if writes or final or getattr(exc, "retryable", False) is not True:
+                    raise
+                last_exc = exc
             except Exception as exc:
                 last_exc = exc
-                if self._replay_would_be_unsafe(exc):
-                    # A timeout or cancellation on a call that could write does
-                    # not mean nothing happened. On 2026-09-13 an editing call
-                    # hit its 900s ceiling with work already saved to disk, and
-                    # the retry loop began replaying the same writing prompt
-                    # against a tree that call had already changed -- doubling
-                    # edits, or applying a second pass to a first pass's
-                    # output. The tree moved, so the prompt is no longer the
-                    # prompt that was sent. Whether to retry is now the
-                    # caller's decision, made with the partial work in hand.
-                    raise PartialWorkSuspected(
+                if writes:
+                    interrupted = (isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
+                                   or getattr(exc, "interrupted", False) is True)
+                    try:
+                        passing = not interrupted and bool(self._retryable(exc))
+                    except Exception:  # noqa: BLE001 -- a provider with no retry rule
+                        passing = False
+                    stop = PartialWorkSuspected(
                         f"{self.label} did not complete ({exc}). This call could "
                         f"write, so the working tree may already hold partial "
                         f"work; it must be inspected before anything is retried. "
                         f"Replaying the same prompt against a changed tree is "
                         f"not a retry, it is a second, different edit.",
                         cause=exc,
-                    ) from exc
-                if self._retryable(exc) and attempt < self.max_retries - 1:
-                    delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
-                    log.warning(
-                        "%s call failed (%s); retrying in %.1fs (attempt %d/%d).",
-                        self.label,
-                        exc,
-                        delay,
-                        attempt + 1,
-                        self.max_retries,
+                        interrupted=interrupted,
+                        retryable=passing,
                     )
-                    time.sleep(delay)
-                    continue
-                break
-        raise ProviderError(f"{self.label} call failed: {last_exc}") from last_exc
+                    # The stop is what the caller sees, so it keeps the facts
+                    # its cause carried: without them a spent window met by
+                    # an editing call was never marked, and the model stayed
+                    # on the roster. ``retryable`` stays as decided above.
+                    carry_transport_facts(stop, exc)
+                    stop.retryable = passing
+                    raise stop from exc
+                if final or not self._retryable(exc):
+                    break
+            delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
+            log.warning(
+                "%s call failed (%s); retrying in %.1fs (attempt %d/%d).",
+                self.label,
+                last_exc,
+                delay,
+                attempt + 1,
+                self.max_retries,
+            )
+            time.sleep(delay)
+        failure = ProviderError(f"{self.label} call failed: {last_exc}")
+        raise carry_transport_facts(failure, last_exc) from last_exc
 
 
 def _field(obj, name: str, default=None):

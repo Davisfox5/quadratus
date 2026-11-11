@@ -59,7 +59,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .cli_providers import SANDBOX_REFUSAL
+from .cli_providers import LIMIT_WORDING, SANDBOX_REFUSAL
 from .config import Settings
 from .delegation import (
     DelegationLedger,
@@ -74,7 +74,15 @@ from .delegation import (
 )
 from .latest import alias_for, resolution_source
 from .project import Project
-from .providers import LLMProvider, ProviderError, TurnLimitReached, build_provider
+from .providers import (
+    LLMProvider,
+    PartialWorkSuspected,
+    ProviderError,
+    TurnLimitReached,
+    build_provider,
+    carry_transport_facts,
+    scratch_root,
+)
 from .registry import VENDORS, resolve
 from .usage import UsageMeter
 
@@ -103,7 +111,7 @@ def _review_directory(project, source=None):
                 or any(part in ("", ".", "..") for part in name.split("/"))
                 or "\\" in name or not isinstance(data, bytes)):
             raise ProviderError("The independent review's captured source contains an invalid file.")
-    with tempfile.TemporaryDirectory(prefix="quadratus-review-") as directory:
+    with tempfile.TemporaryDirectory(prefix="quadratus-review-", dir=scratch_root()) as directory:
         root = Path(directory)
         for name, data in source.items():
             target = root / name
@@ -131,28 +139,11 @@ class WindowExhausted(ProviderError):
     window_exhausted = True
 
 
-#: Phrases a CLI uses when the *subscription* is out, as opposed to a
-#: momentary server-side rate limit. Matched on wording because every vendor
-#: exits 1 regardless. Deliberately narrow: treating a transient 429 as an
-#: exhausted window would take a healthy model out of the run for the session.
-#:
-#: The first entry is not a guess. Observed verbatim from the Claude CLI on
-#: 2026-09-12: "You've reached your Fable limit. Switch to another model, or
-#: manage usage credits at claude.ai/..." -- which matched none of the
-#: patterns written from imagination, so the run saw a generic transport
-#: error instead of an exhausted window. Add what you actually see here.
-_EXHAUSTION_MARKERS = (
-    "reached your",          # "You've reached your Fable limit" (Claude, seen)
-    "usage limit",
-    "usage limits",
-    "quota exceeded",
-    "out of credits",
-    "subscription limit",
-    "weekly limit",
-    "plan limit",
-    "limit reached",
-    "upgrade to continue",
-)
+#: The wording of a spent subscription. It lives beside the extractors now
+#: (``cli_providers.LIMIT_WORDING``), because it is read only in a CLI's own
+#: error report: the provider sets ``window_exhausted`` on the failure there,
+#: and :func:`_looks_exhausted` reads that fact and never the message.
+_EXHAUSTION_MARKERS = LIMIT_WORDING
 
 
 #: The editing roles the lead owns, each bound by ``Settings.lead_max_turns``.
@@ -493,7 +484,7 @@ class Fleet:
                 )
             before = self.project.contents()
             try:
-                reply = self._generate(model_key, view, prompt, role +
+                reply = self._generate_editing(model_key, view, prompt, before, role +
                                   "\nYour working directory is the persistent project. "
                                   "Implement the requested changes in files. Do not commit, push, "
                                   "or change branches. Return a concise account and exactly one "
@@ -692,7 +683,7 @@ class Fleet:
                  "unverified; do not invent observations. Return the requested protocol directly "
                  "in one response. Normal Quadratus WORKER/FETCH/CONSULT channels remain text "
                  "requests to the session harness, not vendor-native tool calls.")
-        with tempfile.TemporaryDirectory(prefix="quadratus-analysis-") as directory:
+        with tempfile.TemporaryDirectory(prefix="quadratus-analysis-", dir=scratch_root()) as directory:
             view = view.in_directory(directory, allow_writes=False)
             return self._generate(key, view, prompt, role)
 
@@ -720,7 +711,7 @@ class Fleet:
                 "work, recorded checks, deferred work and unknown facts. If evidence is "
                 "truncated or missing, say so rather than investigating. This is a summary, "
                 "not a new review or an assertion that the entire project goal is complete.")
-        with tempfile.TemporaryDirectory(prefix="quadratus-closeout-") as directory:
+        with tempfile.TemporaryDirectory(prefix="quadratus-closeout-", dir=scratch_root()) as directory:
             if hasattr(view, 'in_directory'):
                 # A summary call with no tools: the plain read-only view, and
                 # the directory stays empty (tests/test_closeout.py).
@@ -731,13 +722,126 @@ class Fleet:
     def _relativise(reply: str, directory) -> str:
         return _relativise_snapshot_paths(reply, directory)
 
-    def _generate(self, key, provider, prompt, system, *, role="", task="", origin=None):
+    def _project_unchanged(self, before) -> bool:
+        """Whether the measured project source is what it was at ``before``.
+
+        The same measurement the scope and gate checks read. A project that
+        cannot be read counts as changed: unknown is never grounds to replay.
+        """
+        try:
+            return self.project.contents() == before
+        except Exception:  # noqa: BLE001 -- unknown is changed
+            log.debug("could not measure the project after a failed editing call", exc_info=True)
+            return False
+
+    @staticmethod
+    def _also_unchanged(check) -> bool:
+        """A caller's second measurement of the project. None is no second
+        measurement; one that raises, or answers anything but True, counts
+        as changed."""
+        if check is None:
+            return True
+        try:
+            return check() is True
+        except Exception:  # noqa: BLE001 -- unknown is changed
+            log.debug("the second measurement after a failed editing call failed", exc_info=True)
+            return False
+
+    def _generate_editing(self, key, view, prompt, before, system, *, unchanged=None):
+        """One editing call on the project, replayed at most once and only
+        after measuring that it changed nothing.
+
+        The provider never retries a call that can write (see
+        ``LLMProvider._generate_once``). This is where a failed one may be
+        sent again, because this is where the project was measured before it
+        began. Three outcomes, each read from typed facts and the measured
+        source, never from the failure's wording:
+
+        * Stopped from outside (a timeout, an output cap): never replayed,
+          and raised as it came. What it did before the stop is unknown.
+        * The project differs from ``before``: the partial-work stop. The
+          prompt was written for a tree that no longer exists.
+        * The project is unchanged: a failure that passes (``retryable``) is
+          sent once more; anything else, and a second failure, is an ordinary
+          failed call that left nothing behind.
+
+        ``before`` is the measured source, which does not see every path
+        (``.git``, build output, ``.env*``, links). ``unchanged`` is where a
+        caller that lists those paths as well says so: a function that
+        answers True only when its own listing is what it was before the
+        call. It is asked after the source has measured unchanged, and
+        "unchanged" means both. Anything but True from it is a changed
+        project like any other: the partial-work stop, never a replay and
+        never an ordinary failure, which a session may hand to another lead
+        and so replay all the same.
+        """
+        for attempt in (1, 2):
+            try:
+                if attempt == 1:
+                    # The same call, spelled as it always was.
+                    return self._generate(key, view, prompt, system)
+                return self._generate(key, view, prompt, system, first_attempt=attempt)
+            except ProviderError as exc:
+                suspected = isinstance(exc, PartialWorkSuspected)
+                if getattr(exc, "window_exhausted", False) or (suspected and exc.interrupted):
+                    raise
+                transient = getattr(exc, "retryable", False) is True
+                if not (suspected or transient):
+                    raise
+                if not self._project_unchanged(before):
+                    if suspected:
+                        raise
+                    raise PartialWorkSuspected(
+                        f"{key} failed ({exc}) after changing the project. The same prompt is not "
+                        "sent again against a changed tree; the work is kept for inspection.",
+                        cause=exc, interrupted=False) from exc
+                if not self._also_unchanged(unchanged):
+                    # The source is as it was; the caller's own listing is
+                    # not, or could not be taken. Raised as it came, this was
+                    # an ordinary failure, and the session's lead recovery,
+                    # which inspects the source alone, sent the task to
+                    # another lead: the replay this function exists to stop.
+                    if suspected:
+                        raise
+                    raise PartialWorkSuspected(
+                        f"{key} failed ({exc}) and paths outside the measured source changed or "
+                        "could not be measured. The same prompt is not sent again; the project "
+                        "is kept as it is for inspection.",
+                        cause=exc, interrupted=False) from exc
+                if transient and attempt == 1:
+                    self._note_replay(key, exc)
+                    time.sleep(max(0.0, float(getattr(view, "retry_base_delay", 0.0) or 0.0)))
+                    continue
+                if not suspected:
+                    raise
+                # Measured: nothing was written. Not partial work, so the
+                # session may treat it as any failed call that changed nothing.
+                failure = ProviderError(
+                    f"{key} call failed with the project measured unchanged: {exc.cause or exc}")
+                raise carry_transport_facts(failure, exc.cause) from exc
+
+    def _note_replay(self, key, exc) -> None:
+        """Say that an editing call is being sent once more, and on what grounds."""
+        kind = type(getattr(exc, "cause", None) or exc).__name__
+        line = (f"{key}: the editing call failed in transport ({kind}) and the project is "
+                "measured unchanged; sending it once more")
+        log.warning("%s", line)
+        report = getattr(self, "progress", None)
+        if report is not None:
+            try:
+                report(line)
+            except Exception:  # noqa: BLE001 -- reporting never fails a run
+                log.debug("progress line failed", exc_info=True)
+
+    def _generate(self, key, provider, prompt, system, *, role="", task="", origin=None, first_attempt=1):
         context = invocation_context.get() or {}
         role = role or context.get("role", "direct")
         task = task or context.get("task", "run")
         origin = origin or context.get("origin", Origin.SEAT)
         observed = []
         def observe(view, attempt, seconds, failure, reply="", *, invoked=True):
+            # A call Fleet replays is the same call's next attempt in the record.
+            attempt = attempt + first_attempt - 1
             observed.append(attempt)
             self._record_invocation(
                 key, view, role=role, task=task, origin=origin,
@@ -778,6 +882,9 @@ class Fleet:
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: {exc}") from exc
             if isinstance(exc, Exception) and _looks_exhausted(exc):
+                # A typed fact from the vendor's own envelope, never the
+                # message: that can quote a model, and prose must not take a
+                # model off the roster or move a seat.
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
             raise
@@ -1180,9 +1287,18 @@ def _add_missing_headers(patch: str, prompt: str, root) -> str:
     return f"--- a/{existing[0]}\n+++ b/{existing[0]}\n" + patch
 
 
-def _looks_exhausted(exc: Exception) -> bool:
-    text = str(exc).lower()
-    return any(marker in text for marker in _EXHAUSTION_MARKERS)
+def _looks_exhausted(exc) -> bool:
+    """Whether a failed call's own envelope said the subscription window is
+    spent: the typed ``window_exhausted`` fact (``providers.TRANSPORT_FACTS``)
+    on the failure, exactly True.
+
+    This once searched the failure's whole text for limit wording. That text
+    can end with what a model was saying when its turn stopped, so a
+    cancelled turn whose narration mentioned a limit, or text injected to say
+    so, took the model off the roster for the run and could move a seat.
+    A string, or a failure with no such fact, is not an exhausted window.
+    """
+    return getattr(exc, "window_exhausted", False) is True
 
 
 #: Rendered design evidence a review call may be handed: exactly these file

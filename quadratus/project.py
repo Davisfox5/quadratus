@@ -12,7 +12,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from .providers import ProviderError
+from .providers import ProviderError, scratch_root
 
 _SKIP = {'.git', '.quadratus', '.multi_llm', '.venv', 'venv', 'env',
          'node_modules', '__pycache__', '.pytest_cache', '.ruff_cache',
@@ -95,7 +95,7 @@ class Project:
     @contextmanager
     def snapshot(self):
         # copy2, never hard links: a reviewer's writes must not alter source.
-        with tempfile.TemporaryDirectory(prefix='quadratus-review-') as directory:
+        with tempfile.TemporaryDirectory(prefix='quadratus-review-', dir=scratch_root()) as directory:
             root = Path(directory)
             for name, data in self.contents().items():
                 target = root / name

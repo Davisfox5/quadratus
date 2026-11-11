@@ -37,6 +37,18 @@ class IsolatedResult:
 #: Short enough that a stall is noticed promptly, long enough that the
 #: supervisor is not spinning: the workload writes far less often than this.
 _POLL_SECONDS = 5
+#: How long `docker rm --force` gets. Separate from the workload's ceiling.
+_CLEANUP_SECONDS = 15
+
+
+def _exit_code(text):
+    """The workload's exit status from `docker wait`, or None when its output
+    is not a number. None is a failed run with an unknown status: an empty
+    reply from the daemon must not raise past the cleanup or read as zero."""
+    try:
+        return int(str(text).strip())
+    except ValueError:
+        return None
 
 
 def _tree(path):
@@ -192,7 +204,7 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
         docker(['docker', 'start', name])
         if stall_seconds is None:
             result = docker(['docker', 'wait', name])
-            code = int(result.stdout.strip())
+            code = _exit_code(result.stdout)
             outcome = 'success' if code == 0 else 'failed'
         else:
             # Waited in slices so the heartbeat can be read between them. The
@@ -206,7 +218,7 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
                     result = subprocess.run(['docker', 'wait', name], capture_output=True,
                                             text=True, check=True,
                                             timeout=max(0.01, slice_end - time.monotonic()))
-                    code = int(result.stdout.strip())
+                    code = _exit_code(result.stdout)
                     outcome = 'success' if code == 0 else 'failed'
                     break
                 except subprocess.TimeoutExpired:
@@ -232,8 +244,16 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
     finally:
         # Killing the whole container also kills descendants that created
         # their own process groups; killpg on the Python parent cannot do that.
-        stopped = subprocess.run(['docker', 'rm', '--force', name],
-                                 capture_output=True, text=True, timeout=15)
+        try:
+            stopped = subprocess.run(['docker', 'rm', '--force', name],
+                                     capture_output=True, text=True, timeout=_CLEANUP_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            # A daemon too slow to answer is the same fact as a failed
+            # removal: the container may still be running. Left to raise as
+            # it was, the timeout replaced both the run's outcome and this
+            # message.
+            raise RuntimeError('Container cleanup failed; workload stop is unverified '
+                               f'(docker rm gave no answer in {_CLEANUP_SECONDS}s)') from exc
         if stopped.returncode and 'No such container' not in stopped.stderr:
             raise RuntimeError('Container cleanup failed; workload stop is unverified')
     # Stdout from workload must be explicitly written under /work if needed;

@@ -80,6 +80,10 @@ class ProbeResult:
     seconds: float = 0.0
     #: Aliases tried before this one, all of which the CLI rejected.
     rejected: Sequence[str] = ()
+    #: The failure's own envelope said the subscription window is spent (the
+    #: typed fact, ``runtime._looks_exhausted``). Never read from ``detail``,
+    #: which is text.
+    exhausted: bool = False
 
 
 def default_probe_set() -> List[str]:
@@ -175,6 +179,7 @@ def probe_models(
                         detail=str(exc).strip()[:300],
                         seconds=round(time.monotonic() - started, 2),
                         rejected=tuple(rejected[:-1]),
+                        exhausted=_looks_exhausted(exc),
                     )
                     continue
                 result = ProbeResult(
@@ -223,7 +228,7 @@ def render_report(
             said = f" — says it is {result.reported!r}" if result.reported else ""
             shown = result.alias or "(the CLI's own default, no model flag)"
             lines.append(f"  OK   {result.key} -> {shown}{tried}{said}")
-        elif _looks_exhausted(result.detail):
+        elif result.exhausted:
             # The alias was fine; the window is not. Telling an operator to go
             # edit a working alias because their quota ran out sends them to
             # fix the one thing that is not broken.
@@ -240,7 +245,7 @@ def render_report(
             )
 
     failed = [r for r in models if not r.ok]
-    spent = [r for r in failed if _looks_exhausted(r.detail)]
+    spent = [r for r in failed if r.exhausted]
     lines += ["", "Summary", "-------"]
     lines.append(
         f"  {len(models) - len(failed)} of {len(models)} models answered; "

@@ -48,16 +48,19 @@ Design notes
 from __future__ import annotations
 
 import copy
+import errno
 import json
 import logging
 import math
 import os
 import re
+import select
 import shlex
 import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -66,7 +69,16 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .delegation import NativeChild
-from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn, TurnLimitReached
+from .native_sessions import bounded_lines, first_record
+from .providers import (
+    LLMProvider,
+    ProviderError,
+    ProviderRefusal,
+    Turn,
+    TurnLimitReached,
+    carry_transport_facts,
+    scratch_root,
+)
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +89,7 @@ __all__ = [
     "CodexCLIProvider",
     "GrokCLIProvider",
     "CLI_SPECS",
+    "CLIOutputTooLarge",
     "CODEX_NATIVE_DELEGATION_CONTROL",
     "CODEX_NATIVE_DELEGATION_FEATURES",
     "CODEX_NATIVE_DELEGATION_OVERRIDE",
@@ -92,9 +105,165 @@ class CLINotInstalled(RuntimeError):
     """The vendor CLI binary could not be found on PATH."""
 
 
+#: Phrases a CLI uses when the *subscription* is out, as opposed to a
+#: momentary server-side rate limit. Deliberately narrow: treating a transient
+#: 429 as an exhausted window would take a healthy model out of the run for
+#: the session.
+#:
+#: The first entry is not a guess. Observed verbatim from the Claude CLI on
+#: 2026-09-12: "You've reached your Fable limit. Switch to another model, or
+#: manage usage credits at claude.ai/..." -- which matched none of the
+#: patterns written from imagination, so the run saw a generic transport
+#: error instead of an exhausted window. Add what you actually see here.
+#:
+#: Read only in a CLI's own error report (``_own_error_facts``), never over
+#: an exception's whole message: that message can quote what a model was
+#: saying when its turn stopped, and a cancelled grok turn whose narration
+#: said "limit reached" once took its model off the roster for the run.
+LIMIT_WORDING = (
+    "reached your",          # "You've reached your Fable limit" (Claude, seen)
+    "usage limit",
+    "usage limits",
+    "quota exceeded",
+    "out of credits",
+    "subscription limit",
+    "weekly limit",
+    "plan limit",
+    "limit reached",
+    "upgrade to continue",
+)
+
+#: HTTP statuses that mean the request failed for a reason that passes: a
+#: rate limit, a timeout, or the vendor's servers. 529 is Anthropic's
+#: "overloaded".
+RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
+
+#: Optional error-class prefixes a runtime puts before its message.
+_ERROR_PREFIX = r"(?:(?:[A-Za-z_][\w.]*)?(?:Error|ERROR|error): |fatal: ){0,3}"
+#: The whole-line shapes of a transport failure, as the CLIs and the
+#: runtimes under them print one. A line counts only when all of it is the
+#: shape (``fullmatch``), so a sentence that mentions "500" or "connection"
+#: is not one. Seeds like every table here: add the line you actually saw.
+_TRANSPORT_SHAPES = (
+    # The vendor API's own status, as each CLI words it.
+    re.compile(_ERROR_PREFIX + r"API Error: (?P<status>\d{3})\b.*"),
+    re.compile(_ERROR_PREFIX + r"(?:unexpected status|exceeded retry limit, last status:) (?P<status>\d{3})\b.*"),
+    # The connection under the request failed.
+    re.compile(_ERROR_PREFIX + r"API Error: Connection error\b.*"),
+    re.compile(_ERROR_PREFIX + r"(?:connect|read|write|getaddrinfo) "
+               r"(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE)\b.*"),
+    re.compile(_ERROR_PREFIX + r"(?:socket hang up|fetch failed|stream disconnected before completion\b.*)"),
+)
+#: How many lines at each end of a CLI's own error text are read for those
+#: shapes. Both ends, because a runtime names the error first and prints a
+#: stack trace after it: read from the end alone, a spent window followed by
+#: a dozen "at ..." lines was a plain transport error and the seat never moved.
+_SHAPE_LINES = 10
+#: How much of the start of a CLI's stderr is read beside its end
+#: (``STDERR_TAIL``).
+STDERR_HEAD = 400
+
+
+def _own_stderr(stderr) -> str:
+    """The two ends of a CLI's stderr, in whole lines, for ``_own_error_facts``.
+
+    A line the cut went through is dropped: the shapes are whole-line shapes,
+    and the last part of a sentence that only quotes one would match as one.
+    """
+    text = stderr if isinstance(stderr, str) else ""
+    if len(text) <= STDERR_HEAD + STDERR_TAIL:
+        return text
+    head, tail = text[:STDERR_HEAD], text[-STDERR_TAIL:]
+    if text[STDERR_HEAD] != "\n":
+        head = head[:head.rfind("\n") + 1]
+    if text[-STDERR_TAIL - 1] != "\n":
+        tail = tail[tail.find("\n") + 1:] if "\n" in tail else ""
+    return head + "\n" + tail
+
+
+def _own_error_facts(text, status=None) -> Dict[str, object]:
+    """The typed facts in a CLI's own report of a failed request.
+
+    ``status`` is an HTTP status the CLI's JSON states. ``text`` is error
+    text the CLI itself wrote: an error field of its envelope or the two
+    ends of its stderr. Never the model's answer or narration, which is why
+    callers pass a field and not a whole stream.
+
+    A spent window is limit wording beside no status or beside 429, and is
+    never retried: nothing changes until the window rolls over. Any other
+    status in ``RETRYABLE_STATUS``, or a whole-line connection failure, is a
+    failure that passes.
+    """
+    status = status if type(status) is int else None
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if len(lines) > 2 * _SHAPE_LINES:
+        lines = lines[:_SHAPE_LINES] + lines[-_SHAPE_LINES:]
+    network = False
+    for line in lines:
+        for shape in _TRANSPORT_SHAPES:
+            match = shape.fullmatch(line)
+            if match is None:
+                continue
+            found = match.groupdict().get("status")
+            if found is None:
+                network = True
+            elif status is None:
+                status = int(found)
+    lowered = "\n".join(lines).lower()
+    exhausted = status in (None, 429) and any(marker in lowered for marker in LIMIT_WORDING)
+    facts: Dict[str, object] = {}
+    if exhausted:
+        facts["window_exhausted"] = True
+    elif status in RETRYABLE_STATUS or (network and status is None):
+        facts["retryable"] = True
+    if status is not None:
+        facts["transport_status"] = status
+    return facts
+
+
+def _mark_transport(error: BaseException, text="", status=None) -> BaseException:
+    """Set the typed transport facts on ``error`` from the CLI's own report."""
+    for name, value in _own_error_facts(text, status).items():
+        setattr(error, name, value)
+    return error
+
+
+def _no_envelope(message: str, *, exit_report: bool = False) -> ProviderError:
+    """The failure for a stdout that holds no answer and no report of the
+    CLI's own: not the envelope it was asked for, or a stream with nothing
+    in it.
+
+    Marked, because on a failed exit the end of stderr is then the CLI's
+    only voice, and ``CLIProvider._call`` reads the typed facts from it. A
+    spent grok or codex window that is reported on stderr alone was once
+    recognised by searching the whole message; with that search gone, this
+    mark is what keeps it recognised.
+
+    ``exit_report``: on a failed exit the exit status and stderr replace this
+    message altogether, since they say more than "not JSON" does (claude,
+    whose failed exits always read that way).
+    """
+    error = ProviderError(message)
+    error.no_envelope = True
+    error.exit_report = exit_report
+    return error
+
+
 def _extract_claude_result(stdout: str) -> str:
     """Pull the assistant text out of ``claude --output-format json``."""
-    payload = json.loads(stdout)
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError) as exc:
+        # Empty output, or text that is not JSON. Left to raise, this was a
+        # JSONDecodeError the caller reported as a transport failure with no
+        # diagnostics attached.
+        shown = (stdout or "").strip()[:300] if isinstance(stdout, str) else ""
+        raise _no_envelope(f"claude did not return a JSON envelope: {shown or '(empty output)'}",
+                           exit_report=True) from exc
+    if not isinstance(payload, dict):
+        # ``[]`` or ``null`` parses, and then has no ``.get``.
+        raise _no_envelope(f"claude returned unexpected JSON ({type(payload).__name__}): "
+                           f"{stdout.strip()[:300]}", exit_report=True)
     if payload.get("stop_reason") == "refusal":
         # A classifier decline is not an error to the CLI: it is a completed
         # turn with nothing in it. Surface it as what it is, not as "empty
@@ -124,8 +293,19 @@ def _extract_claude_result(stdout: str) -> str:
             "; ".join(str(e) for e in errors) if isinstance(errors, list) else "")
         if not str(detail).strip():
             detail = f"no detail in the envelope (subtype {payload.get('subtype')!r})"
-        raise ProviderError(f"claude reported an error: {str(detail)[:300]}")
-    return payload.get("result", "") or ""
+        error = ProviderError(f"claude reported an error: {str(detail)[:300]}")
+        # The typed facts come from the envelope's own status. Its text is
+        # read as well only where it must be the CLI's: beside a status, or
+        # when the model wrote nothing (a rejected request reports zero
+        # output tokens). An error envelope around model output says nothing.
+        status = payload.get("api_error_status")
+        usage = payload.get("usage")
+        silent = (isinstance(usage, dict) and type(usage.get("output_tokens")) is int
+                  and usage["output_tokens"] == 0)
+        own = str(detail) if type(status) is int or silent else ""
+        raise _mark_transport(error, own, status)
+    result = payload.get("result")
+    return result if isinstance(result, str) else ""
 
 
 def _extract_codex_result(stdout: str) -> str:
@@ -194,18 +374,20 @@ def _extract_codex_result(stdout: str) -> str:
         error.auth_invalid = True
         raise error
     if failed is not None:
-        raise ProviderError(f"codex turn failed: {failed[:300]}")
+        # ``turn.failed`` and ``error`` items are codex's own report, not the
+        # model's text, so the typed facts may be read from them.
+        raise _mark_transport(ProviderError(f"codex turn failed: {failed[:300]}"), failed)
     if answer:
         return answer
     if errors:
-        raise ProviderError(f"codex reported an error: {errors[-1][:300]}")
+        raise _mark_transport(ProviderError(f"codex reported an error: {errors[-1][:300]}"), errors[-1])
     if saw_json:
-        raise ProviderError(
+        raise _no_envelope(
             "codex produced no assistant message. The usual cause is a model "
             "the CLI does not serve: the turn starts and ends with nothing in "
             "it. Check `codex exec --model <name>` by hand."
         )
-    raise ProviderError(f"codex returned no parseable events: {stdout.strip()[:300]}")
+    raise _no_envelope(f"codex returned no parseable events: {stdout.strip()[:300]}")
 
 
 #: Grok stop reasons that are an explicit decline. Only these: a refusal is
@@ -239,11 +421,11 @@ def _extract_grok_result(stdout: str) -> str:
     try:
         payload = json.loads(stdout)
     except ValueError as exc:
-        raise ProviderError(
+        raise _no_envelope(
             f"grok did not return a JSON envelope: {stdout.strip()[:300]}"
         ) from exc
     if not isinstance(payload, dict):
-        raise ProviderError(f"grok returned unexpected JSON: {stdout.strip()[:300]}")
+        raise _no_envelope(f"grok returned unexpected JSON: {stdout.strip()[:300]}")
     stop = payload.get("stopReason")
     if stop in _GROK_REFUSAL_STOPS:
         # Before the error and cap handling: an explicit decline is a
@@ -259,7 +441,17 @@ def _extract_grok_result(stdout: str) -> str:
             + (f" [{category}]" if category else "") + ".",
             category=category, explanation=explanation)
     if payload.get("error"):
-        raise ProviderError(f"grok reported an error: {str(payload['error'])[:300]}")
+        # The ``error`` field is the CLI's own; ``text`` below is the model's.
+        # Its shape as an object is not documented, so every string in one is
+        # read as a line of the report and a ``status`` number is used only
+        # if it is there.
+        own = payload["error"]
+        if isinstance(own, dict):
+            report = "\n".join(value for value in own.values() if isinstance(value, str))
+            status = own.get("status")
+        else:
+            report, status = str(own), None
+        raise _mark_transport(ProviderError(f"grok reported an error: {str(own)[:300]}"), report, status)
     text = payload.get("text")
     # A turn that did not reach end_turn still carries text, and that text is
     # the narration it had got to -- a denied tool comes back as
@@ -276,6 +468,9 @@ def _extract_grok_result(stdout: str) -> str:
     if stop != "end_turn":
         diagnostics = _extract_grok_diagnostics(stdout) or {}
         attempted = diagnostics.get("attempted_tools")
+        # The narration is quoted for whoever reads the failure. It is the
+        # model's text, so this error carries no typed transport fact and
+        # nothing may classify it by its message (see ``LIMIT_WORDING``).
         raise ProviderError(
             f"grok did not complete the turn (stopReason {stop!r})"
             + (f"; attempted tools: {', '.join(attempted)}" if attempted else "")
@@ -534,8 +729,7 @@ def _codex_journal(root: Path, session_id: str, cwd, started: Optional[datetime]
         files = list(Path(root).glob(f"*/*/*/rollout-*-{session_id}.jsonl"))
         if len(files) != 1:
             return None
-        with files[0].open(encoding="utf-8", errors="replace") as handle:
-            first = json.loads(handle.readline())
+        first = first_record(files[0])  # byte-bounded: the line is the vendor's, not ours
         meta = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
         if not isinstance(meta, dict) or meta.get("id") != session_id:
             return None
@@ -622,19 +816,19 @@ def _codex_rollout_usage(root: Path, session_id: str) -> Optional[dict]:
         return None
     counts, total = 0, None
     try:
-        with open(files[-1], encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                payload = row.get("payload") if isinstance(row, dict) else None
-                if not isinstance(payload, dict) or payload.get("type") != "token_count":
-                    continue
-                counts += 1
-                info = payload.get("info")
-                if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
-                    total = info["total_token_usage"]
+        # Byte-bounded lines: the journal also holds tool output of any length.
+        for line in bounded_lines(files[-1]):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            payload = row.get("payload") if isinstance(row, dict) else None
+            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                continue
+            counts += 1
+            info = payload.get("info")
+            if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+                total = info["total_token_usage"]
     except OSError:
         return None
     if total is None:
@@ -1908,15 +2102,35 @@ CODEX_SPEC = CLISpec(
 #: Recheck this on a Grok Build release that documents its tool names;
 #: ``QUADRATUS_CLI_ARGS_GROK`` is the place to try a fix without editing
 #: Python.
-#: Ceiling on a prompt delivered in argv. ARG_MAX is 1 MiB on macOS and is
-#: shared with the environment, so this leaves generous room rather than
-#: racing the real limit -- the failure at the limit is an opaque OSError from
-#: exec, and a clear refusal well short of it is worth the lost headroom.
-MAX_ARGV_PROMPT = 200_000
+#: Ceiling, in encoded bytes, on a prompt delivered in argv. Linux caps one
+#: argument at 131,072 bytes whatever ARG_MAX says (macOS shares 1 MiB
+#: between argv and the environment), and the failure at the cap is an opaque
+#: OSError from exec, so a clear refusal a little short of it is worth the
+#: lost headroom. It was 200,000 *characters*: a 150,000-character restricted
+#: prompt failed with "Argument list too long" in the Linux acceptance
+#: container, and multi-byte text failed sooner. Set to the supplied-context
+#: prompt bound (``runtime.Fleet._supplied_context``), the largest prompt a
+#: restricted call is handed on purpose.
+MAX_ARGV_PROMPT = 128_000
 
 #: How much of a CLI's stderr survives into the ledger per attempt. Enough to
 #: hold a sandbox refusal or an auth failure verbatim; not a transcript.
 STDERR_TAIL = 2_000
+
+#: Most bytes kept from one output stream of one CLI call. ``codex exec
+#: --json`` repeats every command's output, so a model that prints a large
+#: file, or loops, could otherwise grow the harness's memory without bound.
+#: Far above any answer; ``QUADRATUS_CLI_OUTPUT_LIMIT_MB`` raises it.
+MAX_CLI_OUTPUT_BYTES = 32 * 1024 * 1024
+#: How much of each end of an over-long stream the error keeps.
+OUTPUT_EDGE = 2_000
+#: Seconds the output readers get once the CLI is gone: first for the pipes
+#: to end with it (the usual case, at once), then for whatever a stopped
+#: leftover process still held.
+_EOF_GRACE, _DRAIN_GRACE = 0.25, 2.0
+#: How often a reader with nothing to read looks up to see whether the CLI
+#: has gone. Only a call whose pipe is held open ever waits this long.
+_POLL_SECONDS = 0.05
 
 GROK_SPEC = CLISpec(
     vendor="grok",
@@ -2038,50 +2252,270 @@ def _launch(argv, *, input=None, timeout=None, cwd=None, env=None):  # noqa: A00
 
     ``start_new_session`` is POSIX; on platforms without it the call degrades
     to the old single-process behaviour rather than failing.
-    """
-    kwargs = {}
-    if hasattr(os, "killpg") and hasattr(os, "setsid"):
-        kwargs["start_new_session"] = True
 
+    A launcher that exits on its own is not the end of its group either. A
+    dev server a model started in the background kept running against the
+    project, or against a copy already deleted; and a child that still held
+    the stdout pipe made ``communicate`` wait for an end of file that never
+    came, so a call that had finished, with its whole answer read, was
+    reported as a timeout and the answer thrown away. So after a normal exit
+    whatever is left in the group is stopped (``_stop_leftovers``), and the
+    output is read until the pipe is empty, never until end of file.
+
+    Empty, not "for a while": a reader that is still behind when the wait
+    ends has not read the whole answer, and a partial stream can parse (the
+    last complete line of a JSONL stream may be a model's progress note).
+    That call is reported as cut off, the way a pipe that never ended always
+    was, and never returned as a finished one (``_Capture.unfinished``).
+
+    Each stream is read by its own thread up to a byte cap
+    (``MAX_CLI_OUTPUT_BYTES``). Past it the group is stopped and
+    :class:`CLIOutputTooLarge` is raised with both ends of what was read.
+    """
+    grouped = hasattr(os, "killpg") and hasattr(os, "setsid")
     proc = subprocess.Popen(  # noqa: S603 -- argv is built, never a shell string
         argv,
         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
         cwd=cwd,
         env=env,
-        **kwargs,
+        **({"start_new_session": True} if grouped else {}),
     )
+    limit = _output_limit()
+    # Set when the launcher exits or a stream passes its cap, whichever is
+    # first, so the wait below needs no polling.
+    wake = threading.Event()
+    out, err = _Capture(proc.stdout, limit, wake), _Capture(proc.stderr, limit, wake)
+    if input is not None:
+        threading.Thread(target=_feed, args=(proc.stdin, input.encode("utf-8", errors="replace")),
+                         name="quadratus-cli-stdin", daemon=True).start()
+    threading.Thread(target=lambda: (proc.wait(), wake.set()), name="quadratus-cli-exit", daemon=True).start()
     try:
-        stdout, stderr = proc.communicate(input=input, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        _terminate_group(proc)
-        stdout, stderr = _drain_output(proc, exc)
-        raise subprocess.TimeoutExpired(
-            argv, timeout, output=stdout, stderr=stderr
-        ) from None
+        woke = wake.wait(timeout)
     except BaseException:
         # KeyboardInterrupt included: an operator stopping the run must not
         # leave a vendor CLI and its children running against the project.
         _terminate_group(proc)
-        _drain_output(proc)
+        _finish_captures((out, err), _DRAIN_GRACE)
         raise
-    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+    if not woke:
+        _terminate_group(proc)
+        _finish_captures((out, err), _DRAIN_GRACE)
+        raise subprocess.TimeoutExpired(argv, timeout, output=out.text(), stderr=err.text())
+    if proc.returncode is None:
+        # Woken by a stream past its cap while the launcher still runs.
+        _terminate_group(proc)
+    # The launcher is gone. In the usual case both pipes end with it; a pipe
+    # something else holds open is read until it is empty.
+    _finish_captures((out, err), _EOF_GRACE)
+    if grouped:
+        _stop_leftovers(proc.pid)
+    # A detached descendant may hold a pipe even now; it is not waited for.
+    _finish_captures((out, err), _DRAIN_GRACE)
+    proc.poll()
+    for name, capture in (("stdout", out), ("stderr", err)):
+        if capture.overflow.is_set():
+            raise CLIOutputTooLarge(name, limit, capture.text(), output=out.text(), stderr=err.text())
+    behind = [name for name, capture in (("stdout", out), ("stderr", err)) if capture.unfinished()]
+    if behind:
+        # Not a finished call: what was read is not known to be all of it.
+        cut = subprocess.TimeoutExpired(argv, _EOF_GRACE + _DRAIN_GRACE, output=out.text(), stderr=err.text())
+        cut.reason = (f"exited {proc.returncode}, but its {' and '.join(behind)} could not be read to the "
+                      "end: output was still arriving, or the read failed, after it was gone")
+        raise cut
+    return subprocess.CompletedProcess(argv, proc.returncode, out.text(), err.text())
 
 
-def _drain_output(proc, previous=None):
-    """A detached descendant may retain pipes even after the group is gone."""
+class CLIOutputTooLarge(RuntimeError):
+    """A vendor CLI wrote more to one stream than a call may keep, and was stopped.
+
+    Not a :class:`ProviderError`: the call was cut off from outside
+    (``interrupted``), so it is never retried, and on a call that could write
+    the provider reports suspected partial work as it does for a timeout.
+    ``head`` and ``tail`` are the two ends of what was read before the stop.
+    """
+
+    #: Read by ``LLMProvider._generate_once``: stopped, not failed.
+    interrupted = True
+
+    def __init__(self, stream: str, limit: int, captured: str, *, output: str = "", stderr: str = ""):
+        self.stream, self.limit = stream, limit
+        self.head, self.tail = captured[:OUTPUT_EDGE], captured[-OUTPUT_EDGE:]
+        #: What was read, for the caller's accounting. Dropped once observed.
+        self.output, self.stderr = output, stderr
+        super().__init__(
+            f"the CLI wrote more than {limit:,} bytes to its {stream} and was stopped "
+            f"(QUADRATUS_CLI_OUTPUT_LIMIT_MB raises the limit). It began {self.head[:200]!r} "
+            f"and was last writing {self.tail[-200:]!r}")
+
+
+def _output_limit() -> int:
+    """The per-stream byte cap, after any operator override."""
+    raw = os.environ.get("QUADRATUS_CLI_OUTPUT_LIMIT_MB", "").strip()
+    if raw:
+        try:
+            megabytes = float(raw)
+        except ValueError:
+            megabytes = 0.0
+        if math.isfinite(megabytes) and megabytes > 0:
+            return max(1, int(megabytes * 1024 * 1024))
+        log.warning("could not use QUADRATUS_CLI_OUTPUT_LIMIT_MB=%r; keeping the default", raw)
+    return MAX_CLI_OUTPUT_BYTES
+
+
+def _pipe_waiter(descriptor: int) -> Optional[Callable[[float], bool]]:
+    """A function that waits up to so many seconds for the pipe to have
+    something to read (data, or its end), or None where a pipe cannot be
+    polled (no ``select.poll``: the reader then blocks in the read)."""
+    poll = getattr(select, "poll", None)
+    if poll is None:
+        return None
     try:
-        return proc.communicate(timeout=2)
-    except subprocess.TimeoutExpired as exc:
-        for pipe in (proc.stdin, proc.stdout, proc.stderr):
-            if pipe is not None:
-                pipe.close()
-        def decoded(value):
-            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
-        return (decoded(exc.output or getattr(previous, "output", None)),
-                decoded(exc.stderr or getattr(previous, "stderr", None)))
+        poller = poll()
+        poller.register(descriptor, select.POLLIN)
+    except (OSError, ValueError):
+        return None
+    return lambda seconds: bool(poller.poll(seconds * 1000))
+
+
+class _Capture:
+    """One output stream of a CLI, read by its own thread up to a byte cap.
+
+    At the cap the thread stops reading and closes its end, so the writer
+    stalls or fails instead of the harness growing; ``overflow`` tells the
+    launcher to stop the group. The thread owns the stream: it closes it
+    when it stops, and it is never closed from another thread.
+
+    The thread stops at end of file, or, once the launcher is gone
+    (``closing``), the first time it finds the pipe empty. Either way it has
+    then read everything the launcher wrote (``drained``), so a process that
+    only holds the pipe open does not keep the call waiting, and a thread
+    still reading when the caller stops waiting is known to be behind
+    (``unfinished``), not mistaken for one that has finished.
+    """
+
+    def __init__(self, stream, limit: int, wake: threading.Event):
+        self._stream, self._limit, self._wake = stream, limit, wake
+        self._chunks: List[bytes] = []
+        self.overflow = threading.Event()
+        #: Set by the launcher once the CLI is gone: stop at an empty pipe.
+        self.closing = threading.Event()
+        #: Set by the thread when it stopped with nothing left to read.
+        self.drained = threading.Event()
+        try:
+            self._ready = _pipe_waiter(stream.fileno())
+        except (OSError, ValueError):
+            self._ready = None
+        self.thread = threading.Thread(target=self._read, name="quadratus-cli-output", daemon=True)
+        self.thread.start()
+
+    def _read(self) -> None:
+        size = 0
+        try:
+            descriptor = self._stream.fileno()
+            while True:
+                if self._ready is not None:
+                    # Read before the wait, never after it: "empty" then
+                    # means empty at a moment after the launcher's last write.
+                    closing = self.closing.is_set()
+                    if not self._ready(0.0 if closing else _POLL_SECONDS):
+                        if closing:
+                            self.drained.set()
+                            return
+                        continue
+                block = os.read(descriptor, 65536)
+                if not block:
+                    self.drained.set()
+                    return
+                room = self._limit - size
+                self._chunks.append(block[:room])
+                size += len(block)
+                if size > self._limit:
+                    self.overflow.set()
+                    self._wake.set()
+                    return
+        except (OSError, ValueError):
+            return
+        finally:
+            try:
+                self._stream.close()
+            except (OSError, ValueError):
+                pass
+
+    def unfinished(self) -> bool:
+        """Whether what was read may not be all the launcher wrote.
+
+        Asked once the launcher is gone and the waiting is over. A thread
+        that stopped on a failed read has not read to the end. One that is
+        still running has not either, where the pipe can be polled: it would
+        have stopped at the first empty pipe. Where it cannot, a running
+        thread is blocked behind whoever holds the pipe open, which is the
+        one case the bounded wait exists to let through.
+        """
+        if self.drained.is_set() or self.overflow.is_set():
+            return False
+        return self._ready is not None or not self.thread.is_alive()
+
+    def text(self) -> str:
+        """What has been read so far, decoded; newlines as text mode gave them."""
+        data = b"".join(list(self._chunks)).decode("utf-8", errors="replace")
+        return data.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _finish_captures(captures, grace: float) -> None:
+    """The CLI is gone: let the readers stop at an empty pipe, and wait up to
+    ``grace`` seconds in all for them to get there."""
+    for capture in captures:
+        capture.closing.set()
+    end = time.monotonic() + grace
+    for capture in captures:
+        capture.thread.join(max(0.0, end - time.monotonic()))
+
+
+def _feed(stream, data: bytes) -> None:
+    """Write the prompt to the CLI's stdin and close it. A CLI that exits
+    without reading it all is the caller's failure to report, not this one's."""
+    try:
+        stream.write(data)
+        stream.flush()
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _stop_leftovers(pgid: int) -> Optional[dict]:
+    """Stop what a launcher that exited on its own left in its process group.
+
+    The members only, one verified pid at a time, by the routine the
+    integration gate uses for its own commands (``integration._stop_owned``).
+    Never a whole-group signal here: the launcher has been reaped, and its
+    pid, which names the group, could come to name something else. A process
+    that moved to its own session is not in the group and is not touched.
+    Returns the cleanup record, or None when nothing was left or the process
+    list could not be read. Never raises.
+    """
+    try:
+        from .integration import _group_members, _stop_owned
+        members = _group_members(pgid)
+        if not members:
+            if members is None:
+                log.debug("could not list processes; anything the CLI left running was not stopped")
+            return None
+        record = _stop_owned(pgid)
+    except Exception:  # noqa: BLE001 -- cleanup never fails a finished call
+        log.debug("could not stop what the CLI left running", exc_info=True)
+        return None
+    log.warning(
+        "The CLI exited leaving %d process(es) running in its group: %d signalled%s.",
+        # One process can be in both lists: asked to stop, then killed.
+        len(record["found"]), len(set(record["terminated"]) | set(record["killed"])),
+        "" if record.get("complete") else "; cleanup is NOT confirmed complete")
+    return record
 
 
 def _terminate_group(proc) -> None:
@@ -2224,6 +2658,30 @@ def _fold_disallowed(argv: List[str], flag: str, extra: List[str], separator: st
             argv[index] = separator.join(present + [name for name in extra if name not in present])
             return argv
     return argv + [flag, separator.join(extra)]
+
+
+def _values_end(argv: Sequence[str], at: int) -> int:
+    """The index just past the values of the variadic flag at ``at``: every
+    following token up to the next option, which is how the CLI reads it."""
+    end = at + 1
+    while end < len(argv) and not argv[end].startswith("-"):
+        end += 1
+    return end
+
+
+def _fold_allowed(argv: List[str], flag: str, extra: Sequence[str]) -> List[str]:
+    """Add ``extra`` rules to an existing ``flag`` rather than repeating the flag.
+
+    The allow flag is variadic: each rule is its own argument after it. So
+    the new rules go in after the ones already there, in the same form, and
+    the flag appears once. A flag not yet present is appended with them.
+    """
+    if flag not in argv:
+        return list(argv) + [flag, *extra]
+    at = argv.index(flag)
+    end = _values_end(argv, at)
+    present = argv[at + 1:end]
+    return list(argv[:end]) + [rule for rule in extra if rule not in present] + list(argv[end:])
 
 
 #: Prefix on a synthesised child's detail that marks it as *attempted*
@@ -2393,7 +2851,9 @@ class CLIProvider(LLMProvider):
             os.makedirs(self._workdir, exist_ok=True)
             return self._workdir
         if not self._owned_workdir:
-            self._owned_workdir = tempfile.mkdtemp(prefix=f"quadratus-{self.name}-")
+            # Under the private scratch root, not the shared temp folder that
+            # another call's workspace-write sandbox may write.
+            self._owned_workdir = tempfile.mkdtemp(prefix=f"quadratus-{self.name}-", dir=scratch_root())
         return self._owned_workdir
 
     def cleanup(self) -> None:
@@ -2572,6 +3032,16 @@ class CLIProvider(LLMProvider):
         # the spellings that could out-order a weaker form, and the operator
         # contract that overrides land last is one this module already
         # promises.
+        allow = spec.allowed_tools_flag
+        if tool_args and allow and allow in tool_args and allow in argv:
+            # The granted checks already carry this flag, and a repeated tool
+            # flag is not known to merge (see ``_fold_disallowed``): if the
+            # second replaced the first, the lead would lose its checks and
+            # stop as CapabilityUnavailable. One flag, both sets of rules.
+            at = tool_args.index(allow)
+            end = _values_end(tool_args, at)
+            argv = _fold_allowed(argv, allow, tool_args[at + 1:end])
+            tool_args = tool_args[:at] + tool_args[end:]
         argv += tool_args or []
         argv += list(spec.control_args)
         argv += extra
@@ -2580,14 +3050,17 @@ class CLIProvider(LLMProvider):
         elif self.max_turns and spec.max_turns_flag:
             argv += [spec.max_turns_flag, str(int(self.max_turns))]
         if self.restricted and spec.restricted_prompt_flag:
-            if len(prompt) > MAX_ARGV_PROMPT:
+            # Bytes, as exec counts them: characters undercount any text
+            # that is not ASCII.
+            size = len(prompt.encode("utf-8", errors="replace"))
+            if size > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the
                 # tool restrictions with it, turning a bounded worker call
                 # into a full agent with writes. Refusing is the only option
                 # that cannot be mistaken for success.
                 raise ProviderError(
                     f"{self.label}: a restricted call delivers its prompt as an "
-                    f"argument, and this one is {len(prompt):,} characters "
+                    f"argument, and this one is {size:,} bytes "
                     f"(limit {MAX_ARGV_PROMPT:,}). Route this task to an "
                     f"unrestricted seat rather than sending it unbounded."
                 )
@@ -2684,13 +3157,16 @@ class CLIProvider(LLMProvider):
     def _write_prompt_file(self, prompt: str) -> str:
         """Spill the prompt to a file for CLIs that read it from a path.
 
-        Lives in the scratch directory the agent already runs in, and is
-        overwritten per call rather than accumulating: one prompt is live at a
-        time per provider, and ``cleanup`` takes the directory with it.
+        A new 0600 file per call, in the private scratch root
+        (``providers.scratch_root``): outside the directory the agent runs
+        in, so it is never mistaken for source, and outside the shared temp
+        folder, where another call's sandbox could read or replace it.
+        ``_call`` removes it when the call ends and ``cleanup`` removes any
+        that are left, so only a hard kill leaves a prompt behind.
         """
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
                                          prefix="quadratus-prompt-", suffix=".txt",
-                                         delete=False) as stream:
+                                         dir=scratch_root(), delete=False) as stream:
             stream.write(prompt)
             self._prompt_files.add(stream.name)
             return stream.name
@@ -2739,7 +3215,11 @@ class CLIProvider(LLMProvider):
                     "GOOGLE_API_KEY", "XAI_API_KEY", "GROK_API_KEY"):
             env.pop(var, None)
 
-        log.debug("%s invoking: %s", self.label, " ".join(argv[:6]))
+        # The binary and a count only: the arguments carry the system prompt,
+        # and on a restricted call the task prompt, which a debug log must
+        # not copy out.
+        log.debug("%s invoking: %s with %d arguments", self.label,
+                  os.path.basename(str(argv[0])), len(argv) - 1)
         try:
             proc = _launch(
                 argv,
@@ -2753,11 +3233,29 @@ class CLIProvider(LLMProvider):
             errors = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
             self.last_stderr = (errors or "")[-STDERR_TAIL:]
             self._observe_output(output or "")
-            raise TimeoutError(
-                f"{self.label} CLI timed out after {self.timeout}s"
-            ) from exc
+            # ``reason``: the launcher's own account of a call it cut off for
+            # a cause other than the clock (output it could not read whole).
+            reason = getattr(exc, "reason", "") or f"timed out after {self.timeout}s"
+            raise TimeoutError(f"{self.label} CLI {reason}") from exc
+        except CLIOutputTooLarge as exc:
+            # Accounting from what was read, then the bulk is let go: the
+            # error keeps the two ends.
+            self.last_stderr = (exc.stderr or "")[-STDERR_TAIL:]
+            self._observe_output(exc.output or "")
+            exc.output = exc.stderr = ""
+            raise
         except FileNotFoundError as exc:
             raise ProviderError(f"{self.label} CLI vanished from PATH: {exc}") from exc
+        except OSError as exc:
+            if exc.errno != errno.E2BIG:
+                raise
+            # exec refused the argument list, so nothing ran. Named, since
+            # the bare OSError reads as a transport failure.
+            largest = max((len(str(arg).encode("utf-8", errors="replace")) for arg in argv), default=0)
+            raise ProviderError(
+                f"{self.label} CLI was not started: its argument list is too long for this system "
+                f"(largest argument {largest:,} bytes; Linux allows 131,072 for one). "
+                "Nothing ran.") from exc
         finally:
             self._remove_worker_tool_files()
             if self.spec.prompt_file_flag and self.spec.prompt_file_flag in argv:
@@ -2790,16 +3288,35 @@ class CLIProvider(LLMProvider):
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model
                     raise
-                detail = (proc.stderr or '').strip()[:400]
-                if detail:
-                    raise ProviderError(f'{parsed}; {detail}') from parsed
-                raise
+                if not getattr(parsed, "exit_report", False):
+                    detail = (proc.stderr or '').strip()[:400]
+                    if detail:
+                        # The wrapper is what the caller sees, so it keeps
+                        # what the envelope established.
+                        wrapped = ProviderError(f'{parsed}; {detail}')
+                        wrapped.diagnostics = self.last_diagnostics
+                        carry_transport_facts(wrapped, parsed)
+                        if getattr(parsed, "no_envelope", False):
+                            # stdout held no report at all, so stderr is the
+                            # CLI's only voice: read there, as for the bare
+                            # exit below. An envelope that did report (a
+                            # cancelled turn and its narration, an error
+                            # field) is never overruled from stderr.
+                            _mark_transport(wrapped, _own_stderr(proc.stderr))
+                        raise wrapped from parsed
+                    raise
             except Exception:  # noqa: BLE001 -- unparseable is the normal case
                 pass
             detail = (proc.stderr or proc.stdout or "").strip()[:400]
-            raise RuntimeError(
-                f"{self.label} CLI exited {proc.returncode}: {detail}"
-            )
+            failure = RuntimeError(f"{self.label} CLI exited {proc.returncode}: {detail}")
+            if proc.returncode < 0:
+                # Ended by a signal: stopped from outside, like a timeout, so
+                # what it had done by then is unknown and it is not re-sent.
+                failure.interrupted = True
+                raise failure
+            # Classified from stderr alone, which is the CLI's own voice.
+            # stdout may be a model's text and is only quoted above.
+            raise _mark_transport(failure, _own_stderr(proc.stderr))
 
         try:
             return self._extract(proc.stdout)
@@ -2812,112 +3329,147 @@ class CLIProvider(LLMProvider):
             raise
 
     def _observe_output(self, stdout):
-        """Extract accounting even when response parsing later fails."""
+        """Extract accounting even when response parsing later fails.
+
+        Each step is guarded on its own. They once shared one ``except``, so
+        a parent journal with no timestamp, or a ``modelUsage`` that was not
+        a mapping, ended the function where it stood and the CONTROL FAILURE
+        note below was skipped without a trace. That note is now written in
+        a ``finally``: whatever children were recorded before a step failed
+        still get it.
+        """
         try:
-            self.last_usage = self.spec.extract_usage(stdout) if self.spec.extract_usage else None
-            self.last_diagnostics = (
-                self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
-            )
+            for step in (self._observe_usage, self._observe_tool_failures, self._observe_children,
+                         self._observe_session, self._observe_codex_session):
+                try:
+                    step(stdout)
+                except Exception:  # noqa: BLE001 -- observational only
+                    log.debug("native accounting step %s unavailable", step.__name__, exc_info=True)
+        finally:
             try:
-                # Isolated: a malformed denial list must not cost the rest of
-                # the call's accounting (Codex review of 3a55d82).
-                self.last_tool_failures = (
-                    self.spec.extract_tool_failures(stdout or "") if self.spec.extract_tool_failures else []
-                )
+                self._annotate_control_failures()
             except Exception:  # noqa: BLE001 -- observational only
-                self.last_tool_failures = []
-            self.native_children = _extract_native_children(stdout)
-            denied = list(getattr(self, "_native_fanout_denied", []) or [])
-            if denied:
-                self.native_children.extend(_denied_fanout_children(
-                    self.spec.vendor, denied, stdout, self.last_diagnostics
-                ))
-                if self.spec.vendor == "claude":
-                    held = _claude_denied_fanout(stdout, denied)
-                    if held:
-                        diagnostics = dict(self.last_diagnostics or {})
-                        diagnostics["denied_tools"] = held
-                        self.last_diagnostics = diagnostics
-            for line in (stdout or "").splitlines():
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                if event.get("type") == "thread.started":
-                    self.last_session_id = event.get("thread_id")
-                elif event.get("session_id"):
-                    self.last_session_id = event["session_id"]
-                elif event.get("sessionId"):
-                    # grok spells it this way; without it no grok row had an id
-                    self.last_session_id = event["sessionId"]
-                # A Claude result names concrete releases, while argv often
-                # uses a moving alias. Auxiliary modelUsage rows are not seats.
-                models = event.get("modelUsage") or {}
-                matching = [name for name in models if self.model and self.model in name]
-                if len(matching) == 1:
-                    self.resolved_model = matching[0]
-            if not getattr(self, "last_session_id", None):
-                try:
-                    whole = json.loads(stdout or "")
-                    if isinstance(whole, dict) and isinstance(whole.get("sessionId"), str):
-                        self.last_session_id = whole["sessionId"]
-                except ValueError:
-                    pass
-            if self.spec.vendor == "openai" and getattr(self, "last_session_id", None):
-                from .native_sessions import codex_children
-                root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
-                # The native shell records a sandbox refusal only in the
-                # session journal (#35); Fleet stops the run on one that no
-                # later tool run recovered from.
-                journal, journal_recovered = _codex_journal_tool_failures(
-                    root, self.last_session_id, self.workdir, self._call_started)
-                self.last_tool_failures = list(self.last_tool_failures or []) + journal
-                stdout_recovered = _codex_stdout_recovered(stdout)
-                verdicts = [v for v in (stdout_recovered, journal_recovered) if v is not None]
-                self.last_tool_recovered = bool(verdicts) and all(verdicts)
-                if self.last_usage is None:
-                    # Diagnostic only (Codex review of #25): a stream that ended
-                    # before response.completed may have unreported usage, so
-                    # the session record's total is a lower bound and never
-                    # clears unknown usage. The budget still stops on it.
-                    floor = _codex_rollout_usage(root, self.last_session_id)
-                    if floor is not None:
-                        self.last_diagnostics = dict(self.last_diagnostics or {}, usage_lower_bound=floor)
-                self.native_children.extend(codex_children(
-                    root, self.last_session_id, self.workdir,
-                    ended=datetime.now(timezone.utc),
-                ))
-            if self.native_children and self.native_delegation_disabled:
-                # The switch was sent and the record shows native activity
-                # anyway. Say so on the record itself, where the ledger and
-                # the evidence bundle will carry it; a child silently filed
-                # under "observed" would read as the expected state of a
-                # vendor without a switch, which this vendor no longer is.
-                # Two wordings, because two kinds of evidence: a child the
-                # vendor's own stream reports (codex) *ran*; a denied tool
-                # name in an envelope (grok) was *attempted*, and the
-                # public record must not claim execution from a name.
-                sent = " ".join(token for token in (
-                    list(self.spec.control_args) or (
-                        [self.spec.disallowed_tools_flag or (self.spec.native_fanout_off_args or [""])[0]]
-                        + list(getattr(self, "_native_fanout_denied", []) or [])
-                    )
-                ) if token)
-                ran = f"CONTROL FAILURE: native child ran although the call sent {sent}"
-                attempted = (
-                    "CONTROL FAILURE (suspected): a denied fan-out tool was attempted "
-                    f"although the call sent {sent}; execution and usage unknown"
-                )
-                annotated = []
-                for child in self.native_children:
-                    note = attempted if child.detail.startswith(ATTEMPTED_DELEGATION) else ran
-                    log.warning("%s: %s", self.label, note)
-                    annotated.append(_annotate_child(child, note))
-                self.native_children = annotated
-        except Exception:
-            log.debug("native accounting unavailable", exc_info=True)
+                log.debug("native control annotation unavailable", exc_info=True)
+
+    def _observe_usage(self, stdout) -> None:
+        self.last_usage = self.spec.extract_usage(stdout) if self.spec.extract_usage else None
+        self.last_diagnostics = (
+            self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
+        )
+
+    def _observe_tool_failures(self, stdout) -> None:
+        try:
+            # Isolated: a malformed denial list must not cost the rest of
+            # the call's accounting (Codex review of 3a55d82).
+            self.last_tool_failures = (
+                self.spec.extract_tool_failures(stdout or "") if self.spec.extract_tool_failures else []
+            )
+        except Exception:  # noqa: BLE001 -- observational only
+            self.last_tool_failures = []
+
+    def _observe_children(self, stdout) -> None:
+        self.native_children = _extract_native_children(stdout)
+        denied = list(getattr(self, "_native_fanout_denied", []) or [])
+        if denied:
+            self.native_children.extend(_denied_fanout_children(
+                self.spec.vendor, denied, stdout, self.last_diagnostics
+            ))
+            if self.spec.vendor == "claude":
+                held = _claude_denied_fanout(stdout, denied)
+                if held:
+                    diagnostics = dict(self.last_diagnostics or {})
+                    diagnostics["denied_tools"] = held
+                    self.last_diagnostics = diagnostics
+
+    def _observe_session(self, stdout) -> None:
+        for line in (stdout or "").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "thread.started":
+                self.last_session_id = event.get("thread_id")
+            elif event.get("session_id"):
+                self.last_session_id = event["session_id"]
+            elif event.get("sessionId"):
+                # grok spells it this way; without it no grok row had an id
+                self.last_session_id = event["sessionId"]
+            # A Claude result names concrete releases, while argv often
+            # uses a moving alias. Auxiliary modelUsage rows are not seats.
+            models = event.get("modelUsage")
+            if not isinstance(models, dict):
+                continue
+            matching = [name for name in models
+                        if isinstance(name, str) and self.model and self.model in name]
+            if len(matching) == 1:
+                self.resolved_model = matching[0]
+        if not getattr(self, "last_session_id", None):
+            try:
+                whole = json.loads(stdout or "")
+                if isinstance(whole, dict) and isinstance(whole.get("sessionId"), str):
+                    self.last_session_id = whole["sessionId"]
+            except ValueError:
+                pass
+
+    def _observe_codex_session(self, stdout) -> None:
+        if self.spec.vendor != "openai" or not getattr(self, "last_session_id", None):
+            return
+        from .native_sessions import codex_children
+        root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+        # The native shell records a sandbox refusal only in the
+        # session journal (#35); Fleet stops the run on one that no
+        # later tool run recovered from.
+        journal, journal_recovered = _codex_journal_tool_failures(
+            root, self.last_session_id, self.workdir, self._call_started)
+        self.last_tool_failures = list(self.last_tool_failures or []) + journal
+        stdout_recovered = _codex_stdout_recovered(stdout)
+        verdicts = [v for v in (stdout_recovered, journal_recovered) if v is not None]
+        self.last_tool_recovered = bool(verdicts) and all(verdicts)
+        if self.last_usage is None:
+            # Diagnostic only (Codex review of #25): a stream that ended
+            # before response.completed may have unreported usage, so
+            # the session record's total is a lower bound and never
+            # clears unknown usage. The budget still stops on it.
+            floor = _codex_rollout_usage(root, self.last_session_id)
+            if floor is not None:
+                self.last_diagnostics = dict(self.last_diagnostics or {}, usage_lower_bound=floor)
+        self.native_children.extend(codex_children(
+            root, self.last_session_id, self.workdir,
+            ended=datetime.now(timezone.utc),
+        ))
+
+    def _annotate_control_failures(self) -> None:
+        if not (self.native_children and self.native_delegation_disabled):
+            return
+        # The switch was sent and the record shows native activity
+        # anyway. Say so on the record itself, where the ledger and
+        # the evidence bundle will carry it; a child silently filed
+        # under "observed" would read as the expected state of a
+        # vendor without a switch, which this vendor no longer is.
+        # Two wordings, because two kinds of evidence: a child the
+        # vendor's own stream reports (codex) *ran*; a denied tool
+        # name in an envelope (grok) was *attempted*, and the
+        # public record must not claim execution from a name.
+        sent = " ".join(token for token in (
+            list(self.spec.control_args) or (
+                [self.spec.disallowed_tools_flag or (self.spec.native_fanout_off_args or [""])[0]]
+                + list(getattr(self, "_native_fanout_denied", []) or [])
+            )
+        ) if token)
+        ran = f"CONTROL FAILURE: native child ran although the call sent {sent}"
+        attempted = (
+            "CONTROL FAILURE (suspected): a denied fan-out tool was attempted "
+            f"although the call sent {sent}; execution and usage unknown"
+        )
+        annotated = []
+        for child in self.native_children:
+            note = attempted if child.detail.startswith(ATTEMPTED_DELEGATION) else ran
+            if note not in child.detail:
+                log.warning("%s: %s", self.label, note)
+            annotated.append(_annotate_child(child, note))
+        self.native_children = annotated
 
     @property
     def native_delegation_disabled(self) -> bool:
@@ -2944,26 +3496,11 @@ class CLIProvider(LLMProvider):
             return True
         if isinstance(exc, CLINotInstalled):
             return False
-        text = str(exc).lower()
-        # Rate-limit and transient-server language varies by vendor; match on
-        # the wording rather than an exit code, which is uniformly 1.
-        return any(
-            token in text
-            for token in (
-                "rate limit",
-                "rate_limit",
-                "overloaded",
-                "timed out",
-                "timeout",
-                "503",
-                "502",
-                "500",
-                "connection",
-                "temporarily",
-                "try again",
-                "usage limit",
-            )
-        )
+        # The typed fact, set where the CLI's own envelope or stderr was read
+        # (``_own_error_facts``). This once searched the failure's whole text
+        # for "500", "connection" or "try again", and that text can quote a
+        # model's answer.
+        return getattr(exc, "retryable", False) is True
 
 
 class ClaudeCLIProvider(CLIProvider):

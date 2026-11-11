@@ -214,8 +214,14 @@ def test_empty_timeout_preserves_trace_identity_without_inventing_usage(claude, 
     assert claude.last_usage is None
 
 
-def test_rate_limit_text_is_retryable(claude):
-    assert claude._retryable(RuntimeError("exited 1: usage limit reached"))
+def test_retryable_is_the_typed_fact_not_the_wording(claude):
+    """Was ``test_rate_limit_text_is_retryable``, which pinned a search of the
+    failure's text. That text can quote a model, so the retry test reads the
+    fact set where the CLI's own envelope or stderr was parsed."""
+    typed = RuntimeError("exited 1: API Error: 429")
+    typed.retryable = True
+    assert claude._retryable(typed)
+    assert not claude._retryable(RuntimeError("exited 1: usage limit reached"))
     assert not claude._retryable(RuntimeError("exited 1: unknown flag --nope"))
 
 

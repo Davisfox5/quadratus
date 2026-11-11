@@ -22,7 +22,7 @@ from quadratus.probe import (
 from quadratus.providers import ProviderError
 from quadratus.registry import MODE_ROSTERS, ORCHESTRATOR_CHAIN, VENDORS
 from quadratus.runtime import Fleet
-from tests.test_runtime import FakeCLIProvider
+from tests.test_runtime import FakeCLIProvider, spent_window
 
 ASTRA = "openai:gpt-6-astra"
 FABLE = "claude:fable"
@@ -222,7 +222,9 @@ def test_a_spent_window_is_not_reported_as_a_bad_alias(monkeypatch, cache):
     providers = {
         "claude": FakeCLIProvider(
             "claude",
-            raises=ProviderError(
+            # The typed fact the envelope parse sets; the report reads that,
+            # never the wording.
+            raises=spent_window(
                 "claude reported an error: You've reached your Fable limit. "
                 "Switch to another model, or manage usage credits at claude.ai"
             ),
@@ -240,7 +242,7 @@ def test_a_seat_out_of_window_is_not_reported_as_a_broken_chain(monkeypatch, cac
     """A fallback firing is the system working, not the system failing."""
     providers = {
         "claude": FakeCLIProvider(
-            "claude", raises=ProviderError("You've reached your Fable limit.")
+            "claude", raises=spent_window("You've reached your Fable limit.")
         )
     }
     fleet = _fleet(monkeypatch, providers)

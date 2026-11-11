@@ -56,6 +56,15 @@ class FakeCLIProvider(LLMProvider):
         self.cleaned = True
 
 
+def spent_window(message):
+    """The failure a provider raises when the CLI's own envelope reports a
+    spent window: the wording is for people, the typed fact is what the
+    fleet reads (``providers.TRANSPORT_FACTS``)."""
+    error = ProviderError(message)
+    error.window_exhausted = True
+    return error
+
+
 @pytest.fixture
 def built(monkeypatch):
     """Every vendor present and healthy, plus a handle on what was built."""
@@ -156,7 +165,7 @@ def test_an_exhausted_window_is_reported_as_such_not_as_a_transport_error(monkey
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
         lambda name, settings, **kw: FakeCLIProvider(
-            name, raises=ProviderError("Claude usage limit reached; resets at 4pm")
+            name, raises=spent_window("Claude usage limit reached; resets at 4pm")
         ),
     )
     fleet = Fleet(Settings(backend="cli"))
@@ -170,7 +179,7 @@ def test_an_exhausted_model_is_routed_around_for_the_rest_of_the_run(monkeypatch
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
         lambda name, settings, **kw: FakeCLIProvider(
-            name, raises=ProviderError("weekly limit reached")
+            name, raises=spent_window("weekly limit reached")
         ),
     )
     fleet = Fleet(Settings(backend="cli"))
@@ -190,7 +199,7 @@ def test_one_model_running_out_does_not_take_its_vendor_with_it(monkeypatch):
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
         lambda name, settings, **kw: FakeCLIProvider(
-            name, raises=ProviderError("You've reached your Fable limit.")
+            name, raises=spent_window("You've reached your Fable limit.")
         ),
     )
     fleet = Fleet(Settings(backend="cli"))
@@ -203,16 +212,25 @@ def test_one_model_running_out_does_not_take_its_vendor_with_it(monkeypatch):
 
 def test_the_real_claude_limit_wording_is_recognised(monkeypatch):
     """The patterns written from imagination missed the one the CLI actually
-    sends, so a spent window looked like a generic transport error."""
+    sends, so a spent window looked like a generic transport error.
+
+    The wording is read where the claude envelope is parsed, and the fleet
+    reads the typed fact that parse sets, so this goes through the real
+    extractor on the envelope the CLI sent (an error envelope at status 429).
+    """
+    import json
+
+    from quadratus.cli_providers import _extract_claude_result
+
+    envelope = json.dumps({
+        "type": "result", "is_error": True, "api_error_status": 429,
+        "result": "You've reached your Fable limit. Switch to another model, "
+                  "or manage usage credits at claude.ai"})
+    with pytest.raises(ProviderError) as parsed:
+        _extract_claude_result(envelope)
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
-        lambda name, settings, **kw: FakeCLIProvider(
-            name,
-            raises=ProviderError(
-                "claude reported an error: You've reached your Fable limit. "
-                "Switch to another model, or manage usage credits at claude.ai"
-            ),
-        ),
+        lambda name, settings, **kw: FakeCLIProvider(name, raises=parsed.value),
     )
     fleet = Fleet(Settings(backend="cli"))
     with pytest.raises(WindowExhausted):
