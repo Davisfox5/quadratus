@@ -15212,7 +15212,12 @@ class Session:
         reply_ref = self.store.put(reply or "(no reply)", kind=f"audit-reply:{auditor}", author=auditor).id
         omitted = [] if failed else self._audit_omitted(reply or "", required)
         completion = None
-        if omitted:
+        # A reply with no verdict for any audited requirement judged nothing:
+        # it is an audit that did not run, retried whole at the next DONE,
+        # so no completion is spent on it (a completion of every id would be
+        # a second audit under another name).
+        judged_any = not audited or any(rid in audited for rid, _, _ in _audit_lines(reply or ""))
+        if omitted and judged_any:
             # One same-auditor completion of exactly the omitted ids, on the
             # job's shared judgment allowance (cycle05): never a second audit
             # of the answered ids, never an inference from a requirement's
