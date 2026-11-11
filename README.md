@@ -335,10 +335,12 @@ What leaves the machine is what you send:
 - `--monitor --serve` listens on 127.0.0.1 only and has no flag to change
   that. The page cannot start, stop or change anything; it shows the project
   path, run id, task, seat, token counts, last event, recent runs, stop
-  reason and report path. It has no sign-in, and it shows that status for
-  any project folder a viewer types into it, not only the one it was started
-  with. If you put it on another device (Tailscale Serve, a tunnel),
-  everyone you admit gets that reach.
+  reason and report path. It has no sign-in. It answers only requests
+  addressed to this machine by a loopback name, plus any host name you admit
+  with `QUADRATUS_MONITOR_ALLOW_HOST` (how a Tailscale Serve or tunnel name
+  gets in), and it shows only the project and series it was started with,
+  plus folders you list in `QUADRATUS_MONITOR_ALLOW_PROJECT`. Everyone you
+  admit on another device sees that much.
 
 ## Project layout
 
