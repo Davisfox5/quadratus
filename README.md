@@ -595,6 +595,13 @@ quadratus/
   cli.py, gui.py      # Command-line and Gradio interfaces
   # --- session engine (what --project and --session run) ---
   session.py          # The run loop: orchestrator → lead → workers → close-out
+  session_types.py    # Stops a run raises, TaskSpec, the questions asked of a task
+  reply_parsers.py    # Readers of directive lines, captures, fixtures, close-outs
+  session_prompts.py  # Standing prompt text and the functions that format it
+  check_facts.py      # Readers of recorded check receipts and test-file text
+  session_checks.py, session_design.py, session_audit.py,
+  session_seat_prompts.py, session_security.py
+                      # Mixins Session inherits: checks, design, audit, prompts, security
   registry.py         # Model roster: shapes, families, capability tags
   task_kinds.py       # Routing policy: difficulty ladder, pins, gated kinds
   routing.py          # Seats, excursions, cross-family verification
