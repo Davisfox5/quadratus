@@ -8110,7 +8110,8 @@ class Session:
                     # A reply arrived; a review did not finish. Held as owned
                     # review debt; the text still reaches the lead as a note.
                     self._owe_review(spec, peer, "review", "ended without a verdict (no NO FINDINGS, no BLOCKING "
-                                     f"finding, no {_REVIEW_COMPLETE} line)", role="collaborator", record=rv)
+                                     f"finding, no {_REVIEW_COMPLETE} line); recorded as an unfinished review",
+                                     role="collaborator", record=rv)
                     self._note(f"task {spec.task_id}: review by {peer} gave no verdict; held as owned review debt")
                 elif rv is not None and rv.get("result") == "pending":
                     self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")

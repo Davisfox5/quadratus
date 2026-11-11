@@ -28,7 +28,9 @@ from quadratus.taskmeta import AmbiguousMetadata
 
 from .test_session import Recorder
 
-OPUS, SOL, GROK = "claude:opus", "openai:gpt-5.6-sol", "grok:default"
+# The OpenAI rows float by family since the merge (openai:sol, label "GPT
+# Sol"); the names below are the ones a lead is shown now.
+OPUS, SOL, GROK = "claude:opus", "openai:sol", "grok:default"
 TRUST = [OPUS, SOL, GROK]
 
 
@@ -716,8 +718,8 @@ def test_a_wrapper_without_pythons_m_keeps_its_own_label(command, label):
 # -- who a consult names (first half, item 19; second half, item 18) ------------
 
 @pytest.mark.parametrize("name, keys", [
-    ("Sol", [SOL]), ("sol", [SOL]), ("GPT-5.6 Sol", [SOL]), ("GPT-5.6", [SOL]), ("gpt", [SOL]),
-    ("openai:gpt-5.6-sol", [SOL]), ("gpt-5.6-sol", [SOL]),
+    ("Sol", [SOL]), ("sol", [SOL]), ("GPT Sol", [SOL]), ("GPT", [SOL]), ("gpt", [SOL]),
+    ("openai:sol", [SOL]), ("gpt sol", [SOL]),
     ("Opus", [OPUS]), ("Claude Opus", [OPUS]), ("Opus 5", [OPUS]), ("Claude", [OPUS]), ("`Opus`", [OPUS]),
     ("Grok", [GROK]), ("Grok 4.6", [GROK]),
     # The report's cases: a substring test resolved these to whoever came first.
@@ -730,7 +732,9 @@ def test_a_member_is_named_by_whole_words(name, keys):
 
 def test_the_lead_itself_and_a_stranger_do_not_resolve(store):
     session = Session("goal", store, lambda *a, **k: "")
-    assert session.brain_trust == TRUST
+    # Grok left the brain trust on the development line (owner directive,
+    # 2026-11-01); it is still a roster row a consult parser can be handed.
+    assert session.brain_trust == [OPUS, SOL]
     assert session._resolve_consultant("Sol", OPUS) == SOL
     assert session._resolve_consultant("Opus", OPUS) is None, "the lead cannot consult itself"
     assert session._resolve_consultant("5", OPUS) is None
@@ -775,8 +779,8 @@ def test_a_long_line_of_colons_is_not_matched_colon_by_colon(monkeypatch):
     assert S._parse_consults(reply, TRUST) == []
     assert len(tried) <= S._MEMBER_NAME_CHARS
     # A full roster key, colon and all, is still read whole.
-    assert S._parse_consults("CONSULT openai:gpt-5.6-sol: is bcrypt right: yes or no?", TRUST) == [
-        ("openai:gpt-5.6-sol", "is bcrypt right: yes or no?")]
+    assert S._parse_consults("CONSULT openai:sol: is bcrypt right: yes or no?", TRUST) == [
+        ("openai:sol", "is bcrypt right: yes or no?")]
 
 
 def test_a_name_that_only_mentions_a_member_is_refused_in_words_not_resolved(store):
