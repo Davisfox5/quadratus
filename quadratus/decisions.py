@@ -94,10 +94,10 @@ DECISIONS: Dict[str, dict] = {
     ),
     "task.kind": dict(
         question="What kind of work is this task?",
-        answers=("general", "frontend", "backend", "testing", "security", "docs", "review", "architect"),
+        answers=("general", "frontend", "backend", "test", "security", "docs", "review", "architect"),
         rule="the orchestrator's KIND line; unrecognised kinds degrade to general (taskmeta.parse_metadata)",
         delegable=True,
-        note="answers must be read from task_kinds.KINDS at call time, not this seed",
+        note="answers must be read from task_kinds.ROUTING at call time, not this seed",
     ),
     "task.tier": dict(
         question="Is this a small, local, reversible change?",

@@ -3,11 +3,13 @@
 The system was designed goal-first, but most real runs do not start from an
 empty directory -- they start from a repository someone wants improved. The
 architecture handles that without a new mode: the same loop runs, and the
-difference is entirely in *seeding*. Three places change:
+difference is entirely in *seeding*. Two places change today, and a third
+is planned:
 
-* **The interview** gets this scan's summary, so it stops asking questions
-  the code already answers and asks about intent instead ("improve what,
-  for whom?").
+* **The interview**, when it is built, gets this scan's summary, so it
+  stops asking questions the code already answers and asks about intent
+  instead ("improve what, for whom?"). It is not implemented yet, so
+  nothing consumes the summary this way today.
 * **The codebase map** -- normally empty until close-outs populate it -- is
   seeded with scanned facts, each carrying ``author="scan"`` provenance so a
   reader can weigh a mechanical observation differently from a model's

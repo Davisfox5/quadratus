@@ -9,21 +9,30 @@ model is not "high" or "low", it has a shape. Here each model declares a
 capability profile, and roles request capabilities. Adding next month's model
 is a new row; no role definition changes.
 
+That is the design, not yet the routing. Seats are named by roster key in
+:mod:`quadratus.task_kinds` and :mod:`quadratus.workers`. Outside this
+module the capability tags are read only by :mod:`quadratus.browser_pilot`
+(CHEAP and CODE), and :data:`REFUSAL_CHAIN` and :data:`CONTROL_PLANE` have
+no caller yet.
+
 What is and is not trustworthy here
 -----------------------------------
 * ``context`` and ``latency`` come from vendor documentation. Anthropic's
-  figures were verified first-hand against platform.claude.com; the OpenAI,
-  Google and xAI figures are second-hand, because those vendors' domains were
-  unreachable when this was compiled.
+  figures were verified first-hand against platform.claude.com; the OpenAI
+  and xAI figures (and the retired Google rows) are second-hand, because
+  those vendors' domains were unreachable when this was compiled.
 * ``alias`` is what the vendor CLI is expected to accept, and is the least
-  reliable field in the table. Only the Claude aliases have been checked
-  against a live binary. Run ``quadratus probe`` to replace these with what
-  your CLIs actually resolve.
+  reliable field in the table. The Claude aliases opus, sonnet and haiku
+  were the first checked against a live binary; the comments above each
+  vendor's rows in :data:`ROSTER` say what has been called since. Run
+  ``quadratus --probe`` to replace these with what your CLIs actually
+  resolve.
 * Capability tags are deliberately coarse and describe *shape*, not a quality
   ranking. Where a tag encodes a measured claim, the source is named in
-  ``notes``. Quality ordering within a capability is what the run scoreboard
-  is for -- it should not be hardcoded from benchmarks, which are vendor-run,
-  churn monthly, and in the review case do not exist at all.
+  ``notes``. Quality ordering within a capability is what a run scoreboard
+  would be for (none is built yet) -- it should not be hardcoded from
+  benchmarks, which are vendor-run, churn monthly, and in the review case do
+  not exist at all.
 
 A caution that keeps being relevant: a large ``context`` value is a claim
 about capacity, not evidence of recall at depth. Independent testing found
@@ -58,8 +67,8 @@ by :func:`assert_floating_orchestrators`. The orchestrator is the one seat
 that persists for a whole session and the one nobody re-picks mid-run; a
 pinned alias there is how a run quietly keeps using last quarter's model
 months after its successor shipped. :mod:`quadratus.latest` does the actual
-resolution -- an operator override, then what ``quadratus probe`` last saw a
-CLI accept, then the seed below.
+resolution -- an operator override, then what ``quadratus --probe`` last saw
+a CLI accept, then the seed below.
 """
 
 from __future__ import annotations
@@ -112,11 +121,11 @@ class Capability:
     AGENTIC = "agentic"
     #: Native multi-agent / step-by-step decomposition variants.
     MULTI_AGENT = "multi-agent"
-    #: Fit to run the orchestrator: interview the operator, author the run
-    #: policy, and hold the end goal across a long, messy debate. This is a
-    #: different axis from per-call judgement quality -- it is about coherence
-    #: over a whole session, which is why the strongest reviewer is not
-    #: automatically the strongest orchestrator.
+    #: Fit to run the orchestrator: name and size the tasks, put to the
+    #: operator what only they can answer, and hold the end goal across a
+    #: long, messy session. This is a different axis from per-call judgement
+    #: quality -- it is about coherence over a whole session, which is why the
+    #: strongest reviewer is not automatically the strongest orchestrator.
     ORCHESTRATE = "orchestrate"
 
 
@@ -129,7 +138,8 @@ class ModelSpec:
     latency: str  # fastest | fast | moderate | slow
     caps: FrozenSet[str]
     notes: str = ""
-    #: True when the alias has been checked against a live CLI.
+    #: True when the alias has been checked against a live CLI. A note for
+    #: readers: no code reads it, and later live calls did not update it.
     verified: bool = False
     #: True when ``alias`` names a model line the vendor CLI resolves to its
     #: current release, rather than one frozen iteration. Required of every
@@ -137,7 +147,7 @@ class ModelSpec:
     floating: bool = False
     #: Further aliases to try, newest first, when the first does not resolve.
     #: Only meaningful for floating entries whose vendor may not accept a bare
-    #: line name -- ``quadratus probe`` walks this chain and caches the winner.
+    #: line name -- ``quadratus --probe`` walks this chain and caches the winner.
     alias_fallbacks: Tuple[str, ...] = ()
     #: True when the right way to address this model is to name no model at
     #: all and take whatever the CLI currently defaults to. The strongest form
@@ -187,9 +197,9 @@ def _spec(provider, alias, label, context, latency, caps, notes="", verified=Fal
     )
 
 
-#: The vendors in today's lineup. One subscription each: Claude Max, ChatGPT
-#: Pro, SuperGrok. Google was dropped on 2026-09-12 -- see the module
-#: docstring and :data:`RETIRED_ROSTER`.
+#: The vendors in today's lineup. One subscription each: Claude Pro/Max,
+#: ChatGPT Plus/Pro, SuperGrok. Google was dropped on 2026-09-12 -- see the
+#: module docstring and :data:`RETIRED_ROSTER`.
 VENDORS: Tuple[str, ...] = ("claude", "openai", "grok")
 
 
@@ -198,6 +208,8 @@ K = 1024
 ROSTER: List[ModelSpec] = [
     # -- Anthropic. Specs verified against platform.claude.com; aliases
     #    verified against claude 2.1.228 (opus/sonnet/haiku resolved live).
+    #    Fable was not in that check, so its row carries no verified flag;
+    #    recorded runs on claude 2.1.269 have since resolved it.
     _spec(
         "claude", "fable", "Claude Fable", 1000 * K, "slow",
         [Capability.REASON, Capability.CODE, Capability.AGENTIC,
@@ -257,7 +269,7 @@ ROSTER: List[ModelSpec] = [
         "literally, especially at low effort. Measured on Sonnet 5.",
         verified=True,
         floating=True,
-        # Bounded worker call, not an agent loop: an escalation target and the supervised interviewer, never a base worker.
+        # Bounded worker call, not an agent loop: an escalation target and, once the interview is built, its supervised voice; never a base worker.
         effort="high",
         restricted=True,
     ),
@@ -277,7 +289,11 @@ ROSTER: List[ModelSpec] = [
         restricted=True,
     ),
 
-    # -- OpenAI. Second-hand specs; aliases unverified.
+    # -- OpenAI. Second-hand specs. The rows carry no verified flag, from
+    #    when no codex binary was to hand. Recorded runs on codex-cli 0.154.0
+    #    have since called Astra, Sol and Luna; Terra has no recorded call.
+    #    Sol, Terra and Luna are pinned release names: only the orchestrator
+    #    seats are required to float.
     _spec(
         "openai", "gpt-6-astra", "GPT-6 Astra", 1100 * K, "slow",
         [Capability.REASON, Capability.CODE, Capability.AGENTIC,
@@ -331,7 +347,9 @@ ROSTER: List[ModelSpec] = [
         restricted=True,
     ),
 
-    # -- xAI. Second-hand specs; aliases unverified.
+    # -- xAI. Second-hand specs. Every row here is vendor_default, so no
+    #    alias is sent and there is none to verify; the calls themselves were
+    #    confirmed signed in on grok 1.0.30.
     _spec(
         "grok", "default", "Grok", 500 * K, "moderate",
         [Capability.CODE, Capability.AGENTIC, Capability.RETRIEVAL],
@@ -493,8 +511,8 @@ def models_for(
     """Every roster model offering ``capability``, optionally filtered.
 
     Ordering is roster order, which is deliberately not a quality ranking:
-    callers that want the strongest candidate should consult scoreboard data
-    rather than trusting position here.
+    position here says nothing about which candidate is strongest, and no
+    scoreboard exists yet to say it instead.
     """
     out = [m for m in ROSTER if capability in m.caps and m.context >= min_context]
     if providers is not None:
@@ -526,6 +544,9 @@ def best_for(capability: str, **kwargs) -> Optional[ModelSpec]:
 #: Exploit generation and penetration testing are gated regardless of routing
 #: and need Anthropic's Cyber Verification Program; rerouting will not open
 #: them, and this chain is not a mechanism for evading a correct refusal.
+#:
+#: Nothing reads this chain yet. In the session engine a refusal is kept on
+#: the record and stops the run; it is never re-sent to another model.
 REFUSAL_CHAIN: List[str] = [
     "claude:opus",
     "openai:gpt-5.6-sol",
@@ -534,7 +555,7 @@ REFUSAL_CHAIN: List[str] = [
 
 
 #: Which models participate per mode. Kept explicit because an
-#: all-models-participate default across a twelve-model roster is ruinous:
+#: all-models-participate default across an eleven-model roster is ruinous:
 #: every added peer costs another review pass and fattens every synthesis
 #: prompt.
 MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
@@ -582,11 +603,13 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
 #:
 #: Fable 5 leads because the job is holding a goal coherent across a long
 #: session, which is what the vendor built it for -- a different axis from
-#: per-call judgement, where Opus 5 is stronger. Opus 5 backs it up because
-#: the orchestrator is a single point of coordination and Fable is, in
+#: per-call judgement, where Opus 5 is stronger. The seat has a fallback
+#: because the orchestrator is a single point of coordination and Fable is, in
 #: practice, the model most likely to become unavailable: it costs twice as
 #: much against the same subscription window, and it has already been
 #: withdrawn once for 19 days. A stalled orchestrator stalls everything.
+#: Opus 5 was that fallback in an earlier chain; it is GPT-6 Astra alone now,
+#: for the reasons given below.
 #:
 #: Fall back on any of: the subscription window for Fable being exhausted,
 #: the model being unavailable, or the project being classified
@@ -799,6 +822,9 @@ class ControlPlaneRole:
 #: Control-plane roles. Cheap by task shape, not by importance: convergence
 #: judging is load-bearing and still checklist work. Haiku was verified
 #: returning a correct, well-calibrated structured verdict on a seeded defect.
+#:
+#: None of these roles is implemented yet and nothing reads this table: it
+#: records who would hold each role, and on what terms, for whoever builds it.
 CONTROL_PLANE: Dict[str, ControlPlaneRole] = {
     # Operator directive, 2026-09-12: Sonnet may hold the interview, never on
     # its own. It is worker-tier, and the interview is the one control-plane

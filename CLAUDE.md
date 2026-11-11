@@ -73,8 +73,10 @@ Key design decisions already settled:
   session, so it is the single worst place to freeze an iteration -- the
   failure is silent, and nothing revisits the choice.
 - **`quadratus --probe` is how a table of second-hand aliases becomes
-  grounded.** Only the Claude CLI has been verified against a live binary.
-  The probe walks each floating model's alias chain, records what the binary
+  grounded.** Only the Claude CLI had been verified against a live binary
+  when the probe was written; all three have been since (see "All three CLI
+  specs are now probe-verified"). The probe walks each floating model's
+  alias chain, records what the binary
   accepted, and reports what did not; a pinned row is tried once and never
   walked, because succeeding on a different release would make the table a
   lie. What a model says it is is recorded and never branched on -- the fact
@@ -133,11 +135,14 @@ Key design decisions already settled:
   the binary is on PATH — only `--probe`, which actually calls, finds this
   class of fault. The rows moved to `RETIRED_ROSTER`, which now covers two
   cases: a vendor left, or a model exists somewhere this transport cannot
-  reach. xAI's seats are now `grok:default` (brain trust, no model flag),
+  reach. xAI's seats then became `grok:default` (brain trust, no model flag),
   `grok:grok-4.5` (ROTE rung and the lookup errand) and `grok:default` again
-  as the in-family escalation above 4.5. Grok 4.5 is not a cheap tier and is
-  not documented as one — it is the older flagship, kept on that rung by the
-  load-spreading argument rather than by price.
+  as the in-family escalation above 4.5. Grok 4.5 was not a cheap tier and
+  was not documented as one: it was the older flagship, kept on that rung by
+  the load-spreading argument rather than by price. That row has since left
+  the roster: the ROTE rung and the lookup errand are `grok:worker` and the
+  escalation above it is `grok:expert`, the same line called at low and high
+  effort (see "A seat is an invocation").
 - **A seat is an invocation, not just a model** (`CLISpec.restricted_args` /
   `.agentic_args` / `.effort_flag`, `ModelSpec.effort` / `.restricted`), and
   it applies to all three vendors. Every one of these CLIs is an *agent* by
@@ -266,8 +271,9 @@ Key design decisions already settled:
   probe against the installed CLIs over anything hardcoded. `quadratus
   --probe` is that probe, and `QUADRATUS_ALIAS_*` / `QUADRATUS_CLI_ARGS_*`
   let an operator correct a wrong alias or a wrong flag from `.env` rather
-  than by patching Python. Two of the three CLI specs are still written from
-  documentation.
+  than by patching Python. Two of the three CLI specs were written from
+  documentation when this was noted; all three have since been exercised by
+  signed-in calls.
 - **Task size beats model choice.** Review quality falls by roughly an order
   of magnitude between a small diff and a large one — a wider gap than any
   gap between reviewers. The decomposition prompt therefore carries a hard
@@ -278,8 +284,10 @@ Key design decisions already settled:
   ages far faster than the first and every entry carries its evidence.
 - **Difficulty is the primary routing axis; kind pins are the exception**
   (`task_kinds.DIFFICULTY_LADDER`). Complex → Opus, standard → Sol, simple
-  (the bulk of well-sized tasks) → the current Grok, rote → Grok 4.5. The
-  earlier kind-pinned table concentrated nearly everything on two
+  (the bulk of well-sized tasks) → the current Grok, rote → the same Grok
+  line called as a bounded worker (`grok:worker`; Grok 4.5 held this rung
+  until effort tiers replaced it). The earlier kind-pinned table
+  concentrated nearly everything on two
   subscriptions while the others sat idle — exactly how one window exhausts
   early and forces a degraded run. Four rungs across three vendors means one
   vendor takes two, and it is xAI: Anthropic carries the primary seat and
@@ -297,8 +305,9 @@ Key design decisions already settled:
 - **An empty `prefer` is a statement, not an omission** — it means the kind
   rides the ladder rather than anyone having earned a pin.
 - **Workers are picked by errand, not vendor loyalty** (`workers.WORKER_TREE`):
-  lookup → Grok 4.5, read → Luna, visual/check/code → Haiku,
-  format/draft → Luna. Picking by skill also spreads the windows. The
+  lookup → `grok:worker` (Grok 4.5 before the effort tiers), read → Luna,
+  visual/check/code → Haiku, format/draft → Luna. Picking by skill also
+  spreads the windows. The
   same-vendor default was retired: caches stay warm through regular use,
   which the tree guarantees. When Google left, its two errands moved on
   different reasoning — long reading to Luna, which has the widest cheap
@@ -306,9 +315,11 @@ Key design decisions already settled:
   marketing*, and visual to Haiku, because the Claude CLI reads image files
   off disk and that capability, not the window, is what the errand needs.
   **Escalation stays in the family** (`WORKER_ESCALATION`): a demanding
-  errand bumps one tier up its own vendor's line — Haiku→Sonnet, Luna→Terra,
-  Grok 4.5→the current Grok — so the skill stays matched while the horsepower
-  rises. The one unverified bump target is acceptable because escalation
+  errand bumps one tier up its own vendor's line (Haiku→Sonnet, Luna→Terra,
+  and for xAI `grok:worker`→`grok:expert`, an effort step on one line that
+  replaced the old Grok 4.5→current Grok bump) so the skill stays matched
+  while the horsepower rises. The one unverified bump target is acceptable
+  because escalation
   fires rarely, after the verified base already failed, and degrades back to
   the base if the target leaves the roster.
 - **Worker failure rules**: same prompt + same model twice is refused
@@ -322,8 +333,9 @@ Key design decisions already settled:
   `NEED TOOL: <what>` in its one answer; the lead reissues the errand with the
   grant (`allow_writes`). The asking worker is wiped as normal. No mid-task
   dialogue, no orchestrator involvement. Terra and Sonnet serve only as
-  in-family escalation targets, never as base workers; xAI's line is two
-  models long, so its base worker escalates to the vendor default.
+  in-family escalation targets, never as base workers; a consumer
+  subscription reaches one xAI line, so its base worker (`grok:worker`)
+  escalates by effort to `grok:expert`, not to another model.
 - **Some work is gated, not routed.** Where every model is bad at something —
   concurrency, performance — there is nobody to prefer, so the policy attaches
   a deterministic check instead of a model. Performance additionally names a
@@ -1175,8 +1187,9 @@ Key design decisions already settled:
   does not know, or one that prompts or exits (`-i`, `--version`,
   `--check`), is refused. A project file merely named like an interpreter
   (`./python3`) is the program itself and is not parsed.
-- **Frontend evidence comes from a real browser** (`browser.py`, optional
-  `playwright` extra): screenshot, console errors (including late throws),
+- **Frontend evidence comes from a real browser** (`browser.py`; `playwright`
+  is a baseline dependency now, and the `browser` extra is kept empty for
+  compatibility): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
 - **The requirements auditor sees the harness's own check facts** (overnight

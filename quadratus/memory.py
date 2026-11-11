@@ -7,9 +7,10 @@ actually needs.
 **Orchestrator -- persistent.** Fable keeps everything for the whole session,
 as an append-only :class:`~quadratus.ledger.Ledger` of completed tasks, each
 entry pointing at the full raw work. It is the only participant that persists,
-which is why an unavailable orchestrator halts the run rather than being
-substituted for. Nobody in the industry runs a coordinator that discards its
-own working context; that would be the red flag.
+which is why the seat is the hard dependency: when Fable is unavailable the
+seat passes once to GPT-6 Astra, the substitution is recorded, and the run
+halts only when both are gone. Nobody in the industry runs a coordinator that
+discards its own working context; that would be the red flag.
 
 **Brain trust -- task-scoped.** A peer keeps its full working memory for the
 duration of one task: every turn, every worker result it commissioned, at full

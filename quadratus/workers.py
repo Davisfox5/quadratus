@@ -21,13 +21,13 @@ to over-delegate to subagents, so the caps are structural, not advisory.
 
 **Workers are picked by errand, not by vendor loyalty.** The worker tree
 (:data:`WORKER_TREE`) maps what the errand *is* to the cheap model measured
-or reputed best at it: live lookup to Grok Fast, long reading to Luna, fact
-and code checking and anything visual to Haiku, rote formatting and drafting
-to Luna, with an in-family bump for errands that defeat the cheap tier. An
-earlier design defaulted workers to the lead's own vendor to reuse cached
-prefixes; that was retired -- each vendor's cache stays warm as long as the
-vendor gets regular use, which the tree itself guarantees, and the
-vendor-loyal default would have sent web lookups to models with stale
+or reputed best at it: live lookup to the Grok worker call, long reading to
+Luna, fact and code checking and anything visual to Haiku, rote formatting
+and drafting to Luna, with an in-family bump for errands that defeat the
+cheap tier. An earlier design defaulted workers to the lead's own vendor to
+reuse cached prefixes; that was retired -- each vendor's cache stays warm as
+long as the vendor gets regular use, which the tree itself guarantees, and
+the vendor-loyal default would have sent web lookups to models with stale
 knowledge.
 
 The tree lost a vendor on 2026-09-12 when Google left the lineup, and the two
@@ -146,7 +146,8 @@ class RepeatedFailure(RuntimeError):
 
 #: Errand -> the cheap model best suited to it, one per vendor, so picking by
 #: skill also spreads load across every subscription window. Seeds, not
-#: truth: only Haiku is verified in this harness, and the tier churns monthly.
+#: truth: the tier churns monthly. Haiku's alias was checked against a live
+#: binary; Luna and the Grok worker call have recorded runs behind them.
 WORKER_TREE: dict = {
     #: Live web lookup, anything current. Grok's strength is the search itself.
     "lookup": "grok:worker",

@@ -12,13 +12,14 @@ How the confidence field is meant to be used
 Every policy carries a confidence and the evidence behind it, and the two
 control behaviour rather than merely documenting it:
 
-* **High and medium confidence pin a model.** There is a measured reason to
-  prefer one, so rotation is overridden.
-* **Low confidence deliberately does not.** The lead rotates as normal, which
-  spreads the work across separate subscription windows *and* accumulates the
-  head-to-head data that would let this entry be upgraded later. Pinning on a
-  hunch would freeze the hunch in place and destroy the only evidence that
-  could correct it.
+* **A high or medium confidence row with a ``prefer`` list pins a model.**
+  There is a measured reason to prefer one, so the pin is tried before the
+  difficulty ladder.
+* **Low confidence deliberately does not.** The kind rides the difficulty
+  ladder (:data:`DIFFICULTY_LADDER`), which spreads the work across separate
+  subscription windows. Pinning on a hunch would freeze the hunch in place.
+  The session's rotated pick is only the last resort, used when no rung
+  fits or no difficulty was given.
 
 So an empty ``prefer`` is a positive statement -- "no credible basis to choose"
 -- and not an oversight.
@@ -91,7 +92,7 @@ class Confidence:
     """How much evidence stands behind a routing policy.
 
     LOW is not a placeholder awaiting a better guess -- see the module
-    docstring. It routes by rotation on purpose.
+    docstring. It rides the difficulty ladder on purpose.
     """
 
     HIGH = "high"
@@ -144,7 +145,7 @@ class TaskKind:
     #: Schema, query, and migration work.
     DATA = "data"
 
-    #: Anything unclassified. Rotates.
+    #: Anything unclassified. Rides the difficulty ladder.
     GENERAL = "general"
 
 
@@ -153,9 +154,10 @@ class KindPolicy:
     """What to do with one kind of task.
 
     Attributes:
-        prefer: Models to use, in order. Empty means rotate -- see the module
-            docstring; this is a deliberate value, not a missing one.
-        exclude: Models that must not lead this kind regardless of rotation.
+        prefer: Models to use, in order. Empty means ride the difficulty
+            ladder -- see the module docstring; this is a deliberate value,
+            not a missing one.
+        exclude: Models that must not lead this kind, whatever else picks.
             Reserved for measured deficits, not impressions.
         confidence: How much the ``prefer`` list should be trusted.
         evidence: What ``prefer`` and ``exclude`` rest on, in one line. Present
@@ -188,6 +190,8 @@ class KindPolicy:
 
 OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
+# LUNA and SONNET are on no pin and no rung today: both pins were retired
+# (see the GLUE and DOCS rows). Kept as names for those rows' history.
 LUNA = "openai:gpt-5.6-luna"
 SONNET = "claude:sonnet"
 GROK = "grok:default"          # xAI's current default, whatever it is
@@ -510,7 +514,9 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Independent proposals beat any single model's, and the harness "
             "around the debate mattered more than which models were in it. "
-            "Rotation is correct here: the diversity is the product."
+            "No model is pinned for that reason. The session engine runs no "
+            "independent-proposal round yet, so this kind rides the "
+            "difficulty ladder to one lead."
         ),
     ),
 
@@ -674,8 +680,8 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Rides the ladder as ROTE, which lands it on the least-loaded "
             "window. The earlier Sonnet pin spent the same Anthropic window "
-            "the orchestrator needs most -- and needs more now that two of "
-            "the three orchestrator seats are Anthropic."
+            "the orchestrator needs most: the primary orchestrator seat "
+            "is Anthropic's."
         ),
     ),
     TaskKind.PERF: KindPolicy(
@@ -696,14 +702,14 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Deliberately unrouted. The public leaderboards here are not usable "
             "-- one widely-cited text-to-SQL set was found to have a 62.8% "
-            "annotation error rate -- so rotation plus the scoreboard is a "
+            "annotation error rate -- so riding the difficulty ladder is a "
             "better basis than any published ranking."
         ),
     ),
 
     TaskKind.GENERAL: KindPolicy(
         confidence=Confidence.LOW,
-        evidence="Unclassified work rotates, which is also how the scoreboard fills.",
+        evidence="Unclassified work rides the difficulty ladder, like every unpinned kind.",
     ),
 }
 
@@ -711,9 +717,9 @@ ROUTING: Dict[str, KindPolicy] = {
 def policy_for(kind: str) -> KindPolicy:
     """The policy for ``kind``, falling back to GENERAL for anything unknown.
 
-    Unknown kinds rotate rather than raise: a task the classifier could not
-    label is a normal occurrence, and refusing to run it would be a worse
-    answer than running it without a preference.
+    Unknown kinds route as GENERAL rather than raise: a task the classifier
+    could not label is a normal occurrence, and refusing to run it would be a
+    worse answer than running it without a preference.
     """
     return ROUTING.get(kind, ROUTING[TaskKind.GENERAL])
 

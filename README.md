@@ -139,8 +139,8 @@ architecture, briefly:
 - **A fixed brain trust** of frontier models leads individual tasks. A lead
   keeps full working memory for one task and is wiped when it closes;
   **worker bees** (each vendor's fast model, picked by errand type:
-  lookup / read / visual / check / format) keep nothing. Three memory scopes, one
-  per role (`memory.py`, `workers.py`).
+  lookup / read / visual / check / code / format / draft) keep nothing. Three
+  memory scopes, one per role (`memory.py`, `workers.py`).
 - **Difficulty-ladder routing** (`task_kinds.py`, `registry.py`): task
   difficulty picks the model; kind-based pins (security and testing to Sol,
   review to the reviewer pair, scope and decomposition to the orchestrator)
@@ -149,11 +149,14 @@ architecture, briefly:
 - **Task size beats model choice**: decomposition carries a hard size
   ceiling, because review quality collapses on large diffs faster than any
   gap between reviewers.
-- **Review discipline** (`routing.py`, `session.py`): never one reviewer
-  (the two pinned reviewers fail in opposite directions), reviewers are
-  anonymous to the lead but named in the record, verification crosses
-  vendor lines, and critique gets one rebuttal round then fix→verify —
-  never open-ended debate.
+- **Review discipline** (`routing.py`, `session.py`): difficulty sets how
+  many peers review a draft. A complex task draws every other brain-trust
+  member, a standard task one reviewer, and simple and rote tasks none. Two
+  kinds of work add one: a `review` task always draws its counterpart reviewer (the
+  two pinned reviewers fail in opposite directions), and a UI task draws a
+  reviewer from another vendor. Reviewers are anonymous to the lead but
+  named in the record, verification crosses vendor lines, and critique gets
+  one rebuttal round then fix→verify — never open-ended debate.
 - **Records that survive summarisation**: an append-only ledger that is
   never re-summarised (`ledger.py`), an artifact store where raw output is
   kept and summaries are indexes with `FETCH:` pointers (`artifacts.py`),
@@ -212,8 +215,8 @@ quadratus --probe     # what the CLIs actually accept — spends a little budget
 To use billed API keys instead, set `LLM_BACKEND=api` (or
 `CLAUDE_BACKEND=api` for one provider) and the matching key —
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`. `.env.example`
-documents every setting, including per-provider backends, CLI flag
-overrides, and alias overrides.
+documents the transport settings: per-provider backends, API keys, CLI flag
+overrides, alias overrides and request tuning.
 
 ## Usage
 
@@ -243,7 +246,38 @@ quadratus "Add rate limiting to the API, with tests" --project /path/to/repo
   --mode solo          # adversarial (default) | collaborative | solo
   --allow-writes       # let the agents edit files (off by default)
   --state-dir DIR      # artifacts, codebase map, usage log (default .quadratus)
+  --tasks FILE         # run your own JSON list of task texts, in order, with
+                       # no planner call; the goal is recorded, not judged
+  --decider jev        # ask TypeSafe AI's Jev for a task kind or difficulty
+                       # the orchestrator left unlabelled (default: rule)
 ```
+
+`--tasks` reads each text the way an orchestrator reply is read (KIND, SCOPE,
+TIER and COVERS lines, then the description) and checks the whole list before
+any call. `--decider jev` is a billed API call outside your subscriptions: it
+needs `pip install 'quadratus[decisions]'` and `TYPESAFE_API_KEY`, never
+overrides a label the orchestrator stated, and records every answer on the
+task. See [Decision models](docs/decisions-api.md).
+
+The remaining options (`quadratus --help` has the full text):
+
+| Option | What it does |
+| --- | --- |
+| `--repo DIR` | another name for `--project` |
+| `--extra-check CMD` | a further required check beside `--check`; repeatable, and it must name its files |
+| `--capture-profile JSON` | how to start the app, so the harness captures UI renders itself |
+| `--readiness JSON` | probes run once before any model call; a failing probe stops the run |
+| `--survey-recovery N` | continue through failures, spending at most N recovery tasks, and report them apart from acceptance |
+| `--direct-tier` | let a small, local task run with no collaborator review and no model close-out; checks are unchanged |
+| `--decider-labels all` | with `--decider jev`: the decider routes every planned task (default `unstated`: only labels left out) |
+| `--rulings FILE` | answers you give in advance to questions the planner may ask |
+| `--repair-test PATH` | an existing test file this run may repair; repeatable |
+| `--test-changes FILE` | your own exact test replacements or retirements, as JSON |
+| `--neutral-preferences` | run without your personal CLI plugins, hooks and rules where each CLI allows it |
+| `--security-verdict-json` | require the strict JSON security verdict |
+| `--series DIR`, `--history N` | with `--monitor`: a Stage B series to read, and how many recent runs to list (default 10) |
+| `--claude-model`, `--openai-model`, `--grok-model` | model IDs for the code discussion pipeline only; the session engine refuses them |
+| `-v`, `--verbose` | debug logging |
 
 A run reports each seat and task as it moves, then prints every close-out and
 the API-price counterfactual. Everything it accumulated stays in the state
@@ -254,6 +288,17 @@ each run's `usage.jsonl` is the cost ledger.
 If the orchestrator's own window is exhausted mid-run, the seat falls to the
 fallback and the run continues — availability is learned by calling, so the
 first request is often what discovers it.
+
+To see what a run is doing without touching it:
+
+```bash
+quadratus --monitor --project /path/to/repo             # one screen of status, then exit
+quadratus --monitor --project /path/to/repo --serve     # the same status as a web page
+                                                        # on 127.0.0.1:7861 that reloads itself
+```
+
+`--monitor` only reads the run folder: it starts nothing, writes nothing and
+calls no model. `--serve PORT` picks another port.
 
 Web interface: `quadratus-gui` (or `python chat_gui.py`), then open
 http://127.0.0.1:7860. Choose another port with `quadratus-gui --port 8000` or
@@ -268,8 +313,32 @@ fields. The run shows the effective numbers before any call and saves them as
 after each call returns, so they are not a hard ceiling. A one-turn summary
 call reserves less than an ordinary call, and a per-call threshold also sets a
 lead turn cap unless you set one yourself; the summary names both. Left off, a
-run has no shared allowance, as before. Conversation memory, file uploads, and a per-model
-contribution breakdown. Sharing is disabled while a CLI backend is active.
+run has no shared allowance, as before. The Code discussion tab keeps
+conversation memory, takes a file upload and shows what each model
+contributed. Public sharing is refused on every backend.
+
+### What is recorded, and what leaves the machine
+
+A run's records stay in its state directory (`.quadratus` inside the project
+by default): each run's report, ledger, raw model replies, vendor
+transcripts, usage and diff under `runs/<run-id>/`, plus the artifact store
+and the codebase map. Those files hold your goal, prompts and source
+excerpts, so treat the folder as private.
+
+What leaves the machine is what you send:
+
+- Each model call sends its prompt, and the source that call is given, to the
+  vendor whose CLI (or API key) answers it.
+- `--decider jev` sends up to 8,000 characters of each unlabelled task's
+  description to TypeSafe AI's API, or to the gateway that
+  `TYPESAFE_BASE_URL` or a gateway key names.
+- `--monitor --serve` listens on 127.0.0.1 only and has no flag to change
+  that. The page cannot start, stop or change anything; it shows the project
+  path, run id, task, seat, token counts, last event, recent runs, stop
+  reason and report path. It has no sign-in, and it shows that status for
+  any project folder a viewer types into it, not only the one it was started
+  with. If you put it on another device (Tailscale Serve, a tunnel),
+  everyone you admit gets that reach.
 
 ## Project layout
 
@@ -282,9 +351,9 @@ quadratus/
   latest.py           # Floating aliases: addressing a line, not a release
   probe.py            # Asks the installed CLIs what they actually accept
   prompts.py          # Prompts for the pipeline phases
-  orchestrator.py     # Four-phase collaboration pipeline (current entry)
+  orchestrator.py     # Four-phase collaboration pipeline (a bare "<goal>")
   cli.py, gui.py      # Command-line and Gradio interfaces
-  # --- session engine (in progress) ---
+  # --- session engine (what --project and --session run) ---
   session.py          # The run loop: orchestrator → lead → workers → close-out
   registry.py         # Model roster: shapes, families, capability tags
   task_kinds.py       # Routing policy: difficulty ladder, pins, gated kinds
@@ -310,9 +379,10 @@ ruff check .
 pytest
 ```
 
-CI runs ruff and the test suite on Python 3.11/3.12
-(`.github/workflows/ci.yml`), installing a Chromium for the browser tests.
-Tests need no network and no keys.
+CI runs ruff and the test suite on Python 3.11, 3.12 and 3.13
+(`.github/workflows/ci.yml`), installing a Chromium for the browser tests,
+then builds the wheel, installs it outside the source tree and starts the
+installed commands. Tests need no network and no keys.
 
 ## License
 
@@ -378,6 +448,9 @@ and security verifiers. Required contract text must fit the packet byte limit;
 reference notes may be excerpted with a visible truncation marker. Unrestricted
 project editors must end each editing reply with `CHANGED: ["relative/path"]`
 (or `CHANGED: []`). The runtime compares that list with files added, changed or
-deleted during that call. A mismatch stops the run and preserves the work and
-raw reply for inspection. Restricted editors still use the existing PATCH
+deleted during that call. The measured files are what every scope, check and
+design step reads. A list that disagrees with them does not stop the run: it
+is recorded on the task as an unverified fact, with the raw reply kept. Only
+a reply with a malformed request line and no `CHANGED` line fails its task,
+and the orchestrator re-plans. Restricted editors still use the existing PATCH
 contract. No reviewer receives another reviewer's findings.

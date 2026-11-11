@@ -11,8 +11,9 @@ hot path.
 
 Two grades of number, clearly separated:
 
-* **Measured** -- when the CLI reports real token counts (the Claude CLI's
-  JSON envelope carries a ``usage`` block), those are recorded as-is.
+* **Measured** -- when the CLI reports real token counts, those are recorded
+  as-is. All three do today: the Claude and Grok JSON envelopes carry a
+  ``usage`` block and codex reports it on its ``turn.completed`` event.
 * **Estimated** -- otherwise tokens are estimated at ~4 characters per token,
   the long-standing English/code rule of thumb. Estimates are marked as
   estimates in the record; they are good enough to rank hot spots and size a
@@ -47,8 +48,9 @@ class Price:
     output_per_mtok: float
 
 
-#: Seed price sheet, per model key, compiled 2026-08. Stale within months by
-#: design assumption -- correct it from the vendor pages, not from memory.
+#: Seed price sheet, per model key, first compiled 2026-08; rows added since
+#: carry their own date or note. Stale within months by design assumption --
+#: correct it from the vendor pages, not from memory.
 #: Keys are roster keys, which are stable across a model line's releases, so a
 #: floating alias that moves to a new release keeps pricing at the old one's
 #: rate until someone edits here. That is the intended failure: a wrong dollar
@@ -81,6 +83,8 @@ PRICES: Dict[str, Price] = {
     # is the one most likely to drift away from its price line, which is the
     # accepted cost of not pinning the model: a wrong figure on a
     # counterfactual meter is cheaper than a run stuck on last year's Grok.
+    # The worker and expert seats are the same model line called at a
+    # different effort, so all three share its rate.
     "grok:default": Price(2.0, 6.0),
     "grok:worker": Price(2.0, 6.0),
     "grok:expert": Price(2.0, 6.0),

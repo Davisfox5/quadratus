@@ -1307,7 +1307,7 @@ _COVERS_REQUEST = (
 #: How many operator questions one decision may spend before it is judged to
 #: be interrogating rather than deciding. Three is generous: a decision that
 #: genuinely needs more operator input than that is a scoping conversation,
-#: which belongs in the interview, not the loop.
+#: which belongs before the run (the interview is not built yet), not the loop.
 _MAX_ASKS_PER_DECISION = 3
 
 _ASK_SPARINGLY = (
