@@ -4960,7 +4960,8 @@ class Session:
                 continue
             self._activity("check-started", task=spec.task_id)
             try:
-                with gate_in_copy(gate, self.project, children[role].project) as bound:
+                with gate_in_copy(gate, self.project, children[role].project,
+                                  exclude=self.config.project_excludes) as bound:
                     if bound is None:
                         entry["gate"] = rules.gate_facts(None, reason="this check cannot be run in a copy")
                     else:
@@ -6746,12 +6747,16 @@ class Session:
             self._activity("check-ended", task=spec.task_id)
         self._verify_dependencies(f"during observed check ({spec.task_id})")
         moved = project.contents() != before
+        from .integration import without_names
         self.review_checks.append({
             "task": spec.task_id, "stage": stage, "gate": identity, "passed": bool(result.passed) and not moved,
-            "command": result.command, "report": result.report,
+            # An observation is read for its counts, never for the names of
+            # the cases that passed, so it does not keep them.
+            "command": result.command, "report": without_names(result.report),
             # A run the tree moved under shows nothing about any one source.
             "source": None if moved else current,
-            "receipts": [dict(dataclasses.asdict(r), output=(r.output or "")[-4000:]) for r in result.receipts],
+            "receipts": [dict(dataclasses.asdict(replace(r, report=without_names(r.report))),
+                              output=(r.output or "")[-4000:]) for r in result.receipts],
         })
         self._note(f"task {spec.task_id}: harness ran the checks on the source before {stage}: "
                    + ("passed" if result.passed and not moved else "did not pass"))
@@ -10565,14 +10570,28 @@ class Session:
             # Kept explicit: a lost artifact makes the record incomplete
             # (outcome.missing_facts), it is never passed off as a receipt.
             lost = f"{type(exc).__name__}: {str(exc)[:160]}"
+        from .integration import attribute, without_names
+        # The names of a quiet run's passed cases are kept in one place: the
+        # run's newest check in self.checks, which the caller appends after
+        # this and which is where they are read (the test-repair and
+        # test-change rules at DONE, tools/truth_check.py). This record keeps
+        # the counts, and so does every earlier check from here on. Kept in
+        # each, a large quiet suite took result.json past what the monitor
+        # reads (final review 2026-11-11, gate 4).
+        for earlier in self.checks:
+            if earlier.get("report") is not None:
+                earlier["report"] = without_names(earlier["report"])
+            for receipt in earlier.get("receipts") or ():
+                if isinstance(receipt, dict) and receipt.get("report") is not None:
+                    receipt["report"] = without_names(receipt["report"])
         entry = dict(passed=result.passed, returncode=result.returncode, gate=gate_kind, output_artifact=output,
                      output_artifact_error=lost,
                      source=self._source_identity(),
                      receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests,
                                     returncode=r.returncode, cached=r.cached, source_hash=r.source_hash,
-                                    runner_hash=r.runner_hash, report=r.report) for r in result.receipts],
-                     report=result.report)
-        from .integration import attribute
+                                    runner_hash=r.runner_hash, report=without_names(r.report))
+                               for r in result.receipts],
+                     report=without_names(result.report))
         verdict = attribute(result)
         if not result.passed:
             entry["attribution"] = verdict

@@ -23,10 +23,15 @@ Design constraints, in order:
 from __future__ import annotations
 
 import json
+import re
+import socket
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Sequence
+from urllib.parse import urlparse
 
 from .config import env_with_legacy
 from .integration import _bound_folder, write_bound
@@ -115,11 +120,17 @@ class PageEvidence:
 
 
 #: Chromium switches for a pinned capture. Request pinning lives on the
-#: page's own session, which pauses the requests of the page, its in-process
-#: frames, its dedicated workers and its worklets (probed on Chromium 153).
-#: A frame given its own process is a separate target that session does not
-#: pause, so a pinned capture keeps frames in the page's process.
+#: page's own session, which pauses the HTTP requests of the page, its
+#: in-process frames, its dedicated workers and its worklets (probed on
+#: Chromium 153). A frame given its own process is a separate target that
+#: session does not pause, so a pinned capture keeps frames in the page's
+#: process. What that session never sees (a worker's WebSocket, WebRTC,
+#: WebTransport) is held at the network instead: :class:`_Sink`.
 _PIN_ARGS = ("--disable-site-isolation-trials",)
+#: With a proxy configured, WebRTC sends no UDP at all (STUN and TURN over
+#: UDP reached another loopback port without it; probed on Chromium 153),
+#: and its TCP goes to the proxy like everything else.
+_NO_WEBRTC_UDP = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
 #: A shared worker is its own target too, and nothing a Playwright session
 #: can reach pauses its requests before it starts: an on-origin page reached
 #: another loopback port through one while the capture read clean (review
@@ -135,9 +146,125 @@ _SHARED_WORKERS_OFF = ("shared workers are off in a pinned capture, because thei
                        '"shared_workers": true')
 
 
-def pinned_launch_args(shared_workers: bool = False) -> List[str]:
-    """The extra Chromium switches a pinned browser starts with."""
-    return [*_PIN_ARGS, *(() if shared_workers else (_NO_SHARED_WORKERS,))]
+_RULE_HOST = re.compile(r"[A-Za-z0-9.-]{1,253}|[0-9A-Fa-f:.]{2,45}")
+
+
+def _direct_rule(url: str) -> Optional[str]:
+    """``host:port`` of an http(s) URL, the form Chromium's proxy bypass
+    list takes, or None. A host that could add a rule of its own (";", ",",
+    "*") gets none, so the browser cannot reach it at all."""
+    try:
+        parsed = urlparse(str(url))
+        host, port = parsed.hostname or "", parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not _RULE_HOST.fullmatch(host):
+        return None
+    port = port or (443 if parsed.scheme == "https" else 80)
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+
+class _Sink:
+    """A dead-end proxy the harness owns, where a pinned browser sends every
+    connection that is not to an origin it is held to.
+
+    The page's session pauses HTTP requests, and Playwright's WebSocket guard
+    is a script in each frame. A dedicated worker's WebSocket, a WebSocket
+    taken from a new frame's window before that script ran, a WebRTC TURN
+    or STUN exchange and a WebTransport session passed both: each reached
+    another loopback port while the capture read clean (final review
+    2026-11-11, gate 2, confirmed with a browser). So a pinned browser also
+    starts with this listener as its only proxy and the held origins as the
+    only addresses it connects to directly (:func:`pinned_launch_args`).
+    Probed on Chromium 153: any other TCP connection, from any target, comes
+    here; it is noted in ``hits`` and closed, and nothing is forwarded. A
+    proxied WebTransport session is refused by the browser, and WebRTC sends
+    no UDP. A hit leaves the render unclean, as a paused request does."""
+
+    def __init__(self):
+        self.hits: List[str] = []
+        self._closing = False
+        try:
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.bind(("127.0.0.1", 0))
+            self._socket.listen(64)
+            self._socket.settimeout(0.1)
+            self.port = self._socket.getsockname()[1]
+        except OSError as exc:  # fail closed, named
+            raise RuntimeError("request pinning is unavailable: the harness could not listen for the "
+                               f"browser's off-origin connections ({exc})") from exc
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                connection, _ = self._socket.accept()
+            except socket.timeout:
+                if self._closing:
+                    return      # the browser is gone and the backlog is empty
+                continue
+            except OSError:
+                return
+            try:
+                connection.settimeout(0.5)
+                head = connection.recv(2048)
+            except OSError:
+                head = b""
+            finally:
+                connection.close()
+            self._note(head)
+
+    def _note(self, head: bytes) -> None:
+        # "CONNECT host:port HTTP/1.1" (a WebSocket, WebRTC over TCP) or
+        # "GET http://host/path HTTP/1.1" (a request no session paused).
+        words = head.split(b"\r\n", 1)[0].decode("latin-1").split(" ")
+        if len(words) >= 2 and words[0] == "CONNECT":
+            where = "a connection to " + words[1]
+        else:
+            where = words[1] if len(words) >= 2 else "a connection that named no address"
+        note = ("blocked outside the preview: " + where)[:MAX_EVENT_CHARS]
+        if note not in self.hits and len(self.hits) < MAX_PAGE_EVENTS:
+            self.hits.append(note)
+
+    def close(self) -> List[str]:
+        """Stop listening, after what is already queued has been noted.
+        Call it once the browser has closed. Returns ``hits``."""
+        self._closing = True
+        self._thread.join(timeout=5)
+        try:
+            self._socket.close()
+        except OSError:
+            pass
+        return self.hits
+
+
+@contextmanager
+def _closing_sink(sink: Optional[_Sink]):
+    """Close ``sink`` on the way out, whatever happened to the browser."""
+    try:
+        yield sink
+    finally:
+        if sink is not None:
+            sink.close()
+
+
+def pinned_launch_args(shared_workers: bool = False, *, sink: Optional[_Sink] = None,
+                       origins: Sequence[str] = ()) -> List[str]:
+    """The extra Chromium switches a pinned browser starts with.
+
+    With ``sink``, the browser's whole network is held as well: the sink is
+    its only proxy, loopback is not exempt from it, and only ``origins``
+    (http or https URLs; a file page has none) are reached directly."""
+    args = [*_PIN_ARGS, *(() if shared_workers else (_NO_SHARED_WORKERS,))]
+    if sink is not None:
+        direct = sorted({rule for rule in map(_direct_rule, origins) if rule})
+        # "<-loopback>" first: later rules win, and without it Chromium
+        # connects to every loopback address directly.
+        args += [f"--proxy-server=http://127.0.0.1:{sink.port}",
+                 "--proxy-bypass-list=" + ";".join(["<-loopback>", *direct]),
+                 _NO_WEBRTC_UDP]
+    return args
 
 
 def _watch_targets(browser, strangers: list) -> Callable[[], None]:
@@ -178,11 +305,14 @@ def hold_to_origin(context, page, allow: Optional[Callable[[str], bool]], *, pin
     admits. Shared by the capture and the pilot (``browser_pilot.drive``).
 
     Unpinned, only navigations are guarded: one that ``allow`` refuses is
-    aborted and noted in ``blocked``. With ``pin_requests`` every request is
-    paused before it is sent and one off the origin is failed, so nothing
-    reaches another service; WebSockets are held the same way. Any new
-    window or tab is refused and closed, and where the main frame lands is
-    checked as well."""
+    aborted and noted in ``blocked``. With ``pin_requests`` every request
+    this page's session sees is paused before it is sent and one off the
+    origin is failed; a WebSocket a frame opens is held by a guard in the
+    frame. Neither reaches a worker's WebSocket, WebRTC or WebTransport: the
+    caller holds those at the network by starting the browser with a
+    :class:`_Sink` (``pinned_launch_args``), as the capture and the pilot
+    do. Any new window or tab is refused and closed, and where the main
+    frame lands is checked as well."""
     def guard(route):
         request = route.request
         if (request.is_navigation_request() and allow is not None
@@ -349,15 +479,17 @@ def render_page(
     pinned = pin_requests and allow_navigation is not None
     budget = _Budget(deadline if bool(steps) else None)
     budget.require("before the browser started")
+    # Where a pinned browser's off-origin connections end (see _Sink).
+    sink = _Sink() if pinned else None
 
-    with sync_playwright() as pw:
+    with _closing_sink(sink), sync_playwright() as pw:
         launch_kwargs = {}
         if executable_path:
             launch_kwargs["executable_path"] = executable_path
         if budget.active:
             launch_kwargs["timeout"] = budget.ms(30_000)
         if pinned:
-            launch_kwargs["args"] = pinned_launch_args(shared_workers)
+            launch_kwargs["args"] = pinned_launch_args(shared_workers, sink=sink, origins=[url])
         browser = pw.chromium.launch(**launch_kwargs)
         try:
             strangers: list = []
@@ -443,6 +575,11 @@ def render_page(
             write_bound(anchor, (*inside, "page.png"), image)
         finally:
             browser.close()
+    if sink is not None:
+        # What the browser tried to reach past every guard above: stopped at
+        # the sink, and the render is not clean.
+        for note in sink.close():
+            failed_requests.append(note)
 
     evidence = PageEvidence(
         url=url,

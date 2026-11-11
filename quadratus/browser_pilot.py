@@ -280,7 +280,10 @@ def drive(
     The browser is held to the start page's origin the way a harness
     capture is (:func:`held_to`, ``browser.hold_to_origin``): every request
     off it is failed before it is sent, a new window is refused, and a page
-    that lands outside it is closed before anything is read from it.
+    that lands outside it is closed before anything is read from it. A
+    connection the page's own guards do not see (a worker's WebSocket,
+    WebRTC, WebTransport) ends at the harness's dead-end proxy
+    (``browser._Sink``) and is listed in ``blocked``.
 
     Raises:
         ValueError: when ``start_url`` is neither a local preview, a file
@@ -295,8 +298,10 @@ def drive(
             "browser piloting needs playwright: pip install playwright"
         ) from exc
     from .browser import (
+        _closing_sink,
         _Events,
         _seen,
+        _Sink,
         _watch_targets,
         hold_to_origin,
         pinned_launch_args,
@@ -320,9 +325,13 @@ def drive(
         write_bound(out, (name,), page.screenshot(**options))
         return str(out / name)
 
-    with sync_playwright() as pw:
+    # Where the browser's connections off those origins end: a worker's
+    # WebSocket, WebRTC and WebTransport pass the page's own guards.
+    sink = _Sink()
+    with _closing_sink(sink), sync_playwright() as pw:
         launch_kwargs = {"executable_path": executable_path} if executable_path else {}
-        browser = pw.chromium.launch(args=pinned_launch_args(), **launch_kwargs)
+        browser = pw.chromium.launch(args=pinned_launch_args(sink=sink, origins=[url, *allow_origins]),
+                                     **launch_kwargs)
         try:
             watch = _watch_targets(browser, strangers)
             context = browser.new_context(service_workers="block", accept_downloads=False)
@@ -416,5 +425,6 @@ def drive(
             browser.close()
 
     run.console_errors = list(errors)
-    run.blocked = list(blocked) + list(failed) + [unpinned_note(kind, where) for kind, where in strangers]
+    run.blocked = (list(blocked) + list(failed) + sink.close()
+                   + [unpinned_note(kind, where) for kind, where in strangers])
     return run

@@ -589,8 +589,9 @@ _KEEP_TAIL_BYTES = 256 * 1024
 #: A line longer than this is never a case line or a summary line and is
 #: not scanned as one.
 _MAX_SCAN_LINE = 4096
-#: Of a receipt's kept output, what stderr may take from stdout when both
-#: do not fit.
+#: Of a receipt's kept output, what the lesser stream keeps when both do
+#: not fit: stderr's end beside a long stdout, or stdout's end (where a
+#: runner's summary is) beside the stderr of a command that failed there.
 _STDERR_SHARE = 600
 
 
@@ -678,7 +679,13 @@ def _streams(output) -> tuple:
     return getattr(output, 'stdout', output) or '', getattr(output, 'stderr', '') or ''
 
 
-def _kept(output, *, lead: str = '', trail: str = '') -> str:
+def _reports_on_stderr(runner, passed: bool) -> bool:
+    """Whether a command's kept output should favour stderr: it did not
+    pass, and its runner is not one known to report on stdout."""
+    return not passed and runner not in _STDOUT_RUNNERS
+
+
+def _kept(output, *, lead: str = '', trail: str = '', favour_stderr: bool = False) -> str:
     """What a receipt keeps of a command's output, at most ``_TAIL_CHARS``:
     ``lead`` (a note the harness adds), the end of stderr, the end of
     stdout, then ``trail``. Stdout is last because the readers of a kept
@@ -686,15 +693,25 @@ def _kept(output, *, lead: str = '', trail: str = '') -> str:
     the last summary they meet, and that must be the runner's own on
     stdout, not something a subprocess or an exit handler wrote to stderr
     (review 2026-11-10, checks 15). Stderr still keeps a share, so a crash
-    it reported is not pushed out by a long stdout."""
+    it reported is not pushed out by a long stdout.
+
+    ``favour_stderr`` (:func:`_reports_on_stderr`) turns the shares round
+    for a command that failed and may have said why on stderr: jest and
+    unittest report there, and behind a long stdout (a coverage table, a
+    printing suite) the receipt kept 600 characters of npm's error lines
+    and lost the assertion (final review 2026-11-11, gate 5). The order is
+    the same, and stdout keeps its end, so a summary printed there is
+    still the last one the readers meet."""
     stdout, stderr = (s.strip() for s in _streams(output))
     notes = [n.strip() for n in (lead, trail)]
     budget = max(0, _TAIL_CHARS - sum(len(n) + 1 for n in notes if n))
     if len(stdout) + len(stderr) + 1 > budget:
-        share = min(len(stderr), max(_STDERR_SHARE, budget - len(stdout) - 1), budget)
-        stderr = stderr[-share:] if share else ''
-        room = budget - (len(stderr) + 1 if stderr else 0)
-        stdout = stdout[-room:] if room > 0 else ''
+        major, minor = (stderr, stdout) if favour_stderr else (stdout, stderr)
+        share = min(len(minor), max(_STDERR_SHARE, budget - len(major) - 1), budget)
+        minor = minor[-share:] if share else ''
+        room = budget - (len(minor) + 1 if minor else 0)
+        major = major[-room:] if room > 0 else ''
+        stderr, stdout = (major, minor) if favour_stderr else (minor, major)
     return '\n'.join(x for x in (notes[0], stderr, stdout, notes[1]) if x)[-_TAIL_CHARS:]
 
 
@@ -936,7 +953,8 @@ class IntegrationGate:
             # The partial output is kept: a hang must name what it was doing.
             return GateResult(
                 passed=False, command=shown, returncode=None,
-                output=_kept(combined, lead=f"(timed out after {self.timeout}s) {_cleanup_note(cleanup)}"),
+                output=_kept(combined, lead=f"(timed out after {self.timeout}s) {_cleanup_note(cleanup)}",
+                             favour_stderr=_reports_on_stderr(runner_of(self.command), False)),
             )
         runner = runner_of(self.command)
         passed, lead = returncode == 0, ""
@@ -950,7 +968,8 @@ class IntegrationGate:
             passed=passed,
             command=shown,
             returncode=returncode,
-            output=_kept(combined, lead=lead, trail=_cleanup_note(cleanup)),
+            output=_kept(combined, lead=lead, trail=_cleanup_note(cleanup),
+                         favour_stderr=_reports_on_stderr(runner, passed)),
             report=report,
             cases=case_record(combined, runner),
         )
@@ -1138,6 +1157,60 @@ _LABELS = re.compile(rf'(?:{_LABEL}){{1,3}}')
 _ONLY_UNEXECUTED = re.compile(r'\d+ (?:skipped|deselected)(?:,? \d+ (?:skipped|deselected))*[ \t=]*')
 
 
+#: Runners whose summary does not start with a count. Each has a row of its
+#: own shape, read only as the whole line it is, written here from the
+#: runner's real output (cucumber-js 13, Robot Framework 7, CodeceptJS 4,
+#: @web/test-runner 0.20):
+#:   3 scenarios (1 passed, 1 skipped, 1 failed)
+#:   3 tests, 1 passed, 1 failed, 1 skipped
+#:     OK  | 3 passed, 1 skipped   // 23ms
+#:   Chromium: |██████| 1/1 test files | 3 passed, 0 failed, 1 skipped
+#: When only a line starting with a count was a summary these read as no
+#: summary at all: an all-skipped cucumber or Robot run passed with nothing
+#: executed and its skips unseen, and the same suites under "npm test" were
+#: blocked for want of a count (final review 2026-11-11, gate 1). The count
+#: inside the parentheses is admitted for cucumber's row alone; eslint's "5
+#: problems (0 errors, 5 warnings)" is still no summary.
+#: Cucumber's cases are its scenarios. Its "8 steps (...)" row is not read:
+#: "3 steps (1 passed, 1 pending, 1 undefined)" belongs to a run in which no
+#: scenario passed. WebdriverIO's "Spec Files: 1 passed, 1 total" counts
+#: files, as jest's "Test Suites:" row does, and a file whose every case was
+#: skipped passes: it is no count of cases and stays unread.
+#: @web/test-runner's row: one a browser, on adjacent lines.
+_BROWSER_ROW = re.compile(r'[ \t]*[A-Z][A-Za-z ]{1,30}:[ \t]+\|[^|\n]{0,200}\|[ \t]+\d+/\d+ test files[ \t]+\|'
+                          r'[ \t]+(\d+ passed, \d+ failed(?:, \d+ skipped)?)[ \t]*')
+_RUNNER_ROWS = (
+    re.compile(r'[ \t]*(?:0 scenarios|\d+ scenarios? \((\d+ [a-z]+(?:, \d+ [a-z]+){0,6})\))[ \t]*'),
+    re.compile(r'[ \t]*\d+ tests?(?: total)?, (\d+ passed, \d+ failed(?:, \d+ skipped)?)[ \t]*'),
+    re.compile(r'[ \t]*(?:OK|FAIL)[ \t]+\|[ \t]+(\d+ passed(?:, \d+ (?:failed|failedHooks|skipped)){0,3})'
+               r'[ \t]*(?://.{0,80})?'),
+    _BROWSER_ROW,
+)
+_ROW_ITEM = re.compile(r'(\d+) ([A-Za-z]+)')
+#: Where one of those rows may begin behind a wrapper's label. Tried only
+#: on a line the count lines' own search read nothing from, so it adds
+#: readings and changes none.
+_ROW_START = re.compile(r'(?<![^\s=*|])(?:\d+ scenarios?\b|\d+ tests?(?: total)?, \d|(?:OK|FAIL)[ \t]+\|'
+                        r'|[A-Z][A-Za-z]{1,30}:[ \t]+\|)')
+#: What a row's word means. A case that reached no result (cucumber's
+#: pending, undefined, ambiguous and unknown, or a word not known here) did
+#: not run: a skip, never an execution. A failed hook is not a case.
+_ROW_WORDS = {'passed': 'passed', 'failed': 'failed', 'failedHooks': None}
+
+
+def _runner_row(line: str, rows=_RUNNER_ROWS) -> Optional[list]:
+    """The ``(count, outcome)`` pairs of one of the named rows above when
+    ``line`` is one, whole; None when it is not."""
+    if len(line) > _MAX_SCAN_LINE or not (' passed' in line or ' scenario' in line):
+        return None
+    for row in rows:
+        found = row.fullmatch(line)
+        if found:
+            pairs = [(count, _ROW_WORDS.get(word, 'skipped')) for count, word in _ROW_ITEM.findall(found.group(1) or '')]
+            return [(count, outcome) for count, outcome in pairs if outcome]
+    return None
+
+
 def _own_summary(rest: str) -> bool:
     """Whether ``rest`` is a runner's own summary in full form: a row with
     its name ("Tests: ..."), a count line that ends with its time ("3
@@ -1149,17 +1222,31 @@ def _own_summary(rest: str) -> bool:
     return bool(_NO_TESTS_FULL.match(rest) or _UNITTEST_ROW.match(rest) or _CARGO_ROW.match(rest))
 
 
-def _prefixed_summary(line: str) -> Optional[str]:
-    """The runner's own summary inside ``line`` when something stands in
-    front of it, or None."""
-    for count, found in enumerate(_SUMMARY_START.finditer(line)):
+def _behind(line: str, starts, accepted) -> Optional[str]:
+    """The first place ``starts`` finds in ``line``, behind something else,
+    whose text to the end of the line ``accepted(rest, start)`` takes."""
+    for count, found in enumerate(starts.finditer(line)):
         start = found.start()
         if not start or count >= _SUMMARY_STARTS or _CASE_PREFIX.search(line, 0, start):
             return None     # the line's own start, or text inside a case's name
         rest = line[start:]
-        if _own_summary(rest) or (_ONLY_UNEXECUTED.fullmatch(rest) and _LABELS.fullmatch(line, 0, start)):
+        if accepted(rest, start):
             return rest
     return None
+
+
+def _prefixed_summary(line: str) -> Optional[str]:
+    """The runner's own summary inside ``line`` when something stands in
+    front of it, or None: a full-form count line first, as before, and
+    failing that a named row of another runner (:func:`_runner_row`) that
+    a wrapper's label fronts. Behind any other words a row is not read:
+    "loaded 0 scenarios" is somebody's log line, not a run of nothing."""
+    found = _behind(line, _SUMMARY_START, lambda rest, start: _own_summary(rest) or (
+        _ONLY_UNEXECUTED.fullmatch(rest) and _LABELS.fullmatch(line, 0, start)))
+    if found is None and (' passed' in line or ' scenario' in line):
+        found = _behind(line, _ROW_START, lambda rest, start: (
+            _LABELS.fullmatch(line, 0, start) and _runner_row(rest) is not None))
+    return found
 
 
 def _summary_text(output) -> str:
@@ -1179,7 +1266,8 @@ def _summary_text(output) -> str:
     lines = []
     for line in _ANSI.sub('', output or '').splitlines():
         lines.append(line)
-        if len(line) > _MAX_SCAN_LINE or _SUMMARY_HEAD.match(line) or _NO_TESTS.match(line):
+        if (len(line) > _MAX_SCAN_LINE or _SUMMARY_HEAD.match(line) or _NO_TESTS.match(line)
+                or _runner_row(line) is not None):
             continue    # too long to be one, or read where it stands
         behind = _prefixed_summary(line)
         if behind is not None:
@@ -1193,11 +1281,27 @@ def _summary_outcomes(text) -> Optional[list]:
     :func:`_summary_text` made of the output. One reading for executed,
     skipped and deselected counts, which each used to scan on their own and
     had drifted. A line with only an error count is a summary when it ends
-    the way pytest's does ("1 error in 0.05s")."""
-    for line in reversed((text or '').splitlines()):
+    the way pytest's does ("1 error in 0.05s"). A named row of a runner
+    whose summary starts some other way is one too (:func:`_runner_row`); it
+    may hold no pair at all ("0 scenarios"), which is a summary of nothing
+    executed and not the absence of one."""
+    lines = (text or '').splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
         head = _SUMMARY_HEAD.match(line) if len(line) <= _MAX_SCAN_LINE else None
         if not head:
-            continue
+            row = _runner_row(line)
+            if row is None:
+                continue
+            if _BROWSER_ROW.fullmatch(line):
+                # A row for each browser: all of them, so one browser's
+                # skips are not lost behind another's passes.
+                for earlier in reversed(lines[:index]):
+                    more = _runner_row(earlier, (_BROWSER_ROW,))
+                    if more is None:
+                        break
+                    row += more
+            return row
         found = _SUMMARY_ITEM.findall(line)
         if not head.group('row'):
             # A todo count is a runner's only in its named row; "3 todo
@@ -1267,7 +1371,7 @@ def _test_count(output):
     # Pytest (and compact JS summaries) can report failed executions alongside
     # passes. Use one final summary line, excluding cases whose body did not run.
     outcomes = _summary_outcomes(output)
-    if outcomes:
+    if outcomes is not None:
         return sum(int(count) for count, outcome in outcomes
                    if outcome in {'passed', 'failed', 'xfailed', 'xpassed'})
     return None
@@ -1397,13 +1501,15 @@ class GateSuite:
                     elif count < command.minimum_tests:
                         status, reason = 'failed', 'fewer tests than required'
                 receipt = GateReceipt(**base, status=status, reason=reason, returncode=returncode,
-                                      output=_kept(output, trail=_cleanup_note(cleanup)), tests=count,
-                                      report=report, cases=case_record(output, named))
+                                      output=_kept(output, trail=_cleanup_note(cleanup),
+                                                   favour_stderr=_reports_on_stderr(named, status == 'passed')),
+                                      tests=count, report=report, cases=case_record(output, named))
             except _GateTimeout as exc:
                 # Still an error, never a product failure: what was printed
                 # before the deadline is kept so the hang can be diagnosed.
                 receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s',
-                                      output=_kept(exc.output, lead=_cleanup_note(exc.cleanup)))
+                                      output=_kept(exc.output, lead=_cleanup_note(exc.cleanup),
+                                                   favour_stderr=_reports_on_stderr(runner_of(command.argv), False)))
             except (OSError, ValueError) as exc:
                 receipt = GateReceipt(**base, status='blocked', reason=f'runner unavailable: {exc}')
             try:
@@ -1424,6 +1530,7 @@ class GateSuite:
             if command.cacheable and receipt.status == 'passed' and receipt.runner_hash:
                 self._cache[key] = receipt
             receipts.append(receipt)
+        receipts = _within_name_bound(receipts)
         passed = not stopped and all(r.status == 'passed' for r in receipts if r.required)
         output = '\n'.join(f'{r.id}: {r.status}: {r.reason}\n{r.output}' for r in receipts)
         return GateResult(passed, 'gate suite', 0 if passed else 1, output, tuple(receipts))
@@ -2172,6 +2279,48 @@ def test_change_authorizations(raw, *, goal, root, forbid=(), originals=None):
     return tuple(records)
 
 
+#: How much one gate run's receipts keep of the names of passed cases, in
+#: characters. The producer bounds one report; this bounds a run of many
+#: commands, so the one check record that keeps the names stays a known
+#: size (the monitor reads result.json only up to its own bound).
+_MAX_RUN_NAME_CHARS = 1_500_000
+
+
+def without_names(report):
+    """``report`` without the names of its passed cases, for a record no
+    reader of those names uses; ``passed_cases_omitted`` says how many were
+    left out. A report that names none is returned as it is.
+
+    A quiet run's report names every pass (``read_report``), and every copy
+    of a receipt carried the whole list: a 5,000-case suite put 480,000
+    bytes into result.json for each check, twice, and nine checks took the
+    file past what the monitor reads (final review 2026-11-11, gate 4). The
+    names are read from the run's newest check only (the test-repair and
+    test-change rules, ``tools/truth_check.py``), so that record keeps them
+    and every other one keeps the counts."""
+    if not isinstance(report, dict) or not isinstance(report.get('passed_cases'), list):
+        return report
+    slim = {key: value for key, value in report.items() if key != 'passed_cases'}
+    slim['passed_cases_omitted'] = len(report['passed_cases'])
+    return slim
+
+
+def _within_name_bound(receipts: list) -> list:
+    """``receipts`` with the names of passed cases kept only up to
+    ``_MAX_RUN_NAME_CHARS`` in all. A report past it keeps its counts and is
+    marked ``passed_truncated``, which every reader of names takes as "not
+    every pass is named": stricter, never a pass that was not shown."""
+    used, out = 0, []
+    for receipt in receipts:
+        names = receipt.report.get('passed_cases') if isinstance(receipt.report, dict) else None
+        if isinstance(names, list):
+            used += sum(len(name) + 4 for name in names if isinstance(name, str))
+            if used > _MAX_RUN_NAME_CHARS:
+                receipt = replace(receipt, report=dict(without_names(receipt.report), passed_truncated=True))
+        out.append(receipt)
+    return out
+
+
 def _named_passes(report) -> set:
     """The cases a harness-validated report names as passed, when it names
     every one; empty otherwise.
@@ -2338,6 +2487,72 @@ def repair_problems(name: str, original: bytes, current: dict, receipts) -> List
     return problems
 
 
+def _place_withheld(root: Path, copy: Path, exclude=()) -> tuple:
+    """Put the project's withheld files (``project.withheld_files``: the
+    ``.env*``, credential and vendor agent files no model copy holds) into
+    ``copy``, for a run of the gate's own commands there. Returns ``(files
+    placed, folders made for them)``, so a caller whose copy lives on can
+    take exactly those out again (:func:`_remove_placed`).
+
+    A file the copy already has is left as it is. Nothing is written
+    through a link: a copy a model edited can hold one, and a file placed
+    behind it would leave the copy. One that cannot be placed is left out,
+    as all of them were before: the check then says what it says without
+    it."""
+    from .project import withheld_files
+    placed, made = [], []
+    for name, data in withheld_files(root, exclude).items():
+        target = copy / name
+        try:
+            folder, missing = copy, []
+            for part in Path(name).parts[:-1]:
+                folder = folder / part
+                if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
+                    raise OSError('not a folder of the copy')
+                if not folder.exists():
+                    missing.append(folder)
+            if target.exists() or target.is_symlink():
+                continue
+            for folder in missing:
+                folder.mkdir()
+                made.append(folder)
+            # Owner-only from the first byte; the project's own mode after.
+            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            placed.append(target)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(data)
+            shutil.copymode(root / name, target)
+        except OSError:
+            continue
+    return placed, made
+
+
+def _remove_placed(placed, made) -> None:
+    """Take out what :func:`_place_withheld` put in. Raises RuntimeError
+    naming a file that is still there: a copy that keeps one is not a copy
+    anything else may read."""
+    left = []
+    for target in placed:
+        try:
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)       # a check replaced the file with a folder
+            else:
+                target.unlink(missing_ok=True)
+        except OSError:
+            try:
+                os.chmod(target.parent, 0o700)      # a check may have closed the folder
+                target.unlink(missing_ok=True)
+            except OSError:
+                left.append(target.name)
+    for folder in reversed(made):
+        try:
+            folder.rmdir()
+        except OSError:
+            pass    # a check left something of its own in it
+    if left:
+        raise RuntimeError(f"withheld file(s) could not be removed from the copy after its check: {', '.join(left)}")
+
+
 def run_original_tests(gate, root, originals: dict, current: dict, keep=(), *, exclude=()):
     """Run the gate's own commands against the current source with every
     run-start test and support file restored to its run-start bytes.
@@ -2398,23 +2613,8 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=(), *, e
             target = copy / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-        from .project import withheld_files
-        for name, data in withheld_files(root, exclude).items():
-            target = copy / name
-            try:
-                if target.exists() or target.is_symlink():
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                # Owner-only from the first byte; the project's own mode after.
-                descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(descriptor, 'wb') as stream:
-                    stream.write(data)
-                shutil.copymode(root / name, target)
-            except OSError:
-                # One that cannot be placed is left out, as all of them were
-                # before: the check then says what it says without it. This
-                # copy never raised for a file the measured source lacks.
-                continue
+        # This copy is deleted with its folder, so nothing is taken out again.
+        _place_withheld(root, copy, exclude)
         for name in _DEPENDENCY_DIRS:
             source = root / name
             if source.is_dir() and not source.is_symlink():
@@ -2446,7 +2646,7 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=(), *, e
 
 
 @contextmanager
-def gate_in_copy(gate, root, copy):
+def gate_in_copy(gate, root, copy, *, exclude=()):
     """The gate's own commands bound to ``copy``, a private copy of the
     project at ``root``: the same argv, cwd, timeouts and minimums, with a
     path that names the project re-pointed at the copy. Yields a
@@ -2455,20 +2655,27 @@ def gate_in_copy(gate, root, copy):
 
     A copy carries source only, so the project's dependency folders are
     linked in for the run, as :func:`run_original_tests` does, and unlinked
-    after it. Used to run a task's gate on a contest draft as evidence
-    (quadratus.contest); nothing is written to the project."""
+    after it. The project's withheld files are placed for the run as they
+    are there (``exclude`` is the operator's excluded paths) and taken out
+    after it: a suite that reads ``.env`` failed in both drafts of a
+    contest and passed in the project, so the drafts were ranked on noise
+    (final review 2026-11-11, gate 3). They are in the copy only while the
+    gate's commands run; a copy a model reads never holds them. Used to
+    run a task's gate on a contest draft as evidence (quadratus.contest);
+    nothing is written to the project."""
     root, copy = Path(root).resolve(), Path(copy).resolve()
     commands = _gate_commands(gate, root)
     if commands is None:
         yield None
         return
-    linked = []
+    linked, placed, made = [], [], []
     try:
         for name in _DEPENDENCY_DIRS:
             source, target = root / name, copy / name
             if source.is_dir() and not source.is_symlink() and not target.exists() and not target.is_symlink():
                 target.symlink_to(source, target_is_directory=True)
                 linked.append(target)
+        placed, made = _place_withheld(root, copy, exclude)
         inside = re.compile(re.escape(str(root)) + r'(?=/|$)')
         yield GateSuite([replace(c, argv=tuple(inside.sub(str(copy), a) for a in c.argv)) for c in commands],
                         cwd=copy)
@@ -2478,6 +2685,7 @@ def gate_in_copy(gate, root, copy):
                 target.unlink()
             except OSError:
                 pass
+        _remove_placed(placed, made)
 
 
 def _relative(cwd: str, operand: str, copy: Path) -> str:
