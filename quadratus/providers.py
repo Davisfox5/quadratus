@@ -17,6 +17,7 @@ import copy
 import logging
 import os
 import random
+import re
 import stat
 import subprocess
 import tempfile
@@ -145,10 +146,49 @@ _scratch_noted = False
 
 #: How old a leftover under the scratch root must be before a run removes it.
 SCRATCH_MAX_AGE_SECONDS = 24 * 60 * 60
-#: The names the harness gives what it makes there: source copies, summary
-#: folders, prompt files and the worker bridge's socket folders. Nothing else
-#: is ever removed, so a root the operator shares with other files is safe.
-SCRATCH_PREFIXES = ("quadratus-", "qw-")
+#: The file the harness leaves in a scratch folder it made. Only a folder
+#: that carries it is ever swept: a folder the operator made, and may keep
+#: other things in, is never cleared on the strength of a name.
+SCRATCH_MARKER = ".quadratus-scratch"
+#: What the harness makes there, exactly as it names it: a source copy
+#: (review, original-tests), a summary folder (analysis, closeout), a
+#: provider's own folder (by provider name) and the worker bridge's socket
+#: folder, each with the eight characters ``tempfile`` adds; and a prompt
+#: file. Final review, 2026-11-11: any name starting ``quadratus-`` or
+#: ``qw-`` went, and in a scratch folder the operator chose that took
+#: ``quadratus-main``, a checkout, with it. A test holds these to the
+#: prefixes the package passes to ``tempfile``.
+SCRATCH_FOLDER_KINDS = ("review", "analysis", "closeout", "original-tests", "claude", "openai", "grok")
+_SCRATCH_FOLDER = re.compile(rf"(?:quadratus-(?:{'|'.join(SCRATCH_FOLDER_KINDS)})-|qw-)[a-z0-9_]{{8}}")
+_SCRATCH_FILE = re.compile(r"quadratus-prompt-[a-z0-9_]{8}\.txt")
+_unmarked_noted = False
+
+
+def _mark_scratch(root) -> None:
+    """Leave the marker in a scratch folder the harness made. Never raises:
+    a folder that cannot be marked is simply never swept."""
+    try:
+        fd = os.open(os.path.join(root, SCRATCH_MARKER),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError:
+        return
+    try:
+        os.write(fd, b"Quadratus made this folder for its scratch copies. A run removes what earlier runs\n"
+                     b"left here after a day, and nothing from a folder without this file.\n")
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def scratch_marked(root) -> bool:
+    """Whether ``root`` carries the harness's own marker: a regular file
+    this user owns, never a link."""
+    try:
+        info = os.lstat(os.path.join(root, SCRATCH_MARKER))
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and (os.name != "posix" or info.st_uid == os.getuid())
 
 
 def scratch_root_path() -> Path:
@@ -189,15 +229,21 @@ def sweep_scratch(max_age: float = SCRATCH_MAX_AGE_SECONDS, *, now: Optional[flo
     """Remove what earlier runs left under the scratch root; return the names.
 
     A hard kill leaves source copies behind, and nothing clears a folder
-    under the home directory the way the system clears its temp folder. Only
-    a direct child of the root that the harness named (``SCRATCH_PREFIXES``),
-    that this user owns and that is older than ``max_age`` goes: a run still
-    using a copy made it minutes ago, not a day ago. A link is never
-    followed (one so named is unlinked, its target untouched), nothing above
-    or beside the root is opened, and a failure costs that one entry. Never
-    raises: this is housekeeping before a run, not a condition of it.
+    under the home directory the way the system clears its temp folder.
+
+    Two conditions, both required. The root carries the marker the harness
+    wrote when it made the folder (``SCRATCH_MARKER``): a root without it is
+    never swept, whatever is in it. And only a direct child goes that is
+    exactly what the harness makes there, a real folder or a real file of
+    that shape (``SCRATCH_FOLDER_KINDS``), that this user owns and that is
+    older than ``max_age``: a run still using a copy made it minutes ago,
+    not a day ago. A link is never followed and never removed (the harness
+    makes none), nothing above or beside the root is opened, and a failure
+    costs that one entry. Never raises: this is housekeeping before a run,
+    not a condition of it.
     """
     import shutil
+    global _unmarked_noted
     removed: List[str] = []
     try:
         root = scratch_root()
@@ -207,18 +253,28 @@ def sweep_scratch(max_age: float = SCRATCH_MAX_AGE_SECONDS, *, now: Optional[flo
     except Exception:  # noqa: BLE001 -- the first call that needs the root reports it
         log.debug("the scratch folder was not swept", exc_info=True)
         return removed
+    if not scratch_marked(root):
+        if not _unmarked_noted:
+            _unmarked_noted = True
+            log.info("The scratch folder %s was not made by the harness (it has no %s file), so nothing in "
+                     "it is ever removed. Create an empty file of that name there to let a run clear what "
+                     "earlier runs left.", root, SCRATCH_MARKER)
+        return removed
     for name in sorted(entries):
-        if not name.startswith(SCRATCH_PREFIXES):
+        folder, single = _SCRATCH_FOLDER.fullmatch(name), _SCRATCH_FILE.fullmatch(name)
+        if not folder and not single:
             continue
         path = os.path.join(root, name)
         try:
             info = os.lstat(path)
             if (os.name == "posix" and info.st_uid != os.getuid()) or info.st_mtime > cutoff:
                 continue
-            if stat.S_ISDIR(info.st_mode):
+            if folder and stat.S_ISDIR(info.st_mode):
                 shutil.rmtree(path)  # unlinks a link inside, never follows it
+            elif single and stat.S_ISREG(info.st_mode):
+                os.unlink(path)
             else:
-                os.unlink(path)      # a file, or a link: the link itself
+                continue             # the name, but not what the harness makes under it
             removed.append(name)
         except OSError:
             log.debug("could not remove the scratch leftover %s", name, exc_info=True)
@@ -243,6 +299,12 @@ def scratch_root() -> str:
     folder (not a link) that this user owns and nobody else can enter; one
     that is not is refused, never repaired and never replaced by the temp
     folder in silence, and the refusal names the variable that picks another.
+
+    A root this call creates is given the marker that lets a later run sweep
+    it (``SCRATCH_MARKER``). So is the default root when it has none: only
+    the harness makes ``~/.cache/quadratus/scratch``, and one made before
+    the marker existed would otherwise never be cleared again. A folder the
+    operator named that already existed is theirs and is left unmarked.
     """
     global _scratch_noted
     way_out = "Set QUADRATUS_SCRATCH_DIR to a folder only you can read and write."
@@ -255,9 +317,11 @@ def scratch_root() -> str:
         while not os.path.lexists(probe) and probe.parent != probe:
             missing.append(probe)
             probe = probe.parent
+        made = False
         for folder in reversed(missing):
             try:
                 os.mkdir(folder, 0o700)
+                made = folder == root
             except FileExistsError:
                 pass  # another run made it first
         info = os.lstat(root)
@@ -272,6 +336,8 @@ def scratch_root() -> str:
             raise ProviderError(
                 f"The scratch folder {root} is open to other users (mode "
                 f"{stat.S_IMODE(info.st_mode):o}). Make it private (chmod 700) or name another. {way_out}")
+    if made or not os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip():
+        _mark_scratch(root)
     if not _scratch_noted:
         try:
             inside_temp = root.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())

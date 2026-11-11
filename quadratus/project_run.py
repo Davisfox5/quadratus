@@ -275,7 +275,8 @@ def _refuse_agent_config(project, allowed=False, progress=None):
 
 
 #: The most of an earlier run's ``result.json`` the preflight reads, how many
-#: run folders it lists and how many of the newest it looks into for one.
+#: run folders it lists, and how many of the newest records it reads (by
+#: name, and again by when they were written).
 _MAX_OLD_RECORD_BYTES = 32 * 1024 * 1024
 _MAX_RUNS_LISTED = 20_000
 _NEWEST_RUNS_TRIED = 20
@@ -308,11 +309,23 @@ def _read_bounded(path, limit):
         os.close(fd)
 
 
-def _newest_run_record(state):
-    """``(run id, record, note)`` for the newest run folder under ``state``
-    that holds a ``result.json``. ``record`` is None when there is none or it
-    cannot be read, and ``note`` then says why when that is worth saying. An
-    old record is untrusted input: nothing about it raises."""
+def _recent_run_records(state):
+    """``(records, notes)``: the earlier run records the standing-finding
+    preflight reads, oldest run name first. Each is ``dict(run, written,
+    paths, accepted)``: the folder's name, when its ``result.json`` was last
+    written (lstat ctime, which no write can set back), the watched paths it
+    recorded as changed and the ones its operator accepted at its start.
+
+    Not one record but a window of them. The newest-named folder alone was
+    the test, and ``runs`` is a folder an editing call can write: the call
+    that planted a path added one folder holding ``{}`` and the finding was
+    gone (final review, trust_transport 3). The window is the newest
+    ``_NEWEST_RUNS_TRIED`` records by name and the same number by when they
+    were written. A run's own record is written after its last call, so no
+    folder that run's calls made can be written later than it, however many
+    there are and whatever they are named. A folder with no record takes no
+    place in either. An old record is untrusted input: nothing about it
+    raises, and one that cannot be read is a note."""
     runs = Path(state) / 'runs'
     try:
         names = []
@@ -323,38 +336,78 @@ def _newest_run_record(state):
                 if entry.is_dir(follow_symlinks=False):
                     names.append(entry.name)
     except FileNotFoundError:
-        return '', None, ''
+        return [], []
     except OSError as exc:
-        return '', None, f'the run records under {runs} could not be listed ({type(exc).__name__})'
-    for name in sorted(names, reverse=True)[:_NEWEST_RUNS_TRIED]:
-        path = runs / name / 'result.json'
+        return [], [f'the run records under {runs} could not be listed ({type(exc).__name__})']
+    written = {}
+    for name in names:
         try:
-            data = _read_bounded(path, _MAX_OLD_RECORD_BYTES)
-        except FileNotFoundError:
+            written[name] = os.lstat(runs / name / 'result.json').st_ctime_ns
+        except OSError:
             continue        # a run that ended before it wrote a record
+    window = set(sorted(written, reverse=True)[:_NEWEST_RUNS_TRIED])
+    window |= set(sorted(written, key=lambda name: (written[name], name), reverse=True)[:_NEWEST_RUNS_TRIED])
+    records, notes = [], []
+    for name in sorted(window):
+        try:
+            data = _read_bounded(runs / name / 'result.json', _MAX_OLD_RECORD_BYTES)
         except OSError as exc:
-            return name, None, f'the record of run {name} could not be read ({exc})'
+            notes.append(f'the record of run {name} could not be read ({exc})')
+            continue
         try:
             record = json.loads(data.decode('utf-8', errors='replace'))
         except (ValueError, RecursionError) as exc:
-            return name, None, f'the record of run {name} is not readable JSON ({type(exc).__name__})'
+            notes.append(f'the record of run {name} is not readable JSON ({type(exc).__name__})')
+            continue
         if not isinstance(record, dict):
-            return name, None, f'the record of run {name} is not a JSON object'
-        return name, record, ''
-    return '', None, ''
+            notes.append(f'the record of run {name} is not a JSON object')
+            continue
+        watch, trust = record.get('project_watch'), record.get('trust')
+        paths = watch.get('paths') if isinstance(watch, dict) else None
+        accepted = trust.get('watched_paths_accepted') if isinstance(trust, dict) else None
+        records.append(dict(
+            run=name, written=written[name],
+            paths=[p for p in paths if isinstance(p, dict) and isinstance(p.get('path'), str)]
+            if isinstance(paths, list) else [],
+            accepted={a['path'] for a in accepted if isinstance(a, dict) and isinstance(a.get('path'), str)}
+            if isinstance(accepted, list) else set()))
+    return records, notes
+
+
+def _recorded_watch_paths(records):
+    """Every watched path the records name as changed, oldest record first,
+    each with the ``run`` that recorded it: the union, so no one record can
+    clear what another recorded.
+
+    A path a later run's operator accepted is left out, or one acceptance
+    would have to be repeated for every run that still has the old record
+    in its window. Later means by name and by when the record was written:
+    a record made during the run that planted the path can name itself
+    anything, but it was written before that run's own record and so
+    accepts nothing in it."""
+    entries = []
+    for index, old in enumerate(records):
+        accepted = set()
+        for later in records[index + 1:]:
+            if later['written'] > old['written']:
+                accepted |= later['accepted']
+        entries += [dict(entry, run=old['run']) for entry in old['paths'] if entry['path'] not in accepted]
+    return entries
 
 
 def _refuse_standing_watch_findings(project, state, accepted=False, progress=None):
-    """Refuse, before any model call, a project in which a watched path the
-    last run recorded as changed still holds what that run recorded.
+    """Refuse, before any model call, a project in which a watched path an
+    earlier run recorded as changed still holds what that run recorded.
 
     The in-place stop ends with its run (quadratus.project_watch). Started
     again with nothing removed, the new run listed the planted git hook or
     link as its baseline, every later check passed on top of it, and no
     diff or review copy ever showed it. So the finding is carried in the
-    run's record and asked about here. The operator removes or restores the
-    path, or accepts it for this run. A record that cannot be read is said
-    and is not a refusal: it proves nothing either way.
+    run's record and asked about here, from every recent record and not
+    only the newest (``_recent_run_records``). The operator removes or
+    restores the path, or accepts it, which later runs then read from the
+    accepting run's record and do not ask about again. A record that cannot be read is said and
+    is not a refusal: it proves nothing either way.
     """
     from .project_watch import (
         ACCEPT_WATCHED_PATHS_ENV,
@@ -364,37 +417,48 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
         still_in_place,
         watched_paths_accepted,
     )
-    run_id, record, note = _newest_run_record(state)
-    if note and progress:
-        progress(f'Watched paths: {note}, so whether the last run left a watched path changed is '
+    records, notes = _recent_run_records(state)
+    for note in notes[:_NEWEST_RUNS_TRIED] if progress else ():
+        progress(f'Watched paths: {note}, so whether that run left a watched path changed is '
                  'not known from it.')
-    recorded = ((record or {}).get('project_watch') or {}) if isinstance(record, dict) else {}
-    paths = recorded.get('paths') if isinstance(recorded, dict) else None
-    if not isinstance(paths, list) or not paths:
+    paths = _recorded_watch_paths(records)
+    if not paths:
         return []
-    way_out = ('Inspect each one, then remove or restore it, or accept them as they are for this run '
+    # Said as it works: an acceptance is written to the accepting run's
+    # record and later runs read it there, so they do not ask again about the
+    # same paths (final review of the 1110 batch, run_and_surfaces 3).
+    way_out = ('Inspect each one, then remove or restore it, or accept them as they are '
                'with --accept-watched-paths (accept_watched_paths=True for run_project or run_baseline) '
-               f'or {ACCEPT_WATCHED_PATHS_ENV}=1.')
+               f'or {ACCEPT_WATCHED_PATHS_ENV}=1. An acceptance is written to that run\'s record, and '
+               'later runs do not ask about the same paths again.')
     try:
         listing = ProjectWatch(project.root, exclude=project.exclude).listing()
     except WatchUnavailable as exc:
         if watched_paths_accepted(accepted):
             return []
+        named = ', '.join(sorted({entry['run'] for entry in paths})[-3:])
         raise ValueError(
-            f'Run {run_id} recorded changes to watched paths in this project, and the project could '
+            f'Run {named} recorded changes to watched paths in this project, and the project could '
             f'not be listed to see whether they are still there ({exc}). Nothing was run and no model '
             f'was called. {way_out}') from exc
     standing = still_in_place(paths, listing)
     if not standing:
         return []
+    # The latest record of a path is the one that was compared.
+    recorded_by = {entry['path']: entry['run'] for entry in paths}
+    by = sorted({recorded_by[s['path']] for s in standing})
     named = describe((f"{s['path']}" + (f" [{s['kind']}]" if s['kind'] else ''),
                       s['what'] + (', and written to since' if s.get('since') else '')) for s in standing)
     if watched_paths_accepted(accepted):
         if progress:
-            progress(f'Watched paths run {run_id} left changed, accepted by the operator for this run: {named}')
+            progress(f"Watched paths run {', '.join(by[-3:])} left changed, accepted by the operator "
+                     f'for this run: {named}')
         return standing
+    last = max(record['run'] for record in records)
+    who = (f'The last run on this project ({last})' if by == [last] else
+           f"Earlier runs on this project ({', '.join(by[-3:])}{' and more' if len(by) > 3 else ''})")
     raise ValueError(
-        f'The last run on this project ({run_id}) recorded that an editing call changed paths outside '
+        f'{who} recorded that an editing call changed paths outside '
         f'the measured source that no task may change, and the change is still in place: {named}. '
         'No measured diff or review copy shows them, so a new run would take them as its starting '
         f'point and every check would run on top of them. Nothing was run and no model was called. {way_out}')

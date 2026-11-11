@@ -324,10 +324,14 @@ def test_a_baseline_refuses_a_scratch_root_inside_the_project_before_anything_is
 
 
 def test_a_baseline_sweeps_stale_scratch_copies_as_a_project_run_does(env, tmp_path, monkeypatch):
+    from quadratus.providers import scratch_root
     scratch = tmp_path / "scratch"
-    scratch.mkdir(mode=0o700)
     monkeypatch.setenv("QUADRATUS_SCRATCH_DIR", str(scratch))
-    stale, fresh = scratch / "quadratus-review-old", scratch / "quadratus-review-new"
+    # Made by the harness, so marked as its own to sweep, and named exactly as
+    # it names a copy: a folder the test made, or a looser name, is no longer
+    # swept (final review, trust_transport 6; tests/test_review1110_fix_b.py).
+    assert scratch_root() == str(scratch)
+    stale, fresh = scratch / "quadratus-review-old00000", scratch / "quadratus-review-new00000"
     stale.mkdir()
     fresh.mkdir()
     old = time.time() - 2 * 86400

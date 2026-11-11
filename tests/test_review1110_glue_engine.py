@@ -1054,7 +1054,11 @@ def test_an_old_record_that_cannot_be_read_is_a_note_and_never_a_refusal(tmp_pat
     assert (bool(noted) and said in noted[0]) if said else not noted
 
 
-def test_the_preflight_reads_the_newest_record_only_and_within_its_bound(tmp_path, monkeypatch):
+def test_the_preflight_reads_every_recent_record_within_its_bounds(tmp_path, monkeypatch):
+    """Was "the newest record only": one folder named to sort last and
+    holding an empty record cleared the finding, and an editing call can
+    write that folder (final review, trust_transport 3; the cases are in
+    tests/test_review1110_fix_b.py)."""
     import json
 
     from quadratus import project_run
@@ -1063,17 +1067,18 @@ def test_the_preflight_reads_the_newest_record_only_and_within_its_bound(tmp_pat
     clean = root / ".quadratus" / "runs" / "99991231T000000Z-ffffffff"
     clean.mkdir()
     (clean / "result.json").write_text(json.dumps({"project_watch": {"findings": [], "paths": []}}))
-    assert _quiet_run(monkeypatch)(root).error == "", "a later clean run is the newest record"
-    # Oversized: said, and not a refusal.
+    with pytest.raises(ValueError, match="pre-commit"):
+        _quiet_run(monkeypatch)(root)
+    # Oversized: said, and not read.
     monkeypatch.setattr(project_run, "_MAX_OLD_RECORD_BYTES", 10)
-    newest = sorted((root / ".quadratus" / "runs").iterdir())[-1]
-    run_id, record, note = project_run._newest_run_record(root / ".quadratus")
-    assert run_id == newest.name and record is None and "larger than 10 bytes" in note
+    records, notes = project_run._recent_run_records(root / ".quadratus")
+    assert records == [] and len(notes) == 2 and all("larger than 10 bytes" in note for note in notes)
     # A link in a record's place is never followed.
     monkeypatch.setattr(project_run, "_MAX_OLD_RECORD_BYTES", 1 << 20)
-    (newest / "result.json").unlink()
-    (newest / "result.json").symlink_to("/etc/hostname")
-    assert project_run._newest_run_record(root / ".quadratus")[1] is None
+    (clean / "result.json").unlink()
+    (clean / "result.json").symlink_to("/etc/hostname")
+    records, notes = project_run._recent_run_records(root / ".quadratus")
+    assert len(records) == 1 and records[0]["run"] != clean.name and len(notes) == 1 and clean.name in notes[0]
 
 
 # -- item 15: an interrupt during the transcript copy ---------------------------
@@ -1103,8 +1108,12 @@ def test_leftovers_a_day_old_are_removed_and_nothing_else(tmp_path, monkeypatch)
 
     from quadratus import providers
     scratch = tmp_path / "scratch"
-    scratch.mkdir(mode=0o700)
     monkeypatch.setenv("QUADRATUS_SCRATCH_DIR", str(scratch))
+    # The harness makes the folder, and so marks it as its own to sweep. The
+    # names are exactly what it makes there: any name starting quadratus- or
+    # qw- used to go, a link included (final review, trust_transport 6;
+    # tests/test_review1110_fix_b.py).
+    assert providers.scratch_root() == str(scratch)
     outside = tmp_path / "precious"
     outside.mkdir()
     (outside / "keep.txt").write_text("kept")
@@ -1114,24 +1123,24 @@ def test_leftovers_a_day_old_are_removed_and_nothing_else(tmp_path, monkeypatch)
         os.utime(path, (old, old), follow_symlinks=False)
         return path
 
-    stale = scratch / "quadratus-review-abc"
+    stale = scratch / "quadratus-review-abcd1234"
     (stale / "pkg").mkdir(parents=True)
     (stale / "pkg" / "app.py").write_text("x = 1\n")
     (stale / "escape").symlink_to(outside)                  # a link inside a copy
     aged(stale)
-    aged(_touch(scratch / "quadratus-prompt-old.txt"))
+    aged(_touch(scratch / "quadratus-prompt-old_0000.txt"))
     bridge = scratch / "qw-12345678"
     bridge.mkdir()
     aged(bridge)
-    link = scratch / "quadratus-link"
-    link.symlink_to(outside)
+    link = scratch / "quadratus-review-link0000"
+    link.symlink_to(outside)                                # the harness makes no link there
     aged(link)
-    fresh = scratch / "quadratus-review-new"
+    fresh = scratch / "quadratus-review-new00000"
     fresh.mkdir()                                           # a run using it now
     theirs = aged(_touch(scratch / "notes.txt"))            # not the harness's name
     removed = providers.sweep_scratch()
-    assert sorted(removed) == ["quadratus-link", "quadratus-prompt-old.txt", "quadratus-review-abc", "qw-12345678"]
-    assert fresh.is_dir() and theirs.exists()
+    assert sorted(removed) == ["quadratus-prompt-old_0000.txt", "quadratus-review-abcd1234", "qw-12345678"]
+    assert fresh.is_dir() and theirs.exists() and link.is_symlink()
     assert (outside / "keep.txt").read_text() == "kept", "a link was followed"
     assert providers.sweep_scratch() == []
 
@@ -1144,8 +1153,7 @@ def test_a_provider_whose_scratch_folder_was_swept_makes_it_again(tmp_path, monk
 
     from quadratus import providers
     from quadratus.cli_providers import ClaudeCLIProvider
-    scratch = tmp_path / "scratch"
-    scratch.mkdir(mode=0o700)
+    scratch = tmp_path / "scratch"         # made by the harness, so it is one a run may sweep
     monkeypatch.setenv("QUADRATUS_SCRATCH_DIR", str(scratch))
     monkeypatch.setattr(ClaudeCLIProvider, "available", lambda _: True)
     provider = ClaudeCLIProvider("fixture")

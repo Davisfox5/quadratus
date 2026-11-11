@@ -17,7 +17,8 @@ Sensitive class (content hashed; any add, change, retarget or delete by an
 editing call fails the task as a scope violation, and nothing is reverted):
 
 * in a ``.git`` directory at any depth: ``config``, ``config.worktree``,
-  everything under ``hooks/`` and ``info/``, and the same inside
+  everything under ``hooks/`` and ``info/`` (but ``info/refs``, which git
+  itself rewrites on every gc and repack), and the same inside
   ``modules/``; a ``.git`` file (a worktree or submodule pointer);
 * every ``.env*`` file but ``.env.example``, the credential files and the
   vendor agent configuration (``project.withheld``, names compared without
@@ -25,11 +26,38 @@ editing call fails the task as a scope violation, and nothing is reverted):
 * ``.quadratus/policy.json`` and ``.quadratus/source-excludes.json``, and
   the two records the harness keeps across runs and writes only between
   calls, ``.quadratus/codebase-map.jsonl`` (rendered into every later
-  orchestrator and lead prompt) and ``.quadratus/scoreboard.jsonl``;
+  orchestrator and lead prompt) and ``.quadratus/scoreboard.jsonl``. The
+  same four names are read in the run's state folder when the operator put
+  it somewhere else inside the project (``--state-dir``): that folder is
+  the one path a run excludes from its source, so an excluded folder is
+  read as harness state;
 * every symlink in a walked directory, recorded by its target;
 * a Python file under a report or cache folder (the build-output names
   below other than ``project.PYTHON_OUTPUT_NAMES``): no tool writes one
-  there, and pytest collects a ``conftest.py`` from ``test-results/``.
+  there, and pytest collects a ``conftest.py`` from ``test-results/``;
+* what a test runner or an interpreter loads because of where it sits
+  (``LOADED_NAMES``, ``LOADED_SUFFIXES``, ``LOADED_PREFIXES`` and everything
+  under a ``__mocks__`` folder), in the places no other listing reads:
+  harness state, the tool caches (``__pycache__``, ``.pytest_cache``,
+  ``.ruff_cache``, ``.coverage``, ``.DS_Store``), the whole of a ``.git``
+  directory, and a stray ``.quadratus`` or ``.multi_llm`` folder. Final
+  review, 2026-11-11: with only ``.quadratus/__mocks__/mylib.js`` written,
+  a failing jest check passed, and a ``conftest.py`` in ``.pytest_cache/``
+  or ``.git/`` did the same to pytest under a project config that collects
+  dot folders; no listing showed either. Inside ``dist`` and ``build``,
+  where a real build writes Python and JavaScript, only the part of that
+  class no build has a reason to write is held to it
+  (``BUILD_LOADED_NAMES``, ``.pth`` files and ``__mocks__``); in a report
+  or cache folder, Python and ``.pth`` files and ``__mocks__``. In the
+  folders walked by name only, a link counts when it is so named or leads
+  to a folder, which pytest collects through; a link to a file under any
+  other name loads nothing, and the evidence check has its own rule for a
+  linked screenshot;
+* under a state folder's ``runs``: every run folder (by presence) and its
+  ``result.json`` (by lstat signature). The next run's preflight reads
+  those records, so an editing call that adds, removes or rewrites one is
+  changing what that preflight will be told. The harness writes a run's
+  own ``result.json`` once, after its last call.
 
 A sensitive change that is still in place stops the run: Fleet makes no
 further call for the project but the orchestrator's until the path is back
@@ -55,12 +83,17 @@ build): everything under a folder named in ``project.OUTPUT_NAMES``, a file
 so named, and a ``.quadratus`` or ``.multi_llm`` folder or file that is not
 the project's own state.
 
-Not watched: git internals a plain ``git status`` rewrites (the index,
-``HEAD``, refs, objects); dependency trees, which :mod:`quadratus.deptree`
-identifies; the harness's own state under the top-level ``.quadratus``
-other than the two files above; ``__pycache__``, ``.pytest_cache``,
-``.ruff_cache``, ``.coverage`` and ``.DS_Store``, which every test run
-rewrites; paths the operator excluded; anything outside the project.
+Not recorded: the content of git internals a plain ``git status`` rewrites
+(the index, ``HEAD``, refs, objects), of the harness's own state (run
+records, the activity log, artifacts, capture evidence, fixtures) and of
+the tool caches every test run rewrites. Those folders are still walked,
+by name only, for the loaded-by-position class above; the harness itself
+writes no file so named, so it never trips its own watch. Not watched at
+all: dependency trees, which :mod:`quadratus.deptree` identifies; a
+``.tox`` or ``.nox`` environment beyond the build-output signature (it is
+a dependency tree nobody identifies yet); compiled ``.pyc`` files;
+anything outside the project, which includes the real git directory of a
+linked worktree.
 
 Bounds are finite and fail closed, as in deptree: entries seen, bytes
 hashed and wall time, counted while walking. An overrun or a folder that
@@ -75,6 +108,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 import time
 from contextlib import contextmanager
@@ -98,7 +132,7 @@ from .project import (
 __all__ = ["ProjectWatch", "WatchListing", "WatchUnavailable", "AgentConfigRefused",
            "ACCEPT_WATCHED_PATHS_ENV", "WATCH_RECORD_LIMIT", "still_in_place", "watched_paths_accepted",
            "SensitiveChangeInPlace", "SENSITIVE_RULE", "ALLOW_AGENT_CONFIG_ENV", "agent_config", "agent_config_permitted",
-           "describe"]
+           "describe", "loaded_by_position"]
 
 MAX_ENTRIES = 250_000
 MAX_BYTES = 64 * 1024 * 1024
@@ -127,14 +161,47 @@ WATCH_RECORD_LIMIT = 200
 STATE_FILES = ("policy.json", "source-excludes.json", "codebase-map.jsonl", "scoreboard.jsonl")
 #: Why each is watched, for the listing's ``kinds``.
 _STATE_KINDS = {"codebase-map.jsonl": "memory", "scoreboard.jsonl": "memory"}
-#: Caches every test run rewrites. Not source and not watched.
+#: Caches every test run rewrites. Not source; walked by name only (``_unlisted``).
 _CACHES = frozenset({"__pycache__", ".pytest_cache", ".ruff_cache", ".coverage", ".DS_Store"})
+#: What a test runner or an interpreter loads because of where it sits, by
+#: lowercased name: pytest's conftest and any module it can collect or
+#: import, the interpreter's start-up files, and the files jest, vitest and
+#: pytest take their configuration (or a package's identity) from.
+LOADED_NAMES = frozenset({"conftest.py", "sitecustomize.py", "usercustomize.py", "package.json",
+                          "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"})
+LOADED_SUFFIXES = (".py", ".pth")
+LOADED_PREFIXES = ("jest.config.", "vitest.config.")
+#: A folder whose files a JavaScript runner loads in place of the modules
+#: they are named after. Everything below one is in the class.
+MOCKS_DIR = "__mocks__"
+#: The part of the class no build writes, held to it inside a build folder.
+BUILD_LOADED_NAMES = frozenset({"conftest.py", "sitecustomize.py", "usercustomize.py"})
+BUILD_LOADED_SUFFIXES = (".pth",)
+#: Environments a tool fills with installed packages: dependency trees in
+#: all but name, and still only signed as build output.
+_ENVIRONMENTS = frozenset({".tox", ".nox"})
+#: Build folders, where a real build writes Python and JavaScript.
+_BUILD = PYTHON_OUTPUT_NAMES - _ENVIRONMENTS
+#: Under a state folder: the run records the next run's preflight reads.
+RUNS_DIR = "runs"
+RUN_RECORD = "result.json"
 #: Report and cache folders: output no tool fills with Python.
 _PYTHON_FREE = OUTPUT_NAMES - PYTHON_OUTPUT_NAMES
 #: Folders named like harness state that are not the project's own state.
 _STRAY_STATE = frozenset({".quadratus", ".multi_llm"})
 _GIT_FILES = frozenset({"config", "config.worktree"})
 _GIT_TREES = frozenset({"hooks", "info"})
+#: Git's own housekeeping inside a watched tree, by tree: ``info/refs`` is
+#: rewritten by every gc and repack (repack.updateServerInfo), which an
+#: editor's background fetch can start in the middle of an editing call, and
+#: no local command reads it. ``info/exclude``, ``info/attributes`` and the
+#: rest stay watched.
+_GIT_HOUSEKEEPING = {"info": frozenset({"refs"})}
+#: Git's ledgers. A branch can be named ``fix-setup.py``, so a file below
+#: one that holds what git itself writes there is not code (``_git_ledger``).
+_GIT_LEDGERS = frozenset({"refs", "logs"})
+_REF = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\n?")
+_REFLOG = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64}) (?:[0-9a-f]{40}|[0-9a-f]{64}) ")
 #: Git's own storage inside a module's git directory: large, and rewritten
 #: by ordinary git commands.
 _GIT_INTERNALS = frozenset({"objects", "refs", "logs", "branches", "worktrees", "lfs", "rr-cache"})
@@ -152,9 +219,53 @@ SENSITIVE_RULE = (
     + "); " + ", ".join(".quadratus/" + name for name in STATE_FILES)
     + "; Python files inside a report or cache folder ("
     + ", ".join(sorted(_PYTHON_FREE))
-    + "). A change to one fails the task as out of scope, with the work kept and the path named, "
+    + "); another run's folder or " + RUN_RECORD + " under .quadratus/" + RUNS_DIR
+    + "; files a test runner or interpreter loads because of where they sit ("
+    + ", ".join(sorted(LOADED_NAMES) + ["any *" + s for s in LOADED_SUFFIXES]
+                + [p + "*" for p in LOADED_PREFIXES] + ["anything under a " + MOCKS_DIR + " folder"])
+    + ") anywhere inside .quadratus, a .git folder or a tool cache ("
+    + ", ".join(sorted(_CACHES))
+    + "); and inside " + " or ".join(sorted(_BUILD)) + ", only "
+    + ", ".join(sorted(BUILD_LOADED_NAMES) + ["any *" + s for s in BUILD_LOADED_SUFFIXES]
+                + ["anything under a " + MOCKS_DIR + " folder"])
+    + " (in a report or cache folder, *.pth and " + MOCKS_DIR + " as well)"
+    ". A change to one fails the task as out of scope, with the work kept and the path named, "
     "and no later task runs while it is in place."
 )
+
+
+def _loaded(name: str) -> str:
+    """Why a file so named is loaded by position, or ''. ``name`` is lowercased."""
+    return ("loaded-code" if name in LOADED_NAMES or name.endswith(LOADED_SUFFIXES)
+            or name.startswith(LOADED_PREFIXES) else "")
+
+
+def loaded_by_position(parts) -> bool:
+    """Whether a path is in the class a test runner or an interpreter loads
+    because of where it sits: its name is one of the class, or a folder
+    above it is ``__mocks__``. For a caller that writes a file where no
+    listing reads (harness state), on a model's word, between calls."""
+    parts = tuple(str(part).lower() for part in parts)
+    return bool(parts) and (MOCKS_DIR in parts[:-1] or bool(_loaded(parts[-1])))
+
+
+def _build_loaded(name: str) -> str:
+    """The same inside a build folder: only what no build writes."""
+    return "loaded-code" if name in BUILD_LOADED_NAMES or name.endswith(BUILD_LOADED_SUFFIXES) else ""
+
+
+def _report_loaded(name: str) -> str:
+    """The same inside a report or cache folder: no tool writes Python there."""
+    return "report-code" if name.endswith(".py") else "loaded-code" if name.endswith(".pth") else ""
+
+
+def _output_rule(name: str):
+    """The loaded-by-position test for one build-output or stray-state folder."""
+    if name in _STRAY_STATE:
+        return _loaded
+    if name in _BUILD:
+        return _build_loaded
+    return _report_loaded if name in _PYTHON_FREE else None
 
 
 #: The operator's standing permission to run in a project that carries
@@ -205,7 +316,8 @@ class WatchListing:
     #: path -> lstat signature, for the build-output class.
     output: Dict[str, tuple] = field(default_factory=dict)
     #: path -> why a sensitive path is watched: git, secret, credential,
-    #: agent-config, policy, memory, symlink or report-code.
+    #: agent-config, policy, memory, symlink, report-code, loaded-code or
+    #: run-record.
     kinds: Dict[str, str] = field(default_factory=dict)
     seen: int = 0
     read_bytes: int = 0
@@ -276,7 +388,7 @@ class ProjectWatch:
         if state["seen"] > self.max_entries:
             raise WatchUnavailable(
                 f"more than {self.max_entries} entries while listing watched paths (at {rel}). "
-                "Remove build output the project does not need, or raise "
+                "Remove build output or old run records the project does not need, or raise "
                 "QUADRATUS_WATCH_MAX_ENTRIES.")
         if self.clock() > state["stop"]:
             raise WatchUnavailable(
@@ -395,11 +507,13 @@ class ProjectWatch:
                 st = self._lstat(entry, rel)
                 if st is None:
                     continue
-                if not parts and name == ".quadratus":
+                if (not parts and name == ".quadratus") or (
+                        self._exclude and f"{self.root}/{rel}" in self._exclude):
+                    # Harness state: the project's own .quadratus, and the
+                    # run's state folder when the operator put it elsewhere
+                    # in the project, which is the one path a run excludes.
                     if self.state_files:
-                        self._state(fd, name, st, state)
-                    continue
-                if self._exclude and f"{self.root}/{rel}" in self._exclude:
+                        self._state(fd, name, child, st, state)
                     continue
                 if name == ".git":
                     self._git(fd, name, child, st, state)
@@ -410,16 +524,15 @@ class ProjectWatch:
                         "agent-config" if name.lower() in AGENT_CONFIG_PARENTS else "symlink")
                     self._sensitive(fd, name, rel, st, state, kind)
                 elif stat.S_ISDIR(st.st_mode):
-                    if name in _CACHES:
-                        continue
                     with self._dir(fd, name, rel) as sub:
                         if sub is None:
                             continue
-                        if name.lower() in AGENT_CONFIG_DIRS:
+                        if name in _CACHES:
+                            self._unlisted(sub, child, state)
+                        elif name.lower() in AGENT_CONFIG_DIRS:
                             self._tree(sub, child, state, kind="agent-config")
                         elif name in OUTPUT_NAMES or name in _STRAY_STATE:
-                            self._tree(sub, child, state, kind=None,
-                                       python_free=name in _PYTHON_FREE)
+                            self._tree(sub, child, state, kind=None, loads=_output_rule(name))
                         else:
                             self._source(sub, child, state)
                 elif stat.S_ISREG(st.st_mode) and (name in OUTPUT_NAMES or name in _STRAY_STATE):
@@ -433,11 +546,14 @@ class ProjectWatch:
                     if kind:
                         self._sensitive(fd, name, rel, st, state, kind)
 
-    def _tree(self, fd, parts, state, *, kind, python_free=False):
+    def _tree(self, fd, parts, state, *, kind, loads=None, mocks=False, skip=frozenset()):
         """Every entry below one folder: hashed into the sensitive class when
         ``kind`` names why it is watched, else signed into the output class.
-        ``python_free`` marks a report or cache folder, where a Python file
-        is sensitive: nothing writes one there but a call hiding code."""
+        ``loads`` is the folder's loaded-by-position test (``_output_rule``):
+        a file it names, and everything under a ``__mocks__`` folder
+        (``mocks``), is sensitive, since nothing writes one there but a call
+        hiding code. ``skip`` names regular files directly in this folder
+        that are left out (git's own housekeeping)."""
         self._deep(parts)
         with self._scan(fd, "/".join(parts)) as listing:
             for entry in listing:
@@ -448,12 +564,17 @@ class ProjectWatch:
                 st = self._lstat(entry, rel)
                 if st is None:
                     continue
+                lower = name.lower()
+                why = ("loaded-code" if mocks else loads(lower)) if loads is not None else ""
                 if stat.S_ISDIR(st.st_mode):
                     with self._dir(fd, name, rel) as sub:
                         if sub is not None:
-                            self._tree(sub, child, state, kind=kind, python_free=python_free)
-                elif python_free and name.lower().endswith(".py"):
-                    self._sensitive(fd, name, rel, st, state, "report-code")
+                            self._tree(sub, child, state, kind=kind, loads=loads,
+                                       mocks=mocks or (loads is not None and lower == MOCKS_DIR))
+                elif name in skip and stat.S_ISREG(st.st_mode):
+                    continue
+                elif why:
+                    self._sensitive(fd, name, rel, st, state, why)
                 elif kind is None:
                     target = self._target(fd, name, rel) if stat.S_ISLNK(st.st_mode) else ""
                     if target is not None:
@@ -461,25 +582,149 @@ class ProjectWatch:
                 else:
                     self._sensitive(fd, name, rel, st, state, kind)
 
-    def _state(self, parent_fd, name, st, state):
-        """The project's own ``.quadratus``: only the files a later run would
-        trust or measure by. The run's records change during every call."""
+    def _named(self, fd, leaf, rel, state):
+        """The lstat of one name in an open folder, or None when it is not there."""
+        self._tick(state, rel)
+        try:
+            return os.lstat(leaf, dir_fd=fd)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise WatchUnavailable(f"could not stat {rel}: {exc}") from exc
+
+    def _state(self, parent_fd, name, parts, st, state):
+        """One harness state folder: the files a later run would trust or
+        measure by, the run records the next preflight reads, and whatever
+        else in it a runner loads by position. The rest of a run's records
+        change during every call and are not recorded."""
+        rel = "/".join(parts)
         if stat.S_ISLNK(st.st_mode):
-            self._sensitive(parent_fd, name, name, st, state, "policy")
+            self._sensitive(parent_fd, name, rel, st, state, "policy")
             return
         if not stat.S_ISDIR(st.st_mode):
             return
-        with self._dir(parent_fd, name, name) as fd:
-            for leaf in STATE_FILES if fd is not None else ():
-                rel = f"{name}/{leaf}"
+        with self._dir(parent_fd, name, rel) as fd:
+            if fd is None:
+                return
+            for leaf in STATE_FILES:
+                found = self._named(fd, leaf, f"{rel}/{leaf}", state)
+                if found is not None:
+                    self._sensitive(fd, leaf, f"{rel}/{leaf}", found, state,
+                                    _STATE_KINDS.get(leaf, "policy"))
+            self._unlisted(fd, parts, state, own=frozenset(STATE_FILES), runs=True)
+
+    def _unlisted(self, fd, parts, state, *, mocks=False, link="symlink", ledger="",
+                  own=frozenset(), runs=False):
+        """A folder no other listing reads (harness state, a tool cache, git's
+        own storage): walked by name, never through a link, recording only
+        what a runner loads by position and every link that leads to a
+        folder. Everything else there is rewritten by tools and the harness
+        during a call, so it is neither hashed nor signed, and costs one
+        directory entry.
+
+        ``own`` names entries of this folder already recorded; ``runs``
+        marks a state folder, whose ``runs`` holds the run records;
+        ``ledger`` is ``refs`` or ``logs`` below one of git's."""
+        self._deep(parts)
+        with self._scan(fd, "/".join(parts)) as listing:
+            for entry in listing:
+                name = entry.name
+                child = (*parts, name)
+                rel = "/".join(child)
                 self._tick(state, rel)
-                try:
-                    found = os.lstat(leaf, dir_fd=fd)
-                except FileNotFoundError:
+                lower = name.lower()
+                if lower in own:
                     continue
+                try:
+                    is_link = entry.is_symlink()
+                    is_dir = not is_link and entry.is_dir(follow_symlinks=False)
                 except OSError as exc:
                     raise WatchUnavailable(f"could not stat {rel}: {exc}") from exc
-                self._sensitive(fd, leaf, rel, found, state, _STATE_KINDS.get(leaf, "policy"))
+                if is_dir:
+                    with self._dir(fd, name, rel) as sub:
+                        if sub is None:
+                            continue
+                        if runs and lower == RUNS_DIR:
+                            self._runs(sub, child, state)
+                        else:
+                            self._unlisted(sub, child, state, mocks=mocks or lower == MOCKS_DIR,
+                                           link=link, ledger=ledger)
+                elif mocks or _loaded(lower) or (is_link and self._leads_to_folder(entry)):
+                    st = self._lstat(entry, rel)
+                    if st is None or (ledger and not is_link and self._git_ledger(fd, name, st, ledger, state)):
+                        continue
+                    self._sensitive(fd, name, rel, st, state, link if is_link else "loaded-code")
+
+    @staticmethod
+    def _leads_to_folder(entry) -> bool:
+        """Whether a link in an unlisted folder leads to a folder right now.
+        pytest collects through such a link, so it is recorded like the code
+        it can deliver. A link to a file is loaded only under a name in the
+        class, and is otherwise left to whoever owns the folder: the
+        evidence check stops a run on a linked screenshot by its own rule.
+        The target is asked about and never opened; one that cannot be
+        asked about counts."""
+        try:
+            return entry.is_dir()
+        except OSError:
+            return True
+
+    def _runs(self, fd, parts, state):
+        """A state folder's ``runs``: each run folder by presence and its
+        ``result.json`` by lstat signature, which any rewrite changes. A
+        record can be megabytes and there is one per run ever made here, so
+        none is hashed. The current run's folder is there before its first
+        call and its record is written after its last, so neither changes
+        under an editing call unless the call did it."""
+        self._deep(parts)
+        with self._scan(fd, "/".join(parts)) as listing:
+            for entry in listing:
+                name = entry.name
+                child = (*parts, name)
+                rel = "/".join(child)
+                self._tick(state, rel)
+                st = self._lstat(entry, rel)
+                if st is None:
+                    continue
+                if not stat.S_ISDIR(st.st_mode):
+                    if stat.S_ISLNK(st.st_mode) or _loaded(name.lower()):
+                        self._sensitive(fd, name, rel, st, state,
+                                        "symlink" if stat.S_ISLNK(st.st_mode) else "loaded-code")
+                    continue
+                with self._dir(fd, name, rel) as sub:
+                    if sub is None:
+                        continue
+                    state["sensitive"][rel] = ("dir",)
+                    state["kinds"][rel] = "run-record"
+                    record = f"{rel}/{RUN_RECORD}"
+                    found = self._named(sub, RUN_RECORD, record, state)
+                    if found is not None and stat.S_ISREG(found.st_mode):
+                        state["sensitive"][record] = ("stat", *self._signature(found))
+                        state["kinds"][record] = "run-record"
+                    elif found is not None:
+                        self._sensitive(sub, RUN_RECORD, record, found, state, "run-record")
+                    self._unlisted(sub, child, state, own=frozenset({RUN_RECORD}))
+
+    def _git_ledger(self, fd, name, st, ledger, state) -> bool:
+        """Whether a file below git's ``refs`` or ``logs`` holds what git
+        writes there, so that a branch named like code is not taken for it.
+        A ref is one object name and nothing else; a reflog starts with two.
+        Neither can run: the first is one bare name or number, and two names
+        side by side are a syntax error in any file a runner would load."""
+        if not stat.S_ISREG(st.st_mode) or (ledger == "refs" and st.st_size > 65):
+            return False
+        try:
+            handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=fd)
+        except OSError:
+            return False
+        try:
+            head = os.read(handle, 160) if stat.S_ISREG(os.fstat(handle).st_mode) else b""
+        except OSError:
+            return False
+        finally:
+            os.close(handle)
+        state["read"] += len(head)
+        return bool(_REF.fullmatch(head) if ledger == "refs" else _REFLOG.match(head))
 
     def _git(self, parent_fd, name, parts, st, state):
         rel = "/".join(parts)
@@ -492,9 +737,11 @@ class ProjectWatch:
                 self._git_dir(fd, parts, state, modules=False)
 
     def _git_dir(self, fd, parts, state, *, modules):
-        """One git directory: its config, hooks and info. Under ``modules``
-        every folder may be a submodule's git directory or a path component
-        above one, so each is read the same way."""
+        """One git directory: its config, hooks and info, and by name only
+        the rest of it, where pytest collects a ``conftest.py`` as readily
+        as anywhere once a project's config lets it into dot folders. Under
+        ``modules`` every folder may be a submodule's git directory or a
+        path component above one, so each is read the same way."""
         self._deep(parts)
         with self._scan(fd, "/".join(parts)) as listing:
             for entry in listing:
@@ -508,18 +755,21 @@ class ProjectWatch:
                 if stat.S_ISLNK(st.st_mode):
                     self._sensitive(fd, name, rel, st, state, "git")
                 elif stat.S_ISDIR(st.st_mode):
-                    below = name == "modules" or (modules and name not in _GIT_INTERNALS)
-                    if name not in _GIT_TREES and not below:
-                        continue
                     with self._dir(fd, name, rel) as sub:
                         if sub is None:
                             continue
                         if name in _GIT_TREES:
-                            self._tree(sub, child, state, kind="git")
-                        else:
+                            self._tree(sub, child, state, kind="git",
+                                       skip=_GIT_HOUSEKEEPING.get(name, frozenset()))
+                        elif name == "modules" or (modules and name not in _GIT_INTERNALS):
                             self._git_dir(sub, child, state, modules=True)
+                        else:
+                            self._unlisted(sub, child, state, mocks=name.lower() == MOCKS_DIR, link="git",
+                                           ledger=name if name in _GIT_LEDGERS else "")
                 elif stat.S_ISREG(st.st_mode) and name in _GIT_FILES:
                     self._sensitive(fd, name, rel, st, state, "git")
+                elif _loaded(name.lower()):
+                    self._sensitive(fd, name, rel, st, state, "loaded-code")
 
 
 def agent_config(listing: WatchListing) -> Dict[str, tuple]:

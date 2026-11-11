@@ -510,7 +510,9 @@ def test_python_in_a_report_or_cache_folder_is_sensitive_and_a_build_is_not(tmp_
                "pkg/test-results/CONFTEST.PY", ".hypothesis/conftest.py", "junit.xml/conftest.py"]
     reports = ["test-results/junit.xml", "playwright-report/index.html", "htmlcov/app_py.html",
                "test-results/run/trace.zip"]
-    built = ["build/lib/pkg/conftest.py", "dist/pkg/app.py", ".tox/py/lib/site.py", ".nox/s/lib/site.py"]
+    # A conftest.py in build/ left this list on 2026-11-11: it turned a failing
+    # check green as an observation (tests/test_review1110_fix_b.py).
+    built = ["build/lib/pkg/module.py", "dist/pkg/app.py", ".tox/py/lib/site.py", ".nox/s/lib/site.py"]
     _write(root, {name: "x" for name in planted + reports + built})
     (root / "test-results/linked.py").symlink_to("/etc/hostname")
     assert not Project(root).contents().keys() & set(planted + reports + built)
