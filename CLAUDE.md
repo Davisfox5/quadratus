@@ -1313,7 +1313,10 @@ Key design decisions already settled:
   missing evidence is unverified, never success. Offline canaries in
   `tests/lifecycle/test_truth_canaries.py` drive the real run with scripted
   replies through the known bad cases. Review priority and batching rules are
-  in `docs/DEVELOPMENT_PROCESS.md` ("Spending less per fix").
+  in `docs/DEVELOPMENT_PROCESS.md` ("Spending less per fix"). Since
+  2026-11-11 it also answers unverified when an editing call changed code
+  in a folder the measured diff does not read, or when the run started
+  over a watched path the operator accepted.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
@@ -1502,6 +1505,17 @@ Key design decisions already settled:
   no renders has, and is never closed as design-verified. A folder named
   `views` or `static` does not count by itself for this after-the-fact
   rule; the declared-scope rule is unchanged.
+- **A review of the whole batch found what the per-workstream reviews
+  missed** (final review, 2026-11-11; `project_watch.py`, `browser.py`,
+  `baseline.py`). Code planted in a folder no listing read (a tool cache,
+  the state folder, the top of `.git`) was loaded by a test runner and
+  turned a failing check green, so the watch walks those too and what a
+  runner loads by position there is a watched change. The standing-finding
+  preflight reads every recent run record, and an acceptance lasts. A
+  pinned browser's whole network ends at a dead-end proxy apart from the
+  held origins, because a worker's WebSocket reached another loopback
+  service while the render read clean. A baseline runs an approved
+  policy's command checks as a project run does.
 - **The repo's statements about itself are tested** (review 2026-11-10,
   design 4 and 7; `tests/test_review1110_docs.py`,
   `tests/test_review1110_docs_final.py`). Every drifted statement the review

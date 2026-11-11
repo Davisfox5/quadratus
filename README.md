@@ -472,9 +472,17 @@ that changes each:
   every symlink. A change to one fails the task and names the path; nothing
   is deleted. While the change is in place the run stops, and the next run
   on that project is refused before any model call until you remove or
-  restore the path, or accept it for one run with `--accept-watched-paths`
-  (`QUADRATUS_ACCEPT_WATCHED_PATHS=1`). A change in build output (`dist`,
-  `build`, `.tox`, `.nox`) is recorded and shown to reviewers, not failed.
+  restore the path, or accept it with `--accept-watched-paths`
+  (`QUADRATUS_ACCEPT_WATCHED_PATHS=1`). An acceptance is written to that
+  run's record, later runs do not ask about the same path again, and
+  `tools/truth_check.py` reports a run started that way as unverified. The
+  watch also walks the folders no listing reads (tool caches, the state
+  folder, the top of `.git`): a file a test runner loads by position there
+  (a `conftest.py`, any `.py` file, anything under `__mocks__`, a `.pth`
+  file, a runner config) is a watched change too. A change in build output
+  (`dist`, `build`, `.tox`, `.nox`) is recorded and shown to reviewers, not
+  failed, and the truth check reports a run unverified when that change
+  was to code.
   The watch brackets editing calls only, and nothing outside the project is
   watched. Its bounds are `QUADRATUS_WATCH_MAX_ENTRIES`,
   `QUADRATUS_WATCH_MAX_BYTES` and `QUADRATUS_WATCH_SECONDS`.
@@ -496,7 +504,7 @@ that changes each:
   scratch live under `~/.cache/quadratus/scratch` (or
   `QUADRATUS_SCRATCH_DIR`): a real folder only you can read, outside the
   project. A run removes its own leftovers older than 24 hours when it
-  starts.
+  starts, and only in a folder the harness itself made and marked.
 - **The GUI answers only to this machine and to its own page.** It checks
   the Host header (127.0.0.1, localhost or [::1] on its own port; no setting
   changes that), refuses requests a browser marks as coming from another
