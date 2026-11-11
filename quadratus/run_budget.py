@@ -363,6 +363,21 @@ class RunBudget:
             self._persist()
             raise RunBudgetExceeded(f'Run stopped: {self._reason}')
 
+    def covers(self, attempts: int) -> bool:
+        """Whether the budget left would admit ``attempts`` more calls at
+        once: that many calls under the call limit, their full reserves in
+        the tokens left after the calls in flight, time on the clock, and no
+        stop already latched. It reserves nothing and changes nothing; the
+        calls are admitted one by one by :meth:`reserve` as always. A contest
+        forms only when this covers both drafts and the judge."""
+        with self._lock:
+            if self._reason or self._remaining() <= 0:
+                return False
+            if self._calls + attempts > self.limits.max_calls:
+                return False
+            remaining = self.limits.max_reported_tokens - (self._input + self._output) - self._held()
+            return remaining > 0 and remaining >= attempts * self.limits.reserve_tokens_per_call
+
     def reserve(self, *, transport="cli", price_key="", expected_tokens=None):
         """Atomically authorize one attempt and return its ID and time remaining.
 

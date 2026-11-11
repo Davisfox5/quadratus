@@ -188,6 +188,11 @@ REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "ve
 #: above the operator's lead cap where that is smaller.
 DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply"})
 DECLARATION_MAX_TURNS = 6
+#: A contest's judge (quadratus.contest): one read-only call that picks
+#: between two diffs in its prompt. A review seat for the turn cap, and kept
+#: out of REVIEW_CAPPED_ROLES because its copy holds neither draft: it is told
+#: no check commands and handed no check records, which describe another source.
+JUDGE_ROLE = "judge"
 
 
 class Fleet:
@@ -469,7 +474,7 @@ class Fleet:
         # uncapped.
         role_name = (invocation_context.get() or {}).get("role")
         lead_turns = (self.settings.lead_max_turns
-                      if role_name in (LEAD_CAPPED_ROLES | REVIEW_CAPPED_ROLES) else None)
+                      if role_name in (LEAD_CAPPED_ROLES | REVIEW_CAPPED_ROLES | {JUDGE_ROLE}) else None)
         if role_name in DECLARATION_ROLES:
             lead_turns = min([DECLARATION_MAX_TURNS, *([self.settings.lead_max_turns]
                                                        if self.settings.lead_max_turns else [])])
@@ -1319,6 +1324,10 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
             child = active.fork(root)
             return child.invoke, child.close
         conf = replace(conf, fork=fork)
+    budget = getattr(active, "run_budget", None)
+    if conf.budget_covers is None and callable(getattr(budget, "covers", None)):
+        # Read by the session before a contest forms (SessionConfig.compete).
+        conf = replace(conf, budget_covers=budget.covers)
     return Session(
         goal,
         store,

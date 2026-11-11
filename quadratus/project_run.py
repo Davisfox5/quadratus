@@ -64,8 +64,17 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
                 decider_labels="unstated", repair_tests=(), test_changes=None,
-                trust_project_policy=None, allow_project_agent_config=False, declared_checks=True):
+                trust_project_policy=None, allow_project_agent_config=False, declared_checks=True,
+                compete="off"):
     """Keep both successful and interrupted runs next to their source tree.
+
+    ``compete`` is ``"off"`` (the run as it always was) or ``"complex"``: a
+    task routed at complex difficulty is drafted twice, blind, by two senior
+    seats from different vendors, each in its own copy, and measured facts
+    pick the draft that is merged (quadratus.contest). The result's
+    ``contests`` section records each one, ``reviewers`` records what each
+    review seat raised, and both are appended to the project's
+    ``scoreboard.jsonl`` in the state folder, a record nothing reads back.
 
     ``trust_project_policy`` is the operator's approval of the project's own
     ``.quadratus/policy.json``, by that file's sha256 (also
@@ -121,6 +130,9 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         raise ValueError('Describe the project change to make.')
     if decider_labels not in ('unstated', 'all'):
         raise ValueError("decider_labels must be 'unstated' or 'all'")
+    from .contest import COMPETE_MODES
+    if compete not in COMPETE_MODES:
+        raise ValueError(f"compete must be one of {', '.join(COMPETE_MODES)}")
     if max_tasks < 1:
         raise ValueError('max_tasks must be at least 1')
     # Refused here, before the lock or any call. A mode with no peer from a
@@ -180,7 +192,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
                     decider_labels=decider_labels, repair_tests=repair_tests, test_changes=test_changes,
-                    declared_checks=declared_checks, agent_config=agent_config)
+                    declared_checks=declared_checks, agent_config=agent_config, compete=compete)
 
 
 def _refuse_agent_config(project, allowed=False, progress=None):
@@ -519,7 +531,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
          decider=None, decider_labels="unstated", repair_tests=(), test_changes=None,
-         declared_checks=True, agent_config=None):
+         declared_checks=True, agent_config=None, compete="off"):
     run_dir = _new_run_dir(state)
     from .run_activity import RunActivity
     activity = RunActivity(run_dir, progress)
@@ -578,6 +590,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         decider=decider,
         decider_labels=decider_labels,
         repair_tests=tuple(repair_tests), test_changes=tuple(test_changes or ()),
+        compete=compete,
     )
     # Session settings the caller chose (session_knobs); none is the old run.
     for name, value in (session_options or {}).items():
@@ -713,6 +726,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                      'result.json lists each with the reason.'] if map_record['not_kept'] else []), '']
     lines += [delegation.render_report(), '', '## Task ledger', '', ledger]
     report = '\n'.join(lines)
+    contests = list(getattr(session, 'contests', []) or []) if session else []
+    reviewers = list(getattr(session, 'reviewer_records', []) or []) if session else []
     # Each file is written whole under a temporary name and renamed in, so a
     # reader (the monitor refreshes every few seconds) never sees half of
     # one and an interrupt leaves the old file or the new, never a fragment.
@@ -736,6 +751,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'survey': _survey_record(session, completed),
         'explicit_tasks': _explicit_record(session, completed),
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
+        # Two blind drafts of one task and what decided between them, and
+        # what each review seat raised (quadratus.contest). Records only.
+        'contests': contests,
+        'reviewers': reviewers,
         'trace': {'calls': len(traces),
                   **({'interrupted': True} if trace_interrupted else {}),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
@@ -771,6 +790,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         ],
     }, indent=2))
     write_private(run_dir / 'delegation.md', delegation.render_report())
+    _append_scoreboard(state, run_dir.name, contests, reviewers, progress)
     write_private(run_dir / 'findings.json',
                   json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2))
     # A record another module appended under the usual mode is closed here.
@@ -778,6 +798,19 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # own mode catching up, not the first protection.
     tighten_files(run_dir)
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _append_scoreboard(state, run_id, contests, reviewers, progress=None):
+    """Add this run's contests and reviews to the project's scoreboard, one
+    line each. Append-only and owner-only, and a record nothing in the engine
+    reads back (quadratus.contest). A scoreboard that cannot be written costs
+    the lines, never the run: result.json already holds the same records."""
+    from .contest import append_scoreboard, scoreboard_rows
+    try:
+        append_scoreboard(state / 'scoreboard.jsonl', scoreboard_rows(run_id, contests, reviewers))
+    except (OSError, TypeError, ValueError) as exc:
+        if progress:
+            progress(f'Scoreboard not updated ({type(exc).__name__}); this run\'s records are in result.json.')
 
 
 def _report_map(code_map, progress, shown):

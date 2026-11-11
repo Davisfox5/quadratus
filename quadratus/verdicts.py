@@ -36,6 +36,7 @@ __all__ = [
     "RENDERS_BLIND",
     "REVIEW_COMPLETE",
     "audit_lines",
+    "blocking_findings",
     "design_blocking",
     "design_judgement",
     "has_blocking_finding",
@@ -181,6 +182,13 @@ def has_blocking_finding(text: str) -> bool:
     bought a revision and a recheck of a finding that did not exist.
     """
     return bool(_findings(text, ("BLOCKING",)))
+
+
+def blocking_findings(text: str) -> List[str]:
+    """What each BLOCKING: line names, in order, by the reading
+    :func:`has_blocking_finding` decides on. For the reviewer record, which
+    counts the findings a review raised; it decides nothing."""
+    return [content for _, content in _findings(text, ("BLOCKING",))]
 
 
 def has_prefixed_finding(text: str) -> bool:

@@ -141,6 +141,15 @@ class TaskMemory:
     def refs(self) -> List[ArtifactRef]:
         return list(self._refs)
 
+    def fork(self, author: str) -> "TaskMemory":
+        """A separate memory for the same task holding what this one holds so
+        far, for a second author working it blind (a contest entrant). The
+        two share nothing afterwards."""
+        other = TaskMemory(self.task_id, author, self._store)
+        other._turns = list(self._turns)
+        other._refs = list(self._refs)
+        return other
+
     @property
     def closed(self) -> bool:
         return self._closed

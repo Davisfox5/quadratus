@@ -289,3 +289,38 @@ def test_the_bounded_editor_role_does_not_offer_lead_channels():
         else inspect.getsource(runtime)
     assert "may be returned alone before the patch" not in source
     assert "cannot hire, consult or fetch" in source
+
+
+# -- the contest judge ----------------------------------------------------------------
+
+def test_the_contest_judge_is_told_the_rule_its_reply_is_read_by():
+    """One closing WINNER line decides; anything else is no verdict and the
+    next rule decides (quadratus.contest). Each clause the prompt states is a
+    clause the reader enforces, and the session sends that prompt."""
+    import inspect
+
+    from quadratus import contest
+    prompt = contest.judge_prompt(packet="## Role packet", task_text="the task", draft_a="\nA", draft_b="\nB")
+    assert contest.JUDGE_RULE in prompt
+    rule = contest.JUDGE_RULE
+    assert "exactly one line, 'WINNER: A' or 'WINNER: B'" in rule and "before it one line of reason" in rule
+    assert contest.read_winner("B covers the empty case.\nWINNER: B") == ("B", "B covers the empty case.")
+    for stated, reply in (("no such line", "Both are fine."),
+                          ("with both", "x\nWINNER: A and B"),
+                          ("a condition or anything else after the letter", "x\nWINNER: A if the tests pass"),
+                          ("two WINNER lines", "WINNER: A\nx\nWINNER: A"),
+                          ("That closing line is all that is read", "WINNER: A\nthough B is close")):
+        assert stated in rule, stated
+        assert contest.read_winner(reply) is None, reply
+    assert "is no verdict" in rule and "by the smaller diff" in rule and "no second round" in rule
+    assert contest.RULES.index("judge") + 1 == contest.RULES.index("size"), "what decides when it gives none"
+    # Stated with its condition, and decided that way: size is a rule between
+    # two attempts that both changed something.
+    assert "by the smaller diff when both attempts changed something" in rule
+    real = dict(completed=True, in_scope=True, changed=["a.py"], changed_lines=30)
+    small = dict(real, changed_lines=4)
+    nothing = dict(completed=True, in_scope=True, changed=[], changed_lines=0)
+    assert contest.decide_tied(real, small, None) == ("challenger", "size")
+    assert contest.decide_tied(real, nothing, None) == ("routed", "default")
+    source = inspect.getsource(S.Session._ask_judge)
+    assert "rules.judge_prompt(" in source and "rules.read_winner(reply)" in source

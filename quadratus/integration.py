@@ -2409,6 +2409,41 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
     return GateResult(passed, 'original tests', 0 if passed else 1, output, receipts), ''
 
 
+@contextmanager
+def gate_in_copy(gate, root, copy):
+    """The gate's own commands bound to ``copy``, a private copy of the
+    project at ``root``: the same argv, cwd, timeouts and minimums, with a
+    path that names the project re-pointed at the copy. Yields a
+    :class:`GateSuite`, or None when the commands cannot be read (a gate
+    other than the two kinds here, or one outside the project).
+
+    A copy carries source only, so the project's dependency folders are
+    linked in for the run, as :func:`run_original_tests` does, and unlinked
+    after it. Used to run a task's gate on a contest draft as evidence
+    (quadratus.contest); nothing is written to the project."""
+    root, copy = Path(root).resolve(), Path(copy).resolve()
+    commands = _gate_commands(gate, root)
+    if commands is None:
+        yield None
+        return
+    linked = []
+    try:
+        for name in _DEPENDENCY_DIRS:
+            source, target = root / name, copy / name
+            if source.is_dir() and not source.is_symlink() and not target.exists() and not target.is_symlink():
+                target.symlink_to(source, target_is_directory=True)
+                linked.append(target)
+        inside = re.compile(re.escape(str(root)) + r'(?=/|$)')
+        yield GateSuite([replace(c, argv=tuple(inside.sub(str(copy), a) for a in c.argv)) for c in commands],
+                        cwd=copy)
+    finally:
+        for target in linked:
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
+
 def _relative(cwd: str, operand: str, copy: Path) -> str:
     """``operand`` as a project-relative path, for a command run in ``cwd``."""
     path = Path(operand)

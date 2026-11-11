@@ -607,6 +607,17 @@ class SessionConfig:
     #: other original is restored as before.
     repair_tests: tuple = ()
     test_changes: tuple = ()
+    #: Contests (quadratus.contest), opt-in. "complex" has a task routed at
+    #: COMPLEX difficulty drafted twice, blind, by two senior seats from
+    #: different vendors, each in its own copy of the project; measured facts
+    #: pick the draft that is merged, and the task then continues as usual.
+    #: "off" is the run made before contests existed: no extra call or record.
+    compete: str = "off"
+    #: Supplied by the project runner: whether the run's remaining budget
+    #: would admit this many more calls at once (RunBudget.covers). None is a
+    #: run with no limits. A contest forms only when it covers both drafts
+    #: and the judge.
+    budget_covers: Optional[Callable[[int], bool]] = None
 
 
 _SCOPE_REQUEST = (
@@ -2284,6 +2295,9 @@ class Session:
         available: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.config = config or SessionConfig()
+        from .contest import COMPETE_MODES
+        if self.config.compete not in COMPETE_MODES:
+            raise ValueError(f"compete must be one of {', '.join(COMPETE_MODES)}, not {self.config.compete!r}")
         self.project = Path(self.config.project).expanduser().resolve() if self.config.project else None
         if self.config.allow_writes and self.project is None:
             raise ValueError("A project is required for write grants.")
@@ -2458,6 +2472,18 @@ class Session:
         #: or recheck judges, or a capped task left: evidence for the seats,
         #: never a task check (Session._observe_checks).
         self.review_checks: List[dict] = []
+        #: One record per contest considered (quadratus.contest): each draft's
+        #: measured facts, the winner and what decided it, or why none formed.
+        self.contests: List[dict] = []
+        #: One record per review a seat gave: who, in what role, whether it
+        #: gave a complete verdict, the BLOCKING findings it raised and what
+        #: the re-check said of them. Read from what the task did; no call.
+        self.reviewer_records: List[dict] = []
+        #: ``(task id, diff)``: the losing draft of the task in flight, handed
+        #: to the winner once, in its revision round, with no author named.
+        self._contest_loser: Optional[tuple] = None
+        #: ``(role, reply)`` of the editing call the scope check last stopped.
+        self._stopped_reply: Optional[tuple] = None
 
     def _open_finding(self, kind: str, text: str, *, legacy_route: bool = False) -> None:
         """Append a legacy open finding and record it as a typed fact.
@@ -2615,6 +2641,9 @@ class Session:
                         # here unkept took its NOT RUN lines out of the audit
                         # (review 1110, session first half 11).
                         self._keep_reply(key, reply, activity_context)
+                        # For a contest entrant: a delivery the scope check
+                        # stopped is a completed draft that is out of scope.
+                        self._stopped_reply = (str(context.get("role", "")), reply)
                         try:
                             if context.get("origin") != "worker":
                                 self._record_edit_reply(key, str(context.get("role", "direct")), reply)
@@ -4264,6 +4293,7 @@ class Session:
         # live classification says so, and a disagreement is recorded.
         live = spec.work_class == WorkClass.SECURITY
         if self._required("security_verification", live) or live:
+            self._skip_contest(spec, "security work runs inside its own bounded excursion")
             return self._run_security_task(spec)
 
         chosen, self._dispatch_lead = self._dispatch_lead, None
@@ -4310,8 +4340,20 @@ class Session:
         # The lead drafts with full working memory, and with the fetch and
         # consult channels live: a reply that is a request gets served.
         self._stage("draft")
+        # Opt-in (SessionConfig.compete): two blind drafts in private copies,
+        # the one measured facts pick merged here as this task's draft. None
+        # is every run without it, and the single lead drafts as before.
+        contest = self._form_contest(spec, lead)
         try:
-            draft = self._draft_with_channels(lead, spec, task)
+            if contest is None:
+                draft = self._draft_with_channels(lead, spec, task)
+            else:
+                lead, draft, task = self._contest_draft(contest, spec, task)
+                if lead != contest["routed"]:
+                    # The winner leads from here; its reviewers are drawn for it.
+                    collaborators = self.collaborators_for(spec, lead)
+                    for peer in collaborators:
+                        self._record_selection(spec, peer, "collaborator")
         except TurnLimitReached as exc:
             return self._close_turn_limited(lead, spec, task, exc, before)
         except ProviderError as exc:
@@ -4439,6 +4481,8 @@ class Session:
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
+            self._record_review(spec, peer, "collaborator", note, complete=peer in reviewed,
+                                capped=peer in capped)
 
         # The rebuttal round: the lead answers every finding and revises. This
         # is where the debate actually lands in the artifact -- without it,
@@ -4484,6 +4528,9 @@ class Session:
                     lead,
                     self._revision_prompt(
                         spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
+                        # After a contest, the other attempt: one more note,
+                        # unnamed, in this round only. [] on every other task.
+                        + self._other_attempt_note(spec)
                     ),
                 )
             except TurnLimitReached as exc:
@@ -4557,6 +4604,550 @@ class Session:
         self.memory.absorb(summary)
         self.history.append(summary)
         return summary
+
+    # -- contests (quadratus.contest) ----------------------------------------
+    def _skip_contest(self, spec: TaskSpec, reason: str) -> None:
+        """Record a contest that was considered and did not form. Nothing is
+        recorded when contests are off or the task is not COMPLEX: no contest
+        was considered for it."""
+        if self.config.compete != "complex" or spec.complexity != Complexity.COMPLEX:
+            return
+        self.contests.append(dict(task=spec.task_id, kind=spec.kind, difficulty=spec.complexity,
+                                  formed=False, reason=reason))
+        self._note(f"task {spec.task_id}: no contest ({reason})")
+
+    def _no_contest_reason(self, spec: TaskSpec) -> str:
+        """Why this task is not contested, or "" when it may be. Each rule
+        reads a fact the harness holds about the task."""
+        if is_review_only(spec) or spec.kind == TaskKind.REVIEW:
+            return "a review or audit task delivers a reading, not a draft to compare"
+        if self._tier(spec) == "direct":
+            return "a direct-tier task is one small pass"
+        if self._current_resolves:
+            return "a RESOLVES task repairs one measured finding"
+        if spec.lead:
+            return "its lead was named by the caller, so no other seat drafts it"
+        if not (self.project and self._writes()):
+            return "its draft could not be isolated in a copy: there is no project with a write grant"
+        if self.config.fork is None:
+            return ("its draft could not be isolated in a copy: this run was given no transport "
+                    "for a private copy")
+        if getattr(self.config.repository_policy, "explicit", False):
+            return ("its draft could not be isolated in a copy: the project's own policy binds "
+                    "its checks to the project folder")
+        contract = getattr(self, "_contract", None)
+        if contract is not None and contract.required.design_evidence == "self":
+            return ("its draft could not be isolated in a copy: its lead captures its own "
+                    "renders, which a private copy cannot carry back")
+        return ""
+
+    def _pick_challenger(self, spec: TaskSpec, lead: str) -> tuple:
+        """The second entrant and why it was chosen, or ``(None, why not)``.
+
+        A brain-trust member from another vendor that is available and can
+        do the task, taken from the vendor that has led the fewest tasks
+        this run (the count lead spreading keeps). Never a restricted row,
+        never an orchestrator seat, and never a stand-in: with no such
+        member there is no contest."""
+        from .registry import ORCHESTRATOR_CHAIN
+        vendor = lead.partition(":")[0]
+        excluded = set(policy_for(spec.kind).exclude) | set(ORCHESTRATOR_CHAIN)
+        eligible = [p for p in self.brain_trust
+                    if p.partition(":")[0] != vendor and p not in excluded and self._available(p)
+                    and seat_satisfies(p, spec.needs) and not getattr(resolve(p), "restricted", False)]
+        if not eligible:
+            return None, ("no brain-trust member from a second vendor is available for this task, "
+                          "and a contest is never formed with a stand-in")
+        load = self._leads_by_vendor
+        fewest = min(load.get(p.partition(":")[0], 0) for p in eligible)
+        choice = next(p for p in eligible if load.get(p.partition(":")[0], 0) == fewest)
+        return choice, (f"the brain-trust member from another vendor whose vendor has led the "
+                        f"fewest tasks this run ({fewest})")
+
+    def _form_contest(self, spec: TaskSpec, lead: str) -> Optional[dict]:
+        """The contest for this task, or None when none forms. Off, or a task
+        below COMPLEX, is None with nothing recorded; a COMPLEX task that is
+        not contested is None with the reason on record."""
+        if self.config.compete != "complex" or spec.complexity != Complexity.COMPLEX:
+            return None
+        reason = self._no_contest_reason(spec)
+        challenger, why = (None, "") if reason else self._pick_challenger(spec, lead)
+        if not reason and challenger is None:
+            reason = why
+        covers = self.config.budget_covers
+        if not reason and covers is not None:
+            try:
+                enough = bool(covers(3))
+            except Exception:  # noqa: BLE001 -- an unreadable budget forms no contest
+                enough = False
+            if not enough:
+                reason = "the run's remaining budget does not cover two drafts and a judge"
+        if reason:
+            self._skip_contest(spec, reason)
+            return None
+        record = dict(task=spec.task_id, kind=spec.kind, difficulty=spec.complexity, formed=True, reason="",
+                      challenger_reason=why)
+        self.contests.append(record)
+        return dict(record=record, routed=lead, challenger=challenger)
+
+    def _contest_child(self, root, invoke, tag: str) -> "Session":
+        """A session bound to one entrant's private copy, as a parallel batch
+        child is, shown what a single lead would be shown: the run's ledger
+        and the handoff a continuation gets. It only drafts."""
+        config = replace(
+            self.config, project=root, integration_gate=None, requirements_ledger=False,
+            max_parallel_tasks=1, fork=None, compete="off",
+            progress=(lambda message, tag=tag: self._note(f"[{tag}] {message}")))
+        child = Session(self.memory.goal, self.store, invoke, config=config,
+                        invariants=list(self.memory.ledger.invariants), available=self._available)
+        # Read only here: an entrant never closes a task, so nothing is absorbed.
+        child.memory.ledger = self.memory.ledger
+        child._continues = self._continues
+        child._current_covers = list(self._current_covers)
+        child.turn_limited_records = dict(self.turn_limited_records)
+        child.failed_records = dict(self.failed_records)
+        child._cap_baselines = dict(self._cap_baselines)
+        return child
+
+    def _contest_entry(self, spec: TaskSpec, lead: str, task: TaskMemory, contract, outer) -> dict:
+        """One entrant's draft, made by this session in its private copy.
+
+        The draft stage only: the lead's draft with its channels, each
+        editing call measured against the task's scope as any is. No review,
+        no gate fix, no close-out. Whatever ends the draft is returned, never
+        raised: the session that formed the contest decides what it means."""
+        entry = dict(model=lead, draft=None, completed=False, error=None, ended="", seconds=0.0)
+        outcome = TaskOutcome(task_id=spec.task_id, intent="implementation", lead=lead,
+                              covers=list(self._current_covers), continues=self._continues or "")
+        outcome.stage("dispatch")
+        self._outcome = outcome
+        self.task_outcomes.append(outcome)
+        # The contract the task was dispatched under, owned here by this entrant.
+        self._contract, self._task_gate, self._task_outer, self._capture_snapshot = contract, None, outer, None
+        self._gate_fixes_used = 0
+        self._active_spec, self._task_memory, self._stopped_reply = spec, task, None
+        started = time.monotonic()
+        try:
+            self._task_before = self._capture_source()
+            if self._task_before is None:
+                raise PartialWorkStopped("The contest copy could not be read before the draft.")
+            self._bind_contract(lead)
+            outcome.stage("draft")
+            entry["draft"] = self._draft_with_channels(lead, spec, task)
+            entry.update(completed=True, ended="delivered")
+        except BaseException as exc:  # noqa: BLE001 -- returned for the parent to weigh
+            entry.update(error=exc, active_call=dict(self._active_call))
+            stopped = self._stopped_reply
+            if (isinstance(exc, TaskFailed) and exc.cause == "scope" and stopped and stopped[0] == "lead"
+                    and _delivers(stopped[1], self.brain_trust)):
+                # The call returned a delivery; the scope measurement stopped it.
+                entry.update(completed=True, draft=stopped[1], ended="delivered, outside the task's scope")
+            elif isinstance(exc, TurnLimitReached):
+                entry["ended"] = f"capped at the turn limit ({exc.turns or '?'} rounds)"
+            elif isinstance(exc, TaskFailed):
+                entry["ended"] = f"failed: {exc.cause}"
+            else:
+                entry["ended"] = f"stopped: {type(exc).__name__}"
+        entry["seconds"] = round(time.monotonic() - started, 1)
+        return entry
+
+    def _measure_entry(self, entry: dict, child: "Session", base: dict, spec: TaskSpec) -> None:
+        """What an entrant's copy holds against the source both started from:
+        changed files, the diff, and the scope reading the task itself gets."""
+        from .project import Project
+        entry.update(changed=[], changed_lines=None, diff="", after=None, in_scope=None, in_paths=False)
+        try:
+            copy = Project(child.project, exclude=self.config.project_excludes)
+            after = copy.contents()
+            diff = copy.diff(base)
+            report = child._measure_scope(spec, base)
+        except Exception:  # noqa: BLE001 -- an unreadable copy is an unusable draft
+            log.debug("could not measure a contest copy", exc_info=True)
+            return
+        entry.update(after=after, diff=diff, changed_lines=count_change_lines(diff),
+                     changed=sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p)))
+        if report is not None:
+            entry.update(in_scope=not (report.blocking or report.oversized), in_paths=not report.blocking,
+                         scope_report=report)
+
+    def _contest_gates(self, spec: TaskSpec, entries: dict, children: dict) -> Optional[BaseException]:
+        """Run the task's own gate on each usable copy, one after the other,
+        as evidence for the decision: no fix call, never a task check. The
+        check that counts is still the task's gate on the merged project."""
+        from . import contest as rules
+        from .integration import gate_in_copy
+        live = self.config.integration_gate
+        gate = self._current_gate() if live is not None and self._required("checks", True) else None
+        for role, entry in entries.items():
+            if gate is None:
+                entry["gate"] = rules.gate_facts(None, reason="the task has no check")
+                continue
+            self._activity("check-started", task=spec.task_id)
+            try:
+                with gate_in_copy(gate, self.project, children[role].project) as bound:
+                    if bound is None:
+                        entry["gate"] = rules.gate_facts(None, reason="this check cannot be run in a copy")
+                    else:
+                        entry["gate"] = rules.gate_facts(bound.run())
+            except Exception as exc:  # noqa: BLE001 -- no verdict for this copy, never a stop
+                entry["gate"] = rules.gate_facts(None, reason=f"the check could not be set up in the copy "
+                                                              f"({type(exc).__name__})")
+            finally:
+                self._activity("check-ended", task=spec.task_id)
+        try:
+            # The copies' checks read the project's own dependency trees.
+            self._verify_dependencies(f"during contest checks ({spec.task_id})")
+        except BaseException as exc:  # noqa: BLE001 -- raised by the caller once the work is kept
+            return exc
+        return None
+
+    def _ask_judge(self, spec: TaskSpec, entries: dict, labels: dict, record: dict) -> Optional[str]:
+        """One bounded read-only call to a brain-trust member from a vendor
+        that wrote neither draft. Returns the role it chose ("routed" or
+        "challenger"), or None for no verdict: no third vendor, a capped or
+        failed call, or a reply that does not end in one plain WINNER line.
+        Asked once; the next rule decides when it gives none."""
+        from . import contest as rules
+        from .registry import ORCHESTRATOR_CHAIN
+        vendors = {entry["model"].partition(":")[0] for entry in entries.values()}
+        judge = next((p for p in self.brain_trust
+                      if p.partition(":")[0] not in vendors and p not in ORCHESTRATOR_CHAIN
+                      and self._available(p) and not getattr(resolve(p), "restricted", False)), None)
+        if judge is None:
+            record["judge"] = dict(model=None, verdict=None, reason="",
+                                   note="no verdict: no brain-trust member from a third vendor is available")
+            return None
+        by_label = {label: role for role, label in labels.items()}
+        blocks = {label: _measured_diff_block(
+            entries[by_label[label]]["diff"], f"Draft {label}, against the source both attempts started from",
+            use=_DIFF_USE_JUDGE, none="This attempt changed no file.") for label in ("A", "B")}
+        limit = self.config.lead_max_turns
+        from .cli_providers import CLI_SPECS
+        cli = CLI_SPECS.get(judge.partition(":")[0])
+        budget = (f"\n\nThis call has at most {limit} tool rounds. At round {limit} it stops and no verdict "
+                  "is recorded. Everything you need is in this prompt."
+                  if limit and cli is not None and cli.max_turns_flag else "")
+        prompt = rules.judge_prompt(packet=self._role_packet(spec, "reviewer"), task_text=spec.description,
+                                    draft_a=blocks["A"], draft_b=blocks["B"], budget_note=budget,
+                                    unchanged=rules.one_unchanged(entries["routed"], entries["challenger"]))
+        self._record_selection(spec, judge, rules.JUDGE_ROLE)
+        verdict, note = None, ""
+        try:
+            with invocation(spec.task_id, rules.JUDGE_ROLE):
+                reply = self._invoke_model(judge, prompt)
+        except TurnLimitReached as exc:
+            note = f"no verdict: the judge stopped at its turn cap ({exc.turns or '?'} rounds)"
+        except Exception as exc:
+            if _stops_the_run(exc):
+                raise
+            # A judge that fails or declines is a tie nobody broke, not a stop:
+            # the single-lead run never made this call.
+            note = f"no verdict: the judge's call did not return ({type(exc).__name__}: {str(exc)[:160]})"
+        else:
+            self.store.put(reply, kind=f"contest-judge:{judge}", author=judge)
+            verdict = rules.read_winner(reply)
+            if verdict is None:
+                note = "no verdict: the reply did not end with one plain WINNER line"
+        record["judge"] = dict(model=judge, verdict=verdict[0] if verdict else None,
+                               reason=verdict[1] if verdict else "", note=note)
+        return by_label[verdict[0]] if verdict else None
+
+    def _merge_files(self, after: dict, changed, *, modes=None) -> None:
+        """Bring a private copy's changed files into the project: each named
+        file takes the copy's bytes, and one the copy removed is removed.
+        ``modes`` is the copy's folder, when a merged file should also take
+        the mode it has there (a script the draft made executable)."""
+        import shutil
+        for path in changed:
+            target = Path(self.project) / path
+            if path in after:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(after[path])
+                if modes is not None:
+                    try:
+                        shutil.copymode(Path(modes) / path, target)
+                    except OSError:
+                        pass
+            elif target.exists():
+                target.unlink()
+
+    def _lead_tokens(self, spec: TaskSpec, model: str, since: int) -> Optional[int]:
+        """Reported tokens of ``model``'s own lead calls on this task since
+        ledger position ``since``: what its draft cost, without the errands
+        and consults it commissioned, which the ledger lists under their own
+        roles. None when nothing reported a count."""
+        events = list(getattr(self.config.delegation_ledger, "events", None) or [])[since:]
+        counts = [event.total_tokens for event in events
+                  if getattr(event, "invoked", False) and event.task == spec.task_id
+                  and (event.role or "").split(":")[0] == "lead"
+                  and model in (event.canonical_model, event.requested_model)]
+        known = [count for count in counts if count is not None]
+        return sum(known) if known else None
+
+    def _contest_draft(self, contest: dict, spec: TaskSpec, task: TaskMemory) -> tuple:
+        """Run the contest and return ``(lead, draft, task memory)`` of the
+        draft that becomes the task's own.
+
+        Each entrant drafts blind in its own copy, at once, as parallel batch
+        children do. Measured facts pick the winner (quadratus.contest), its
+        changed files are merged into the project, and the caller carries on
+        as if that draft had been made there: the task's diff, scope report,
+        gate and close-out all read the merged project against the task's
+        starting source, so the work is counted once.
+
+        A contest never ends worse than the routed lead alone would have.
+        When only one draft is usable it wins. When neither is, the routed
+        lead's own result is raised here exactly as its draft call would have
+        raised it, with its work inside the task's paths merged first and
+        anything outside them kept as an artifact, never merged. A stop that
+        is the run's own (``_stops_the_run``: a spent budget, an interrupt, a
+        denied capability, a failure nothing names) still stops the run,
+        whoever met it, after the work it would lose is kept."""
+        import concurrent.futures
+
+        from . import contest as rules
+        from .project import Project
+        record, roles = contest["record"], ("routed", "challenger")
+        models = dict(routed=contest["routed"], challenger=contest["challenger"])
+        labels = rules.labels_for(spec.task_id)
+        self._verify_dependencies(f"before contest ({spec.task_id})")
+        project = Project(self.project, exclude=self.config.project_excludes)
+        stack, children = contextlib.ExitStack(), {}
+        try:
+            base = project.contents()
+            for role in roles:
+                root = stack.enter_context(project.snapshot())
+                invoke, close = self.config.fork(root)
+                stack.callback(close)
+                children[role] = self._contest_child(root, invoke, f"{spec.task_id} draft {labels[role]}")
+        except BaseException as exc:
+            stack.close()
+            if not isinstance(exc, Exception) or classify(exc) == "budget":
+                raise
+            # No copy, no contest: the routed lead drafts in the project as it
+            # would have, and the record says why.
+            record.update(formed=False, reason="its draft could not be isolated in a copy "
+                                               f"({type(exc).__name__}: {str(exc)[:160]})")
+            self._note(f"task {spec.task_id}: no contest ({record['reason']})")
+            return models["routed"], self._draft_with_channels(models["routed"], spec, task), task
+        memories = dict(routed=task, challenger=task.fork(models["challenger"]))
+        self._record_selection(spec, models["challenger"], "lead")
+        vendor = models["challenger"].partition(":")[0]
+        self._leads_by_vendor[vendor] = self._leads_by_vendor.get(vendor, 0) + 1
+        self._note(f"task {spec.task_id}: contest, {models['routed']} and {models['challenger']} draft blind "
+                   f"in private copies ({record['challenger_reason']})")
+        ledger_mark = len(getattr(self.config.delegation_ledger, "events", None) or [])
+        started, entries, fatal, judged = time.monotonic(), {}, None, None
+        merged, kept = [], None
+        with stack:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(roles)) as pool:
+                futures = {role: pool.submit(children[role]._contest_entry, replace(spec, lead=models[role]),
+                                             models[role], memories[role], getattr(self, "_contract", None),
+                                             getattr(self, "_task_outer", None))
+                           for role in roles}
+                for role, future in futures.items():
+                    try:
+                        entries[role] = future.result()
+                    except BaseException as exc:  # noqa: BLE001 -- weighed below like any entrant's stop
+                        entries[role] = dict(model=models[role], draft=None, completed=False, error=exc,
+                                             ended=f"stopped: {type(exc).__name__}", seconds=0.0)
+            for role in roles:
+                self._measure_entry(entries[role], children[role], base, spec)
+                exc = entries[role].get("error")
+                # The run's stop whoever met it, by the rule a parallel child's
+                # is read with; any other stop is one draft losing.
+                if exc is not None and _stops_the_run(exc):
+                    fatal = fatal or exc
+            if fatal is None and all(rules.usable(entries[role]) for role in roles):
+                try:
+                    fatal = self._contest_gates(spec, entries, children)
+                except BaseException as exc:  # noqa: BLE001 -- raised below, once the work is kept
+                    fatal = exc
+            winner, decided_by = rules.decide_measured(entries["routed"], entries["challenger"])
+            if winner is None and not decided_by:
+                one, other = entries["routed"], entries["challenger"]
+                if one["changed"] == other["changed"] and all(
+                        one["after"].get(path) == other["after"].get(path) for path in one["changed"]):
+                    # Byte for byte the same change: there is nothing to judge.
+                    record["judge"] = dict(model=None, verdict=None, reason="",
+                                           note="not asked: the two drafts are the same change")
+                elif fatal is None:
+                    try:
+                        judged = self._ask_judge(spec, entries, labels, record)
+                    except BaseException as exc:  # noqa: BLE001 -- raised below, once the work is kept
+                        fatal = exc
+                winner, decided_by = rules.decide_tied(entries["routed"], entries["challenger"], judged)
+            for role in roles:
+                entry = entries[role]
+                entry.setdefault("gate", rules.gate_facts(None, reason=(
+                    "not run: the run was stopping" if fatal is not None
+                    else "not run: the drafts were separated before the check")))
+                entry["reported_tokens"] = self._lead_tokens(spec, models[role], ledger_mark)
+                if entry.get("diff"):
+                    entry["diff_artifact"] = self.store.put(
+                        entry["diff"], kind=f"contest-draft:{labels[role]}", author=models[role]).id
+            # Only measured changes reach the project, and only here.
+            chosen = entries[winner or "routed"]
+            edit_started = time.time()
+            if chosen.get("changed") and (winner is not None or chosen.get("in_paths")):
+                self._merge_files(chosen["after"], chosen["changed"], modes=children[winner or "routed"].project)
+                merged = list(chosen["changed"])
+                self._last_edit_started = edit_started
+            elif chosen.get("changed"):
+                # The routed lead's work outside the task's paths: kept, not merged.
+                kept = self.store.put(json.dumps({p: (chosen["after"].get(p) or b"").decode("utf-8", "replace")
+                                                  for p in chosen["changed"]}),
+                                      kind="contest-unmerged", author=models["routed"]).id
+            source = children[winner or "routed"]
+        # Its account comes over unless its files stayed behind: a winner's
+        # draft is the task's draft even when it changed no file.
+        self._adopt_entrant(spec, source, winner is not None or bool(merged) or not chosen.get("changed"))
+        loser = next((role for role in roles if role != winner), None) if winner else None
+        record.update(
+            drafts=sorted((rules.draft_record(role, labels[role], entries[role]) for role in roles),
+                          key=lambda draft: draft["label"]),
+            winner=labels[winner] if winner else None, winner_model=models[winner] if winner else None,
+            decided_by=decided_by, merged=merged, unmerged_artifact=kept,
+            loser_diff_artifact=entries[loser].get("diff_artifact") if loser else None,
+            loser_note_delivered=False, seconds=round(time.monotonic() - started, 1),
+            stopped=f"{type(fatal).__name__}: {str(fatal)[:200]}" if fatal is not None else "")
+        record.setdefault("judge", None)
+        self._contest_loser = None
+        if winner is not None and loser is not None and rules.usable(entries[loser]) and entries[loser].get("diff"):
+            self._contest_loser = (spec.task_id, entries[loser]["diff"])
+        self._note(f"task {spec.task_id}: contest "
+                   + (f"won by {models[winner]} (decided by {decided_by})" if winner
+                      else "produced no usable draft; the routed lead's own result stands"))
+        if winner is None:
+            task.keep(json.dumps(record), kind="contest", author="harness")
+            self._active_call = dict(entries["routed"].get("active_call") or {})
+            raise fatal or self._routed_result(entries["routed"], bool(merged), kept)
+        lead, task = models[winner], memories[winner]
+        self._task_memory = task
+        task.keep(json.dumps(record), kind="contest", author="harness")
+        if self._outcome is not None:
+            self._outcome.lead = lead
+            if winner != "routed":
+                # The contract keeps its dispatched owner; the switch is history.
+                self._outcome.owner_changes.append({"from": models["routed"], "to": lead, "reason": "contest",
+                                                     "decided_by": decided_by})
+                failed = entries["routed"].get("error")
+                # Recovered only when the run goes on: a stop raised below is
+                # the run's own, and is recorded where it lands.
+                if failed is not None and failed is not fatal and not rules.usable(entries["routed"]):
+                    self._outcome.note(classify(failed), f"routed lead {models['routed']} in its contest copy: "
+                                       f"{type(failed).__name__}: {str(failed)[:200]}", stage="draft").recovered = True
+        if fatal is not None:
+            raise fatal
+        return lead, entries[winner]["draft"], task
+
+    def _adopt_entrant(self, spec: TaskSpec, child: "Session", stands: bool) -> None:
+        """What the entrant whose draft stands as the task's own learned
+        about its work, brought to this session as a parallel child's is:
+        acceptance it said it did not run, re-based to this session's checks,
+        and the non-terminal notes on its outcome. A single lead's NOT RUN
+        lines are recorded whether or not it changed a file, so a draft that
+        changed none brings them too: dropped, the audit could mark met a
+        requirement the lead itself said was not run. Nothing comes over only
+        when its changes were left out of the project (``stands`` is False):
+        those records describe files the project does not hold."""
+        if not stands:
+            return
+        for entry in child.unexecuted_acceptance:
+            self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks), discharged_at=None))
+        self._last_changed_report = child._last_changed_report
+        self._last_tool_failures = list(child._last_tool_failures or [])
+        self._last_environment_failure = child._last_environment_failure
+        mine = next((o for o in child.task_outcomes if o.task_id == spec.task_id), None)
+        if mine is not None and self._outcome is not None:
+            self._outcome.facts.extend(fact for fact in mine.facts if not fact.terminal)
+            for name, count in mine.attempts.items():
+                self._outcome.count(name, count)
+
+    def _routed_result(self, entry: dict, merged: bool, kept) -> BaseException:
+        """What to raise when no contest draft is usable: the routed lead's
+        own stop, as its draft call in the project would have raised it,
+        describing the project as it now is. Work it left outside the task's
+        paths was not merged, so a stop that would have kept that work in
+        the project names the artifact that holds it instead."""
+        exc = entry.get("error")
+        state = self._inspect_partial_edits(self._task_before)
+        unmerged = bool(entry.get("changed")) and not merged
+        left = (f" Its changes in its contest copy ({', '.join(entry['changed'][:8])}) fell outside the "
+                f"task's paths and were not merged; they are kept in artifact {kept}." if unmerged else "")
+        if exc is None:
+            return PartialWorkStopped("The routed lead's contest copy could not be measured, so its draft "
+                                      "was not merged; nothing was changed." + left, partial=state)
+        if isinstance(exc, TaskFailed):
+            raised = TaskFailed(exc.cause, str(exc) + left, partial=state)
+        elif isinstance(exc, PartialWorkStopped):
+            raised = PartialWorkStopped(str(exc) + left, partial=state)
+        elif unmerged and isinstance(exc, TurnLimitReached):
+            raised = TaskFailed("scope", "Turn-limited edits exceed the declared scope." + left, partial=state)
+        elif unmerged and isinstance(exc, ProviderError) and not isinstance(exc, ProviderRefusal):
+            raised = TaskFailed("transport", f"Lead failed ({type(exc).__name__}: {str(exc)[:200]}) after "
+                                             "changing source." + left, partial=state)
+        else:
+            return exc
+        raised.__cause__ = exc
+        return raised
+
+    def _other_attempt_note(self, spec: TaskSpec) -> List[str]:
+        """The losing draft of this task's contest, as one more note for the
+        winner's revision: its measured diff, with no author and no word that
+        a contest was held. Handed over once; [] on every other task. It
+        reaches no reviewer."""
+        loser, self._contest_loser = self._contest_loser, None
+        if not loser or loser[0] != spec.task_id:
+            return []
+        for record in reversed(self.contests):
+            if record.get("task") == spec.task_id and record.get("formed"):
+                record["loser_note_delivered"] = True
+                break
+        return ["[Another attempt]\nThis note is not a review and raises no finding, so it needs no "
+                "answer. It is another attempt at the same task, made separately from the same starting "
+                "source. Take from it only what is better than your own work, and leave the rest."
+                + _measured_diff_block(loser[1], "another attempt at this task, against the source you "
+                                                 "started from", use=_DIFF_USE_OTHER_ATTEMPT)]
+
+    def _record_review(self, spec: TaskSpec, peer: str, role: str, note: str, *, complete: bool,
+                       capped: bool = False, raised: Optional[int] = None) -> None:
+        """One review a seat gave, for the reviewer record: read from the
+        reply the task already has, never a call of its own."""
+        try:
+            from .verdicts import blocking_findings
+            if raised is None:
+                raised = len(blocking_findings(note))
+                if role == "design-review" and not capped:
+                    # A design review is APPROVED or BLOCKING lines. Any other
+                    # reply gave no verdict: the blocker the harness writes
+                    # for it is not a finding this reviewer raised.
+                    complete = bool(raised) or str(note or "").strip() == "APPROVED"
+                try:
+                    # A verifier's JSON verdict lists its findings in a field.
+                    listed = json.loads(note).get("blocking_findings") if note.lstrip().startswith("{") else None
+                    raised = len(listed) if isinstance(listed, list) else raised
+                except (ValueError, AttributeError):
+                    pass
+            count = 0 if capped else int(raised)
+            self.reviewer_records.append(dict(
+                task=spec.task_id, model=peer, role=role, complete=bool(complete) and not capped,
+                capped=bool(capped), blocking_raised=count, blocking_resolved=0, blocking_unresolved=0,
+                recheck=None, recheck_rounds=0))
+        except Exception:  # noqa: BLE001 -- the record never fails a task
+            log.debug("could not record a review", exc_info=True)
+
+    def _record_recheck(self, spec: TaskSpec, peer: str, verdict: str) -> None:
+        """What a reviewer's re-check said of its own blocking findings. It
+        answers for them as a set, so RESOLVED counts all of them resolved
+        and UNRESOLVED all of them standing; a capped re-check counts none."""
+        for record in reversed(self.reviewer_records):
+            if (record["task"], record["model"], record["role"]) == (spec.task_id, peer, "collaborator"):
+                raised = record["blocking_raised"]
+                record.update(recheck=verdict, recheck_rounds=record["recheck_rounds"] + 1,
+                              blocking_resolved=raised if verdict == "resolved" else 0,
+                              blocking_unresolved=raised if verdict == "unresolved" else 0)
+                return
 
     def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
         """A lead stopped at its turn limit: keep the work, record it, re-plan.
@@ -4841,6 +5432,10 @@ class Session:
                 verdict = said = self._invoke_model(verifier, prompt)
         except TurnLimitReached as exc:
             verdict, said = None, self._capped_review(spec, verifier, "verification", exc)
+        # Complete here means the seat answered; whether the answer accepts
+        # is decided by the verdict readers, as before.
+        self._record_review(spec, verifier, "verifier", verdict or "", complete=verdict is not None,
+                            capped=verdict is None)
         task.record("assistant", f"[{verifier}] {said}")
         task.keep(said, kind=f"verify:{verifier}", author=verifier)
         return verdict
@@ -6741,6 +7336,7 @@ class Session:
             # caller files it as a review that gave no verdict (unverified),
             # not as a design defect.
             self._record_delivery(reviewer, hashes)
+            self._record_review(spec, reviewer, "design-review", "", complete=False, capped=True)
             return self._capped_review(spec, reviewer, "design review", exc)
         except EvidenceNotDelivered as exc:
             self._edge("delivered", False)
@@ -6751,6 +7347,7 @@ class Session:
             self._edge("delivered", False)
             return f"BLOCKING: the reviewer altered its copy of the source or renders before judging ({str(exc)[:300]})"
         self._record_delivery(reviewer, hashes)
+        self._record_review(spec, reviewer, "design-review", verdict, complete=True)
         return verdict
 
     def _record_delivery(self, reviewer, hashes) -> None:
@@ -6932,7 +7529,6 @@ class Session:
         import contextlib
 
         from .project import Project
-        from .run_budget import RunBudgetExceeded
         parsed = []
         for named in specs:
             # The serial loop's own reading of the directive lines, with the
@@ -6970,8 +7566,9 @@ class Session:
                 tag = spec.task_id
                 child_config = replace(
                     self.config, project=root, integration_gate=None, requirements_ledger=False,
-                    max_parallel_tasks=1, fork=None,
+                    max_parallel_tasks=1, fork=None, compete="off",
                     progress=(lambda message, tag=tag: self._note(f"[{tag}] {message}")))
+                self._skip_contest(spec, "a task inside a parallel batch is not contested")
                 # Standing rules and operator rulings are re-emitted on every
                 # render, a child's included: its lead is bound by them like
                 # any other. Its ledger of completed work stays its own, empty.
@@ -7008,6 +7605,7 @@ class Session:
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
+                self.reviewer_records.extend(child.reviewer_records)
                 # A child's execution facts come back with it, re-based to the
                 # parent's checks: only a check the parent runs after the merge
                 # can discharge them (Codex review of b6ba3ba, F5).
@@ -7050,18 +7648,10 @@ class Session:
                         # is the merge, so its design verdict is left as found.
                         mine.evidence.update(merged=False, screenshots=[])
                     self._note(f"{spec.task_id} not merged: {reason[:160]}")
-                    if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
-                        fatal = fatal or exc
-                    if isinstance(exc, RunBudgetExceeded):
+                    if exc is not None and _stops_the_run(exc):
                         fatal = fatal or exc
                     continue
-                for path in changed:
-                    target = Path(self.project) / path
-                    if path in after:
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(after[path])
-                    elif target.exists():
-                        target.unlink()
+                self._merge_files(after, changed)
                 # Before the copy is deleted: the renders its records and
                 # approved digests name, into the project they now describe.
                 self._adopt_child_evidence(child, spec, mine)
@@ -9323,10 +9913,12 @@ class Session:
                 task.record("user", "A blocking finding was not re-checked against the revision "
                                     "(the reviewer stopped at its turn cap) -- carry it into the "
                                     f"summary as an open question:\n[{shown}] {standing}")
+                self._record_recheck(spec, peer, "capped")
                 continue
             task.record("assistant", f"[{shown} recheck] {verdict}")
             if not _resolved_verdict(verdict):
                 unresolved.append((peer, verdict.strip()))
+            self._record_recheck(spec, peer, "resolved" if _resolved_verdict(verdict) else "unresolved")
         return unresolved
 
     def _capped_review(self, spec: TaskSpec, peer: str, what: str, exc: TurnLimitReached) -> str:
@@ -9486,6 +10078,10 @@ class Session:
         outcome = self._outcome if getattr(self._outcome, "task_id", None) == task_id else None
         if outcome is not None and "checks" in (outcome.edges or {}):
             facts.append("required checks: " + ("passed" if outcome.edges["checks"] else "failed"))
+        held = next((r for r in reversed(self.contests) if r.get("task") == task_id and r.get("formed")), None)
+        if held is not None:
+            from .contest import ledger_line
+            facts.append(ledger_line(held))
         return facts
 
     def _note_unrun_tests(self, spec, task, gate) -> None:
@@ -10276,6 +10872,35 @@ _NO_REQUESTS_IN_FIX = (
 )
 
 
+def _stops_the_run(exc: BaseException) -> bool:
+    """Whether a stop met in a private copy (a parallel child's, a contest
+    entrant's) or by a contest's judge is the run's stop, raised once the
+    work it would lose is kept. One rule for all three.
+
+    A task's own result is not: preserved partial work and a failed task
+    (PartialWorkStopped), a cap, a refusal or a transport error
+    (ProviderError), a stall (RunStalled). In a batch that child is not
+    merged; in a contest that draft loses. Everything else is: a spent
+    budget, an interrupt, a denied capability, dependency integrity, and any
+    failure nothing names, which is handed to the operator as it was raised
+    (map J27) and never read as one draft losing."""
+    return not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled))
+
+
+def _delivers(reply: str, trust) -> bool:
+    """Whether a lead's reply is a delivery by the drafting loop's own
+    reading: not a FETCH, WORKER, CONSULT or ASK request."""
+    if _parse_fetch(reply) is not None:
+        return False
+    body = _parse_kind(reply)[2].strip()
+    split = split_lead_request(body)
+    if split is not None:
+        body = split[1]
+    if body.startswith("WORKER ") or _parse_consults(body, trust):
+        return False
+    return not body.startswith(("ASK:", "CONSULT", "WORKER", "FETCH:"))
+
+
 def _revision_changed_delivery(already: str) -> str:
     """What a revision or fix call's CHANGED line covers, stated for that call.
 
@@ -10464,6 +11089,12 @@ _DIFF_USE_REVIEW = ("Start from it, and open files in your source copy to check 
                     "show (unchanged code it depends on, callers, anything listed as cut or left out).")
 _DIFF_USE_DESIGN = ("Use it to see which interface this task changed, so you can tell whether the "
                     "renders show it; open files in your source copy for what it does not show.")
+#: For a contest's judge, whose working directory holds neither draft.
+_DIFF_USE_JUDGE = ("Judge this attempt from what is shown here. It is not applied in your working "
+                   "directory, so a part listed as cut or left out cannot be read there either.")
+#: For the winner of a contest, shown the other attempt in its revision round.
+_DIFF_USE_OTHER_ATTEMPT = ("It is not applied in your working directory. Read it as an alternative to "
+                           "compare with your own work, never as something to apply whole.")
 _DIFF_NONE = ("The harness measured no change to the project source here. Whatever the account "
               "above says was changed, no file differs.")
 _DIFF_NONE_READ_ONLY = ("This run has no edit grant and the harness measured no change to the project "
