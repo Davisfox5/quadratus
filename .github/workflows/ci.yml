@@ -6,12 +6,206 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 6 * * *'
 
 # The jobs only read the repository.
 permissions:
   contents: read
 
+# One current run per PR/ref. A newer edit supersedes queued/stale work.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Fast feedback (docs/testing/fast-feedback.md): a pull request runs the
+  # test files its change can reach on Python 3.12; every other event runs
+  # the whole suite on 3.11 and 3.12. Both run on isolated shards.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_tests: ${{ steps.plan.outputs.has_tests }}
+    steps:
+      # Actions are pinned to the commit their tag named on 2026-11-11.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ci-durations.json
+          key: ci-timings-v1-${{ github.run_id }}
+          restore-keys: ci-timings-v1-
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: github.event_name == 'pull_request'
+        with:
+          path: ci-validated.json
+          key: ci-validated-v1-pr${{ github.event.pull_request.number }}-${{ github.run_id }}
+          restore-keys: ci-validated-v1-pr${{ github.event.pull_request.number }}-
+      - name: Select affected files and balance isolated shards
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          timing=()
+          previous=()
+          if [ "$EVENT" = pull_request ] && [ -f ci-validated.json ]; then previous=(--previous ci-validated.json); fi
+          if [ -f ci-durations.json ]; then timing=(--durations ci-durations.json); fi
+          if [ "$EVENT" = pull_request ]; then
+            python tools/ci/plan.py --base "$BASE" --output ci-plan.json "${timing[@]}" "${previous[@]}"
+          else
+            python tools/ci/plan.py --full --output ci-plan.json "${timing[@]}"
+          fi
+          python - <<'PY'
+          import json, os
+          p = json.load(open('ci-plan.json'))
+          versions = ['3.12'] if os.environ['EVENT'] == 'pull_request' else ['3.11', '3.12']
+          matrix = {'include': [dict(python=v, shard=s['index']) for v in versions for s in p['shards']]}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('matrix=' + json.dumps(matrix) + '\n')
+              f.write('has_tests=' + str(bool(p['shards'])).lower() + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(f"Selected {len(p['selected'])} test files; omitted {len(p['omitted'])}.\n\n")
+              f.write('\n'.join(p['reasons']) + '\n')
+              f.write('Baseline: ' + json.dumps(p['baseline']) + '\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-plan
+          path: ci-plan.json
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - run: pip install 'ruff>=0.5'
+      - run: ruff check .
+
+  shard:
+    needs: plan
+    if: needs.plan.outputs.has_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: Python ${{ matrix.python }} / shard ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ci-plan
+      - name: Install dependencies
+        id: dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          python -c "import importlib.metadata as m; print('playwright=' + m.version('playwright'))" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.dependencies.outputs.playwright }}-${{ hashFiles('requirements*.txt') }}
+      - name: Install Playwright browser and system libraries
+        run: python -m playwright install --with-deps chromium
+      - name: Run planned test files with live timing
+        run: python tools/ci/run.py --plan ci-plan.json --shard ${{ matrix.shard }} --output ci-results
+      - name: Retain failures, skips, timings and current progress
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tests-${{ matrix.python }}-${{ matrix.shard }}
+          path: ci-results/
+          if-no-files-found: warn
+
+  # Succeeds only when planning, lint and every selected shard did. It was
+  # named test (3.12); the whole-suite job below has that name now.
+  aggregate:
+    needs: [plan, lint, shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the complete selected plan
+        env:
+          PLAN: ${{ needs.plan.result }}
+          LINT: ${{ needs.lint.result }}
+          TESTS: ${{ needs.shard.result }}
+          HAS_TESTS: ${{ needs.plan.outputs.has_tests }}
+        run: |
+          test "$PLAN" = success
+          test "$LINT" = success
+          if [ "$HAS_TESTS" = true ]; then test "$TESTS" = success; else test "$TESTS" = skipped; fi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.plan.outputs.has_tests == 'true'
+        with:
+          pattern: tests-*
+          path: shard-results
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: needs.plan.outputs.has_tests == 'true'
+        with:
+          path: ci-durations.json
+          key: ci-timings-v1-${{ github.run_id }}
+          restore-keys: ci-timings-v1-
+      - name: Carry measured file durations into the next plan
+        if: needs.plan.outputs.has_tests == 'true'
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+          cache = Path('ci-durations.json')
+          weights = json.loads(cache.read_text()) if cache.exists() else {}
+          for p in Path('shard-results').rglob('durations.json'):
+              for name, seconds in json.loads(p.read_text()).items():
+                  weights[name] = max(weights.get(name, 0), seconds)
+          Path('ci-durations.json').write_text(json.dumps(weights, sort_keys=True))
+          PYTHON
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: needs.plan.outputs.has_tests == 'true'
+        with:
+          path: ci-durations.json
+          key: ci-timings-v1-${{ github.run_id }}
+
+  record-baseline:
+    needs: aggregate
+    if: github.event_name == 'pull_request' && needs.aggregate.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: github.event_name == 'pull_request'
+        with:
+          name: ci-plan
+      - name: Advance baseline only after the whole selected run succeeds
+        if: github.event_name == 'pull_request'
+        env:
+          VALIDATED_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          p = json.loads(Path('ci-plan.json').read_text())
+          p['validated_run'] = os.environ['VALIDATED_RUN']
+          Path('ci-validated.json').write_text(json.dumps(p))
+          PYTHON
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: github.event_name == 'pull_request'
+        with:
+          path: ci-validated.json
+          key: ci-validated-v1-pr${{ github.event.pull_request.number }}-${{ github.run_id }}
+
+  # The whole suite on every supported Python, on every event. The shards
+  # above select by impact on a pull request; this job selects nothing.
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -19,7 +213,6 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      # Actions are pinned to the commit their tag named on 2026-11-11.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python ${{ matrix.python-version }}

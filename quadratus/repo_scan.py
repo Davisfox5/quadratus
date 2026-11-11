@@ -160,6 +160,9 @@ class ScanReport:
     manifests: List[str] = field(default_factory=list)
     top_dirs: List[str] = field(default_factory=list)
     readme_head: str = ""
+    #: The README's file name as the directory stores it (cycle21: the map
+    #: said "README begins:" and a planner named ``readme.md``).
+    readme_name: str = ""
     #: ``(relative path, line count)`` for the biggest non-test source files,
     #: largest first. A lead is told which file to change and still has to
     #: discover what is in the project; naming the principal files costs a
@@ -201,7 +204,7 @@ class ScanReport:
         if self.check_command:
             lines.append("Check command: " + " ".join(self.check_command) + ".")
         if self.readme_head:
-            lines.append("README begins:\n" + self.readme_head)
+            lines.append(f"{self.readme_name or 'README'} begins:\n" + self.readme_head)
         return "\n".join(lines)
 
     def map_notes(self) -> List[Tuple[str, str]]:
@@ -449,14 +452,25 @@ def scan_repo(root) -> ScanReport:
                     break
     report.top_dirs = sorted(top_dirs)
 
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        entries = []
     for name in ("README.md", "README.rst", "README.txt", "README"):
-        candidate = root / name
+        # The spelling the directory stores, never the one asked for: on a
+        # case-insensitive filesystem ``README.md`` also opens ``readme.md``.
+        spelled = [n for n in entries if n.casefold() == name.casefold()]
+        actual = name if name in entries else (spelled[0] if len(spelled) == 1 else None)
+        if actual is None:
+            continue
+        candidate = root / actual
         if candidate.is_file() and not candidate.is_symlink():
             try:
                 # The head only: twelve lines never needed the whole file.
                 with candidate.open("rb") as handle:
                     head = handle.read(_README_BYTES).decode("utf-8", errors="replace")
                 report.readme_head = "\n".join(head.splitlines()[:12]).strip()
+                report.readme_name = actual
             except OSError:
                 pass
             break

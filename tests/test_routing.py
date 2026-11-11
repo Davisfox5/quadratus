@@ -18,9 +18,9 @@ from quadratus.routing import (
 )
 
 FABLE = "claude:fable"
-ASTRA = "openai:gpt-6-astra"
+ASTRA = "openai:astra"
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 SONNET = "claude:sonnet"
 
 
@@ -201,7 +201,7 @@ def test_no_worker_tier_model_sits_in_the_security_chain():
     """Operator directive: the worker tier holds no role in security. Not
     being refused (Sonnet carries no classifier) is not the same as being
     trusted with the work."""
-    for worker_tier in (SONNET, "claude:haiku", "openai:gpt-5.6-luna",
+    for worker_tier in (SONNET, "claude:haiku", "openai:luna",
                         "grok:grok-4.5"):
         assert worker_tier not in SECURITY_WORK_CHAIN
 

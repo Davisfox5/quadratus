@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import copy
 import errno
+import hashlib
 import json
 import logging
 import math
@@ -72,8 +73,10 @@ from .delegation import NativeChild
 from .native_sessions import bounded_lines, first_record
 from .providers import (
     LLMProvider,
+    PermissionBlocked,
     ProviderError,
     ProviderRefusal,
+    TransientOverload,
     Turn,
     TurnLimitReached,
     carry_transport_facts,
@@ -249,6 +252,131 @@ def _no_envelope(message: str, *, exit_report: bool = False) -> ProviderError:
     return error
 
 
+class StaleClient(RuntimeError):
+    """An installed vendor client is older than the version this engine
+    qualified. Raised by the run preflight before any model call,
+    never by a provider: the seat stays constructed and reported, the run
+    is refused with both versions named (see ``CLISpec.minimum_client``)."""
+
+
+#: The version ``<binary> --version`` reported, read once per executable
+#: identity (path, arguments, device, inode, size, mtime) per process and
+#: kept for the status line, the invocation ledger and the preflight. A
+#: replaced or upgraded executable at the same path is a new identity and
+#: is read again, so a long-lived process sees the operator's remedy.
+_CLIENT_VERSIONS: Dict[tuple, Optional[str]] = {}
+_VERSION = re.compile(r"(?<![\w.])(\d{1,5})\.(\d{1,5})\.(\d{1,5})(?:-([0-9A-Za-z.]{1,32}))?(?![\w.])")
+#: What a recorded client version may look like: exactly the bounded
+#: ``major.minor.patch[-pre]`` form, never the binary's own line.
+CLIENT_VERSION_FORM = re.compile(r"\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[0-9A-Za-z.]{1,32})?")
+
+
+def parse_client_version(text) -> Optional[tuple]:
+    """The first ``major.minor.patch[-pre]`` in ``text`` as an orderable
+    tuple, or None. A pre-release orders below its release (semver), so
+    ``0.162.0-alpha.17.2 < 0.162.0 < 0.163.0``."""
+    match = _VERSION.search(str(text or ""))
+    if not match:
+        return None
+    major, minor, patch, pre = match.groups()
+    return (int(major), int(minor), int(patch), 0 if pre is None else -1, pre or "")
+
+
+def _version_text(match) -> str:
+    """The bounded ``major.minor.patch[-pre]`` a match found, and nothing
+    around it: no product name, path, error or token text."""
+    major, minor, patch, pre = match.groups()
+    return f"{int(major)}.{int(minor)}.{int(patch)}" + (f"-{pre}" if pre else "")
+
+
+def client_version_at_least(found, minimum) -> Optional[bool]:
+    """Whether ``found`` (version text) meets ``minimum`` (version text);
+    None when either does not parse: unknown is never a pass."""
+    have, want = parse_client_version(found), parse_client_version(minimum)
+    if have is None or want is None:
+        return None
+    return have[:4] >= want[:4]
+
+
+#: Vendor wording for a spent subscription window, as seen or documented.
+#: One tuple with ``LIMIT_WORDING``, so the typed fact the fleet routes on
+#: (``window_exhausted``) and the class the ledger records cannot drift apart.
+EXHAUSTION_MARKERS = LIMIT_WORDING
+#: Vendor wording for a rejected sign-in (codex 401 seen on GameTape run 6;
+#: grok "Not signed in" seen on blind-acceptance attempt 7).
+_AUTH_MARKERS = ("unauthori", "not signed in", "not logged in", "sign in again", "authentication")
+#: The classes a failed call may be recorded as. Anything else is unknown,
+#: and unknown is recorded by absence, never guessed.
+FAILURE_CLASSES = ("cap", "auth", "rate_limited", "unavailable")
+#: A status in a failure message, only where the wording says it is one:
+#: "last status: 429 Too Many Requests" (codex), "API Error: 429 temporary
+#: capacity" (claude), "HTTP 503", "status code 502". A bare number in
+#: other prose ("cannot open file429.py", "line 503") is not a status
+#: (root's review of ace40f8). Read only from text a vendor reported as
+#: an error, never from an answer; unknown otherwise.
+_STATUS_IN_TEXT = re.compile(
+    r"(?i)(?:\bstatus(?:\s+code)?\s*[:=]?\s*|\bhttp\s*[:=]?\s*|\berror\s*[:=]\s*)([45]\d{2})(?![\d.\w])")
+
+
+def failure_facts(status, text) -> Dict[str, object]:
+    """Bounded facts about how a failed call ended, shared by every vendor's
+    extractor: the HTTP ``status`` the client reported (an integer field or
+    a bare 4xx or 5xx in its error message) and a ``failure_class`` drawn only
+    from what that status and the vendor's own wording establish. A cap
+    (the subscription window) outranks a 429, because the vendor says it
+    with the same status; an auth rejection is 401 or 403 or its wording;
+    429 alone is rate limiting; 502, 503 and 504 are the service being
+    unavailable. Nothing else is classified, no retry delay is inferred,
+    and no text is kept: the message stays in the ledger's stderr tail."""
+    facts: Dict[str, object] = {}
+    message = str(text or "")
+    if type(status) is not int or not 100 <= status <= 599:
+        found = _STATUS_IN_TEXT.search(message)
+        status = int(found.group(1)) if found else None
+    if status is not None:
+        facts["status"] = status
+    lowered = message.lower()
+    if any(marker in lowered for marker in EXHAUSTION_MARKERS):
+        facts["failure_class"] = "cap"
+    elif status in (401, 403) or any(marker in lowered for marker in _AUTH_MARKERS):
+        facts["failure_class"] = "auth"
+    elif status == 429:
+        facts["failure_class"] = "rate_limited"
+    elif status in (502, 503, 504):
+        facts["failure_class"] = "unavailable"
+    return facts
+
+
+def client_version(path: str, args: Sequence[str]) -> Optional[str]:
+    """The version the installed client reports (``0.154.0`` from
+    ``codex-cli 0.154.0``), read once per executable identity with a
+    bounded subprocess. None, meaning unknown, when the executable cannot
+    be stat'ed or run, exits non-zero, or prints no recognised version on
+    its first stdout line; stderr is never read, and nothing but the
+    bounded version form is kept. Never a model call, never raises."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (path, tuple(args), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+    if key not in _CLIENT_VERSIONS:
+        text = None
+        try:
+            # Printing a version needs no sign-in and no credential, so this
+            # child gets the probe profile like every other one.
+            from .child_env import check_env
+            env, _ = check_env()
+            proc = subprocess.run([path, *args], capture_output=True, text=True, timeout=15, check=False,
+                                  env=env)
+            first = (proc.stdout or "").strip().splitlines()
+            match = _VERSION.search(first[0][:200]) if proc.returncode == 0 and first else None
+            text = _version_text(match) if match else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            text = None
+        _CLIENT_VERSIONS[key] = text
+    return _CLIENT_VERSIONS[key]
+
+
 def _extract_claude_result(stdout: str) -> str:
     """Pull the assistant text out of ``claude --output-format json``."""
     try:
@@ -303,7 +431,22 @@ def _extract_claude_result(stdout: str) -> str:
         silent = (isinstance(usage, dict) and type(usage.get("output_tokens")) is int
                   and usage["output_tokens"] == 0)
         own = str(detail) if type(status) is int or silent else ""
+        if _own_error_facts(own, status).get("transport_status") == 529 and isinstance(usage, dict):
+            # Overloaded, typed by the envelope's own status (or the client's
+            # "API Error: 529" error line, read only where the text is the
+            # CLI's), with usage the envelope settled: the failure
+            # _generate_once re-sends under its own bound and budget check
+            # (MAX_TRANSIENT_RETRIES; cycle06 run).
+            error = TransientOverload(str(error), status=529)
         raise _mark_transport(error, own, status)
+    if payload.get("stop_reason") == "max_tokens":
+        # The output limit cut the final message: whatever text came back is
+        # where the answer stopped, not the answer (the API's documented stop
+        # reason; not yet seen from the installed binary). Kept as evidence
+        # on the error, never returned as a completed reply.
+        error = ProviderError("claude stopped at its output limit before finishing the reply")
+        error.partial_text = payload.get("result")
+        raise error
     result = payload.get("result")
     return result if isinstance(result, str) else ""
 
@@ -333,7 +476,12 @@ def _extract_codex_result(stdout: str) -> str:
     """
     answer = ""
     errors: List[str] = []
-    failed = None
+    #: An explicit terminal failure, held apart from its detail: a
+    #: turn.failed whose error carries no message, an empty one or a
+    #: malformed one is still a failed turn (root's review of ace40f8,
+    #: where {"status": 503} alone let an earlier message through).
+    failed = False
+    failure_detail = ""
     saw_json = False
     for line in stdout.splitlines():
         line = line.strip()
@@ -345,9 +493,19 @@ def _extract_codex_result(stdout: str) -> str:
             continue
         saw_json = True
         if event.get("type") == "turn.failed":
-            detail = event.get("error")
-            failed = (str(detail.get("message") or "") if isinstance(detail, dict)
-                      else "") or "no error detail in the event"
+            failed = True
+            error = event.get("error")
+            message = error.get("message") if isinstance(error, dict) else None
+            status = error.get("status") if isinstance(error, dict) else None
+            failure_detail = (message.strip() if isinstance(message, str) and message.strip()
+                              else f"status {status}" if type(status) is int
+                              else "the client reported no detail")
+        elif event.get("type") == "turn.completed":
+            # A completed turn after a failed one is the client's own
+            # recovery (0.163 waits and resumes inside the sampling
+            # session): the last terminal event in stream order decides.
+            failed = False
+            failure_detail = ""
         item = event.get("item")
         if not isinstance(item, dict):
             continue
@@ -360,10 +518,9 @@ def _extract_codex_result(stdout: str) -> str:
             message = item.get("message")
             if isinstance(message, str) and message.strip():
                 errors.append(message.strip())
-    # An agent_message can be progress narration emitted before a terminal
-    # failure. The failed turn outranks any earlier text, even when the event
-    # omitted its error detail.
-    if re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failed or "", re.IGNORECASE):
+    if answer and not failed:
+        return answer
+    if failed and re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failure_detail, re.IGNORECASE):
         # GameTape run 6: the turn failed with 401 after the websocket dropped.
         # A run on a copied sign-in loses it when another codex client on the
         # same account refreshes the token. Named, and vendor-wide.
@@ -373,12 +530,18 @@ def _extract_codex_result(stdout: str) -> str:
             "account refreshed it. Sign in again before the next run.")
         error.auth_invalid = True
         raise error
-    if failed is not None:
+    if failed:
+        # The turn ended in failure whatever came before it. Text an earlier
+        # agent_message carried is where the turn had got to (an interim
+        # message, a draft of the reply) and is kept on the error as
+        # evidence; returning it as the answer made a 429 after a progress
+        # message read as a completed delivery.
+        error = ProviderError(f"codex turn failed: {failure_detail[:300]}"
+                              + (f" (after a reported error: {errors[-1][:200]})" if errors else ""))
+        error.partial_text = answer or None
         # ``turn.failed`` and ``error`` items are codex's own report, not the
         # model's text, so the typed facts may be read from them.
-        raise _mark_transport(ProviderError(f"codex turn failed: {failed[:300]}"), failed)
-    if answer:
-        return answer
+        raise _mark_transport(error, failure_detail)
     if errors:
         raise _mark_transport(ProviderError(f"codex reported an error: {errors[-1][:300]}"), errors[-1])
     if saw_json:
@@ -393,6 +556,20 @@ def _extract_codex_result(stdout: str) -> str:
 #: Grok stop reasons that are an explicit decline. Only these: a refusal is
 #: never inferred from prose or from any other stop.
 _GROK_REFUSAL_STOPS = ("refusal", "content_filter")
+
+#: Grok stop reasons that are the agent loop's own cap, not a failure: the
+#: call ran, its usage is real, and a writable call may have changed files.
+#: ``max_turn_requests`` is the installed CLI's name for it (grok 1.0.62,
+#: stop vocabulary end_turn / max_tokens / max_turn_requests / refusal /
+#: cancelled, confirmed by the operator against the binary on 2026-10-25;
+#: the published headless runner maps StopReason::MaxTurnRequests to it).
+#: Demonstrated live: proof-workflow-01 t4's second revision stopped there
+#: after 8 turns and was read as a failed, unmerged task instead of a cap.
+#: ``max_turns`` is kept as the older spelling. ``max_turns_reached`` is an
+#: event name in the same binary, not a stop reason, and is not read here;
+#: a bare ``cancelled`` at the configured count stays with the count rule
+#: below (``_is_cap_shaped``), and every other incomplete stop is a failure.
+_GROK_CAP_STOPS = ("max_turns", "max_turn_requests")
 
 
 def _is_cap_shaped(payload: dict) -> bool:
@@ -460,10 +637,10 @@ def _extract_grok_result(stdout: str) -> str:
     # completed turn is therefore an error, including a stop reason this code
     # has never seen: guessing that an unknown one is benign is how the
     # narration got mistaken for an answer in the first place.
-    if stop == "max_turns":
+    if stop in _GROK_CAP_STOPS:
         # Capped, not failed: the call ran and may have written. The text is
         # where the loop had got to, kept as evidence and never as an answer.
-        raise TurnLimitReached("grok stopped at its turn limit before finishing",
+        raise TurnLimitReached(f"grok stopped at its turn limit before finishing (stopReason {stop!r})",
                                partial_text=text, turns=_envelope_turns(payload))
     if stop != "end_turn":
         diagnostics = _extract_grok_diagnostics(stdout) or {}
@@ -479,6 +656,38 @@ def _extract_grok_result(stdout: str) -> str:
     if not isinstance(text, str) or not text.strip():
         raise ProviderError("grok completed the turn with no answer text.")
     return text
+
+
+#: Grok's own line for a tool call a headless run could not get approved
+#: (cycle14 t5's saved stderr: "permission required: Fetch: file:///.../README.md
+#: was not run, as a headless run cannot ask for approval"). Matched whole,
+#: one line at a time; nothing else in stderr or the envelope is read as one.
+_GROK_HEADLESS_PERMISSION = re.compile(
+    r"permission required: (?P<tool>[A-Za-z][\w.-]{0,63}): (?P<target>\S(?:.{0,4094}\S)?) "
+    r"was not run, as a headless run cannot ask for approval")
+_TARGET_SCHEME = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]{0,15})://")
+
+
+def _extract_grok_permission_block(stderr: str) -> Optional[Dict[str, object]]:
+    """The bounded permission block from grok's exact headless-approval line,
+    or None (cycle15). ``tool`` as grok named it, ``scheme`` of the target
+    (``file``, ``https``, ... or ``path`` for a bare path), and a digest of
+    the target: the raw target (a machine path) stays only in the private
+    stderr tail. More than one such line keeps the first and counts them."""
+    found = []
+    for line in str(stderr or "").splitlines()[-200:]:
+        match = _GROK_HEADLESS_PERMISSION.fullmatch(line.strip())
+        if match is not None:
+            found.append(match)
+    if not found:
+        return None
+    first = found[0]
+    target = first.group("target")
+    scheme = _TARGET_SCHEME.match(target)
+    return dict(tool=first.group("tool"), scheme=(scheme.group("scheme").lower() if scheme else "path"),
+                headless_approval=True,
+                target_digest=hashlib.sha256(target.encode("utf-8", "replace")).hexdigest()[:16],
+                lines=len(found))
 
 
 #: Containers whose entries *are* tool calls by construction.
@@ -533,6 +742,19 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         diagnostics.setdefault("model_calls", turns)
     diagnostics.update(_reread_and_cost(payload.get("usage"),
                                         payload.get("total_cost_usd")))
+    error = payload.get("error")
+    if error or payload.get("type") == "error":
+        # How the failed call ended, as the client reports it: an integer
+        # status on the envelope or its error object, and the class the
+        # status and the vendor's wording establish. The grok envelope's
+        # error shape is not documented; a field that is not there is
+        # unknown, not zero.
+        holder = error if isinstance(error, dict) else {}
+        status = next((v for v in (holder.get("status"), holder.get("statusCode"), holder.get("code"),
+                                   payload.get("status"), payload.get("statusCode"))
+                       if type(v) is int), None)
+        text = " ".join(str(v) for v in (holder.get("message") if holder else error, payload.get("message")) if v)
+        diagnostics.update(failure_facts(status, text))
     names: List[str] = []
 
     def tool_name(item, certain):
@@ -896,6 +1118,34 @@ def _reread_and_cost(usage, cost=None) -> Dict[str, object]:
     return facts
 
 
+#: The codex event-stream item types that are a tool step: one command, file
+#: change, MCP tool call or web search the model asked for and the client ran.
+CODEX_TOOL_ITEMS = ("command_execution", "file_change", "mcp_tool_call", "web_search")
+
+
+def _codex_tool_steps(stdout: str) -> int:
+    """How many tool steps one codex call ran: completed tool items in its
+    event stream. codex reports no turn count (its ``turn.completed`` is the
+    whole exec), so this is the measured count of what each round did, by
+    type only; nothing of a command or its output is read (Davis,
+    2026-11-05: grok-worker-01's 16 codex calls had no round figure)."""
+    steps = 0
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "item.completed":
+            continue
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") in CODEX_TOOL_ITEMS:
+            steps += 1
+    return steps
+
+
 def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     """Bounded facts from codex's ``turn.completed`` event.
 
@@ -909,11 +1159,40 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             event = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+        if not isinstance(event, dict):
             continue
-        # The last completed turn wins, matching _extract_codex_usage.
+        if event.get("type") == "turn.failed":
+            # A failed turn as the client reports it: the terminal reason
+            # and the HTTP status its message names ("exceeded retry limit,
+            # last status: 429 Too Many Requests" on codex 0.154, which
+            # carries nothing else). The message itself is not kept: it is
+            # the vendor's free text, and the ledger holds stderr already.
+            # Recorded, not acted on: the budget still settles the attempt
+            # as unknown usage, and nothing here says the turn never ran.
+            error = event.get("error") if isinstance(event.get("error"), dict) else {}
+            diagnostics = {"stop_reason": "turn.failed"}
+            diagnostics.update(failure_facts(error.get("status"), error.get("message")))
+            continue
+        if event.get("type") != "turn.completed":
+            continue
         diagnostics = {"stop_reason": "turn.completed"}
-        diagnostics.update(_reread_and_cost(event.get("usage")))
+    steps = _codex_tool_steps(stdout)
+    account = _codex_usage_account(stdout)
+    if steps or account["completed_turns"]:
+        # A completed turn with no tool item ran zero steps, measured; a
+        # stream with neither says nothing, so nothing is recorded.
+        diagnostics["tool_steps"] = steps
+    if account["completed_turns"] or account["pending"] or account["invalid"]:
+        diagnostics["usage_completeness"] = "complete" if account["complete"] else "unresolved"
+        diagnostics["completed_turns"] = account["completed_turns"]
+        if account["cached_input_tokens"]:
+            # A measured subset of completed turns' input, as the reread
+            # fact was always written: only when there is one (integration
+            # review: zero completed turns have no cache figure to report).
+            diagnostics["cached_input_tokens"] = account["cached_input_tokens"]
+        if not account["complete"] and account["completed_turns"]:
+            diagnostics["usage_lower_bound"] = dict(account["reported"],
+                usage_source="last cumulative thread snapshot; incomplete call")
     return diagnostics or None
 
 
@@ -982,44 +1261,83 @@ def _extract_plain(stdout: str) -> str:
     return stdout.strip()
 
 
-def _extract_codex_usage(stdout: str) -> Optional[Dict[str, int]]:
-    """Token counts from ``codex exec --json``'s ``turn.completed`` event.
+def _codex_usage_account(stdout: str) -> dict:
+    """The call's token count from the thread's cumulative total, never a
+    sum of snapshots and never a partial stream as a total.
 
-    Observed on codex-cli 0.154.0::
-
-        {"type":"turn.completed","usage":{"input_tokens":20114,
-         "cached_input_tokens":12928,"cache_write_input_tokens":0,
-         "output_tokens":5,"reasoning_output_tokens":0}}
-
-    ``cached_input_tokens`` is read as a *subset* of ``input_tokens`` rather
-    than an addition to it, so it is not folded in -- unlike the Claude
-    envelope, where cache reads are reported separately and are folded. The
-    two vendors report cache differently and guessing wrong in the additive
-    direction would inflate the counterfactual bill. The last turn wins: a
-    multi-turn run reports per turn, and the meter records one call.
+    Upstream rust-v0.163.0 ``exec/src/event_processor_with_jsonl_output.rs``
+    (lines 118-128, 509-535): ``ThreadTokenUsageUpdated`` stores the
+    thread's cumulative total and every ``turn.completed`` emits
+    ``usage_from_last_total``, so successive completions repeat a running
+    total and summing them double-counts (root's correction, 2026-10-21,
+    of root's own earlier sum). The account is therefore the last valid
+    snapshot on a single thread: snapshots must be monotonic (a regression
+    is malformed), a repeated total charges nothing extra, cached input is
+    a subset never added, and a second thread id in one stream is not the
+    same cumulative account. A failed, open, double-started or malformed
+    turn, a regression or a second thread leaves the call unknown, with the
+    last valid snapshot kept as the observed lower bound. Nothing here
+    recovers a historical call's usage or verifies the backend's bill.
     """
-    best: Optional[Dict[str, int]] = None
+    last: Optional[Dict[str, int]] = None
+    last_cache = 0
+    completed, invalid = 0, False
+    open_turn, unaccounted = False, False
+    threads: set = set()
     for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
+        if not line.lstrip().startswith("{"):
             continue
         try:
             event = json.loads(line)
         except ValueError:
+            invalid = True
             continue
+        if not isinstance(event, dict):
+            invalid = True
+            continue
+        kind = event.get("type")
+        if kind == "thread.started":
+            thread = event.get("thread_id")
+            threads.add(thread if isinstance(thread, str) else repr(thread))
+        if kind == "turn.started":
+            unaccounted = unaccounted or open_turn
+            open_turn = True
+        elif kind in ("turn.failed", "error"):
+            unaccounted = True
+            open_turn = False
+        if kind != "turn.completed":
+            continue
+        open_turn = False
         usage = event.get("usage")
         if not isinstance(usage, dict):
+            invalid = True
             continue
-        try:
-            found = {
-                "input_tokens": int(usage.get("input_tokens", 0)),
-                "output_tokens": int(usage.get("output_tokens", 0)),
-            }
-        except (TypeError, ValueError):
+        values = {key: _strict_count(usage, key, missing_ok=False) for key in ("input_tokens", "output_tokens")}
+        cache = _strict_count(usage, "cached_input_tokens", missing_ok=True)
+        if any(value is None for value in values.values()) or cache is None:
+            invalid = True
             continue
-        if found["input_tokens"] or found["output_tokens"]:
-            best = found
-    return best
+        if cache > values["input_tokens"]:
+            invalid = True
+            continue
+        if last is not None and (values["input_tokens"] < last["input_tokens"]
+                                 or values["output_tokens"] < last["output_tokens"] or cache < last_cache):
+            # A cumulative total cannot fall: the stream is not one account.
+            invalid = True
+            continue
+        last, last_cache = dict(values), cache
+        completed += 1
+    pending = open_turn or unaccounted
+    several_threads = len(threads) > 1
+    reported = dict(last) if last is not None else {"input_tokens": 0, "output_tokens": 0}
+    return {"complete": bool(completed) and not pending and not invalid and not several_threads,
+            "completed_turns": completed, "reported": reported, "cached_input_tokens": last_cache,
+            "invalid": invalid, "pending": pending, "threads": len(threads)}
+
+
+def _extract_codex_usage(stdout: str) -> Optional[Dict[str, int]]:
+    account = _codex_usage_account(stdout)
+    return account["reported"] if account["complete"] else None
 
 
 def _extract_native_children(stdout: str) -> List[NativeChild]:
@@ -1268,6 +1586,20 @@ def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
     return seat
 
 
+def _ending_only(diagnostics: Dict[str, object]) -> Optional[Dict[str, object]]:
+    """An envelope with no auxiliary rows reports no auxiliary provenance, as
+    before; how a failed call ended is kept regardless, so an error
+    envelope's status and class reach the ledger. The call's own measured
+    facts are kept too: its turn count, its cached-input subset and the
+    vendor's stated cost. Dropping them here was the single-seat metadata
+    loss carried since the recovery batch; grok-worker-01 recorded no turn
+    count and no cache figure for any of its 24 claude calls (Davis,
+    2026-11-05)."""
+    kept = {k: diagnostics[k] for k in ("stop_reason", "status", "failure_class", "model_calls",
+                                        "cached_input_tokens", "vendor_cost_usd") if k in diagnostics}
+    return kept or None
+
+
 def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     """Provenance for the usage figure: which rows beyond the seat were counted.
 
@@ -1296,13 +1628,25 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             diagnostics.setdefault("model_calls", turns)
         diagnostics.update(_reread_and_cost(payload.get("usage"),
                                             payload.get("total_cost_usd")))
+        if payload.get("is_error"):
+            # How the failed call ended, as the client reports it: the
+            # envelope's stop reason, the HTTP status it names
+            # (``api_error_status`` on a 429, seen) and the class those
+            # establish. Facts only, never the result text.
+            stop = payload.get("stop_reason") or payload.get("subtype")
+            if isinstance(stop, str) and re.fullmatch(r"[A-Za-z_.-]{1,40}", stop):
+                diagnostics["stop_reason"] = stop
+            errors = payload.get("errors")
+            text = str(payload.get("result") or "") + " " + (
+                " ".join(str(e) for e in errors) if isinstance(errors, list) else "")
+            diagnostics.update(failure_facts(payload.get("api_error_status"), text))
     if malformed:
         diagnostics["auxiliary_usage"] = "unknown"
         if seat is not None:
             diagnostics["seat_tokens"] = seat["input_tokens"] + seat["output_tokens"]
         return diagnostics
     if not rows:
-        return None
+        return _ending_only(diagnostics)
     total = sum(r["input_tokens"] + r["output_tokens"] for r in rows.values())
     if seat is None:
         diagnostics["auxiliary_models"] = sorted(rows)
@@ -1313,7 +1657,7 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     if len(seat_rows) == 1:
         aux = {name: r for name, r in rows.items() if name != seat_rows[0]}
         if not aux:
-            return None
+            return _ending_only(diagnostics)
         diagnostics["auxiliary_models"] = sorted(aux)
         diagnostics["auxiliary_tokens"] = sum(r["input_tokens"] + r["output_tokens"] for r in aux.values())
         return diagnostics
@@ -1425,6 +1769,8 @@ class CLISpec:
     #: Optional run-wide denial request for other vendors' native helpers.
     #: This is not proof their CLI honors it; see the Grok specification.
     native_fanout_off_args: List[str] = field(default_factory=list)
+    #: Startup controls separate from the variadic tool-denial flag.
+    native_fanout_off_flags: List[str] = field(default_factory=list)
     #: Environment set on the subprocess only when the off-mode denial was
     #: folded into this call's argv. Documented kill switches that remove a
     #: fan-out path at startup, so a denial the model never sees cannot be
@@ -1523,12 +1869,28 @@ class CLISpec:
     #: count, attempted tool names), for the ledger. None where the CLI's
     #: output carries nothing of the kind.
     extract_diagnostics: Optional[Callable[[str], Optional[Dict[str, object]]]] = None
+    #: The CLI's own headless-approval refusal, read from stderr into bounded
+    #: metadata (cycle15). A call whose turn failed with one present raises
+    #: ``PermissionBlocked``. None where no such line is known.
+    extract_permission_block: Optional[Callable[[str], Optional[Dict[str, object]]]] = None
+    #: The local file readers a restricted seat already has, named in its
+    #: source-copy prompt (cycle15). Every name must be in
+    #: ``restricted_args``; the prompt never offers a tool the call lacks.
+    local_read_tools: tuple = ()
     #: Failed tool calls the agent made during this call (command, exit code,
     #: output tail), bounded, for the ledger. None where the CLI's output does
     #: not report its tool calls in a parseable form.
     extract_tool_failures: Optional[Callable[[str], List[Dict[str, object]]]] = None
     #: Whether these flags have been checked against a real binary.
     verified: bool = False
+    #: Arguments that print the client's version (read once per binary).
+    version_args: List[str] = field(default_factory=lambda: ["--version"])
+    #: The oldest client this engine qualified, or None. A run
+    #: whose installed client parses below it is refused before any call
+    #: (``runtime.Fleet.stale_clients``, ``project_run``); an unreadable
+    #: version is reported as unknown and not refused. No override: the
+    #: remedy is updating the client, and the refusal names both versions.
+    minimum_client: Optional[str] = None
     #: Environment variables to set for the subprocess.
     env: Dict[str, str] = field(default_factory=dict)
     #: Vendor key, used to find this spec's environment overrides.
@@ -1633,6 +1995,13 @@ CLAUDE_WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 #: an assigned collaboration role from competing with the coding-agent persona.
 CLAUDE_SPEC = CLISpec(
     vendor="claude",
+    # Root's qualification target (2026-10-21): the official npm stable
+    # 2.1.304, from the installed 2.1.296, in the same batch that moved
+    # codex to 0.163.0. Set with the client preflight so a run names both
+    # versions and refuses before any call; an unreadable version is
+    # unknown and not refused. No upstream 429 defect is established for
+    # this client; the baseline records what was qualified, not a fault.
+    minimum_client="2.1.304",
     editing_commands="granted",
     extract_tool_failures=_extract_claude_denials,
     binary="claude",
@@ -2014,6 +2383,20 @@ CODEX_SPEC = CLISpec(
     auth_ok_pattern=r"(?i)logged in",
     extract_diagnostics=_extract_codex_diagnostics,
     extract_tool_failures=_extract_codex_tool_failures,
+    # Qualified minimum (2026-10-21). Upstream rust-v0.154.0
+    # codex-api/src/api_bridge.rs maps every 429 but the usage-limit codes
+    # to a RetryLimit holding only the status and request id, discarding
+    # the turn_rate_limit_exceeded body and its Retry-After, so a capacity
+    # rejection ends the turn with a bare status after the client's own
+    # retries. rust-v0.162.0 carries Retry-After through the websocket
+    # TransportError (protocol/src/error.rs retry_delay) and waits inside
+    # the same sampling session under its retry budget and the call
+    # deadline (core/src/responses_retry.rs; suite retry_after.rs). 0.163.0
+    # is the first version this engine qualified, live on 2026-10-21; it is
+    # not a claim about which upstream release first carried the wait.
+    # The engine runs no outer retry: the client is where the wait belongs,
+    # and a run on a client that cannot wait is refused before any call.
+    minimum_client="0.163.0",
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
@@ -2135,12 +2518,23 @@ _POLL_SECONDS = 0.05
 GROK_SPEC = CLISpec(
     vendor="grok",
     binary="grok",
+    # Root's qualification target (2026-10-21): the official Homebrew/x.ai
+    # stable 1.0.62, from the installed 1.0.30 that every grok flag note
+    # below was verified on. Same preflight as the other two vendors.
+    minimum_client="1.0.62",
     system_flag="--system-prompt-override",
     model_flag="--model",
     # Without this the CLI streams the agent's narration and the "answer" is
     # whatever it was mid-sentence about; with it, one JSON envelope carrying
     # the final text and real token counts.
     output_args=["--output-format", "json"],
+    # The native session's identity, allocated before launch (root on
+    # 113f4e1, 6549956979 item 2): the installed 1.0.62 accepts a fresh UUID
+    # here, and its session folder under ~/.grok/sessions carries it, so a
+    # timeout that returns no envelope no longer hides the transcript or its
+    # native events. The final-only JSON envelope is unchanged: usage and
+    # stop semantics stay what they were.
+    session_id_flag="--session-id",
     # Verified levels on grok 1.0.30: low, medium, high, xhigh. Both --help
     # and the shipped README also advertise none/minimal/max; the binary
     # rejects all three. One more reason the probe outranks the table.
@@ -2191,6 +2585,7 @@ GROK_SPEC = CLISpec(
     # single nonsense name denies: nothing. Hence the separator field.
     native_fanout_off_args=["--disallowed-tools",
                             "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool"],
+    native_fanout_off_flags=["--no-subagents"],
     # grok reaches MCP tools through use_tool (and finds them with
     # search_tool). Attached only inside the container, whose HOME holds no
     # other integrations; see _worker_tool_argv.
@@ -2221,6 +2616,8 @@ GROK_SPEC = CLISpec(
     extract=_extract_grok_result,
     extract_usage=_extract_grok_usage,
     extract_diagnostics=_extract_grok_diagnostics,
+    extract_permission_block=_extract_grok_permission_block,
+    local_read_tools=("read_file", "grep", "list_dir"),
     verified=True,
 )
 
@@ -2827,6 +3224,13 @@ class CLIProvider(LLMProvider):
                 f"'{binary}' is not on PATH. Install the CLI and sign in "
                 f"with your subscription, or set this provider's backend to 'api'."
             )
+        # The installed client's version, for the status line, every
+        # invocation row and the run preflight (codex 0.154 discarded a
+        # 429's body and Retry-After inside its API bridge; 0.163.0 is the
+        # version this engine qualified). Recorded here, never refused
+        # here: a seat is constructed and reported as it is.
+        self.client_version = client_version(path, self.spec.version_args)
+        self.minimum_client = self.spec.minimum_client or None
         if not self.spec.verified:
             log.warning(
                 "%s CLI flags are unverified against a live binary; if calls fail, "
@@ -3006,6 +3410,7 @@ class CLIProvider(LLMProvider):
             argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag, denied,
                                     spec.disallowed_tools_separator)
             self._native_fanout_denied = denied
+            argv += list(spec.native_fanout_off_flags)
         else:
             self._native_fanout_denied = []
         if (getattr(self, "_disposable", False) and not self._allow_writes
@@ -3052,7 +3457,7 @@ class CLIProvider(LLMProvider):
             argv += list(spec.summary_only_args)
         elif self.max_turns and spec.max_turns_flag:
             argv += [spec.max_turns_flag, str(int(self.max_turns))]
-        if self.restricted and spec.restricted_prompt_flag:
+        if (self.restricted or mode == 'off') and spec.restricted_prompt_flag:
             # Bytes, as exec counts them: characters undercount any text
             # that is not ASCII.
             size = len(prompt.encode("utf-8", errors="replace"))
@@ -3062,10 +3467,12 @@ class CLIProvider(LLMProvider):
                 # into a full agent with writes. Refusing is the only option
                 # that cannot be mistaken for success.
                 raise ProviderError(
-                    f"{self.label}: a restricted call delivers its prompt as an "
+                    f"{self.label}: a restricted or native-delegation-off call delivers its prompt as an "
                     f"argument, and this one is {size:,} bytes "
-                    f"(limit {MAX_ARGV_PROMPT:,}). Route this task to an "
-                    f"unrestricted seat rather than sending it unbounded."
+                    f"(limit {MAX_ARGV_PROMPT:,}). "
+                    + ("Shorten the prompt without removing its native-delegation controls."
+                       if mode == 'off' else
+                       "Route this task to an unrestricted seat rather than sending it unbounded.")
                 )
             argv += [spec.restricted_prompt_flag, prompt]
         elif spec.prompt_file_flag:
@@ -3284,6 +3691,14 @@ class CLIProvider(LLMProvider):
 
         self._observe_output(proc.stdout)
         self.last_stderr = (proc.stderr or "")[-STDERR_TAIL:]
+        blocked = None
+        if self.spec.extract_permission_block is not None:
+            try:
+                blocked = self.spec.extract_permission_block(proc.stderr or "")
+            except Exception:  # noqa: BLE001 -- observational; the call's own failure stands
+                blocked = None
+            if blocked:
+                self.last_diagnostics = dict(self.last_diagnostics or {}, permission_block=blocked)
 
         if proc.returncode != 0:
             # A failing exit code does not mean there is nothing to read. The
@@ -3304,6 +3719,8 @@ class CLIProvider(LLMProvider):
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model
                     raise
+                if blocked:
+                    raise self._permission_blocked(parsed, blocked) from parsed
                 if not getattr(parsed, "exit_report", False):
                     detail = (proc.stderr or '').strip()[:400]
                     if detail:
@@ -3342,7 +3759,23 @@ class CLIProvider(LLMProvider):
             raise
         except ProviderError as failure:
             failure.diagnostics = self.last_diagnostics
+            if blocked and not isinstance(failure, TurnLimitReached) and not getattr(failure, "auth_invalid", False):
+                raise self._permission_blocked(failure, blocked) from failure
             raise
+
+    def _permission_blocked(self, failure: ProviderError, blocked: Dict[str, object]) -> PermissionBlocked:
+        """The typed denial for a failed turn whose stderr carries the CLI's
+        own headless-approval line (cycle15). A refusal, a cap and an
+        authentication failure keep their own types (the caller re-raises
+        them first). The message names the tool, the scheme and the digest,
+        never the raw target."""
+        exc = PermissionBlocked(
+            f"{self.label} stopped: {blocked.get('tool')} on a {blocked.get('scheme')} target "
+            f"(digest {blocked.get('target_digest')}) needed approval a headless run cannot ask for; "
+            "the call was not completed and is not retried",
+            permission_block=blocked)
+        exc.diagnostics = self.last_diagnostics
+        return exc
 
     def _observe_output(self, stdout):
         """Extract accounting even when response parsing later fails.
@@ -3372,6 +3805,10 @@ class CLIProvider(LLMProvider):
         self.last_diagnostics = (
             self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
         )
+        if getattr(self, "client_version", None):
+            # Which client answered: the row can then be read against
+            # the client's known behaviour (a 0.154 429 is a bare status).
+            self.last_diagnostics = dict(self.last_diagnostics or {}, client_version=self.client_version)
 
     def _observe_tool_failures(self, stdout) -> None:
         try:

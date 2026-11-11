@@ -150,6 +150,19 @@ def approval_digest(value, named='trust_project_policy') -> str:
     return text
 
 
+class PacketTooLarge(PolicyError):
+    """A required role packet over its byte limit (cycle21): the same
+    refusal and message as before, with what was measured. ``needed`` is the
+    packet's mandatory UTF-8 bytes with operator exclusions exempt, exactly
+    as the limit is applied; ``components`` splits the task's own scope text
+    (``TaskScope.component_bytes``) from the policy's fixed part."""
+
+    def __init__(self, needed: int, limit: int, components=None, role: str = ""):
+        self.needed, self.limit, self.role = int(needed), int(limit), role
+        self.components = dict(components or {})
+        super().__init__(f'Required role packet exceeds {limit} bytes; narrow the task')
+
+
 def _json(text):
     def pairs(items):
         result = {}
@@ -335,15 +348,91 @@ class RepositoryPolicy:
     #: sha256 of the in-project policy file as read, '' for the built-in.
     source_sha256: str = ''
 
-    def role_packet(self, scope, role, conventions=''):
+    def role_packet(self, scope, role, conventions='', *, limit=None):
         """A bounded shared contract, without another reviewer's conversation.
 
         Required scope/checklist text is never silently cut. Oversized contracts
-        stop before dispatch; only reference notes may be excerpted.
+        stop before dispatch; only reference notes may be excerpted. ``limit``
+        is a task's approved allowance (Davis, 2026-11-09: a lead's justified
+        request the orchestrator granted, ``Session._packet_allowance``); None
+        is the policy's default, ``packet_limit``.
         """
-        plan = self.resolve(scope.permitted_paths if scope else ())
+        contract, exclusion_bytes, limit = self._packet_contract(scope, role, limit)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
+        if room < 0:
+            needed = limit - room
+            scope_bytes = scope.component_bytes() if scope is not None else {}
+            raise PacketTooLarge(needed, limit, dict(scope_bytes, fixed=needed - scope_bytes.get('scope', 0)),
+                                 role=role)
+        notes = conventions.encode()[:room + 1]
+        listed = 'instructions' in self.document
+        for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
+            if len(notes) > room:
+                break
+            try:
+                path = self.root / _path(name, self.root)
+            except PolicyError:
+                if listed:
+                    raise
+                # A default name the project happens to carry as a link out of
+                # the project is skipped, not a reason to stop every packet.
+                continue
+            try:
+                if not path.is_file():
+                    continue
+                inside = path.resolve().relative_to(self.root).parts
+            except (OSError, RuntimeError, ValueError):
+                continue
+            named = tuple(PurePosixPath(name.removeprefix('./')).parts)
+            if not source_path(inside) and not (self.approved and listed and inside == named):
+                # A file kept out of model copies is put into a prompt only
+                # when the approved policy lists that very path, which is
+                # what the approval named (policy_grants). One reached through
+                # a link or a default name never is.
+                continue
+            with path.open('rb') as source:
+                notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
+        truncated = len(notes) > room
+        return contract + heading + notes[:room].decode('utf-8', errors='ignore') + (marker if truncated else '')
+
+    @property
+    def packet_limit(self) -> int:
+        """The role packet's default byte limit: the policy's
+        ``reference_bytes_limit`` (12,000 when unset), which a repository
+        policy cannot set above 24,000. That clamp bounds the default only; a
+        task's approved allowance is passed to the builder as ``limit`` and is
+        bounded by the run's own ceiling (``Session._packet_ceiling``), never
+        by this figure."""
         context = self.document.get('context', {})
-        limit = min(24_000, context.get('reference_bytes_limit', 12_000))
+        return min(24_000, context.get('reference_bytes_limit', 12_000))
+
+    def packet_needed(self, scope, role) -> int:
+        """The mandatory bytes a role packet would carry for this scope, as
+        the builder measures them against a limit (exclusions exempt): the
+        size a task's allowance must reach for the packet to be built."""
+        contract, exclusion_bytes, _ = self._packet_contract(scope, role)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        return len((contract + heading + marker).encode()) - exclusion_bytes
+
+    def packet_overhead(self, role='lead') -> int:
+        """The mandatory bytes a role packet carries besides a task's own
+        scope text, measured with the builder itself on an empty scope (the
+        default families and gates; a task's paths can select others). Only
+        for stating the room in a prompt; the refusal is always measured."""
+        contract, exclusion_bytes, _ = self._packet_contract(None, role)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        return (len((contract + heading + marker).encode()) - exclusion_bytes
+                - len('Scope: no task scope declared.'.encode()))
+
+    def _packet_contract(self, scope, role, limit=None):
+        """The packet's mandatory text, the exempt exclusion bytes and the
+        limit: the one builder the refusal and the measurement share."""
+        plan = self.resolve(scope.permitted_paths if scope else ())
+        limit = self.packet_limit if limit is None else int(limit)
         scope_text = scope.render() if scope else 'Scope: no task scope declared.'
         # Exclusions are operator protections, not optional reference notes.
         # Their count or filename length must not prevent a run from starting.
@@ -388,42 +477,7 @@ class RepositoryPolicy:
             'gates': visible_gates, 'absent': plan['absent_gates'],
             'skipped': plan['skipped_gates'], 'adapters': plan['adapters']}, sort_keys=True))
         parts.append('Repository decisions: ' + json.dumps(self.document.get('decisions', [])))
-        contract = '\n'.join(parts)
-        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
-        marker = '\n[Reference notes truncated to packet byte limit]'
-        room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
-        if room < 0:
-            raise PolicyError(f'Required role packet exceeds {limit} bytes; narrow the task')
-        notes = conventions.encode()[:room + 1]
-        listed = 'instructions' in self.document
-        for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
-            if len(notes) > room:
-                break
-            try:
-                path = self.root / _path(name, self.root)
-            except PolicyError:
-                if listed:
-                    raise
-                # A default name the project happens to carry as a link out of
-                # the project is skipped, not a reason to stop every packet.
-                continue
-            try:
-                if not path.is_file():
-                    continue
-                inside = path.resolve().relative_to(self.root).parts
-            except (OSError, RuntimeError, ValueError):
-                continue
-            named = tuple(PurePosixPath(name.removeprefix('./')).parts)
-            if not source_path(inside) and not (self.approved and listed and inside == named):
-                # A file kept out of model copies is put into a prompt only
-                # when the approved policy lists that very path, which is
-                # what the approval named (policy_grants). One reached through
-                # a link or a default name never is.
-                continue
-            with path.open('rb') as source:
-                notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
-        truncated = len(notes) > room
-        return contract + heading + notes[:room].decode('utf-8', errors='ignore') + (marker if truncated else '')
+        return '\n'.join(parts), exclusion_bytes, limit
 
     def resolve(self, paths=(), *, writing=False):
         paths = sorted({_path(p, self.root) for p in paths})
@@ -502,7 +556,13 @@ class RepositoryPolicy:
         return result
 
     def scope(self, scope):
-        """Intersect policy and operator limits with the existing scope checks."""
+        """Intersect policy and operator limits with the existing scope checks.
+        Paths are enforced. ``scope_max_lines`` is the operator's default
+        size estimate for a task that declares none, advisory like the
+        task's own (operator directive 2026-10-20): a declared estimate is
+        kept as declared, the policy figure never clamps it, and neither
+        stops anything. The pinned library schema bounds only the
+        operator's default figure."""
         limit = self.document['defaults']['scope_max_lines']
         deny = self.document['capability_policy']['deny_write'] + list(self.forbid)
         deny += [p for entry in self.document['capability_policy']['sensitive'] for p in entry['paths']]
@@ -510,7 +570,7 @@ class RepositoryPolicy:
             return TaskScope(max_lines=limit, forbidden_paths=tuple(deny),
                              overrun_ratio=min(1.5, self.document['defaults']['overrun_ratio']))
         from dataclasses import replace
-        return replace(scope, max_lines=min(scope.max_lines or limit, limit),
+        return replace(scope, max_lines=scope.max_lines or limit,
                        overrun_ratio=min(scope.overrun_ratio, self.document['defaults']['overrun_ratio']),
                        forbidden_paths=tuple(dict.fromkeys([*scope.forbidden_paths, *deny])))
 

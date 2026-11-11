@@ -53,6 +53,7 @@ __all__ = [
     "UNKNOWN", "ROLE_STAGES", "ARTIFACT_STAGES", "TAIL_BYTES", "MAX_JSON_BYTES",
     "MAX_USAGE_BYTES", "MAX_ARTIFACT_ENTRIES", "read_status", "run_history",
     "render_text", "render_markdown", "history_rows", "HISTORY_COLUMNS",
+    "call_breakdown", "BREAKDOWN_BYTES", "render_breakdown_html",
 ]
 
 UNKNOWN = "unknown"
@@ -419,6 +420,7 @@ def read_status(project_root=None, series_dir=None, *, state_dir=None, now=None)
         "terminal_status": UNKNOWN,
         "stop_reason": UNKNOWN,
         "report": UNKNOWN,
+        "breakdown": None,
         "unknown": {},
     }
     unknown: Dict[str, str] = status["unknown"]
@@ -431,6 +433,8 @@ def read_status(project_root=None, series_dir=None, *, state_dir=None, now=None)
         _fill(status, mark, project_root, series_dir, state_dir, now)
     except Exception as exc:  # noqa: BLE001 -- a monitor never fails on the run it describes
         mark("liveness", f"monitor error: {exc.__class__.__name__}: {_first_line(exc)}")
+    if status["run_dir"] != UNKNOWN:
+        status["breakdown"] = call_breakdown(status["run_dir"])
     for field, value in list(status.items()):
         if value == UNKNOWN and field not in unknown and field != "unknown":
             unknown[field] = "not determined"
@@ -545,6 +549,23 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
         status["last_write"] = f"{_iso(last_write)} ({_age(now - last_write)})"
 
     result, result_problem = _read_json(run_dir / "result.json")
+    if result is None:
+        # No readable export (absent, truncated, malformed): the committed
+        # terminal, when the run committed one, is the outcome (the crash
+        # boundary between the committed terminal and the compatibility
+        # export; the export's own problem stays a diagnostic).
+        export_problem = result_problem if (run_dir / "result.json").exists() else ""
+        result, terminal_problem = _terminal_result(run_dir)
+        if export_problem and result is not None:
+            unknown = status.get("unknown")
+            if isinstance(unknown, dict):
+                unknown["result.json"] = f"export unreadable, committed terminal used: {export_problem}"
+        # An unreadable export with no committed terminal is reported as the
+        # export's own problem; a missing export as the terminal's absence.
+        result_problem = _reader_problem(result, export_problem, terminal_problem)
+    # A committed state that cannot be read is said so: a reader must tell a
+    # running run from one whose record is altered or truncated.
+    corrupt = terminal_problem if (result is None and _corrupt_state(terminal_problem)) else ""
     status["finished"] = result is not None or (run_dir / "result.json").exists()
 
     _fill_calls(status, mark, run_dir, now)
@@ -553,11 +574,13 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
     if status["finished"]:
         if status["live"] == UNKNOWN or (lock_pid is None and status["live"] is not True):
             status["live"] = False
-            status["liveness"] = "latest run has written result.json; it is over"
+            status["liveness"] = ("latest run has written result.json; it is over"
+                                  if (run_dir / "result.json").exists()
+                                  else "latest run committed its terminal state; it is over")
         _fill_terminal(status, mark, run_dir, result, result_problem)
     else:
         for field in ("terminal_status", "stop_reason"):
-            mark(field, "run has not finished")
+            mark(field, corrupt or "run has not finished")
         report = run_dir / "report.md"
         status["report"] = str(report) if report.exists() else UNKNOWN
         if status["report"] == UNKNOWN:
@@ -632,7 +655,8 @@ def _fill_calls(status, mark, run_dir: Path, now: float) -> None:
 
 
 def _fill_tokens(status, mark, run_dir: Path) -> None:
-    budget, problem = _read_json(run_dir / "budget.json")
+    from .jobstore import read_budget
+    budget, problem = read_budget(run_dir)
     if budget is not None:
         reported = _count(budget.get("reported_tokens"))
         if reported is not None:
@@ -701,8 +725,67 @@ def _fill_terminal(status, mark, run_dir: Path, result, problem) -> None:
         mark("terminal_status", problem)
         mark("stop_reason", problem)
         return
+    result, uncommitted = _committed_terminal(run_dir, result)
+    if uncommitted:
+        status["terminal_status"], status["stop_reason"] = "incomplete", uncommitted
+        return
     status["terminal_status"], status["stop_reason"] = _outcome(
         result, "the plan was declined, the task limit was reached, or findings/checks remain open")
+
+
+def _corrupt_state(problem: str) -> bool:
+    return str(problem or "").startswith("the run's committed state is corrupt")
+
+
+def _reader_problem(result, export_problem: str, terminal_problem: str) -> str:
+    """What a reader says when neither the export nor the committed
+    terminal gave an outcome: an unreadable export's own problem, with a
+    corrupt committed state named beside it; a missing export reads as the
+    terminal's absence."""
+    if result is not None or not export_problem:
+        return terminal_problem
+    if _corrupt_state(terminal_problem):
+        return f"{export_problem}; {terminal_problem}"
+    return export_problem
+
+
+def _terminal_result(run_dir: Path):
+    """A result-shaped view of the committed terminal record, for a run
+    whose export is missing: ``(result, problem)``; ``(None, why)`` when the
+    run committed no terminal or its state is corrupt."""
+    from .jobstore import GenerationCorrupt, read_manifest, read_terminal
+    try:
+        manifest = read_manifest(run_dir)
+        terminal = read_terminal(run_dir) if manifest is not None else None
+    except GenerationCorrupt as exc:
+        return None, f"the run's committed state is corrupt: {exc}"
+    if terminal is None:
+        return None, "result.json: FileNotFoundError"
+    return dict(completed=bool(terminal.get("completed")), error=terminal.get("error") or "",
+                explicit_tasks=terminal.get("explicit_tasks"), goal=terminal.get("goal"),
+                budget=dict(stop_reason=terminal.get("budget_stop_reason") or ""),
+                tasks=terminal.get("tasks") or [], committed_terminal=True), ""
+
+
+def _committed_terminal(run_dir: Path, result: Dict[str, Any]):
+    """The completion a reader may act on: when the run has a committed
+    manifest, its terminal record decides and result.json is an export;
+    a manifest with no terminal record means the run never committed how it
+    ended. Returns ``(result, problem)``."""
+    from .jobstore import GenerationCorrupt, read_manifest, read_terminal
+    try:
+        manifest = read_manifest(run_dir)
+    except GenerationCorrupt as exc:
+        return result, f"the run's committed state is corrupt: {exc}"
+    if manifest is None:
+        return result, ""
+    try:
+        terminal = read_terminal(run_dir)
+    except GenerationCorrupt as exc:
+        return result, f"the run's committed terminal record is corrupt: {exc}"
+    if terminal is None:
+        return result, "the run never committed its terminal state; its result.json is not an outcome"
+    return dict(result, completed=bool(terminal.get("completed")), error=terminal.get("error") or ""), ""
 
 
 # -- history ----------------------------------------------------------------
@@ -731,17 +814,32 @@ def _history_row(run_dir: Path) -> Dict[str, Any]:
                            "stop_reason": UNKNOWN, "path": str(run_dir)}
     result_path = run_dir / "result.json"
     result, problem = _read_json(result_path)
+    export_problem = problem if result is None and result_path.exists() else ""
+    if result is None:
+        result, terminal_problem = _terminal_result(run_dir)
+        problem = _reader_problem(result, export_problem, terminal_problem)
     if result is None and not result_path.exists():
-        row["status"] = "unfinished"
-        row["stop_reason"] = "no result.json"
+        row["status"] = UNKNOWN if _corrupt_state(problem) else "unfinished"
+        row["stop_reason"] = problem if _corrupt_state(problem) else "no result.json"
+    elif result is not None and result.get("committed_terminal"):
+        ended = result_path if result_path.exists() else run_dir / "manifest.json"
+        row["ended"] = _iso(_mtime(ended)) or UNKNOWN
+        row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
+        if export_problem:
+            row["export"] = f"export unreadable, committed terminal used: {export_problem}"
     elif result is None:
         row["ended"] = _iso(_mtime(result_path)) or UNKNOWN
         row["status"] = UNKNOWN
         row["stop_reason"] = problem
     else:
         row["ended"] = _iso(_mtime(result_path)) or UNKNOWN
-        row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
-    budget, _ = _read_json(run_dir / "budget.json")
+        result, uncommitted = _committed_terminal(run_dir, result)
+        if uncommitted:
+            row["status"], row["stop_reason"] = "incomplete", uncommitted
+        else:
+            row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
+    from .jobstore import read_budget
+    budget, _ = read_budget(run_dir)
     reported = _count(budget.get("reported_tokens")) if isinstance(budget, dict) else None
     if reported is not None:
         row["tokens"] = reported
@@ -757,6 +855,168 @@ def history_rows(history: List[Dict[str, Any]]) -> List[List[Any]]:
     return [[r.get("run", UNKNOWN), r.get("started", UNKNOWN), r.get("ended", UNKNOWN),
              r.get("status", UNKNOWN), r.get("tokens", UNKNOWN), r.get("stop_reason", UNKNOWN)]
             for r in history]
+
+
+# -- the call breakdown -----------------------------------------------------
+
+#: The whole of a run's invocations.jsonl is read for the breakdown, up to
+#: this bound; past it only the newest records are, and the result says so.
+BREAKDOWN_BYTES = 8 * 1024 * 1024
+
+
+def _seconds(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 10 ** 7:
+        return round(float(value), 1)
+    return None
+
+
+def _label(value: Any) -> str:
+    text = _first_line(value, 60) if value is not None else ""
+    return text or UNKNOWN
+
+
+def call_breakdown(run_dir) -> Dict[str, Any]:
+    """Where one run's tokens went, call by call and by role, read from its
+    ``invocations.jsonl`` (Davis, 2026-11-05: grok-worker-01 showed 97% input
+    tokens and no way to see rounds). Each invoked call's input, output,
+    cached input, model turns (claude, grok), tool steps (codex), seconds and
+    input per turn; then the same summed by role. Read-only and bounded like
+    every monitor read; a missing figure is ``None`` and counted as unknown,
+    never zero. Never raises."""
+    out: Dict[str, Any] = {"rows": [], "by_role": [], "problem": "", "partial": False}
+    try:
+        path = Path(run_dir) / "invocations.jsonl"
+        size = _size(path)
+        if size is None:
+            out["problem"] = "invocations.jsonl is absent"
+            return out
+        records, problem = _tail_jsonl(path, BREAKDOWN_BYTES)
+        out["partial"] = size > BREAKDOWN_BYTES
+        out["problem"] = problem + ("; only the newest records were read" if out["partial"] else "")
+        roles: Dict[str, Dict[str, Any]] = {}
+        for record in records:
+            if record.get("invoked") is not True:
+                continue
+            inp, outp = _count(record.get("input_tokens")), _count(record.get("output_tokens"))
+            turns, steps = _count(record.get("model_turns")), _count(record.get("tool_steps"))
+            row = {"task": _label(record.get("task")), "role": _label(record.get("role")),
+                   "seat": _label(record.get("requested_model")), "input": inp, "output": outp,
+                   "tokens": inp + outp if inp is not None and outp is not None else None,
+                   "cached": _count(record.get("cached_input_tokens")), "turns": turns, "tool_steps": steps,
+                   "seconds": _seconds(record.get("seconds")),
+                   "input_per_turn": inp // turns if inp is not None and turns else None}
+            out["rows"].append(row)
+            # Every sum is over the calls that recorded its figure, and says
+            # how many those are: a missing figure is never added as zero
+            # (root's pre-live review of f4d34a2, 6670379668).
+            agg = roles.setdefault(row["role"], {
+                "role": row["role"], "calls": 0, "tokens": 0, "calls_with_tokens": 0, "unknown_tokens": 0,
+                "turns": 0, "calls_with_turns": 0, "tool_steps": 0, "calls_with_steps": 0,
+                "seconds": 0.0, "calls_with_seconds": 0, "unknown_seconds": 0,
+                "calls_with_input_per_turn": 0, "_paired_input": 0, "_paired_turns": 0})
+            agg["calls"] += 1
+            if row["tokens"] is None:
+                agg["unknown_tokens"] += 1
+            else:
+                agg["tokens"] += row["tokens"]
+                agg["calls_with_tokens"] += 1
+            if turns is not None:
+                agg["turns"] += turns
+                agg["calls_with_turns"] += 1
+            # Input per turn pairs a call's own input with its own turns:
+            # a call missing either stays out of numerator and denominator.
+            if turns is not None and inp is not None:
+                agg["_paired_input"] += inp
+                agg["_paired_turns"] += turns
+                agg["calls_with_input_per_turn"] += 1
+            if steps is not None:
+                agg["tool_steps"] += steps
+                agg["calls_with_steps"] += 1
+            if row["seconds"] is None:
+                agg["unknown_seconds"] += 1
+            else:
+                agg["seconds"] += row["seconds"]
+                agg["calls_with_seconds"] += 1
+        for agg in sorted(roles.values(), key=lambda a: -a["tokens"]):
+            paired_input, paired_turns = agg.pop("_paired_input"), agg.pop("_paired_turns")
+            agg["input_per_turn"] = paired_input // paired_turns if paired_turns else None
+            if not agg["calls_with_tokens"]:
+                agg["tokens"] = None
+            agg["seconds"] = round(agg["seconds"], 1) if agg["calls_with_seconds"] else None
+            out["by_role"].append(agg)
+    except Exception as exc:  # noqa: BLE001 -- a monitor never fails on the run it describes
+        out["problem"] = f"breakdown unreadable: {exc.__class__.__name__}"
+    return out
+
+
+def _breakdown_note(breakdown: Dict[str, Any]) -> str:
+    rows = breakdown.get("rows") or []
+    turns = sum(1 for r in rows if r["turns"] is not None)
+    steps = sum(1 for r in rows if r["tool_steps"] is not None)
+    return (f"{len(rows)} calls; model turns recorded for {turns}, tool steps for {steps}; "
+            "a blank is not recorded, never zero")
+
+
+BREAKDOWN_ROLE_COLUMNS = ["Role", "Calls", "Tokens", "Model turns", "Tool steps", "Input per turn", "Seconds"]
+BREAKDOWN_CALL_COLUMNS = ["Task", "Role", "Seat", "Input", "Output", "Cached", "Turns", "Tool steps",
+                          "Input per turn", "Seconds"]
+
+
+def breakdown_role_rows(breakdown: Dict[str, Any]) -> List[List[str]]:
+    """The by-role summary as display rows under ``BREAKDOWN_ROLE_COLUMNS``."""
+    def turns(a):
+        return (f"{a['turns']:,} in {a['calls_with_turns']} of {a['calls']}" if a["calls_with_turns"] else "")
+    def steps(a):
+        return (f"{a['tool_steps']:,} in {a['calls_with_steps']} of {a['calls']}" if a["calls_with_steps"] else "")
+    def tokens(a):
+        if a["tokens"] is None:
+            return f"unknown ({a['unknown_tokens']})"
+        return f"{a['tokens']:,}" + (f" (+{a['unknown_tokens']} unknown)" if a["unknown_tokens"] else "")
+    def per_turn(a):
+        if a["input_per_turn"] is None:
+            return ""
+        partial = a["calls_with_input_per_turn"] < a["calls"]
+        return f"{a['input_per_turn']:,}" + (f" ({a['calls_with_input_per_turn']} of {a['calls']} calls)"
+                                             if partial else "")
+    def seconds(a):
+        if a["seconds"] is None:
+            return ""
+        return f"{a['seconds']:,.0f}" + (f" (+{a['unknown_seconds']} unknown)" if a["unknown_seconds"] else "")
+    return [[a["role"], str(a["calls"]), tokens(a), turns(a), steps(a), per_turn(a), seconds(a)]
+            for a in breakdown.get("by_role") or []]
+
+
+def breakdown_call_rows(breakdown: Dict[str, Any]) -> List[List[str]]:
+    """Every invoked call as display rows under ``BREAKDOWN_CALL_COLUMNS``."""
+    return [[r["task"], r["role"], r["seat"], _blank(r["input"]), _blank(r["output"]), _blank(r["cached"]),
+             _blank(r["turns"]), _blank(r["tool_steps"]), _blank(r["input_per_turn"]),
+             "" if r["seconds"] is None else f"{r['seconds']:,.0f}"]
+            for r in breakdown.get("rows") or []]
+
+
+def _blank(value: Any) -> str:
+    return "" if value is None else f"{value:,}"
+
+
+def render_breakdown_html(breakdown: Optional[Dict[str, Any]]) -> str:
+    """The breakdown as an HTML section for the GUI tab and the phone page:
+    the by-role table, then every call inside a closed ``<details>``. Every
+    string is escaped; empty when no call has been recorded."""
+    import html as _html
+    if not isinstance(breakdown, dict) or not breakdown.get("rows"):
+        return ""
+    def esc(value):
+        return _html.escape(str(value), quote=True)
+    def table(columns, rows):
+        return ("<table><tr>" + "".join(f"<th>{esc(c)}</th>" for c in columns) + "</tr>"
+                + "".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>" for r in rows) + "</table>")
+    return ('<section aria-label="Where the tokens went"><h3>Where the tokens went</h3>'
+            f'<p class="qm-note">{esc(_breakdown_note(breakdown))}</p>'
+            + table(BREAKDOWN_ROLE_COLUMNS, breakdown_role_rows(breakdown))
+            + '<details><summary>Every call</summary>'
+            + table(BREAKDOWN_CALL_COLUMNS, breakdown_call_rows(breakdown)) + '</details>'
+            + (f'<p class="qm-note">{esc(breakdown["problem"])}</p>' if breakdown.get("problem") else "")
+            + '</section>')
 
 
 # -- rendering --------------------------------------------------------------
@@ -787,8 +1047,19 @@ def _live_word(status: Dict[str, Any]) -> str:
     return UNKNOWN
 
 
-def render_text(status: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None) -> str:
-    """One screen of plain text for a terminal over ssh."""
+def _text_table(columns: List[str], rows: List[List[str]], text_columns: int) -> List[str]:
+    """Rows aligned for a terminal: the first ``text_columns`` left, numbers right."""
+    widths = [max([len(c)] + [len(r[i]) for r in rows]) for i, c in enumerate(columns)]
+    def line(cells):
+        return "  " + "  ".join(c.ljust(w) if i < text_columns else c.rjust(w)
+                                for i, (c, w) in enumerate(zip(cells, widths, strict=True)))
+    return [line(columns)] + [line(r) for r in rows]
+
+
+def render_text(status: Dict[str, Any], history: Optional[List[Dict[str, Any]]] = None, *,
+                calls: bool = False) -> str:
+    """One screen of plain text for a terminal over ssh. ``calls`` adds the
+    table of every call under the by-role summary."""
     lines = [f"Quadratus monitor  {status.get('read_at', '')}",
              f"Project:   {status['project']}"]
     series = status.get("series")
@@ -814,6 +1085,16 @@ def render_text(status: Dict[str, Any], history: Optional[List[Dict[str, Any]]] 
     unknown = {k: v for k, v in status.get("unknown", {}).items() if k != "last_event_note"}
     if unknown:
         lines.append("Unknown:   " + "; ".join(f"{k}: {v}" for k, v in unknown.items()))
+    breakdown = status.get("breakdown")
+    if isinstance(breakdown, dict) and breakdown.get("rows"):
+        lines += ["", "Where the tokens went, by role (" + _breakdown_note(breakdown) + "):"]
+        lines += _text_table(BREAKDOWN_ROLE_COLUMNS, breakdown_role_rows(breakdown), 1)
+        if calls:
+            lines += ["", "Every call:"] + _text_table(BREAKDOWN_CALL_COLUMNS, breakdown_call_rows(breakdown), 3)
+        if breakdown.get("problem"):
+            lines.append(f"  ({breakdown['problem']})")
+    elif isinstance(breakdown, dict) and breakdown.get("problem"):
+        lines.append(f"Calls:     {breakdown['problem']}")
     if history:
         lines += ["", "Recent runs:"]
         for row in history:
@@ -853,5 +1134,19 @@ def render_markdown(status: Dict[str, Any]) -> str:
         lines += ["", "<details><summary>Unknown fields</summary>", ""]
         lines += [f"- {k}: {v}" for k, v in unknown.items()]
         lines += ["", "</details>"]
+    breakdown = status.get("breakdown")
+    if isinstance(breakdown, dict) and breakdown.get("rows"):
+        def table(columns, rows):
+            def cell(text):
+                return str(text).replace("|", "\\|")
+            return (["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
+                    + ["| " + " | ".join(cell(c) for c in r) + " |" for r in rows])
+        lines += ["", "#### Where the tokens went, by role", f"_{_breakdown_note(breakdown)}_", ""]
+        lines += table(BREAKDOWN_ROLE_COLUMNS, breakdown_role_rows(breakdown))
+        lines += ["", "<details><summary>Every call</summary>", ""]
+        lines += table(BREAKDOWN_CALL_COLUMNS, breakdown_call_rows(breakdown))
+        lines += ["", "</details>"]
+        if breakdown.get("problem"):
+            lines.append(f"_{breakdown['problem']}_")
     lines += ["", f"_Read at {status.get('read_at', '')}_"]
     return "\n".join(lines)

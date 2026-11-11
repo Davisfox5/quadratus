@@ -43,7 +43,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from urllib.parse import parse_qs, urlsplit
 
 from .local_http import env_list, host_allowed, parse_allowed_hosts, split_host
-from .monitor import UNKNOWN, read_status, run_history
+from .monitor import UNKNOWN, read_status, render_breakdown_html, run_history
 
 __all__ = ["MonitorServer", "render_html", "serve", "DEFAULT_PORT", "REFRESH_SECONDS",
            "ALLOW_HOST_ENV", "ALLOW_PROJECT_ENV", "ALLOW_HOST_FLAG", "ALLOW_PROJECT_FLAG", "PATH_REFUSAL"]
@@ -186,6 +186,7 @@ def render_html(status: Dict[str, Any], history: List[Dict[str, Any]], *,
     if status.get("finished") is True:
         parts.append(f"<div class=\"ended\"><b>Ended:</b> {_e(status.get('terminal_status'))}: "
                      f"{_e(status.get('stop_reason'))}<br><b>Report:</b> {_e(status.get('report'))}</div>")
+    parts.append(render_breakdown_html(status.get("breakdown")))
     if history:
         parts.append("<table><tr><th>Run</th><th>Started</th><th>Status</th><th>Tokens</th><th>Stop reason</th></tr>")
         for row in history:

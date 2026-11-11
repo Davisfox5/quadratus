@@ -16,18 +16,30 @@ import pytest
 
 from quadratus.config import Settings
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_lifecycle_matrix import DESIGN, T2, Script, _design_files
+from tests.lifecycle.test_lifecycle_matrix import DESIGN, T2, Script, _design_files, judging
 
 pytestmark = pytest.mark.requirements_ledger
 
 AUDIT_SCOPE = dict(DESIGN, max_lines=1, edits="none")
-REPAIR_SCOPE = dict(DESIGN, max_lines=40)
+#: The repair's proof is visual: the harness renders the page and the design
+#: reviewer judges the declared scenarios (evidence capture); no test case,
+#: no reading exemption for a UI file.
+REPAIR_SCOPE = dict(DESIGN, max_lines=40, proofs=H.proofs_for("R1, R2", "templates/index.html", evidence="capture",
+                                                                 operation="the import page is rendered at both viewports",
+                                                                 state="the toolbar wraps", expect="the page fits and the Import button is labelled"))
+#: This file's own explicit judgment of a capture scenario, written per
+#: obligation id by the scripted design reviewer that was shown the renders.
+CAPTURE_JUDGED = "SUFFICIENT the mobile and desktop renders show the import toolbar inside the viewport with the Import button labelled"
 REQS = "REQUIREMENTS:\nR1: the import page works on a phone\nR2: the import button is labelled\n"
 AUDIT = "KIND: frontend standard\nSCOPE: " + json.dumps(AUDIT_SCOPE) + "\nAudit the import page.\nCOVERS: R1, R2"
 REPAIR = "KIND: frontend standard\nSCOPE: " + json.dumps(REPAIR_SCOPE) + "\nFix the mobile overflow.\nCOVERS: R1, R2"
 RECAPTURE = AUDIT.replace("Audit the import page.", "Re-check the import page.")
-DOCS = "KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md.\nCOVERS: R1, R2"
+DOCS = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, proofs=H.proofs_for("R1, R2", "README.md", evidence="reading")))
+        + "\nDocument add in README.md.\nCOVERS: R1, R2")
 MET = "R1: MET - templates/index.html\nR2: MET - templates/index.html"
+#: This file's own explicit judgment of a review-only task's legacy acceptance
+#: row (mapping unknown): what the capture shows, said per obligation id.
+LEGACY_JUDGED = "SUFFICIENT the capture of templates/index.html shows the Import button at the measured width"
 WIDE = {"mobile": 450}
 NO_EDIT = "Nothing to change after review.\nCHANGED: []"
 
@@ -62,9 +74,9 @@ def _run(tmp_path, monkeypatch, plan, leads, *, review="APPROVED", fix=None, max
     overrides = {
         "orchestrator": orchestrator, "lead": lead,
         "revision": lambda call, replay: NO_EDIT,
-        "design-review": review if callable(review) else (lambda call, replay: review),
+        "design-review": judging(review if callable(review) else (lambda call, replay: review), capture=CAPTURE_JUDGED),
         "requirements-review": lambda call, replay: "COMPLETE",
-        "auditor": lambda call, replay: audits.pop(0) if audits else MET,
+        "auditor": judging(lambda call, replay: audits.pop(0) if audits else MET, legacy=LEGACY_JUDGED),
         "design-fix": fix or (lambda call, replay: "Captured again.\nCHANGED: []"),
         **(roles or {}),
     }
@@ -308,7 +320,11 @@ def test_an_invalid_resolves_is_sent_back_before_any_lead_call(tmp_path, monkeyp
 
 
 def test_a_resolves_without_its_requirements_in_covers_is_sent_back(tmp_path, monkeypatch):
-    partial = REPAIR.replace("COVERS: R1, R2", "COVERS: R1") + "\nRESOLVES: F1"
+    # The declared scenarios match the narrowed COVERS, so the send-back
+    # under test is the RESOLVES one (F1 touches R2), not the mapping's.
+    partial = ("KIND: frontend standard\nSCOPE: " + json.dumps(dict(REPAIR_SCOPE, proofs=H.proofs_for(
+        "R1", "templates/index.html", evidence="capture", operation="the import page is rendered at both viewports",
+        state="the toolbar wraps", expect="the page fits"))) + "\nFix the mobile overflow.\nCOVERS: R1\nRESOLVES: F1")
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, partial, REPAIR + "\nRESOLVES: F1"],
                   {"t1": _capture(measured=WIDE), "t2": _repair()})
     assert "missing: R2" in _orchestrator_prompts(replay)[2]
@@ -393,7 +409,24 @@ def test_an_audit_that_edits_source_fails_the_task_and_records_no_finding(tmp_pa
 
 
 def test_a_refused_audit_lead_is_todays_refusal_stop(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": lambda call, replay: H.claude_refusal("cyber")})
+    """The refusal envelope is Claude's, so the audit is seated on a Claude
+    lead (complex difficulty rides the ladder to Opus). Until root's usage
+    account on 066c060 a Claude envelope fed to the Sol lead this task
+    used to draw passed its usage through the Codex parser and the run
+    went on to a Claude recovery lead that refused; the Codex parser now
+    reads only its own completed turns, so a foreign envelope is unknown
+    usage and that route stops on the budget, not on a refusal. The
+    control is vendor-correct now: one Claude lead, one refusal, the
+    refusal stop, no findings."""
+    audit = AUDIT.replace("KIND: frontend standard", "KIND: frontend complex")
+    refusals = []
+
+    def lead(call, replay):
+        assert call.vendor == "claude", call.vendor
+        refusals.append(call.model)
+        return H.claude_refusal("cyber")
+    replay = _run(tmp_path, monkeypatch, [REQS + audit], {"t1": lead})
+    assert refusals == ["opus"] and [c.role for c in replay.calls if c.task == "t1"] == ["lead"]
     assert replay.result.error.startswith("ProviderRefusal") and replay.findings == []
 
 
@@ -502,6 +535,11 @@ def test_a_scope_overrun_after_a_resolution_is_rechecked_at_done(tmp_path, monke
 
 
 def test_an_exception_with_source_unchanged_keeps_a_valid_resolution(tmp_path, monkeypatch):
+    from quadratus.session import Session
+    picked = Session._pick_lead
+    # t3's injected failure is a Claude refusal envelope: t3's lead is the Claude seat.
+    monkeypatch.setattr(Session, "_pick_lead",
+                        lambda self, spec: "claude:opus" if spec.task_id == "t3" else picked(self, spec))
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
                   {"t1": _capture(measured=WIDE), "t2": _repair(),
                    "t3": lambda call, replay: H.claude_refusal("cyber")}, max_tasks=8)

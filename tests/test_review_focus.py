@@ -1,0 +1,143 @@
+"""Focused review context and counterpart entry points (Davis, 2026-11-04).
+
+grok-worker-01 spent 1.72M of 5.72M reported tokens on reviews and
+rechecks, 97% of it input: each seat explored its copy round by round to
+find what changed. A review now carries the measured change since the task
+began, and a recheck the change since that review. The same run's reviews
+caught a cleanup failure on one entry point while the same failure on a
+counterpart of the same operation survived to the final audit, so review,
+revision, fix and recheck now each name counterparts. Context and
+instructions only: what a seat may read, run or edit is unchanged.
+"""
+from types import SimpleNamespace
+
+from quadratus import session as S
+from quadratus.artifacts import ArtifactStore
+from quadratus.session import Session, SessionConfig, TaskSpec
+
+
+def _session(tmp_path, *, writes=True):
+    project = tmp_path / "project"
+    project.mkdir(parents=True)
+    (project / "app.py").write_text("def add(a, b):\n    return 0\n")
+    (project / "cli.py").write_text("print('cli')\n")
+    session = Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
+                      config=SessionConfig(project=str(project), allow_writes=writes))
+    return session, project
+
+
+def test_the_review_carries_the_measured_change_and_the_counterpart_lens(tmp_path):
+    session, project = _session(tmp_path)
+    before = session._capture_source()
+    (project / "app.py").write_text("def add(a, b):\n    return a + b\n")
+    (project / "new.py").write_text("X = 1\n")
+    spec = TaskSpec(task_id="t1", description="fix add")
+    prompt = session._collaborator_prompt(spec, "Implemented add.", "claude:opus", since=before)
+    assert "## The change under review, as the harness measured it" in prompt
+    assert "Files (changed lines): app.py (2), new.py (1)" in prompt
+    assert "+    return a + b" in prompt and "+X = 1" in prompt and "cli.py" not in prompt.split("~~~diff")[1]
+    assert "Start from this change" in prompt and "whatever an account above says" in prompt
+    assert S._COUNTERPART_LENS in prompt and S._ERROR_BOUNDARY_LENS in prompt
+    # A review after a merge passes no capture: no change is claimed for it.
+    plain = session._collaborator_prompt(spec, "Implemented add.", "claude:opus")
+    assert "The change under review" not in plain and S._COUNTERPART_LENS in plain
+
+
+def test_an_unchanged_source_says_so_and_a_read_only_run_shows_no_diff(tmp_path):
+    session, project = _session(tmp_path)
+    before = session._capture_source()
+    got = session._measured_change(before, "## H", "guide", "Nothing: unchanged.")
+    assert got == "\n\n## H\n\nNothing: unchanged."
+    reader, _ = _session(tmp_path / "ro", writes=False)
+    assert reader._measured_change(reader._capture_source(), "## H", "guide", "empty") == ""
+    assert session._measured_change(None, "## H", "guide", "empty") == ""
+
+
+def test_a_large_change_is_cut_and_says_so_with_every_file_still_named(tmp_path, monkeypatch):
+    session, project = _session(tmp_path)
+    monkeypatch.setattr(S, "REVIEW_DIFF_CHARS", 200)
+    before = session._capture_source()
+    (project / "big.py").write_text("".join(f"LINE_{i} = {i}\n" for i in range(200)))
+    (project / "zz_last.py").write_text("Z = 0\n")
+    got = session._measured_change(before, "## H", "guide", "empty")
+    assert "big.py (200)" in got and "zz_last.py (1)" in got, "the file list is whole even when the diff is cut"
+    assert "The diff is cut at 200 of" in got and "read the listed files for the rest" in got
+    assert "LINE_199" not in got and got.count("~~~") == 2
+
+
+def test_revision_fix_and_recheck_name_counterparts_generically(tmp_path):
+    session, _ = _session(tmp_path)
+    spec = TaskSpec(task_id="t1", description="fix add")
+    session._active_spec = spec
+    assert S._COUNTERPART_FIX in session._revision_prompt(spec, "draft", ["BLOCKING: x"])
+    assert S._COUNTERPART_FIX in session._fix_prompt(spec, "work", [("peer", "BLOCKING: x")])
+    instructions = session._recheck_instructions(["RFT1-1"])
+    assert S._COUNTERPART_RECHECK in instructions and instructions.rstrip().endswith("Expected ids: RFT1-1.")
+    # Generic by construction: no candidate's defect, framework or route is named.
+    text = S._COUNTERPART_LENS + S._COUNTERPART_FIX + S._COUNTERPART_RECHECK
+    for word in ("commit", "close", "HTTP", "500", "send_error", "sqlite", "dependency", "ticket"):
+        assert word not in text, word
+
+
+def test_the_recheck_is_shown_what_changed_since_the_review(tmp_path, monkeypatch):
+    """The recheck prompt as _recheck_blocking builds it: the revision's own
+    change against the capture taken when the review ran, not the draft's."""
+    session, project = _session(tmp_path)
+    session._task_before = session._capture_source()
+    (project / "app.py").write_text("def add(a, b):\n    return a + b\n")       # the draft
+    session._review_before = session._capture_source()                          # the review's source
+    (project / "cli.py").write_text("print('cli, fixed')\n")                    # the revision
+    seen = {}
+
+    def invoke(peer, prompt):
+        seen["prompt"] = prompt
+        return "RFT1-1: RESOLVED fixed"
+    monkeypatch.setattr(session, "_invoke_model", invoke)
+    spec = TaskSpec(task_id="t1", description="fix add")
+    session._active_spec = spec
+    task = SimpleNamespace(record=lambda *a, **k: None, keep=lambda *a, **k: None, task_id="t1")
+    try:
+        session._recheck_blocking(spec, [("claude:opus", "BLOCKING: cli output is wrong")], "Fixed cli.", task)
+    except Exception:  # noqa: BLE001 -- only the prompt the seat was sent is under test
+        pass
+    prompt = seen.get("prompt") or ""
+    assert "## What changed since your review, as the harness measured it" in prompt, prompt[-2000:]
+    after_heading = prompt.split("## What changed since your review")[1]
+    assert "+print('cli, fixed')" in after_heading and "return a + b" not in after_heading
+    assert S._COUNTERPART_RECHECK in prompt
+
+
+def test_a_whole_run_review_sees_the_draft_and_its_recheck_sees_only_the_revision(tmp_path, monkeypatch):
+    """Replayed below the vendor CLIs: the reviewer is handed the draft's
+    measured change, the recheck the revision's change since that review."""
+    from pathlib import Path
+
+    from tests.lifecycle import harness as H
+    from tests.lifecycle.test_lifecycle_matrix import DECL_T1, FILES, FIXED, Script
+
+    def collaborator(call, replay):
+        if len(replay.of("collaborator")) == 1:
+            return ("BLOCKING: nothing tests negative numbers | basis: tests/test_app.py | impact: correctness")
+        return "No blocking findings.\nREVIEW: COMPLETE"
+
+    def revision(call, replay):
+        old = Path(call.cwd, "tests/test_app.py").read_text()
+        H.write(call, {"tests/test_app.py": old + "\n\ndef test_negative():\n    assert add(-1, -2) == -3\n"})
+        return 'Added a negative-number test.\nCHANGED: ["tests/test_app.py"]'
+
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=lambda c, r: DECL_T1 if len(r.of("orchestrator")) == 1
+                                                 else "DONE", lead=lead, collaborator=collaborator,
+                                                 revision=revision), files=FILES, max_tasks=1)
+    review = replay.of("collaborator")[0].prompt
+    assert "## The change under review, as the harness measured it" in review
+    assert "+    return a + b" in review and "Files (changed lines): app.py (2)" in review
+    assert S._COUNTERPART_LENS in review
+    assert S._COUNTERPART_FIX in replay.of("revision")[0].prompt
+    (recheck,) = replay.of("recheck")
+    since = recheck.prompt.split("## What changed since your review, as the harness measured it")[1]
+    assert "+def test_negative():" in since and "return a + b" not in since, since[:800]
+    assert S._COUNTERPART_RECHECK in recheck.prompt

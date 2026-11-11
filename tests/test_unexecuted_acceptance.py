@@ -12,7 +12,8 @@ from types import SimpleNamespace
 import pytest
 
 from quadratus.artifacts import ArtifactStore
-from quadratus.session import Session, SessionConfig
+from quadratus.integration import IntegrationGate
+from quadratus.session import Session, SessionConfig, _gate_identity
 
 SCENARIO = "tests/browser/scenarios/09-project-search.js"
 UNIT = "tests/ui/project_search.test.js"
@@ -25,20 +26,47 @@ def _session(tmp_path, reply):
     (root / UNIT).write_text("// ran through the five-file check\n")
     (root / SCENARIO).write_text("// requested, never executed\n")
     (root / "tests" / "ui" / "new_search.test.js").write_text("// no check names it\n")
+    # The configured gate names the unit file and the scenario whole, as an
+    # operator's check does; a NOT RUN item naming either is routed to it
+    # (Session._gate_can_run), one naming anything else has no runner.
+    gate = IntegrationGate(["node", "--test", UNIT, SCENARIO], cwd=str(root))
     session = Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
-                      config=SessionConfig(project=root, allow_writes=True, requirements_ledger=True))
+                      config=SessionConfig(project=root, allow_writes=True, requirements_ledger=True,
+                                           integration_gate=gate))
     session.memory.ledger.requirements.update({
         "R1": "typing filters the cards", "R5": "the list logs no console errors while typing"})
     prompts = []
-    session._auditor = lambda: "openai:gpt-5.6-sol"
-    session._invoke_model = lambda key, prompt, **kw: prompts.append(prompt) or reply
+    session._auditor = lambda: "openai:sol"
+    session._invoke_model = lambda key, prompt, **kw: prompts.append(prompt) or (reply(prompt) if callable(reply) else reply)
     return session, prompts
+
+
+def _judging(verdicts, *items):
+    """A scripted auditor that states ``verdicts`` and this case's own
+    SUFFICIENT line for exactly the NOT RUN or skip-fact rows whose text
+    is one of ``items`` (or starts with an item ending in ': '), where the
+    prompt lists them executed (replies.judged)."""
+    from tests.lifecycle.replies import judged, requested_obligations
+
+    def reply(prompt):
+        named = {row["behavior"]: f"the harness's own run executed {row['behavior'][:80]} on this source"
+                 for row in requested_obligations(prompt)
+                 for item in items if row["behavior"] == item or (item.endswith(": ") and row["behavior"].startswith(item))}
+        return judged(prompt, verdicts, approve=named)
+    return reply
+
+
+def _identity(session):
+    """What every recorded check carries: the gate it ran, the environment
+    and the requirement revisions current when it ran (Session._check)."""
+    return dict(gate=_gate_identity(session.config.integration_gate), environment=session._environment_id(),
+                requirements=session._requirement_revisions())
 
 
 def _not_run(session, task, covers, reply, role="revision"):
     session._active_spec = SimpleNamespace(task_id=task)
     session._current_covers = list(covers)
-    session._record_not_run("openai:gpt-5.6-sol", role, reply)
+    session._record_not_run("openai:sol", role, reply)
     session._active_spec, session._current_covers = None, []
 
 
@@ -91,17 +119,20 @@ def test_not_run_never_raises_a_verdict(tmp_path):
 
 
 def test_only_a_later_passing_check_naming_the_item_lifts_a_report(tmp_path):
-    session, _ = _session(tmp_path, f"R5: MET - {UNIT}\n")
+    session, _ = _session(tmp_path, _judging({"R5": f"MET - {UNIT}"}, SCENARIO))
     _not_run(session, "t3", ["R5"], f"NOT RUN: {SCENARIO} - not approved")
-    session.checks.append(dict(passed=True, command="gate suite",
+    source = session._source_fingerprint()  # every recorded check carries the source it ran on
+    session.checks.append(dict(passed=True, command="gate suite", source=source, **_identity(session),
                                receipts=[dict(id="check", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command="pytest -q")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "an unrelated passing check lifts nothing"
-    session.checks.append(dict(passed=False, command="gate suite",
+    session.checks.append(dict(passed=False, command="gate suite", source=source, **_identity(session),
                                receipts=[dict(id="extra-2", status="failed", output="# pass 3\n# fail 0\n# skipped 0\n", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "a failing run lifts nothing"
-    session.checks.append(dict(passed=True, command="gate suite",
+    session.checks.append(dict(passed=True, command="gate suite", source=source, **_identity(session),
                                receipts=[dict(id="extra-2", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is True
+    typed = session.evidence_obligations[0]
+    assert typed["execution"] == "ran" and typed["runner"] == "gate" and list(typed["receipts"]) == ["check-3"]
 
 
 def test_prose_is_not_parsed_and_the_editing_call_is_told_the_line(tmp_path):
@@ -114,7 +145,8 @@ def test_prose_is_not_parsed_and_the_editing_call_is_told_the_line(tmp_path):
     import inspect
 
     from quadratus import runtime
-    assert "'NOT RUN: <command or file> - <why>'" in inspect.getsource(runtime)
+    from quadratus.scope import NOT_RUN_RULE
+    assert "+ NOT_RUN_RULE" in inspect.getsource(runtime) and "'NOT RUN: <item> - <why>'" in NOT_RUN_RULE
 
 
 def test_editing_calls_record_their_not_run_lines(tmp_path):
@@ -122,7 +154,7 @@ def test_editing_calls_record_their_not_run_lines(tmp_path):
     session._writes = lambda: False
     session._active_spec = SimpleNamespace(task_id="t3")
     session._current_covers = ["R5"]
-    session._edit("openai:gpt-5.6-sol", "prompt", role="lead")
+    session._edit("openai:sol", "prompt", role="lead")
     assert [(e["task"], e["role"], e["item"], e["requirements"]) for e in session.unexecuted_acceptance] == [
         ("t3", "lead", "node tests/browser/run.js", ["R5"])]
 
@@ -150,14 +182,18 @@ def _ran(session, task, covers, result):
     session._current_covers = list(covers)
     session._note_skips(SimpleNamespace(task_id=task), result)
     session.checks.append(dict(passed=result.passed, command=result.command, output=result.output,
-                               receipts=[dataclasses.asdict(r) for r in result.receipts]))
+                               receipts=[dataclasses.asdict(r) for r in result.receipts],
+                               # As the session records every check: the source it ran on, the
+                               # gate, environment and revisions, so the typed obligation's
+                               # receipt binds to exactly it (delivery.discharge).
+                               source=session._source_fingerprint(), **_identity(session)))
     session._current_covers = []
 
 
 def test_a_passing_check_that_skips_cases_keeps_the_requirement_open(tmp_path):
     """The v5 shape: Node 37 passed, 2 browser cases skipped, gate green,
     and the audit cites the unit file that ran."""
-    session, prompts = _session(tmp_path, f"R5: MET - {UNIT}\n")
+    session, prompts = _session(tmp_path, _judging({"R5": f"MET - {UNIT}"}, "extra-1: "))
     _ran(session, "t1", ["R1"], _gate_result(0))
     _ran(session, "t4", ["R5"], _gate_result(2))
     met, why = session._audit_requirements(ids=["R5"])["R5"]
@@ -205,12 +241,15 @@ def test_a_report_without_a_path_is_never_lifted_by_command_text(tmp_path):
     session, _ = _session(tmp_path, f"R5: MET - {UNIT}\n")
     _not_run(session, "t3", ["R5"], "NOT RUN: pytest - the browser marker suite was not approved")
     _not_run(session, "t4", ["R5"], "NOT RUN: node tests/browser/run.js - denied")
-    session.checks.append(dict(passed=True, command="gate suite", receipts=[
+    # Every recorded check carries the source, gate and environment it ran
+    # under (Session._check); a record without them discharges nothing.
+    source = session._source_fingerprint()
+    session.checks.append(dict(passed=True, command="gate suite", source=source, **_identity(session), receipts=[
         dict(id="check", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command="python -m pytest -q"),
         dict(id="extra-1", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command="node --test tests/browser/run.js.bak")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False
     assert len(session._standing_not_run()) == 2, "neither a runner name nor a longer path lifts"
-    session.checks.append(dict(passed=True, command="gate suite", receipts=[
+    session.checks.append(dict(passed=True, command="gate suite", source=source, **_identity(session), receipts=[
         dict(id="extra-2", status="passed", output="# pass 3\n# fail 0\n# skipped 0\n", command="node tests/browser/run.js")]))
     assert [e["task"] for e in session._standing_not_run()] == ["t3"], "the named file ran; 'pytest' never lifts"
 
@@ -239,9 +278,11 @@ def _node_session(tmp_path, commands=None, snapshot=False):
                       config=SessionConfig(project=root, allow_writes=True, requirements_ledger=True,
                                            integration_gate=gate, max_gate_fixes=0))
     session.memory.ledger.requirements.update({"R1": "unit", "R5": "browser acceptance executes"})
-    session._auditor = lambda: "openai:gpt-5.6-sol"
-    session._invoke_model = lambda key, prompt, **kw: (
-        f"R1: MET - {NODE_UNIT}\nR5: MET - {NODE_UNIT} and {NODE_BROWSER}\n")
+    session._auditor = lambda: "openai:sol"
+    # This fixture's own judgment: the browser NOT RUN item it scripts, where
+    # the prompt lists it executed; skip facts and held rows get no line.
+    session._invoke_model = lambda key, prompt, **kw: _judging(
+        {"R1": f"MET - {NODE_UNIT}", "R5": f"MET - {NODE_UNIT} and {NODE_BROWSER}"}, NODE_BROWSER)(prompt)
     if snapshot:
         session._snapshot_original_tests()
     return root, session
@@ -252,7 +293,7 @@ def _gate(session, task, covers):
     from quadratus.session import TaskSpec
     spec = TaskSpec(task, "check")
     session._active_spec, session._current_covers = spec, list(covers)
-    session._run_integration_gate("openai:gpt-5.6-sol", spec, TaskMemory(task, "x", session.store))
+    session._run_integration_gate("openai:sol", spec, TaskMemory(task, "x", session.store))
     session._active_spec, session._current_covers = None, []
     return session.checks[-1]
 
@@ -338,7 +379,7 @@ def test_parallel_children_bring_their_not_run_reports_to_the_parent(tmp_path):
     """Codex review of b6ba3ba, F5."""
     from tests.test_parallel_tasks import Orchestrated, _block
     from tests.test_parallel_tasks import _session as _parallel_session
-    batch = "PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py") + "\nCOVERS: R2"
+    batch = "PARALLEL\n" + _block("a.py", covers="R1") + "\n---\n" + _block("b.py", covers="R2")
 
     class Script(Orchestrated):
         def invoke_for(self, root):

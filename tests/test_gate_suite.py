@@ -166,15 +166,27 @@ def test_failed_cheap_gate_stops_before_collaborators(tmp_path):
     s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 0)
     s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
     assert s.open_findings
-    assert len(calls) == 2, 'Only draft and closeout, no paid review of a failed check'
+    assert len(calls) == 1, 'Only the draft: no paid review of a failed check, and no summary call'
 
 
-def test_an_unattributable_cheap_gate_failure_is_handed_off_before_collaborators(tmp_path):
-    from quadratus.integration import CheckUnattributable
+def test_a_cheap_gate_failure_without_a_report_is_ordinary_work_not_a_handoff(tmp_path):
+    """PR73 6693873055: a failure the harness cannot attribute is no longer
+    the operator's by that fact alone. With no repair allowance it is the
+    same open failure an assertion is; the runner being unavailable is not."""
     calls = []
     suite = GateSuite([command(code='raise SystemExit(1)', cheap=True)], cwd=tmp_path)
     s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 0)
-    with pytest.raises(CheckUnattributable, match='check: structured report undeclared'):
+    s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
+    assert s.open_findings
+    assert len(calls) == 1, 'Only the draft: no paid review of a failed check, and no summary call'
+
+
+def test_an_unavailable_runner_is_still_handed_off_before_collaborators(tmp_path):
+    from quadratus.integration import CheckUnattributable
+    calls = []
+    suite = GateSuite([GateCommand('check', (str(tmp_path / 'no-such-runner'),), cheap=True)], cwd=tmp_path)
+    s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 1)
+    with pytest.raises(CheckUnattributable, match='runner unavailable'):
         s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
     assert len(calls) == 1, 'Only the draft: no review, no repair, no close-out call'
 
@@ -207,3 +219,28 @@ def test_real_failed_pytest_counts_executions_without_hiding_failure(tmp_path):
 def test_mixed_runner_summary_counts_executed_cases(output, count):
     from quadratus.integration import _test_count
     assert _test_count(output) == count
+
+
+@pytest.mark.parametrize("code", [126, 127])
+def test_project_code_exiting_126_or_127_is_repairable_not_a_launch_failure(tmp_path, code):
+    """Root review of b49a0cb, R1: the real interpreter runs project code
+    that exits with the status a shell uses for an unexecutable command."""
+    from quadratus.integration import repair_route
+    (tmp_path / 'app.py').write_text(f'raise SystemExit({code})\n')
+    result = GateSuite([GateCommand('check', (sys.executable, '-c', 'import app'))], cwd=tmp_path).run()
+    assert not result.passed and result.receipts[0].returncode == code
+    assert repair_route(result)['repairable'] is True
+
+
+def test_a_passing_suite_command_that_left_unconfirmed_processes_is_not_a_pass(tmp_path, monkeypatch):
+    """Root review of b49a0cb, R5: exit 0 with leftover processes whose stop
+    was not confirmed is an unknown effect, never a pass."""
+    from quadratus import integration
+    from quadratus.integration import repair_route
+    cleanup = dict(found=[999999], terminated=[], killed=[], remaining=[999999], unreadable=[],
+                   complete=False)
+    monkeypatch.setattr(integration, '_run_owned', lambda *a, **k: (0, '1 passed', cleanup))
+    result = GateSuite([command()], cwd=tmp_path).run()
+    (receipt,) = result.receipts
+    assert not result.passed and receipt.status == 'error' and receipt.cleanup_complete is False
+    assert repair_route(result)['blockers'] == ['check: left processes whose stop was not confirmed']

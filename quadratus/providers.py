@@ -81,6 +81,43 @@ class PartialWorkSuspected(ProviderError):
         self.retryable = retryable
 
 
+class TransientOverload(ProviderError):
+    """The vendor said it was overloaded and did not answer: a typed status
+    (Anthropic's 529 overloaded_error, as the Claude CLI's error envelope
+    reports it) on a call whose usage the envelope settled. Retried a
+    bounded number of times by ``_generate_once``, only where a replay
+    cannot be a second edit (cycle06 run 20261108T075040Z-4454b282: the
+    read-only planner's 529 ended a run with 32 calls and 2.36M tokens
+    left). Never matched from a model's prose."""
+
+    def __init__(self, message: str, *, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+#: How many times one call is re-sent after a TransientOverload, each one a
+#: separately admitted attempt (``_observed_call``): budget, finish hold and
+#: ledger as for any attempt.
+MAX_TRANSIENT_RETRIES = 2
+
+
+class PermissionBlocked(ProviderError):
+    """A headless CLI call stopped on a tool call it needed approval for and
+    could not ask for (cycle15; cycle14 t5: grok's restricted seat opened
+    README.md through Fetch on a file:// URL and the turn came back
+    cancelled). Raised only from the CLI's own exact headless-approval line,
+    never from model text. A denial, not a transport failure: never retried,
+    never handed to another model or tool, never a failed task to continue.
+
+    ``permission_block`` is bounded metadata: the tool, the target's scheme
+    ("file", "https", ... or "path") and a digest of the target; the raw
+    target stays only in the private stderr evidence."""
+
+    def __init__(self, message: str, *, permission_block: Optional[dict] = None) -> None:
+        super().__init__(message)
+        self.permission_block = dict(permission_block or {})
+
+
 class ProviderRefusal(ProviderError):
     """The model's safety classifiers declined the request.
 
@@ -550,18 +587,30 @@ class LLMProvider:
                 and getattr(spec, 'summary_turn_capped', lambda: False)()):
             from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
             shape = dict(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
+        identity = None
         if control is not None:
+            import hashlib
+
             from .delegation import invocation_context
-            if (invocation_context.get() or {}).get('origin') == 'worker':
+            context = invocation_context.get() or {}
+            if context.get('origin') == 'worker':
                 # A worker errand: a reserve the budget cannot hold fails this
                 # errand and nothing else (run_budget.ReserveRefused). Passed
                 # only here, so every other call reserves as it always did.
                 shape['terminal'] = False
+            identity = dict(seat=f'{self.name}:{self.model}', task=str(context.get('task') or 'run'),
+                            role=str(context.get('role') or 'direct'),
+                            prompt_digest=hashlib.sha256((prompt or '').encode()).hexdigest()[:32],
+                            authority=str(context.get('authority') or ''))
         if control is not None and control.limits.max_cost_usd is not None:
             ticket, remaining = control.reserve(transport=self.transport,
-                                                price_key=f'{self.name}:{self.model}', **shape)
+                                                price_key=f'{self.name}:{self.model}', identity=identity, **shape)
         else:
-            ticket, remaining = control.reserve(**shape) if control is not None else (None, None)
+            ticket, remaining = (control.reserve(identity=identity, **shape) if control is not None
+                                 else (None, None))
+        # The budget operation this call is: its id rides on the ledger row,
+        # so an unknown-usage latch names the call that caused it.
+        self.last_operation = f'O-{ticket}' if isinstance(ticket, int) else None
         previous_timeout = self.timeout if control is not None else None
         if control is not None:
             self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)
@@ -572,6 +621,8 @@ class LLMProvider:
         started = time.monotonic()
         failure = None
         text = ""
+        waited = getattr(self, "_retry_wait", None)
+        self._retry_wait = None
         try:
             text = self._call(prompt, system, turns)
             if not text:
@@ -581,6 +632,10 @@ class LLMProvider:
             failure = exc
             raise
         finally:
+            if waited:
+                # The wait before this re-sent attempt, on its own ledger row.
+                self.last_diagnostics = {**(getattr(self, "last_diagnostics", None) or {}),
+                                         "retry_wait_seconds": waited["seconds"], "retry_cause": waited["cause"]}
             budget_failure = None
             if control is not None:
                 try:
@@ -645,6 +700,15 @@ class LLMProvider:
                 if not text:
                     raise ProviderError(f"{self.label} returned an empty response.")
                 return text
+            except TransientOverload as exc:
+                wait = self._transient_wait(exc, attempt)
+                if wait is None:
+                    raise
+                log.warning("%s was overloaded (status %s); re-sending the same call in %.1fs (attempt %d).",
+                            self.label, exc.status, wait, attempt + 1)
+                self._retry_wait = dict(seconds=round(wait, 3), cause="overloaded", status=exc.status)
+                time.sleep(wait)
+                continue
             except RunBudgetExceeded:
                 raise
             except ProviderError as exc:
@@ -693,6 +757,46 @@ class LLMProvider:
             time.sleep(delay)
         failure = ProviderError(f"{self.label} call failed: {last_exc}")
         raise carry_transport_facts(failure, last_exc) from last_exc
+
+    def _transient_wait(self, exc: "TransientOverload", attempt: int) -> Optional[float]:
+        """The wait before re-sending a call the vendor refused as overloaded,
+        or None when it must not be re-sent: the retries are spent
+        (``MAX_TRANSIENT_RETRIES``, within ``max_retries``), the call could
+        write (a replay against a tree it may have changed is a second edit),
+        its usage is unknown (nothing settled the attempt), or the wait would
+        not leave the run's own wall time, after the finish hold, for the
+        call itself. The same seat, model and role are re-sent; nothing
+        falls back to another model or an API key."""
+        if attempt >= min(MAX_TRANSIENT_RETRIES, self.max_retries - 1):
+            return None
+        if getattr(self, "allow_writes", False):
+            return None
+        if getattr(self, "last_usage", None) is None:
+            return None
+        wait = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
+        control = getattr(self, "run_budget", None)
+        if control is not None:
+            snap = control.snapshot()
+            limits = snap.get("limits") or {}
+            from .run_budget import FINISH_STAGES, finish_stage
+            stage = finish_stage.get()
+            pending = [p for p in ((snap.get("finish_protection") or {}).get("pending") or []) if p in FINISH_STAGES]
+            # The finishing calls still held after this one (all of them for
+            # an ordinary call), as the budget's own admission counts them.
+            held_calls = len(pending if stage is None else
+                             [p for p in pending if FINISH_STAGES.index(p) > FINISH_STAGES.index(stage)])
+            if limits.get("max_calls") is not None and (
+                    int(limits["max_calls"]) - int(snap.get("reserved_attempts") or 0) < 1 + held_calls):
+                # No attempt is left for it: waiting would only delay the
+                # same stop (or the finish hold's refusal).
+                return None
+            held = float((snap.get("finish_protection") or {}).get("held_wall_seconds") or 0)
+            left = float(limits.get("wall_seconds") or 0) - float(snap.get("elapsed_seconds") or 0) - held
+            if wait >= left / 2:
+                # Half of what is left at most: the re-sent call needs time
+                # of its own after the wait.
+                return None
+        return wait
 
 
 def _field(obj, name: str, default=None):
@@ -887,7 +991,8 @@ _REGISTRY = {
 }
 
 
-def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None) -> Optional[LLMProvider]:
+def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None,
+                   resolve_family: bool = True) -> Optional[LLMProvider]:
     """Build a single provider by name from settings, or ``None`` if unknown.
 
     The transport is chosen per provider by ``settings.backend_for(name)``:
@@ -904,6 +1009,14 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
     coding agent asked merely to critique will edit the working tree, and
     several of them at once is write-thrash. The API backends have no file
     access to grant.
+
+    ``resolve_family``: the bare path (``build_providers``, the four-phase
+    pipeline) binds the provider to the configured tier's family, resolved
+    through quadratus.latest once the installed client is known. A Fleet
+    passes False: it binds each seat's own family per call, and the
+    vendor's transport availability must not depend on whether the
+    settings' default family resolves (root's isolation control on
+    aab4fe7: a catalogue without Sol took Luna and Astra down with it).
     """
     entry = _REGISTRY.get(name)
     if entry is None:
@@ -920,7 +1033,7 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
         if cli_cls is None:
             log.warning("No CLI backend for %r; falling back to the API backend.", name)
         else:
-            return cli_cls(
+            provider = cli_cls(
                 model=settings.model_for(name),
                 allow_writes=allow_writes,
                 workdir=workdir,
@@ -930,6 +1043,20 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
                 retry_base_delay=settings.retry_base_delay,
                 refusal_fallback_model=settings.refusal_fallback_for(name),
             )
+            if resolve_family and provider.available():
+                # After construction, so the installed client's version is
+                # known to the catalogue check (minimal_client_version).
+                wire, unavailable = _cli_wire_model(name, settings,
+                                                    installed_client=getattr(provider, "client_version", None))
+                if unavailable:
+                    # A family the installed client cannot resolve: the
+                    # provider is kept so the status line can say why, and
+                    # makes no call. The transport itself is untouched.
+                    provider._client = None
+                    provider._init_error = unavailable
+                else:
+                    provider.model = wire
+            return provider
 
     return cls(
         model=getattr(settings, model_attr),
@@ -940,6 +1067,23 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
         retry_base_delay=settings.retry_base_delay,
         refusal_fallback_model=settings.refusal_fallback_for(name),
     )
+
+
+def _cli_wire_model(name: str, settings, *, installed_client=None):
+    """``(wire model, why unavailable)`` for the bare CLI path: the
+    configured tier name is a family (``sol``, ``opus``) or the vendor
+    default (``""``), resolved through quadratus.latest exactly as a Fleet
+    seat is, so no path hands a family name to a client as a model id
+    (root's factory control on bcd2b52). An explicit operator override
+    stays visible through the same resolution."""
+    alias = settings.model_for(name)
+    if not alias:
+        return alias, None
+    from .latest import resolve_model  # lazy: latest imports this module
+    found = resolve_model(f"{name}:{alias}", installed_client=installed_client)
+    if found.available:
+        return found.wire or "", None
+    return alias, f"{name}:{alias} is not usable: {found.reason}"
 
 
 def build_providers(settings) -> List[LLMProvider]:

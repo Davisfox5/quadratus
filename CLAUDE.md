@@ -120,10 +120,20 @@ Key design decisions already settled:
   the old `worker == seat` guard stopped catching that, so availability is
   now checked explicitly. Refusing beats letting the invocation fail later at
   transport.
-- **The brain trust is one seat per vendor** (Opus 5, GPT-5.6 Sol, Grok 4.6).
-  Nobody is displaced from it, and Sonnet is not in it. Its size follows from
-  the number of vendors -- when Google left, the seat left with the vendor
-  rather than being reassigned.
+- **The brain trust is at most one seat per vendor** (Opus 5, GPT-5.6 Sol).
+  Nobody is displaced from it, and Sonnet is not in it. When Google left, the
+  seat left with the vendor rather than being reassigned. **Grok is off the
+  trust and kept as a worker** (Davis, 2026-11-01: "Turn Grok off as a brain
+  trust member for now. Keep it as a worker. We will see if it can at least
+  do rote tasks"), after two admitted runs (P16, grok-reliability-01) in
+  which the `grok:default` lead spent its whole 900 s deadline with no edit
+  or reply. It is out of `peers`, `planners`, `REFUSAL_CHAIN`, the SIMPLE
+  rung and `_LADDER_ORDER`, so no rotation, spread, escalation or refusal
+  route seats it. xAI stays a vendor: `grok:worker` keeps ROTE and the
+  `lookup` errand, `grok:expert` stays its in-family escalation, tool
+  restrictions and effort are unchanged. The `grok:default` row stays so the
+  key resolves for old records, pricing and the probe. Restoring is those
+  four lists plus the SIMPLE rung.
 - **Security work is peeled into a bounded excursion**: the deputy takes the
   seat, GPT-5.6 Sol does the work, verification crosses vendor lines, the
   excursion closes, Fable resumes. Never an open-ended handover.
@@ -279,18 +289,22 @@ Key design decisions already settled:
   signed-in calls.
 - **Task size beats model choice.** Review quality falls by roughly an order
   of magnitude between a small diff and a large one — a wider gap than any
-  gap between reviewers. The decomposition prompt therefore carries a hard
-  size ceiling (`task_kinds.MAX_TASK_LINES`), and that is the single
-  highest-value instruction in the loop.
+  gap between reviewers. The decomposition prompt therefore carries a size
+  guide (`task_kinds.TASK_SIZE_GUIDE`, ~100 lines), and that is the single
+  highest-value instruction in the loop. **Since 2026-10-20 the guide is
+  advisory** (operator directive, Davis): see the note on advisory sizing
+  below. The harness measures and reports; it stops nothing for size.
 - **Routing opinions live apart from the roster.** `registry.py` says what
   shape a model is; `task_kinds.py` says what to do with that. The second
   ages far faster than the first and every entry carries its evidence.
 - **Difficulty is the primary routing axis; kind pins are the exception**
   (`task_kinds.DIFFICULTY_LADDER`). Complex → Opus, standard → Sol, simple
-  (the bulk of well-sized tasks) → the current Grok, rote → the same Grok
-  line called as a bounded worker (`grok:worker`; Grok 4.5 held this rung
-  until effort tiers replaced it). The earlier kind-pinned table
-  concentrated nearly everything on two
+  (the bulk of well-sized tasks) → Sol since 2026-11-01 (Grok's agent held it
+  before; see the brain-trust entry), rote → the same Grok line called as a
+  bounded worker (`grok:worker`; Grok 4.5 held this rung until effort tiers
+  replaced it). A rote task the restricted worker cannot serve climbs to
+  Sol. The history follows. The earlier kind-pinned table concentrated
+  nearly everything on two
   subscriptions while the others sat idle — exactly how one window exhausts
   early and forces a degraded run. Four rungs across three vendors means one
   vendor takes two, and it is xAI: Anthropic carries the primary seat and
@@ -461,6 +475,7 @@ Key design decisions already settled:
   `assertion` now requires it. Expected-exception failures (`pytest.raises`
   with nothing raised, `builtins.Failed`) stay unattributable: that is a
   stated capability gap, not something this change widens.
+  (Superseded for repair eligibility by PR73 6693873055: attribution is now a diagnostic record; `integration.repair_route` decides.)
 - **The GUI can bound a run, and off is the old run** (Codex GUI plan on
   #35, 2026-10-09). The Project tab's Run limits form builds the existing
   `RunLimits` and `SurveyConfig` in the callback, refuses a bad field by
@@ -675,6 +690,779 @@ Key design decisions already settled:
   SQLite work with "No network access" keeps its database and its network
   ban. A family chosen by a path rule or the project's policy keeps the
   item whole, and so does a scope that rules all I/O out.
+- **Step 2: recovery changes approach, conflicts can be continued, and an
+  interrupted job resumes from a durable quiescent checkpoint** (#35,
+  2026-10-13). An unfinished task's ledger entry carries held facts (cause,
+  first error line, the environment's own tool failures, the harness's run
+  of the checks on the source it left), never the lead's account; a failed
+  task's source now meets the gate once as evidence, as a capped one did. A
+  CONTINUES that re-sends its predecessor's text and declared scope unchanged
+  is sent back before any lead call. A parallel child that wrote outside its
+  scope is a failed, unmerged task (nothing it wrote reaches the project; its
+  files are an artifact) that a scoped CONTINUES may finish; a child stopped
+  by integrity, refusal, budget or an unknown error is unchanged. Merged work
+  that fails the check after the merge fix round is a `check.failed` finding
+  (with the ledger and COVERS) that a RESOLVES task repairs. The run writes
+  `checkpoint.json` (digest-bound) at every point between tasks; `--resume RUN`
+  starts a new episode only from an interrupted run, never a sealed one, never
+  twice, never with a call in flight or unknown usage, and only when source,
+  goal, policy, limits, settings (credential fields excluded by exact
+  name, `max_tokens` bound), gate, dependency and run-configuration
+  (mode, tier, decider, write grant, scope, capture, readiness) identities
+  all match. The checkpoint and `budget.json` come from one persisted
+  snapshot, an interruption persists the time up to it, and every spend
+  counter must be present, finite, non-negative and no lower than the
+  checkpoint's.
+  The record, unfinished work, findings, check debt, typed outcomes and the
+  job's run-start test bytes carry over; the budget starts from what the
+  parent's budget record spent, so the allowance is the job's. State the
+  checkpoint does not carry (design evidence, test repairs, explicit lists)
+  makes the point not resumable rather than partly resumed.
+- **The planner plans against the job's allowance, and recovery is serial**
+  (Step 2 medium job on 3e59970). Every next-task prompt states the task
+  slots left, counting the one being named, and the requirements no task
+  has covered yet: the planner had never been told the cap of 3 and spent it
+  on storage and HTTP while the CLI and docs went unplanned. A parallel
+  batch carrying CONTINUES is sent back before any lead call, as RESOLVES
+  is: a continuation inside a batch skipped the recovery allowance, the
+  hypothesis record, the unchanged-retry check and its contract's
+  predecessor. The cap, the size ceiling and the completion gates are
+  unchanged.
+- **Automated acceptance is what the configured checks can show** (Step 2
+  r02 on 3b629cf, narrowed after root's review of 86e2841). r02's t1 named a
+  scratch two-Store Python session as acceptance, the lead reported it NOT
+  RUN, and R1-R7 stayed open after committed tests covered the same
+  behaviour. Only the configured-checks note, which renders only when a check
+  is configured, now says automated code-behaviour acceptance belongs in
+  collected tests committed in the task's files, never a scratch session,
+  one-off command or script outside the tests. The shared SCOPE text carries
+  no such rule: read-only (`edits: none`) reviews, design or audit judgment,
+  harness captures and operator acceptance keep their own channels. The NOT
+  RUN rule and its discharge are unchanged.
+- **A capped draft in the last task slot meets an independent review**
+  (Step 2 r03 on f4eafea). t3's Grok lead hit its 8-turn cap in slot 3 of 3
+  with the recovery spent; the checks passed on its in-scope source, nothing
+  could continue it, and the job ended GoalUnconfirmedAtCap with nobody
+  having read the work. `Session._capped_final_draft` now sends that source
+  through the existing review, fix, gate and close-out path, with one
+  reviewer from another vendor, only when the task is serial, in the last
+  slot, scoped, inside its scope and passing its own checks on that exact
+  source. The lead stays capped (a capped revision or fix closes capped),
+  the review must give a verdict, the cap's goal question and audits still
+  decide, and the cap stays on the task as a non-blocking fact. A capped
+  task with a slot left still closes unfinished and is continued by name.
+- **Every task review judges the original goal** (root review of d0f3263,
+  then r04 on 5366412). A reviewer saw the role packet, the task's
+  paraphrase and the draft, never the goal; r03's and r04's CLI tasks
+  dropped the goal's JSON refusal contract, closed, and left malformed IDs
+  on argparse's plain-text exit. `Session._goal_authority` now appends the
+  goal verbatim and the covered requirements' original text to every
+  collaborator prompt, ranked above the paraphrase. It grants nothing; a
+  finding that needs a change outside the task's paths stays open. Root's
+  review of 4ed4d30: r04's CLI task was a SIMPLE parallel child, and SIMPLE
+  draws no collaborator, so the goal never reached a review on the route
+  that failed. A task that covers ledger requirements now draws one
+  existing peer from another vendor whatever its difficulty
+  (`collaborators_for`), and a parallel child is handed its covered
+  requirement text by the parent. Missing review is held, never waived
+  (root review of 1a58853): goal-bearing work with no reviewer from another
+  vendor available opens an unverified finding
+  (`_hold_unreviewed_goal_work`), and a direct label on work that covers
+  requirements is refused (`_direct_refusal`), so it runs at the normal
+  tier with its review. With the ledger on, every task carries COVERS, so
+  the direct tier now admits only ledger-off work.
+- **A goal-bearing review owes a verdict per covered requirement** (r05 on
+  1655cf1). The CLI reviewer carried the goal and R10 verbatim and still
+  replied NO FINDINGS while malformed IDs left through argparse's plain
+  exit. A review of work that covers requirements now gives one
+  `R<n>: MET - <file>:<line>` or `R<n>: NOT MET - <condition>` line per
+  covered requirement (`_judge_goal_review`). An approval missing a line
+  is an unfinished review, held unverified; a NOT MET line is a BLOCKING
+  finding even when the reviewer wrote none; a clean review is NO FINDINGS
+  followed only by MET lines and buys no revision. This makes a miss
+  harder, not impossible: the verdict is still the reviewer's judgement.
+- **Reviews and audits trace every error path; the goal outranks requirement
+  wording** (r06 on 5b31818). The reviewer cited per-requirement lines and
+  the auditor judged the CLI requirement, yet both read only the handler that
+  formats errors while input parsing exited before it. `_ERROR_PATH_RULE`
+  now tells both seats to trace parsing and validation ahead of the main
+  operation, outside any error handler, and the helpers, in general words
+  with no runner or known case named. The auditor also held R14 to
+  "exactly", which the requirements review added and the goal never states:
+  the audit prompt now names the goal as the authority, judges the goal's
+  own condition over stricter wording and says so on the line, keeps
+  decisions and rulings binding, and never relaxes a condition the goal
+  states. NOT RUN discharge is unchanged; full-file evidence for discovery
+  commands is a design proposed to root, not implemented.
+- **The final audit is not a proven backstop for refusal conditions** (r08
+  on f247f0a). The reviewer and the final auditor both had the goal, the
+  requirement and the error-path rule, cited a success-path test and
+  called the CLI refusal condition MET; malformed input still left before
+  the handler in another form. Prompt prose did not move either seat.
+  `_PROBE_RULE` asks a review seat whose copy takes scratch
+  (`CLISpec.copy_args`, today codex) to add a scratch test feeding the
+  interface each kind of invalid input the condition covers, including input
+  the interface's own parsing rejects, and report the test's own name as
+  executed and passed; otherwise NOT RUN and no MET line, so the review is
+  held unverified. It applies only when an approved command would discover a
+  new test file (`integration.discovers_added_tests`: verbosity flags only,
+  operands only project-relative directories that exist in the project or
+  copy; no filter, explicit file, absolute or outside path, or other flag;
+  root reviews of b24b6db and 2d9be52, so a private path is never named). The copy-bound role keeps the harness
+  records and "do not run the checks again" and adds one named exception for
+  that scratch file (`runtime._probe_exception`). The auditor gets no probe
+  and no command line. No new command, grant or role. Whether it changes the
+  verdict is unmeasured until a run shows it.
+- **A parallel child's finding on a sibling's work is rechecked on the
+  merged source, once** (r09 on ded0095). t3's reviewer blocked twice on
+  routes the running sibling owned, spent two revisions and two rechecks,
+  and the finding stayed open after the merge although the merged source
+  held the routes. A child's reviewer now sees each sibling's paths and
+  intended result and may write `DEFERRED: <task id> - <condition>`; that,
+  or a finding left unresolved after the child's own rounds, is held open
+  as unverified and, only when the merge gate passes, rechecked once by
+  the same reviewer on the merged source (`_recheck_after_merge`).
+  RESOLVED closes exactly those findings; anything else keeps them. No
+  lead call follows, no MET is written, and a sibling id outside the batch
+  is ignored. The same run showed the scratch proof asked for in r08 was
+  not done: the reviewer read source and reran the suites. Prose cannot
+  enforce it, so the runtime now measures new test files the probe call
+  left in its copy (`context["scratch_tests"]`) and the session records
+  that as an unverified fact. It informs, it does not gate: which
+  requirements need a demonstration is a policy call for root and Davis.
+- **Causal addendum to the r09 note above** (root on 40b2133, from the
+  actual parallel prompt and native rollout). The r09 codex reviewer never
+  received `_PROBE_RULE` or the runtime exception: `_run_batch` gives each
+  child `integration_gate=None` and `_probe_applies` required a gate, so
+  the rule and the probe flag never reached a parallel child. Earlier
+  qualification covered the parent path only. So r09 shows no scratch
+  run, not a model ignoring a delivered rule, and 40b2133's file
+  measurement never activated there either. A child now reads its parent's
+  approved gate commands (`_inherited_checks`, scratch only; its own gate
+  stays off). Under root's decision, a new file name is not execution:
+  when the probe call leaves a test file in its copy, the runtime runs the
+  approved discovering commands itself with `GateSuite` in that copy
+  (`runtime._scratch_proof`). Each scratch case counts only by identity:
+  a pytest line naming the file (verbosity raised through
+  `PYTEST_ADDOPTS` only, never argv), or a node name no handed test
+  declares. Only every declared case executed and passed is `passed`.
+  Failed, skipped, absent, unnamed or a handed file changed is `failed`
+  or `not run`, recorded unverified in `scratch_proofs`, never a MET.
+  Nothing from the project's dependency trees is linked into the copy.
+- **A scratch run has the reviewer's authority, not the gate's** (root
+  review of 1c14ea9). Through the gate runner, a reviewer's scratch test
+  changed a marker outside its copy and the proof still said passed; the
+  gate's authority is not the reviewer's. `runtime._scratch_isolation` now
+  puts each scratch run in an OS sandbox matching `CODEX_SPEC.copy_args`:
+  the copy is the only writable root (TMPDIR moved inside it), no network,
+  and the live project plus every absolute path an approved check names
+  outside the copy are unreadable. Linux uses `/usr/bin/bwrap`, macOS
+  `/usr/bin/sandbox-exec`, both pinned paths, never PATH. No sandbox, or a
+  launcher refusal (`SANDBOX_REFUSAL`, e.g. a nested seatbelt under an
+  outer profile), is `not run`. The run uses the reviewer's model-facing
+  argv. And each pytest instance keeps its id: a parametrized case passes
+  only when every printed instance executed and passed.
+- **A capped revision in the last slot meets its own reviewer, once**
+  (r10 on f6c028c). t3's capped draft took the last-slot handoff to a
+  review that found a real CLI defect; the revision fixed it inside scope
+  with the checks passing, but stopped at its cap and closed turn-limited
+  with no recheck. `_capped_revision_recheck` now sends a capped revision
+  or capped fix back to exactly the reviewers whose blocking findings it
+  answered, once, on the current source. That uses the capped draft's
+  eligibility (`_checked_final_source`): last slot, no operator list, write
+  grant, measured in-scope edits, checks passed on exactly this source.
+  It also needs every one of those reviewers available and no design
+  evidence. RESOLVED lets the task close normally; anything else stays
+  open. The writer is never called again (no fix cycle, gate fix zero). A
+  note with no blocking finding, failing checks or a scope breach keep the
+  capped close. Whole-goal confirmation and the final audit still decide.
+- **Size is advisory; nothing stops, trims, forces or rejects on length
+  alone** (operator directive 2026-10-20, Davis, after the r11, r13, R15
+  and R16 trim rules and the proof-planning diagnostic). The hard stop at
+  1.5 x `max_lines`, the one trim call it bought (`_edit_within_stop`,
+  `_trim_overrun`, `_trim_capped_draft`), the trim evidence and
+  preservation-debt subsystem (`_trim_snapshot` and the rest, `TRIM`
+  dispositions, `trim_records` on the checkpoint and the packet), the
+  revision's room figure with its BLOCKER channel, and the plan refusal
+  above 100 lines are gone. What remains: `max_lines` is the planner's
+  estimate, any positive integer, declared at the task's real size; the
+  harness measures every change (`ScopeReport`, `oversized` is telemetry
+  for well past the estimate), records it, and tells the lead, every
+  editing call and every reviewer the measured size against the estimate
+  (`_scope_size_note`), and the planner sees it on the task row. Priority
+  is correctness and complete requirements, the tests that prove them,
+  then conciseness: no unrelated edits, no duplication, no padding, and
+  never a test squeezed or left out to fit a number. The reviewer judges
+  whether the size was necessary; length alone is not a finding. Paths,
+  original tests, budgets, roles, the independent review, goal
+  confirmation, the final audit and the stale, missing, failed and NOT RUN
+  evidence rules are unchanged; the direct tier's own bound stays
+  conservative, and a task past it runs on the normal tier with its full
+  review rather than being refused. A task's declared estimate is kept as
+  declared; the policy's `scope_max_lines` is the default for a task that
+  declares none and never clamps it (the pinned library schema bounds
+  only that default). Controls: `tests/lifecycle/test_advisory_sizing.py`
+  (a ~190-line draft against ~40 reviewed, audited and completed; a plan
+  at 400 dispatched; a revision that grows rechecked; a capped large
+  draft on the capped route; a path breach, a reviewer's finding on
+  unrelated bulk, an edited original test and the direct bound all still
+  holding), harness pack case 02, `test_joint_scope_telemetry`.
+- **The installed vendor client is a recorded fact and a run precondition;
+  the engine never retries a capacity 429 itself** (Davis, 2026-10-21,
+  after the proof-planning and settings-migration runs both ended on
+  codex 429s). Root read the upstream source: codex 0.154's
+  `codex-api/src/api_bridge.rs` maps every 429 but the usage-limit codes
+  to a bare `RetryLimit` with status and request id, discarding the
+  `turn_rate_limit_exceeded` body and its Retry-After, so the JSONL
+  `turn.failed` carried only "exceeded retry limit, last status: 429" and
+  the attempt settled as unknown usage; 0.162 carries Retry-After through
+  the transport error and waits inside the same sampling session under
+  its own retry budget and the call deadline; 0.163.0 is the first version
+  this engine qualified, live by root (not a claim about which upstream
+  release first carried the wait). So the fix is the client,
+  not an outer replay (no `CapacityRejected` loop, no parallel retry
+  framework, no raw trace capture: rejected as scope). What the engine
+  does: `CLISpec.minimum_client` (`0.163.0` for codex; none for claude or
+  grok, which showed no such fault) and `version_args`; `_build_client`
+  reads `<binary> --version` once per executable identity (path, device,
+  inode, size, mtime: a replaced binary at the same path is read again,
+  so a long-lived process sees the remedy) and keeps only the bounded
+  `major.minor.patch[-pre]` form from a zero exit's first stdout line,
+  never the binary's own line, stderr, or any path or error text
+  (`client_version`, never raises); it records `client_version` and
+  `minimum_client` on the provider without refusing; `Fleet.status_lines` shows `client <v>,
+  qualified minimum <m>` with STALE or "version unreadable; not refused";
+  `Fleet.stale_clients` lists an available CLI vendor whose version parses
+  below the minimum, and `project_run` raises `StaleClient` before the
+  session is created, so a stale client runs nothing and the result names
+  both versions. Unreadable is unknown, not stale, and there is no
+  environment override: the remedy is updating the client. Diagnostics
+  are bounded and allowlisted: `_extract_codex_diagnostics` records a
+  `turn.failed` as `stop_reason` plus the HTTP `status` its message
+  names, nothing else (the message is vendor free text, kept only in the
+  ledger's stderr tail; no `retry_after` is invented, since a successful
+  0.163 call's JSONL carries no 429 body), and `_observe_output` stamps
+  `client_version` on every row. Native retry defaults, the deadline,
+  the budget's unknown-usage settlement, `_looks_exhausted` and every
+  review, usage and partial-work protection are unchanged. Controls:
+  `tests/test_client_version_preflight.py` (parse and semver pre-release
+  ordering, read once per identity and again after the executable is
+  replaced, non-zero exit and stderr and unrecognised lines all unknown,
+  provider recording, failed and completed turn
+  diagnostics, the allowlist dropping free text, status lines, the
+  preflight refusing before any call at 0.154.0 and running at 0.163.0,
+  an environment variable lifting nothing).
+- **Every vendor client is held to a qualified minimum, and a failed call
+  is recorded by the same bounded facts** (Davis, 2026-10-21, the batch
+  after the codex fix). Root's qualification targets: claude 2.1.304 (npm
+  stable, from 2.1.296), grok 1.0.62 (Homebrew/x.ai stable, from 1.0.30),
+  codex 0.163.0 unchanged; set as `minimum_client` on all three specs, same
+  preflight, unreadable stays unknown and is not refused. No upstream
+  fault is established for claude or grok; the baseline records what root
+  qualified. `failure_facts(status, text)` is shared by the three
+  extractors and yields at most `status` (an integer field, or a bare 4xx
+  or 5xx in text the vendor reported as an error) and `failure_class` in
+  `cap`, `auth`, `rate_limited`, `unavailable`: the window's own wording
+  (`EXHAUSTION_MARKERS`, one tuple with `runtime._looks_exhausted`) outranks
+  a 429, 401 or 403 or sign-in wording is auth, 429 alone is rate limiting,
+  502 to 504 unavailable; anything else is unknown by absence, no retry
+  delay is inferred, no text is kept, and prose in a successful answer that
+  mentions 429 or 503 records nothing because only error envelopes are
+  read (codex `turn.failed`, claude `is_error` with `api_error_status` or
+  `errors`, grok `error` or `type: error`). Root's offline controls on
+  f1d9ba2 found the false-success boundary: `_extract_codex_result` returned
+  an earlier `agent_message` when a later `turn.failed` carried the 429.
+  The error now dominates partial text (kept on the error as
+  `partial_text`, never returned), and a `turn.completed` after a
+  `turn.failed` is the client's own recovery and is read as the success it
+  is: the last terminal event in stream order decides. The failed flag is
+  held apart from its detail (root's review of ace40f8: `{"status": 503}`
+  with no message left the old message-as-boolean empty and let an earlier
+  message through), so a `turn.failed` with a missing, empty or malformed
+  error is still a failed turn, with a default detail. A status is read
+  from error text only behind status, HTTP or error wording ("last status:
+  429", "API Error: 429", "HTTP 503", "status code 502"); a bare number in
+  prose ("file429.py", "line 503") is not a status. Claude's
+  `stop_reason: max_tokens` is likewise an error with partial text (the
+  API's documented stop, not yet seen from the binary), and an error
+  envelope with no auxiliary rows now keeps its ending facts where it used
+  to report None. Native retry defaults, the deadline, reviews, usage and
+  partial-work protections are unchanged; no outer retry, override or
+  retry system was added. The workflow fake vendor reports 99.0.0 because
+  one fake serves three vendors. Controls: `tests/test_provider_contract.py`
+  and the vendor cases in `tests/test_client_version_preflight.py`.
+- **The PROVES rule is stated to every seat that writes or judges a
+  delivery, and a malformed line comes back with its measured reason**
+  (the settings-migration run, 2026-10-21: P11 first named a test class,
+  then a comma-separated list; `_record_proves` rightly rejected both, the
+  reviewer asked for source revisions, and the second revision was spent
+  on a format the prompt had never spelled out). `scope.PROVES_RULE`: one
+  `PROVES: P<n> - path/test_x.py::Class::test_case` per named case,
+  repeated with the same P<n> for several cases, never a class, a file or a
+  comma list. It is in the lead's packet (the scope render), the revision
+  prompt (`_binding_feedback`, which also lists each scenario whose
+  binding is an invalid declaration with the reason `_proves_problem`
+  measured from the line's shape) and the reviewer's proof rows. A
+  declaration fault alone asks for the corrected line(s) and no code or
+  test rewrite; findings about the code or the cases still need their
+  fix. The grammar is unchanged and strict: no normalization, no class
+  expansion, no extra model round, and the reasons name the fault, never
+  repair it. Beside it, `scope.TEST_SUBSTANCE_RULE` (the same run's
+  independent finding: a standard-library-only test forbade every import
+  and looped over nothing): a test asserts the stated operation's result
+  from the stated prior state, a test with no assertion or one that cannot
+  fail proves nothing, 'standard library only' permits standard-library
+  imports and forbids third-party packages, and a test never forbids what
+  the goal's later work may validly use. Shown to the lead when the task
+  declares scenarios, in every revision, and to the reviewer, who treats a
+  vacuous or over-forbidding case as a BLOCKING finding on that test.
+  Nothing task-specific is graded. Controls:
+  `tests/lifecycle/test_proof_declaration_feedback.py`.
+- **A task's record is written by the harness; no model summary call
+  exists** (Davis, 2026-10-21, after the ticket-workflow run on 439d757:
+  t1's lead, review, revision and recheck all returned, then the close-out
+  summary call on Sol timed out at the 60 s clamp with only thread.started
+  and turn.started in its stream, the run ended with the task's work
+  measured but unrecorded, and the budget latched unknown usage; the
+  backend cause stays unknown). `_task_close_out` now returns the direct
+  tier's mechanical record or `_factual_close_out` for every other task,
+  reviewed or not, whether or not a later planning call reads it; the
+  model close-out, its refusal record and the SUMMARY/DECISIONS/DEAD
+  ENDS/MAP NOTES parser are deleted, and `_closes_factually` is always
+  true, so no plan stage, remainder or exposure reserves a close-out call
+  (`runtime.Fleet._closeout`, root's file, stays as the bounded summary
+  view and is called by nothing in the session). The record carries the
+  task's measured changes and source fingerprint, the last check with
+  whether it ran on this source (a check on another source or a failed
+  one is named as such, never promoted), each review's disposition and
+  recheck, design evidence, every proof scenario's binding and execution,
+  open facts, unresolved and deferred findings, NOT RUN reports, scratch
+  proofs and finish refusals, bounded (eight items of 300 characters per
+  list) with the whole transcript and diff kept as artifacts and the
+  index on the task; it states that no decision, dead end or map note was
+  written by a model. Reviews, the goal question, the final audit, the
+  budget policy and the unknown-usage stop are unchanged; a stale or
+  failed check is never promoted. The harness stage edge `closeout` and
+  the monitor's stage names are kept. Root's review of 8bc9805 shaped the
+  record further: with no pre-task snapshot the change list is
+  "unknown" with the measurement status, never "no files"; design
+  evidence reads the task's contract or the live applicability, so a
+  required record that is missing is MISSING and a disabled one is
+  disabled, and an approval is current only on this source fingerprint
+  (an earlier source is historical, an unrecorded identity is said so,
+  and source equality alone does not make it current: root's final
+  review reuses the design review's own drift checks, so an approval
+  whose renders or goal/requirement context moved since the review reads
+  as "validity unverified" with the drift named);
+  the model-facing summary is bounded per field (twelve paths, eight
+  items per list, explicit "and N more" counts) and points at the
+  unbounded full record artifact, so no debt is truncated away. With no
+  close-out call there is no stage to drop, so the terminal route
+  (admission/3) can no longer differ from the full route and never
+  fires: the lifecycle scenarios written on it now show the same
+  protections on the last slot or as mandatory-deficit refusals, and
+  the planner's allowance note and the direct-tier text no longer
+  budget a close-out call. Controls:
+  `tests/test_closeout.py` (the record's contents, bounds, gate-command
+  privacy, no map amendment, no model asked), `tests/lifecycle/
+  test_factual_closeout.py` (a reviewed t1 closes on the record, the
+  planner reads it and dispatches t2, reviews and the audit still run,
+  zero summary calls, a failed check recorded FAILED, a scripted refusal
+  never reached) and the lifecycle files that asserted a close-out call.
+- **Codex usage is the sum of completed parent turns and an unaccounted
+  turn is never hidden** (root, 2026-10-21, `_codex_usage_account`). The
+  saved failed call's thread state read tokens_used=0 only as a default,
+  with no token_count or completed event in the rollout, so nothing could
+  say what it spent. Upstream 0.163 `exec/src/event_processor_with_jsonl_output.rs`
+  emits the thread's cumulative total on every `turn.completed`
+  (`usage_from_last_total`), so the account is the last valid snapshot
+  on a single thread, never a sum (root's correction of root's own
+  earlier sum): snapshots must be monotonic, a repeated total charges
+  nothing extra, cached input is a subset never added, and a second
+  thread id in one stream is not the same account. The call is unknown
+  when a turn is open, failed, started twice before completing or
+  malformed, when a total falls, or when a second thread appears; a later
+  `turn.completed` does not clear an earlier `turn.failed`, `error` or
+  double start, and the last valid snapshot is kept as the observed lower
+  bound. Nothing recovers a historical call's usage or verifies a bill. The answer semantics are
+  separate: `_extract_codex_result` still honours a completed turn after
+  a failed one as the client's recovery. Diagnostics carry
+  `usage_completeness` (complete or unresolved), `completed_turns`,
+  `cached_input_tokens` when any, and `usage_lower_bound` (the completed
+  turns' totals with their source named) on an incomplete call;
+  `safe_diagnostics` allowlists exactly those, beside the rollout's
+  integer floor. No zero is fabricated, no estimate is made. Root's native
+  adapter (`tools/step2_native_execution.py`) sets a call-local `RUST_LOG`
+  selecting `codex_otel.trace_safe=info` and `responses_retry=warn`, and
+  `tools/native_call_diagnostics.transport_facts` keeps only allowlisted
+  event names, numbers, booleans, the failure class and a stated backoff
+  (never a message, header, prompt or identity) in
+  `native-transport.json`, removing the selected trace lines from ordinary
+  stderr; `usage_total` is always None there. It also keeps the
+  provider's request correlation id in a bounded opaque shape
+  (`auth.request_id` upstream, never a header, endpoint or account
+  field), `ttft_ms` and `tool_token_count` (the upstream spelling of the
+  response total, never summed into a bill), and counts routine stream
+  deltas, in-progress notices and pings as `routine_rows_omitted`
+  instead of letting them spend the 256-row cap before the completion or
+  failure row. Diagnostic observation only: no retry, model, permission
+  or config change.
+- **Historical: a revision past the size stop spent the remaining fix
+  allowance coming back under it** (r11 on 136a3ec; retired 2026-10-20).
+  t2's in-bound draft was revised past the hard stop by one line, though
+  its prompt stated the exact room, and the task failed with a fix cycle
+  unused and no slot left; the trim call that answered it is gone with
+  the stop.
+- **Every editing call carries the original goal** (r11). Only the draft
+  had it, through the memory render; revision, fix and gate-fix prompts
+  held the generated task text, which in r11 prescribed the defective
+  route branches and called the plain CLI exit a refusal. `_writer_goal`
+  enters once, at the boundary in `_invoke_model_call` where every
+  editing role (`_EDITING_ROLES`) already gets the lead's packet, so
+  design-fix, security-fix, fixture-supply and capture-redeclare are held
+  to it too (root review of af5814d); the draft keeps the memory render's
+  goal, and a parallel child's draft adds its covered requirements. It
+  says a task text or generated recipe does not change them, grants
+  nothing and changes no bound. Only the complete current block counts as
+  already bound (root review of 21639d6): a copied heading over other text,
+  or a block with another covered requirement, never suppresses it.
+- **A capped writer after the draft is told its round budget** (r12 on
+  56ff155). t3's capped Grok revision spent its 8 rounds on 19 reads,
+  greps and commands and wrote nothing; its prompt had the goal and the
+  headroom, but only the draft had ever been told a cap existed.
+  `_writer_turn_budget_note` adds it at the editing boundary for revision,
+  gate-fix and design-fix (`runtime.LEAD_CAPPED_ROLES`) with the write
+  grant, on a CLI with a round flag, using the draft's limit and planning
+  arithmetic. It says the call stops with its edits kept and that checks,
+  reviewers and the final audit still decide; no status promise. Codex,
+  security-fix and uncapped runs are told no cap. The cap itself is
+  unchanged.
+- **Historical (retired 2026-10-20): a finished draft past the size stop
+  got the same one trim** (r13 on
+  5e8926b). Two finished parallel drafts crossed the hard stop inside their
+  paths and failed before any check or peer. `_trim_overrun` (shared with
+  the r11 revision trim) now also serves a normally finished draft: one
+  call, charged as a fix cycle against the task's later revision and
+  fixes, and only while a cycle is left for that revision. Never reverted,
+  measured again; still over, a path breach, a capped or transport-failed
+  draft, or no cycle left fails or holds as before. The trimmed source
+  still meets the checks, the peer and the final audit. Its fact is
+  recorded only after the trim lands, so a failed trim leaves the failure
+  record unchanged.
+- **The cap goal question is the goal decision, not a second audit** (R14
+  on 164859f). It rendered every task's full work inline (43k characters)
+  to an uncapped native seat that also read the delivered files; its 183k
+  reported tokens left 163,762, below the unchanged 200,000 call reserve,
+  and the final audit was never invoked. `_confirm_goal_met` now renders
+  with `with_previews=False`: goal, standing rules, requirements, rulings,
+  harness records and summaries as before, each task's full work as
+  artifact ids that FETCH serves whole. With the requirements ledger on, it
+  says DONE is the goal decision and the independent audit follows. No
+  reserve, order, cap or seat change: reordering would only move the
+  starvation, since native usage cannot be known before a call.
+- **A trim aims at the stated bound; a no-edit capped revision gets one
+  measured retry** (R15 on 7f628ae). Asked for "at most 150", t2's draft
+  trim landed at 152, as r11's revision had at 151: the model aims at the
+  number given. The trim now aims at the task's stated bound and names the
+  stop as the failure line. t3's capped revision had a concrete blocking
+  finding, read for 8 rounds and wrote nothing, with a fix cycle unused.
+  `_no_edit_cap_note` gives such a revision (source byte-identical, a
+  blocking finding open, write grant, a cycle left) one more revision from
+  that cycle, carrying the measured outcome rather than the same prompt;
+  its own cap takes the capped paths. Whether it helps is unproven.
+  A cap raised inside a size trim is tagged and never read as a no-edit
+  revision (root review of b5ea0ef: it bought a third writer call).
+- **Historical (retired 2026-10-20): a capped draft past the size stop got
+  the same one trim** (R16 on
+  78f76bb). t2's draft stopped at its cap with 153 in-path lines against a
+  stated 85 and failed on scope with both cycles unused.
+  `_trim_capped_draft` gives its kept edits the r13 trim (charged as the
+  first cycle, only while one is left after it, prompt stating the cap and
+  aiming at the stated bound). Under the stop it is a capped draft like
+  any other: the cap stays recorded and the existing capped paths decide
+  (the last-slot review, the final-batch child review, or the capped
+  close). Still over fails as before; a capped trim goes straight to the
+  capped close; a path breach gets no trim.
+  A capped trim marks the turn-limited record `trim_capped`, and the
+  final-batch capped-child review holds it rather than reviewing past two
+  caps (root review of 860769e).
+- **The planner is told which unfinished work is still owed** (R17 on
+  a3cf7e4). After t2 CONTINUES t1 closed and a real pause and resume, the
+  planner still read t1's "not done ... CONTINUES: t1" record with nothing
+  saying it was settled or that the one recovery task was spent; it named
+  t3 CONTINUES t1 and the run stopped SurveyAllowanceSpent. The next-task
+  prompt now carries `_unfinished_state_note`: what is still owed (the same
+  typed-or-legacy set that blocks completion), what a later task took over,
+  and recovery tasks used of the allowance. Records stay as written; no
+  CONTINUES is stripped, and the allowance stop is unchanged.
+- **A disputed finding is tested by the harness, never argued** (Davis,
+  2026-10-15, after R18's false audit finding). Reviewers and the auditor
+  state a finding with its condition, location and a concrete failing
+  example. The orchestrator may reply `EVIDENCE: <R<n>|U<n>|none>`, a
+  `FILE:` line and one new test file (`_parse_evidence`). The harness runs it
+  with the configured discovering checks in a disposable, sandboxed copy of
+  the current source (`_run_evidence` over `runtime._scratch_proof`); no
+  command line or path goes to the planner or the auditor. Failed confirms
+  the finding with no further call; not run (skip, no sandbox, a test that
+  rewrote handed source, a project that moved) leaves it held; passed goes
+  once to the model that made the finding, which reassesses it alone
+  (`_reassess`). An audit MET there still needs a resolved citation and is
+  lowered by any standing NOT RUN record; it sets the requirement met and
+  the next DONE audits everything again with the evidence in its prompt
+  (`_evidence_block`). A review RESOLVED closes exactly that held finding.
+  Only the latest audit's own NOT MET lines on the current source and held,
+  non-deferred review findings can be tested (`_disputable`); one request per
+  finding per source, kept in `evidence_requests` (checkpointed, written at
+  a quiescent point before the planner is re-asked). Requests share the
+  decision's ASK bound; the reassessment is an ordinary reserved call.
+  Held review findings with COVERS, a slot left and a discovering check are
+  debt instead of a FindingsOpen stop (`_review_debt_continues`), as a
+  failed check is; they still block completion.
+  After the task cap's final audit (root boundary on 83b658c: seven
+  controls stopped RequirementsUnmet at max_tasks=1 with 8 of 20 calls
+  used and no challenge), `_final_challenge` offers the seated orchestrator
+  the same channel read-only: no task, writer, slot or recovery, only the
+  orchestrator's turns and the same auditor's one reassessment, each a
+  reserved call. A budget that cannot admit one ends the challenge and the
+  audit stands; a requirement leaves the unmet set only when reassessed MET.
+  A proof is bound to `_evidence_identity` (source, effective gate or
+  inherited checks, root, excludes) and relied on only while it holds:
+  drift after the run spends no reassessment, drift during it discards the
+  verdict (root review of 8f68ea0). The request is checkpointed before it
+  runs and its receipt before the reassessment is reserved; the run's
+  receipts and check ids stay on the record, never in a model prompt. A
+  checkpoint from the cap's challenge carries `_cap_goal` and
+  `_final_audit` and is the one spent-slot checkpoint a resume admits: it
+  finishes the decision with no goal question, audit or execution
+  repeated. Each request records its stage durably (intent, awaiting
+  reassessment, reassessment started, done): a resumed job finishes an
+  unstarted reassessment once with the same auditor, from the retained
+  test, finding and bound identity (`_finish_pending_evidence`); a started
+  one is never retried. The reused final audit restores the coverage the
+  ledger had when it was asked, so its own NOT MET cannot read as
+  "never covered" (root review of a93334b). Evidence files are at most 16,000 bytes and shown
+  to the reassessor whole.
+  Every reassessment reads `_authority_context`, the same block the final
+  audit reads (verbatim goal, the requirements judged, redacted check facts
+  and configured checks, decisions and operator rulings, design evidence,
+  NOT RUN records), plus `_EVIDENCE_AUTHORITY`: a test cannot authorize
+  another reading or stand in for renders or unrun checks. A review
+  reassessment gets the goal and its task's covered requirements, not only
+  the generated task text (root review of 8f68ea0).
+- **A goal contract is never waived by a lower authority** (R19 on
+  e2a46a4). t3's reviewer found the goal's JSON refusal broken for malformed
+  new-command IDs, then waived it because the task asked for the type=int
+  convention and the old commands behaved that way, and marked R12 MET; the
+  audit followed. The goal block already said it outranks the task text.
+  `_AUTHORITY_ORDER` now states the order (goal and rulings, then
+  requirements and decisions, then task text or plan) and that no
+  prescribed convention, consistency with existing commands or older
+  behaviour excuses a goal contract on the work it asks for, and that a
+  requirement is never MET beside a note that it is not. It reaches the
+  writer after the draft, every task reviewer, the final auditor and the
+  evidence reassessment. Prompt only: no severity is forced and nothing is
+  marked MET or NOT MET by the harness, and a wording rule is not a
+  measured accuracy fix. The structural half: the final auditor's prompt
+  (9538 chars) never held the reviewer's warning. `_record_review_notes`
+  keeps each non-blocking review paragraph naming a covered requirement,
+  with its task and source fingerprint; `_authority_context` carries those
+  on the requirements judged, labelled current or earlier source, as
+  observations to reconcile. Resolved BLOCKING findings and notes on
+  uncovered requirements are not carried. Notes are kept and carried whole,
+  every one (root review of 728c0fc: a 600-character slice kept a benign
+  prefix and a last-20 cap dropped the oldest warning); review volume is
+  already bounded by the job. A BLOCKING line ends what its paragraph can
+  contribute: its continuation belongs to the blocking and recheck route.
+  A paragraph that states a condition without any id (as `_FINDING_SHAPE`
+  allows) is kept against the task's covered requirements and labelled as
+  naming none, its association uncertain; one naming only uncovered ids
+  stays out (root review of 225367f). An executed-demonstration
+  requirement for every error-boundary MET was built and held back as
+  broader than this fact supports (patch kept in the #73 record).
+- **Every failed required check carries its own report** (R21 on
+  319385322b). The final check failed on a plain test-body assertion and the
+  run stopped CheckUnattributable with budget left. pytest 9 reports each
+  subtest through the item's hook, so producer `quadratus-pytest/5` tallies
+  subtests apart and counts each item once, failed when it or any subtest
+  failed, its one record an assertion only when every cause is a body
+  `AssertionError` (a parent pytest already flipped to failed with no
+  exception of its own is not a cause). A `python -m unittest ...` check that
+  declares `--quadratus-report={report}` runs the same arguments under the
+  same interpreter through `_gate_producer/quadratus_unittest_report.py`
+  (`unittest.main(module=None)` with a recording result class, copied under
+  a nonce name, unittest's own output and exit), producer
+  `quadratus-unittest/1`, the expected producer bound per invocation. Plain
+  unittest stays undeclared and unattributable; root rejected letting a
+  sibling check's report stand in for another, and `attribute()` is unchanged.
+  Root on f0b4827: with no failure, a skipped subcase makes its test skipped
+  in both producers (it had vanished, so `skipped_count` read zero), and the
+  selected shipped producer's bytes are part of `GateSuite._runner_hash`, so
+  a changed reporter misses the cache. unittest's own summary for a failed
+  and a skipped subcase reads as zero executed and still fails closed.
+- **The finish is held, the last wave closes factually, and error clauses
+  need a run** (Davis, 2026-10-16, after R22: three tasks closed, 20 of 20
+  calls spent, the cap's goal question refused at call 21, no audit).
+  `RunBudget.protect_finish` holds the goal question and the requirements
+  audit (`run_budget.FINISH_STAGES`) one call and one full per-call reserve
+  each from ordinary calls, counting reserves in flight; an ordinary call
+  that would spend them raises `FinishReserved` before it starts, is
+  recorded (`finish_refusals`, `budget.json`) and latches nothing. The
+  session marks the finishing calls (`finishing("goal")`, `"audit"`),
+  recomputes the held stages each episode from its own record, and treats a
+  refused review, recheck, revision, fix or post-merge recheck as not run:
+  the finding stays open and every existing debt gate still decides, so a
+  run can stop FindingsOpen instead of finishing. No limit, reserve or
+  shape changes; finishing calls never take the summary shape. The job's
+  last dispatched wave (and a model close-out refused to keep the finish)
+  closes with `_factual_close_out`: reviews as they ended, last check and
+  its source, open debt, NOT RUN, scratch proofs and artifact pointers, no
+  invented decision or map note; not the direct tier's text. A requirement
+  whose own text is about errors, refusals or invalid input
+  (`_error_clause`) is accepted only on executed evidence, by exact case
+  identity (`_cited_cases`, `_executed_cases`; root review of 17a96d3): a
+  cited `file::[Class::]case` a complete approved run's case record shows
+  executed and passed on the current source (a quiet or unittest run names
+  no case and credits nothing; a same-named case elsewhere never stands
+  in), or a case of a scratch demonstration the harness ran and passed in
+  full, cited on that requirement's own MET line (in the review), or bound
+  by provenance (source and checks identity, covered requirements) at the
+  final audit. The audit lowers any other MET to NOT MET; a review's other
+  MET becomes an UNVERIFIED line the lead answers, never an approval.
+  Root on 5ca254c: a scratch proof is bound to the source and checks its
+  copy was handed (`handed_source`, `handed_checks`, measured by the runtime
+  on the copy), so a live change during the review leaves it stale with its
+  raw result kept; and the own-report producers (`quadratus-pytest/6`,
+  `quadratus-unittest/2`) name every case they count passed
+  (`passed_cases`, one per count, validated), so the unchanged quiet
+  declared gates show exact executed identity without verbose output. Whether the executed test establishes the clause stays the
+  seat's judgment. The R22 ledger replayed through the hold refuses row 17
+  (t2's recheck), which leaves its finding open: the hold makes the stop
+  honest, it does not make that run finish.
+- **An editing call is held at the per-call ceiling, and a first editor
+  refused before any write is NOT RUN** (root reconciliation of R23 on #73,
+  6208197375). R23's t3 lead was admitted on its 200k reserve with 670,394
+  left, reported 346,846, and from then on the goal question itself could
+  not fit beside the audit's hold; the scope trim was only where that
+  surfaced. The hold now exposes a call holding the write grant
+  (`Fleet.invoke` sets `run_budget.admitted_as`) at `max_tokens_per_call`,
+  the most it can report without stopping the run, and counts each call in
+  flight at its own exposure; every other call stays at its reserve, an
+  estimate, and with no ceiling the record says the hold does not bound an
+  edit. A call kept out only by calls in flight (it fits alone) waits on the
+  budget's condition with no ticket, attempt or request and is decided
+  again when one settles (`finish_protection.deferrals`); the wall still
+  runs and is never reset, and a worker never waits, because its lead is in
+  flight. Root's zero-model replay: t3's lead refused before any write, and
+  t2's revision deferred behind t1's. A serial task whose first editing call
+  is refused, with no edit admitted and the measured source unchanged, is
+  `not_started` (`Session._settle_not_started`, `not_started` in
+  result.json): never closed, no coverage, no further planning, and the
+  cap's own decision runs every gate. Partial work blocks the goal
+  question; a not-started task blocks completion by name ("NOT RUN"). A
+  refusal after any edit, in an explicit list or in a parallel child stops
+  the run exactly as before; the R23 trim refusal is unchanged.
+- **A serial task the run is certain to stop after closes factually**
+  (R24 on 54d729: t1 closed with three unverified review facts, a model
+  close-out of 11,772 tokens ran, and the run stopped FindingsOpen before
+  any planning call). `Session._stop_follows_close` reads, without
+  changing anything, what the stop decision in `_run_tasks` reads: a
+  legacy open finding the review debt cannot hold (`_review_debt_holds`,
+  the read-only half of `_review_debt_continues`), or a failed last check
+  with no ledger or no COVERS to hold it as debt. Only a task the serial
+  loop dispatched is asked (`_serial_dispatch`); a direct `run_task`, a
+  parallel child or a held-debt task keeps its model close-out. Reviews,
+  verdict parsing, debt and stops are unchanged.
+- **Judgment integrity: one strict reading, one same-seat completion per
+  job, an obligation view and a wall hold** (strategy reset approved by
+  Davis, 2026-10-16, from 1b9f0aa).
+  - `quadratus/judgment.py` combines repeated per-requirement lines for the
+    reviewer, the audit and the reassessment alike: any NOT MET wins in either
+    order, and duplicate MET lines approve nothing. Before, the audit kept the
+    last line and the reassessment the first. A recheck reply is RESOLVED,
+    UNRESOLVED (a genuine finding, which buys the fix round) or INVALID (no
+    verdict, which buys nothing).
+  - A review or recheck that ARRIVED without a valid verdict may be completed
+    by the same seat, in its existing role (`collaborator` or `recheck`: turn
+    cap, read-only copy, scratch, privacy), on the same source,
+    `SessionConfig.max_judgment_completions` times per whole job (default 1).
+    The claim is written to budget.json before the call, never refunded, shared
+    by parallel children and carried by `checkpoint.consumed`. A cap, a refusal,
+    a finish-hold refusal or a changed source gives nothing and is never
+    retried. Other failures propagate as the review call's would. The raw reply
+    is kept (`judgment-raw:*`). A genuine BLOCKING, NOT MET or UNRESOLVED is
+    never routed here. If the completion still gives no verdict, the open
+    finding stops the run as before; no other seat and no audit stands in.
+  - Root review of d264b0c:
+    - The completion is bound (`_judgment_binding`) to the task, seat, role,
+      contract, source, effective gate identity, approved-check digest, goal,
+      and every requirement's text. The binding is taken before the claim,
+      persisted with it, and compared before the call and before the reply
+      is relied on; any drift voids the answer and spends the claim.
+    - A refusal by the seat, transport, integrity or any other failure is
+      recorded, then raised as the review call's own would be.
+    - Only the strict reader marks an answer a valid judgment
+      (`_settle_completion`).
+    - `checkpoint.consumed` requires the claim counter and refuses claim
+      records that exceed it: a missing counter is unknown usage, never an
+      unused allowance.
+  - `quadratus/obligations.py` (pure) builds the one view the planner and the
+    audit both read, and result.json records it (`obligations`). It covers:
+    requirement status and owners; each task's state (held, continues,
+    continued more than once) and its measured code/test/line consumption
+    against its ceiling; each recorded check's passed cases, current only on
+    this source and gate (otherwise stale or wrong gate); judgments without
+    a valid verdict; and capacity after the held finish (calls, tokens,
+    seconds, slots, recovery).
+  - `dispatch_floor` and `_mandatory_stages` refuse a serial task before any
+    call when the calls left cannot pay its known mandatory stages: lead,
+    each required review, a contract-required design review, or a security
+    task's draft and verification. These are exact counts that never
+    predict revisions.
+  - `RunLimits.finish_wall_seconds` (policy `finish-wall/1`, 120 s per
+    pending stage) holds wall time for the goal question and the audit:
+    ordinary calls get what remains after the holds, and the goal question
+    leaves the audit's.
+- **A trim gets what the harness measured** (R20 on c7e9449). t2's one
+  scope trim, told only the total, spent 8 rounds and 373,366 reported
+  tokens, more than its draft, and the run ended with 141,947 left under the
+  200k ordinary-call reserve. `_trim_evidence` gives every trim site
+  (finished draft, capped draft, revision) per-file counts split into code
+  and tests and the task's diff (`project.diff_contents`, the one
+  rendering `Project.diff` uses), measured fresh and filtered by file
+  identity on both sides to what every scope over the task permits; a diff
+  over `_TRIM_DIFF_MAX_CHARS` is stated as omitted, never cut. No call,
+  cap, target, stop or allowance changes; the token effect is a hypothesis.
+  `result.json` `budget_note` records, from the terminal budget snapshot,
+  when what was left sat under the ordinary-call reserve: an observation,
+  never the stop or an outcome fact. It is token capacity only: whether the
+  remainder covers the summary-call reservation
+  `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, never a prediction of
+  admission, since calls, time and workflow are other gates (root reviews
+  of b4d8398 and 38ec681).
+- **Capped work in the final parallel batch meets one review** (r05). A
+  child has no gate and no slot context, so t2's capped Grok draft merged
+  and the job stopped GoalUnconfirmedAtCap with calls left.
+  `_review_capped_final_child` sends the merged source to one reviewer
+  from another vendor when the batch spent the last slot and the merge
+  gate passed. A clean verdict lifts the cap and records coverage;
+  anything else is held. No lead call follows, so a capped lead stays
+  capped.
+  An approval there is a finished review (NO FINDINGS or a REVIEW: COMPLETE
+  line) with no BLOCKING and every covered requirement MET; non-blocking
+  notes beside it are kept on record, not answered (r07 on 820bed6: R8-R10
+  MET, REVIEW: COMPLETE and six low-severity notes were held because only a
+  bare NO FINDINGS counted). Missing lines, NOT MET in either order and
+  BLOCKING still hold.
+- **Native delegation is denied to every seat without the worker bridge**
+  (r04 on 5366412). The goal question at the cap used Claude's own Agent
+  tool, reported four children still running and 1,206,662 unattributed
+  auxiliary tokens, and stopped the job on the per-call ceiling.
+  `runtime.NO_NATIVE_DELEGATION_ROLES` (orchestrator, auditor,
+  requirements-review, consultant and every review seat) gets the
+  verifier's denial with read tools kept. Leads keep the vendor default and
+  the bounded WorkerBridge. Grok's unrestricted seats still take their
+  prompt by file, where `--disallowed-tools` is ignored; there the record
+  stays the check.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The
@@ -1208,6 +1996,614 @@ Key design decisions already settled:
   does not know, or one that prompts or exits (`-i`, `--version`,
   `--check`), is refused. A project file merely named like an interpreter
   (`./python3`) is the program itself and is not parsed.
+- **Stage A+B is connected: typed delivery records are the controller's
+  account** (blueprint 2026-10-17; connected batch 2026-10-18). `delivery.py`
+  holds the records and pure transitions; `session.py` is the adapter.
+  Review findings get stable ids (`RF<TASK>-<n>`) with a basis (requirement,
+  reproduction, evidence or none) and an impact read off the reviewer's
+  own BLOCKING line (`| basis: ... | impact: ...`). Every recheck, the
+  post-merge recheck, the reassessment and the final audit read per id
+  (`judgment.recheck_verdicts`): UNRESOLVED wins, a duplicate or missing
+  line settles nothing, INVALIDATED needs checkable evidence, NEW lines open
+  findings of their own with their basis and impact, foreign ids apply to
+  nothing, and only the designated judge settles a finding (the seat that
+  raised it in recheck or reassessment; the audit for a concern carried to
+  it), on the binding it was handed. A finding with no basis and no
+  immediate risk does not stop the run: it is carried to the audit by id,
+  and the requirement it touches is not met until a judge closes it. A
+  data-loss, integrity, security or irreversible impact holds the close
+  whatever its basis. `recheck_state` is not a live reader any more.
+  Evidence obligations (`O<n>`) are registered for every NOT RUN item, skip
+  fact and declared acceptance behavior, with the harness's gate as runner
+  when it can run what the item names and None (a reported prerequisite)
+  otherwise; execution is discharged only by a receipt bound to the current
+  source, gate, runner, environment and current requirement revisions, and
+  sufficiency comes only from the audit (an explicit `O<n>: SUFFICIENT`
+  line, else its requirement verdict), bound to exactly that evidence. The
+  run's state is a durable job store (`jobstore.py`, `generations.py`):
+  immutable content-addressed records under one manifest, fsync before
+  rename, a latched refusal on any failure, readers that take the manifest
+  over `budget.json` and `checkpoint.json` (now exports), and nothing falls
+  back to an older generation.
+- **The A+B boundary correction** (root's review of f4fe5b7, 2026-10-18)
+  closed the connected batch on three boundaries. *One packet, one
+  predicate*: `Session._packet` (`delivery.EvidencePacket`) is the binding
+  of every judgment, cache, status restore, reassessment carry and final
+  acceptance, and its digest moves with the source, each requirement's
+  revision and text, the gate, the environment, the evidence identity,
+  every recorded check (outcome, receipts, output, the environment and
+  revisions it ran under), the findings with the binding each was last
+  judged on, the obligations with their receipts, the rulings, the
+  decisions and the authority record. An audit whose packet moved while it
+  ran is void, a failed audit is not a final audit on record, and the
+  status snapshot and a reassessment are carried only on the exact packet.
+  After sufficiency, `delivery.acceptance` decides: a MET stands only when
+  every bound obligation has an authorized runner, ran on the current
+  identity and was judged sufficient about exactly that evidence, and no
+  finding touching the requirement is open; INSUFFICIENT, two sufficiency
+  lines for one id (a conflict is no verdict), unjudged, stale and a
+  prerequisite with no runner all lower it. A receipt carries the check's
+  own environment and revisions, never now's; an execution goes stale on
+  gate or environment drift; a NOT RUN item is routed to the gate only when
+  the gate names its paths whole; INVALIDATED closes a finding only on
+  evidence the record resolves (a project file or test, a recorded check,
+  receipt, command, finding, obligation or requirement id), and the audit
+  invalidates or keeps a carried finding, never resolves it. *The route*:
+  the task's selected finite route (mandatory stages, one revision and one
+  recheck per reviewer, a parallel child's post-merge rechecks, the
+  close-out where a model makes one) is admitted whole before the first
+  call or the task is NOT RUN; a second fix cycle is admitted on its own
+  before it starts; the route's checks count on the wall at their measured
+  time, never at the configured timeout. The gate fix is deliberately not
+  on the route: it is bought at the moment a check fails and a refusal
+  there is recorded (the failed check stands), because costing it in
+  advance refuses every task under the normal bounds (2M tokens, 500k
+  editing exposure: the route is exactly 1.6M). *The effect lifecycle*:
+  every model call, check, observed check, original-test run, skip
+  baseline, evidence run, capture, probe, fixture write and merge is an
+  operation under the session's own owner id (`OP<owner>-<n>`, record
+  `operations-<owner>`, a parallel child's own); an exception settles it as
+  failed, an interruption leaves it uncertain and unsettled; an effect
+  settled after the checkpoint's watermark refuses the resume (a late
+  read-only call is only named and asked again); the terminal record is
+  committed with the seal before `result.json`, and a run whose terminal
+  could not be committed is not completed; the authority record (the
+  requirement revisions, rulings, decisions and the plan gate's receipt) is
+  committed at each quiescent point and a resume needs the same one; the
+  store decides on the manifest on disk, never its cache, and refuses to
+  replace a manifest that moved under it. Accepted limits: `.quadratus/`
+  metadata writes (source excludes, retired fixtures, the run lock,
+  resumed-by) are harness-owned and not operations; a capped parallel
+  child's clean-review lift is not packet-bound, the final audit that
+  follows it is; a shared store under two concurrent Sessions is refused at
+  the manifest, not coordinated (root's critical 3, non-blocking).
+- **The remaining-boundary correction** (root review of 04a967d and
+  Astra's durability review, 2026-10-18) closed what the first correction
+  left as shared contracts, not sample patches. *Packet*: every record an
+  acceptance path consumes is digested whole (checks and observed checks
+  with their receipts' provenance, selection, requiredness, skips and
+  output; design checks; scratch proofs; evidence requests), and a check's
+  execution identity (environment, requirement revisions, gate, source) is
+  frozen before the command launches (`_execution_identity`) and carried
+  frozen with any drift named (`_consumed_identity`): a run is never
+  credited to a revision that did not exist when it launched, and a receipt
+  built from it binds the superseded revision, which discharges nothing
+  current. *Continuation*: any operation settled after the last quiescent
+  point and never consumed by the record refuses the resume, a read-only
+  judgment included (a NOT MET the coordinator died before parsing is not
+  asked again as if never given); the reply or outcome is retained as the
+  operation's bounded immutable receipt (`receipt-<opid>`, 64,000 chars
+  with the whole's digest) committed in the settlement generation and
+  named in the refusal, and a receipt that cannot be read back refuses on
+  its own. Only an outcome the harness itself reported (one of this
+  package's exception classes) settles an operation as failed; a suspected
+  partial turn, an interruption and any library or OS error leave it
+  uncertain. *Authority*: the authority record is committed before a
+  task's or a batch's first call (`_authority_before`) as well as at each
+  quiescent point; every operation and every budget reservation names its
+  digest; the cross-vendor requirements review is recorded beside a
+  requirement row as a review of exactly that text digest, never as the
+  human's decision receipt, so an inferred requirement is never
+  `approved` by a model and a revision the review never saw carries no
+  review. *Readers*: the committed terminal carries the goal, the
+  explicit-task semantics, each task's closing state and the budget stop,
+  and the monitor, the history and the story derive completion from it
+  when no export exists; no committed terminal is unfinished, never
+  completed. *Route*: a hypothetical gate fix is still not pre-reserved at
+  dispatch; once a real check has failed, the repair it selected (the gate
+  fix, what the task still owes, and the check's measured wall time, with
+  an unmeasured wall said so) is admitted whole before the editor writes,
+  or the failed check stands and the refusal is recorded
+  (`_gate_repair_stages`, scope `gate-repair`). *Residuals closed on the
+  same contracts* (root and Astra on 6bf1afc): the frozen execution
+  identity carries the gate, its selection and its cwd through every check
+  consumer, so a gate reconfigured at the consumer seam is named as drift
+  and the record keeps the gate that executed; the authority is committed
+  at the common effect-admission boundary (`_operation` and every model
+  call, intake and the requirements review included), its digest is what
+  the effect names, and the requirements review freezes exactly the texts
+  its prompt sent, so a text changed in flight is unreviewed, while its own
+  ADD lines are recorded as its proposals (nobody compared them with the
+  goal) on an id no row holds; readers consult the committed terminal when
+  the export is truncated or malformed as well as absent, keeping the
+  export's problem as a diagnostic, and say when the committed state
+  itself cannot be read. From the author's adversarial review of e688af5:
+  a parallel child's authority is its parent's (`_authority_parent`; a
+  child published a record built from its own empty ledger over the
+  parent's, every child call named it, and no run that ran a batch could
+  be resumed); a routing decision is an operation under the committed
+  authority with the decision as its receipt; operation ids are issued and
+  rows settled under one lock (a sibling's settlement committed a row as
+  settled in a generation holding no receipt for it), a receipt name is
+  written once and a refused settlement is committed uncertain, and a
+  resume checks the receipt it reads back is the operation's own (opid and
+  digest); the acceptance on record consumes each served evidence record
+  (`_consume_evidence`: the final audit's binding moves to the packet the
+  record and its judgment left, a reassessment MET replaces the verdict,
+  the auditor's own packet stays named), since digesting evidence records
+  whole had left every served challenge 'not current' and re-drew the
+  final audit on resume, and an evidence intent a resumed job never runs
+  is closed as it stands and consumed; a failed call's receipts keep why
+  it failed (the budget's stop on unknown usage names the transport
+  failure as its cause, and a failure receipt keeps the cause); a
+  checkpoint with no consumption watermark resumes only when nothing
+  settled at all. *Repair routes*: a task's
+  route peers are its own (set when its reviewers are drawn, cleared per
+  task; before, only a lead recovery set them, so the pre-review subset
+  gate's route omitted its reviews, revision and rechecks), the merge
+  gate's route lists the post-merge rechecks and capped final reviews and
+  no close-out, the subset route's wall counts the full gate after the
+  revision where measured, and the security fix and the design fixes are
+  admitted through the same helper (`_admit_repair`) before their editor
+  writes, a refusal recorded and the verdict or render standing as found.
+- **The evidence loop's scripted judges answer the typed protocol** (root's
+  Mac run of `tests/lifecycle/test_step2_evidence.py` on bc421f8: 27 failed,
+  10 passed, no skips; the earlier "environment" label was wrong and is
+  withdrawn). `Session._reassess` passes the audit's implication no found
+  map on purpose, so a positive reassessment of one requirement never
+  overwrites the insufficiency its earlier NOT MET implied: the scripted
+  auditor must judge the executed obligation explicitly, on a basis the case
+  authors (`tests/lifecycle/replies.py`: `audit_reply`, `recheck_reply`,
+  `requested_obligations`; nothing inferred from a MET, a receipt or an
+  obligation's presence, and a malformed-reply case writes its raw reply).
+  Reviewer findings answer one disposition per expected id, and a finding
+  the evidence loop may test is a standing one (a basis given; a bare
+  BLOCKING line is carried to the audit by id instead). The missing,
+  explicit-insufficient and contradictory shapes stay held
+  (`test_a_positive_reassessment_without_a_sufficiency_judgment_keeps_the_
+  requirement_held`). Two product changes came out of the same receipt: the
+  proof the harness itself ran for a challenge is an executed case for that
+  requirement alone, bound to the record's source and identity
+  (`_executed_cases`; without it no error-clause requirement could be
+  established by the challenge the cap offers), and the final path
+  reconciles carried pending evidence before coverage is read
+  (`_requirements_satisfied` calls `_finish_pending_evidence` first; an
+  awaited record moved the packet, the status restore was skipped, and a
+  resumed cap stopped on "never covered"; a judgment that may have started
+  stays held). *The ratio family's bound*: the family runs under
+  `_ROOT_LIMITS` (2M, the default shape) since admission/2 below; a
+  starved allowance (`_STARVED_LIMITS`, 1.2M) that cannot pay the known
+  stages still refuses the task before any call and is kept as the
+  control. The call calibrations make the route's calls (`blocking=True`:
+  a standing finding per reviewer resolved on the recheck) so the
+  allowance is spent exactly at the reassessment.
+- **A task's route is admitted at its known stages; a correction is
+  admitted when a finding selects it** (admission/2, `Session._plan_stages`,
+  the fresh end-to-end A+B job on 21b342d). The old route costed every
+  hypothetical call at its exposure ceiling (draft, revision, two rechecks,
+  reviews, close-out: 1,600,000) and refused the first reviewed task of a
+  default-bound run against the 1,473,864 left after a 126,136 intake and
+  the 400,000 finish hold; the slot latch (`used = max_tasks`) then
+  forfeited the other two slots and the stop read "the task cap (3) was
+  reached" with nothing written. Root reconciled that no replan reaches the
+  default case, and the policy was corrected deliberately rather than the
+  latch deleted. The dispatch route is now the stages known before any call
+  (the lead's draft at the editing ceiling, every required review, a
+  required design review or security verification), the model close-out
+  where one is made, and the finishing holds: 900,000 for a reviewed task,
+  1,100,000 before the last slot. The revision with the write grant and one
+  recheck per answering reviewer are not on it: `_fix_cycle_stages` admits
+  them whole the moment a review has made a finding, every cycle including
+  the first, through `_admit_plan` (scope `fix-cycle`), which still counts
+  the held finish, so a correction can never invade the reserve. Unpayable,
+  no editor is called, the findings stay open as the reviewer wrote them
+  (`open`, never `unresolved`: nothing rechecked them), the task closes
+  with them and the run ends incomplete and says so (`FindingsOpen`). No
+  review is dropped to fit, no lower tier is counted as a saving, the
+  explicit-list, parallel-batch and uncertain cases keep their fail-closed
+  admissions, and nothing synthesises a slot or a completion. The stop is
+  honest: a route refused at dispatch is recorded on the session
+  (`_route_forfeit`, carried through the checkpoint) and every cap stop
+  names it ("t2's route could not be paid from the allowance left (...),
+  so 2 of 3 task slot(s) were forfeited") instead of the cap
+  (`completion_decision._reached`). The forfeit is an election, not a
+  proof: no replanning of the remaining slots is attempted and nothing
+  claims a cheaper scope could not exist. Last-slot and last-wave tasks
+  have no close-out, so there the known stages are the route and a
+  shortfall is found at the mandatory admission (`dispatch_floor`); the
+  serial full-route control therefore runs over three slots.
+- **Two route candidates before NOT RUN; the second ends the job**
+  (admission/3, the fresh job on bfd7a9a: t2's ordinary route, 900,000,
+  missed the 884,138 left by 15,862 and the run forfeited two slots with
+  nothing of t2 run). `_refuse_unpayable_dispatch` now costs the ordinary
+  selected route and, when it cannot be paid, the same task, reviewers,
+  gates, design and security stages closed by the harness's factual record
+  (`scope: terminal`). Admitted, `_commit_terminal` records the job's
+  commitment to end after that task before any call (`_terminal_route`:
+  task, reason, selected cost, actual slots used, relinquished slots;
+  carried by the checkpoint, kept as a `terminal-route` artifact, exported
+  in result.json), `_closes_factually` and `_task_close_out` consult it so
+  every repair's known remainder and the actual close-out agree, the main
+  loop dispatches no ordinary task after it (a resumed episode included),
+  and the cap's decision follows with the goal question and audit where the
+  existing gates allow; the stop names the choice and the relinquished
+  slots (`completion_decision._reached`). It is a policy choice to
+  relinquish later slots, not a proof that no later task could fit:
+  reported usage can be below an exposure and a read-only task is cheaper.
+  No review is dropped, `_slots_used` stays the actual count, the finish
+  hold is counted, a mandatory deficit is refused as before with no
+  candidate, explicit lists and parallel batches are unchanged, and a
+  failed predecessor, an open finding or a capped task still blocks
+  completion. Two consumers were missed on 0ae5bb6 (Astra A1, A2) and
+  are corrected together: `_final_work_slot` is the one task-bound
+  boundary the capped-source handoffs (`_capped_final_draft`,
+  `_checked_final_source`) read, so a terminal task's capped, checked,
+  in-scope source meets the same bounded cross-vendor review as the
+  numeric last slot's (every other guard stays with its caller, explicit
+  lists and parallel children excluded); and `_admission_notes` tells the
+  planner and audit what the record holds: NOT RUN only when
+  `not_started` says so, the terminal choice with its spent and
+  relinquished slots and never as execution, a refused correction as a
+  correction after the task had started. `obligations.Capacity` shows
+  usable slots (none after the commitment) beside the spent and
+  relinquished counts.
+- **A task is sized for its implementation and its executed proof
+  together.** `_COVERS_REQUEST` says a requirement is delivered only with
+  the tests that prove it in the same task (a passing case per rejecting
+  path for an error clause); `_SCOPE_REQUEST` asks for implementation,
+  proof and setup estimates summed into `max_lines` and refuses a delivery
+  described with its tests merely deferred, and the blanket "make the
+  setup its own task" advice is gone. The optional SCOPE `estimate`
+  object (`scope.read_estimate`: exactly implementation, proof, setup;
+  exact non-negative ints; sum equal to `max_lines`; a bool or an extra key
+  refused) is kept on `TaskScope.estimate`, rendered to the lead and
+  serialized; omitted is unknown, and it widens nothing: the bound, the
+  1.5 stop and every counted line are unchanged. `_slots_note` now shows
+  the planner the allowance after the held finish in the exposure classes
+  admission charges (ordinary calls, tokens, wall; editing and reserve
+  exposures; what a reviewed route and a correction cost), facts from the
+  budget's snapshot. A revision told its room is also told to report a
+  test that does not fit as `NOT RUN: <case> - <why>` (recorded as owed,
+  the finding stays open, nothing resolved by saying so) rather than
+  compress tests onto one line.
+- **A task's proof is declared, bound and judged; never inferred from a
+  green check** (proof/1, the fresh job on 136ebee: the planner's
+  acceptance omitted three rejection paths the reviewer then demanded, its
+  "empty history" expectation was wrong for the prior state, and the
+  size trim deleted a mutation assertion inside an unchanged case that no
+  record showed). SCOPE may carry `"proofs"`: scenarios with a stable
+  `P<n>` id, the requirement ids shown, the operation, the starting state,
+  the expected behaviour and the intended test location (`scope.read_proofs`,
+  strict, refused whole when malformed; omitted is unknown, never complete).
+  A planned write task under the requirements ledger must map every COVERS
+  requirement to a scenario and name no uncovered one (`_proof_problem`,
+  corrected once through the COVERS send-back allowance); the harness
+  validates the mapping, not its completeness. Each scenario is an evidence
+  obligation at dispatch; the lead binds it with `PROVES: P<n> -
+  file::Class::case` lines at any editing delivery (`_record_proves`:
+  every PROVES line is read; a malformed line naming a scenario makes that
+  scenario's declaration invalid, cases cleared, and one naming none
+  invalidates the whole reply's declaration, every scenario reset; a later
+  reply of only well-formed lines restores a binding; problems are
+  recorded). An acceptance obligation is discharged only by one passing
+  check on the current source, under its gate and environment, whose own
+  complete runs name every bound case as passed (`_acceptance_receipt`); a
+  green check that ran something else discharges nothing, and a rebinding
+  on the same source resets execution and sufficiency before any
+  re-discharge (`evidence_binding` covers the case set and behaviour).
+  **Modality is declared, never inferred, and never an exemption** (root
+  and Astra on d515d51 and a1b1840): a scenario is an executable claim
+  wherever its location points, and unexecuted it lowers its requirement
+  (`_lower_unexecuted`) and fails the acceptance predicate. Only a scenario
+  declaring `"evidence": "reading"` is a documentation claim, admitted at
+  dispatch only for a documentation file and never for an error or refusal
+  requirement (`_proof_problem`, applied to serial and parallel intake
+  alike). It is never discharged by a check, never lowered as unexecuted,
+  and never judged by the audit's MET on its requirement, however that MET
+  cites: it counts only on the audit's own explicit per-obligation line
+  (`O<n>: SUFFICIENT <why reading demonstrates this requirement and
+  scenario, citing the file>`), and a SUFFICIENT that does not cite the
+  scenario's file is not counted (`_judge_obligations`). The planner's
+  choice of modality or file authorizes nothing: a runtime requirement
+  mapped to README with a bare MET stays unproved. A legacy acceptance
+  string (modality `legacy`) is the same way an unknown mapping that stays
+  visibly unknown on the record: no case binds, no check discharges, no
+  verdict is read as its sufficiency, and only an explicit per-id line
+  judges it; it claims no execution, so it is not lowered as unexecuted,
+  and unjudged it keeps its requirement unmet. `EvidenceObligation` carries
+  `modality`, `location` and the consumed `scenario` metadata, all in
+  `evidence_binding`; a reading or legacy row's binding carries the
+  current source, effective gate and environment on every refresh, so an
+  edit, a reconfigured gate, a moved location or a changed scenario after
+  the judgment makes it stale by the ordinary `sufficiency_current` rule.
+  The evidence packet (packet/3) carries each obligation's behaviour,
+  cases, bound revisions, gate, environment, modality, binding, location
+  and scenario, and every trim record; judgment fields stay out. PROVES
+  is a strict protocol: distinct cases bind a set, an exact duplicate line
+  is an invalid declaration, never collapsed.
+  **The audit reads the whole scenario or accepts nothing** (Astra on
+  00cfc02 and b18ca98): the audit and a reassessment are shown each
+  obligation's behaviour whole and its full canonical scenario
+  (`_scenario_line`); over `_SCENARIO_RENDER_MAX_CHARS` the line says the
+  scenario is not shown, and the harness then counts no SUFFICIENT for
+  that row, explicit or implied (`_scenario_shown` in
+  `_judge_obligations`), drops an earlier approval on refresh, and keeps
+  INSUFFICIENT. Wording alone is not enforcement.
+  **A served evidence proof can be the receipt for an obligation it was
+  bound to at intent, and nothing else** (root and SAME Astra on b18ca98:
+  the final read-only challenge's execution lives in `evidence_requests`,
+  which `_obligation_receipt` never read). `_serve_evidence` captures
+  `bindings` before the proof runs: only existing explicitly bound
+  test-modality obligations on the audited requirement or the reviewed
+  task qualify, each with its ids, modality, location, whole scenario,
+  bound cases, requirement revisions, policy, environment, source,
+  effective and configured gate, and the proof's id, file and hash.
+  `_evidence_receipt` turns a passed, undrifted proof into a receipt only
+  when every captured field equals the obligation and the run as they are
+  now and every bound case is among the proof's passed cases; the receipt
+  keeps its scratch provenance (`E<n>:O<m>`, the evidence id and file) and
+  is never an integration pass of the whole project. It feeds
+  `delivery.discharge` through the ordinary refresh, so it is available
+  to the reassessment before `_lower_unexecuted`; sufficiency stays the
+  auditor's explicit full-scenario line. A rebinding, a moved source, a
+  changed gate or environment, a reworded requirement, or a record without
+  its bindings is no receipt. Nothing is synthesized from a requirement id
+  or a green case: the lead still binds the case (`PROVES`), which is a
+  claim of where the proof lives, never execution. The receipt carries the
+  gate that actually produced the run (`producer_gate`, persisted at intent
+  and confirmed after execution), never the obligation's; the typed
+  predicate refuses a producer gate that is not the authorized one (root's
+  F1 on 9bedde0). Exact parametrized case names survive, and a base name
+  counts only when every recorded instance passed (F2).
+  **A reviewer's scratch demonstration is the receipt the same way**
+  (`_snapshot_scratch_bindings`, `_scratch_receipt`; root on 9bedde0): the
+  task's bound obligations are snapshotted before the collaborator runs,
+  the runtime measures the scratch files' hashes and the handed source and
+  checks while the copy exists, and the `scratch_proofs` record carries
+  them with the producer gate; the receipt holds only for the current
+  handed identity, a passed proof, measured hashes and every bound case
+  passed. Nothing is reconstructed from current state for an old record.
+  **A capped lead's structured PROVES lines are read at the accepted
+  capped-work handoff** (`_close_turn_limited` before the turn-limited
+  check), since `_record_proves` ran only after a finished edit; the cap
+  stays recorded, a declaration is neither execution nor a verdict, and
+  no extra call is made.
+  **`evidence: capture` is the modality for visual proof** (root on
+  9bedde0): admitted only for design work with design evidence in force
+  and never for an error or refusal requirement; a UI file is never routed
+  through test, reading or legacy. Execution is the harness's own
+  measurement (`_capture_measurement`): the task's latest design record
+  verified, taken on this exact source, delivered to a reviewer from
+  another vendor who returned a verdict, with target, steps, fixture,
+  viewports and digests still those on disk and still passing the
+  identity check. Sufficiency is only the design reviewer's explicit
+  per-obligation line, given alongside APPROVED or BLOCKING
+  (`_design_approved` admits APPROVED followed by nothing but those lines)
+  and judged once the measurement is on record; the requirements audit
+  may add INSUFFICIENT and never SUFFICIENT for a capture row. Missing,
+  wrong or stale state or viewport, a changed source, fixture or image, a
+  disabled or unavailable capture, an undelivered or capped review, or a
+  missing per-row judgment all hold the requirement.
+  The design reviewer reads the original goal and the authoritative text
+  and revision of the requirements its capture rows bind (ids alone are no
+  authority; text not on the ledger leaves the rows unjudgeable), and its
+  per-row lines are read only for the rows it was actually handed
+  (`review_rows`): a line naming another task's row judges nothing and
+  overwrites nothing. The design record is labelled with what the reviewer
+  was handed, measured before its call (state snapshot, source, delivered
+  file hashes) and revalidated after it (`_design_review_drift`); a render
+  replaced, removed or re-taken in another state, or a source that moved,
+  makes the verdict usable for nothing, and the final replacement stop
+  stays as it was. The record also keeps, immutably, the exact context
+  the reviewer was shown before its call (`review_context`: the goal,
+  each covered requirement's text and revision, each row's scenario and
+  bound revisions); a per-row judgment is applied and a measurement
+  counts only while the authoritative context still equals it
+  (`_design_context_drift` names what changed), and a prior reply is
+  never relabelled with live row contents. A capture scenario's
+  canonical identity carries the declared visual state
+  (`_capture_context`: the SCOPE capture declaration normalized by
+  `preview.validate_capture`, route and ordered steps with every
+  supported field, the file step's path and the confirm step's message
+  included, or the lead's undeclared self-capture), so two scenarios that
+  read the same but show different states, fixtures or confirmations are
+  different proofs.
+  **A later task that declares the exact same scenario on the same
+  requirement revisions and modality takes the proof over**
+  (`_supersede_obligation`; root, SAME Astra and SAME Sol on 4fac862):
+  the earlier task's row, run or not, is marked `superseded_by` and kept
+  on the record, immutable, and no longer holds the requirement; the
+  successor must establish fresh proof and sufficiency of its own (a
+  capped repair continued by a later one, a repair redone by a later
+  repair: the debt moves to the declaration that owns it, never
+  disappears). A scenario differing in any field, including a capture's
+  declared visual state, another requirement set or revision, another
+  modality, a legacy row, a NOT RUN or skip fact, predecessor cap debt
+  and open findings are untouched; sharing COVERS alone supersedes
+  nothing.
+  **The rows claim the effective capture, and supersession follows it**
+  (`_rebind_capture_rows`, `_reconcile_supersession`; root's recapture
+  identity gap on c9a665b). The one accepted redeclaration
+  (`_recapture_declared`) replaced the captured state while the task's
+  capture rows kept the dispatched one, so the fresh review was compared
+  with a row it was not about and the rows said ran with no mismatch. At
+  the accepted declaration, before any capture or review of it, this
+  task's capture rows take the effective declared state as their
+  scenario; the dispatched declaration, its problem and whatever was
+  measured or judged under it are kept on the row (`capture_declared`,
+  `capture_lineage`, never rewritten; `declared_capture` and
+  `rebound_rows` on the design record), and execution, receipts and
+  sufficiency start again, so a reviewer shown the dispatched state is
+  never relabelled as having judged the redeclared one
+  (`_design_context_drift` finds the shown row changed). Goal and
+  requirement texts, operation, state, expectation and location are not
+  touched; rows of other tasks, other modalities and superseded rows are
+  not touched; a repeated, wait-less, fixture-less, invalid or withdrawn
+  declaration, and any declaration after the one is spent, rebinds
+  nothing. Supersession follows the effective state: a row this task's
+  dispatched state superseded is lifted with its own execution and
+  judgment, insufficient or otherwise, exactly as they were
+  (`supersession_lifted`; the pre-supersession reason is stashed and
+  restored), and an earlier task's row that declares the effective state
+  is superseded now by the ordinary rule. Fixture-side, a scripted design
+  reviewer that approves verified renders judges each row it is shown
+  with a concrete observation of that fixture's page
+  (`test_harness_capture._observed`), and a fixture whose page is not the
+  shared REPAIR_SCOPE's Import toolbar declares its own scenarios: a
+  verdict about an Import button the page never has describes nothing.
+- **Historical (retired 2026-10-20 with the size trim it served): a trim
+  is evidence, and its assertion preservation is owed a verdict**
+  (`_trim_snapshot`, `_trim_settle`, `_trim_pre_contents`, `_trim_owed`,
+  `_trim_block`, `_read_trim_disposition`). Every trim has a record id
+  `T-<task>-<n>`, unique across the run and its parallel children (a merge
+  remaps a collision once). Before a draft, capped-draft or revision trim
+  writes, every permitted Python source file and every permitted test or
+  support file by name (`_TRIM_SUPPORT_MARKS`), whole, filtered by the
+  task's own scope and the operator limits bound at that moment, is kept
+  with its hash, that policy, the proof bindings and the source identity
+  as an immutable artifact whose sha256 the record carries
+  (`pre-trim-tests`). No import grammar decides what an assertion leans on
+  (root's ninth control on 00cfc02: a walk that follows some import forms
+  and slices in silence describes partial evidence as complete); the
+  capture is bounded by `_TRIM_SUPPORT_MAX_FILES` files and
+  `_TRIM_EVIDENCE_MAX_CHARS` characters, and past either bound the record
+  says so, keeps only hashes, and the trim stays owed. The artifact is read
+  back and verified against that digest on every consumption; missing,
+  unreadable or altered is "not on file". Unknown is owed, never clear: a
+  project that could not be read before or after the trim leaves a record
+  whose effect is unknown and which stays owed. A judging seat (the task's
+  reviewer and rechecker; the final audit for every owed trim) is shown,
+  per id, the comparison from the immutable pre-trim evidence to the test
+  and support files *as they are now under the record's own persisted
+  policy* (never an unbounded fallback for a late review; a record without
+  its policy is not judged), so an edit after an earlier PRESERVED is
+  re-judged against the full pre-trim assertions and the earlier approval
+  is named stale. Every render first clears what an earlier render showed,
+  and a verdict is consumed only against the current readability and
+  identity. Case names and counts decide nothing: the seat judges whether
+  every assertion the covered requirements and declared scenarios need
+  survived (a helper, loop or renaming is preservation; a deleted mutation
+  or state assertion is not) and answers one line per id, `TRIM <id>:
+  PRESERVED` or `TRIM <id>: LOST - <what>` (a bare `TRIM:` line applies
+  only when one trim was shown). A disposition is bound to exactly the
+  evidence shown: record id, verified artifact digest, current source,
+  the policy, and the current identity of the task's covered requirement
+  revisions and proof scenarios, so a reworded requirement or a rebound
+  scenario after an approval owes the trim again (root's controls on
+  a1b1840). PRESERVED without the evidence on file, readable now and shown
+  is refused and recorded as such, two lines for one id settle nothing, a
+  verdict on another id judges nothing, and an owed trim sends DONE back
+  after the audit (`_requirements_satisfied`) rather than being approved
+  by silence. `trim_records` and `proof_binding_problems` are carried by
+  the checkpoint and merged from parallel children.
+- **Every selected repair carries the task's known remainder** (root's
+  control on fef1e27, the default bound: a fix cycle admitted as
+  revision + recheck, 700,000 against 773,864, omitted t1's known 200,000
+  model close-out; the revision ran and resolved the finding and the job
+  stopped `FinishReserved` at the close-out with the goal question and
+  audit never asked). One helper, `_known_remainder(spec, after=)`, names
+  what the task still owes after a point on its route: after the draft,
+  each required review; after the reviews, the required design review
+  (`_design_review_ahead`, the contract's `design_review`); at every
+  point, the model close-out where one is made. It is on the route of
+  every optional editor: the fix cycle (first and further), the gate fix
+  after a subset or full gate, the render fix (a required design review
+  of the repaired capture is counted when no reviewer has blocked yet),
+  the security fix, the size-stop trims (`_admit_trim`: the trim, then
+  what followed the overrunning call on its admitted route) and the
+  no-edit-cap revision retry (admitted before the note that offers it;
+  refused, the capped revision takes the capped paths as before). The
+  measured gate wall is counted where known (`_route_wall`: nothing to
+  know without a gate, else the measured run or reported unmeasured).
+  Nothing is listed twice: a correction's rechecks follow its findings
+  and are named by the caller, the held finish is counted once by the
+  admission, and a last-slot task owes no close-out. A refused repair
+  stands as found: the finding open, the overrun failed, the cap capped.
+  Hypothetical later repairs stay conditional; known judgments never
+  leave the cost.
+- **The close family** (Davis, 2026-10-26; one cohesive batch, not one
+  fix per live run). recovery-handoff-01 ended FindingsOpen with slots
+  unspent: Sol's SCENARIO claim on t3 used an em dash, `_SCENARIO_CLAIM`
+  took only `[-:]`, the claim went to the editor as code work, stayed open
+  as held review debt, and the batch close after t4 and t5 (both rechecked
+  clean after the merge) stopped on it because the batch close never
+  consulted the hold the serial close applies. Five rules now, all pinned
+  by `tests/lifecycle/test_close_family.py`: (1) a typed claim types with
+  any normal separator (`_TYPED_SEP`: hyphen, en dash, em dash, minus,
+  colon) and only with its full semantics; a blank field is no field
+  (root's old-source control) and `_typed_finding` stays `(None, None)`
+  for it. (2) A claim that opens as typed but is incomplete, names a
+  scenario the task does not declare, uses an id that is not `P` plus
+  digits, or repeats a corrected scenario is held `unroutable`
+  (`_typed_near_miss`, `_plan_findings`): the reviewer is told why at the
+  recheck (`_routing_facts`) and may restate it in full, which the next
+  routing reads before any editor round (`_read_restatement`,
+  `_restated`); it is never the editor's instruction, and a kept or
+  refused correction leaves it the reviewer's to judge against the planner's
+  answer, not the editor's. (3) The planner's correction is one per
+  scenario (`_scenario_allowance`, recorded as `task:pid`), and a reply
+  with conflicting lines for one scenario changes nothing (`refused:
+  ambiguous reply`). (4) One close policy (`_close_policy`,
+  `_close_decision`) decides every close, serial task or merged batch, and
+  `_stop_follows_close` predicts with it: a failing check without debt
+  stops; open findings stop unless every one is held review debt
+  (`_review_debt_hold`: ledger on, planner mode, a discovering check, and
+  the legacy list and the typed record in positive correspondence both
+  ways, an empty typed record failing closed, root's probe); held debt
+  continues to the planner while a slot is left and goes to the cap's
+  completion decision when none is (the goal question and the audit run;
+  nothing completes over it). The closing task's COVERS are not required:
+  inherited debt is debt. (5) Every close decision is a record
+  (`close_decisions`), carried, sealed into the terminal state and published
+  in result.json; the cap records why the goal question was or was not
+  asked. `_record_deferred` shares the separators (root's probe: an em dash
+  dropped a deferred condition); a deferred entry kept after the post-merge
+  recheck is still not disputable debt (`_disputable`) and ends the batch
+  as before. Unchanged on purpose: a generic provider failure, an unmerged
+  child, a failing merge gate without debt, missing usage, budgets, and the
+  independent reviews and audit. A judge's `NEW:` line is no finding only
+  when its whole claim is the standalone sentinel (`judgment._empty_claim`;
+  `re.match("(none|n/?a|nothing)\b")` dropped "Nothing rejects nonnumeric
+  inputs…" in silence). Five older controls that pinned a
+  FindingsOpen end in the last slot now pin the cap's `RequirementsUnmet`
+  naming the finding its judge never closed, with the goal question and the
+  audit spent from the capacity the finish reservation held for them.
+- **A cap is a stop reason the vendor names, not a failure the count happens
+  to fit** (recovery handoff repair, 2026-10-25, after proof-workflow-01 ended
+  FindingsOpen with slots unspent). The installed grok CLI (1.0.62) ends an
+  agent loop with `max_turn_requests`; the extractor knew only `max_turns`
+  and the `cancelled`-at-the-count rule, so t4's second revision became a
+  `ProviderError`, the parallel child was "not merged", a legacy open
+  finding stopped the batch, and no planning call could continue t3 or t4.
+  `_GROK_CAP_STOPS` now names both spellings; the typed cap takes the same
+  path serially and in a child (`TurnLimitReached`, kept, merged,
+  `turn_limited_records`, exact usage and turns on the row, the planner told
+  what is owed and allowed to CONTINUES within the recovery allowance). What
+  did **not** change, by root's boundary evidence on the old source: a
+  refusal, a `cancelled` below the configured count, a stop this code has
+  never seen, a cap stop that also carries an `error` (permission denied,
+  authentication required), a pre-turn authentication failure, a refused
+  budget and unknown usage are none of them a cap and none of them a
+  continuation; each still stops after that one revision with the files
+  preserved and no further writer or planning call. A generic
+  `ProviderError` is never made recoverable because a turn began or a tree
+  changed. The one record change beside the cap: a raised parallel child
+  now leaves the durable handoff a scope conflict leaves (a `failed_records`
+  entry naming its kept `parallel-unmerged` artifact, its cap baselines,
+  `failed_tasks`), and the sealed terminal state carries the unfinished-work
+  records, so the stop names a failed task with a handoff and not only a
+  finding. `max_turns_reached` is an event name in that binary, not a stop
+  reason, and is not read.
 - **Frontend evidence comes from a real browser** (`browser.py`; `playwright`
   is a baseline dependency now, and the `browser` extra is kept empty for
   compatibility): screenshot, console errors (including late throws),
@@ -1319,6 +2715,854 @@ Key design decisions already settled:
   check rested on `build/helper.txt` and the source alone failed), or when
   the run started over a watched path an operator accepted, in that run or
   an earlier one; a record of either that it cannot read is unverified too.
+- **A recovery is charged once, for owed work only; ownership is declared,
+  never inferred; one finding id closes everywhere** (completion workflow,
+  Davis, 2026-10-30, after evidence-authority-02 ended `FindingsOpen` with
+  the storage, HTTP and CLI contract delivered, the README requirement
+  never covered and the final audit never run). Three shared causes, one
+  batch. (1) t3's `RESOLVES` of two findings on a task
+  that had closed clean was charged to the survey allowance, so the
+  allowance was spent before any work had failed; `_recovery_decision`
+  now charges a task once when it `CONTINUES` owed work (capped, failed or
+  unmerged, `_owed_tasks`) or `RESOLVES` a finding raised on it, and a
+  `RESOLVES` naming only findings on closed work is ordinary coverage
+  (those findings still settle only through their reviewers' rechecks);
+  every decision is recorded on `survey.charges` and in `result.json`. A
+  batch still refuses `CONTINUES` and `RESOLVES` at intake, so the serial
+  charge is the only one. (2) t5 re-did t4's HTTP work without `CONTINUES`
+  with the allowance spent, and the batch close stopped on t4 still owed.
+  `_continues_problem` sends back a `CONTINUES` naming a task with no
+  record, one that closed, or one a continuation already took over;
+  `_closure_route_problem` sends back a task that covers a requirement or
+  names a file of owed work without `CONTINUES` (the harness never infers a
+  takeover from an overlap), and when the allowance is spent it stops the
+  run `SurveyAllowanceSpent` naming the owed work (`_owed_report`: covers,
+  files, open finding ids) before any lead call is spent on a duplicate
+  the run could not close; work over other requirements still runs on a
+  survey, in the same file or not (root's review of d48014d: a shared file
+  is not a takeover, and the declared requirement relationship is the only
+  admission signal), and a parallel block meets the same admission at
+  intake before any child's writer (root: a batch refusing explicit
+  CONTINUES still paid an unlinked child that re-did owed work).
+  The planner's unfinished-state note and the RESOLVES note state both
+  rules, and the terminal stop (`_stop_open_work`) appends the requirements
+  no task covered (`_uncovered_requirements`) beside the debt that stopped
+  the run. That report is never debt: `_open_work` names only what blocks
+  completion, because the verification handoff reads it and a blocker
+  there dispatches a writer (root's full suite on 7650cb0: the report line
+  placed inside `_open_work` turned a verification-only task over an
+  uncovered requirement into a writer dispatch and ten handoff controls
+  failed on the one cause). (3) t6's reviewer deferred a finding to its sibling; the child's
+  own recheck resolved it on the pre-merge copy, the legacy text carried no
+  id, outlived the typed record and defeated the batch close's hold. A
+  deferral's registered finding is `held` out of the child's rechecks and
+  judged once on the merged source; its text starts with its id; a reading
+  that closes a finding (`_apply_review_reading`) closes its held entries,
+  legacy texts and facts in the same step, wherever the recheck ran; and a
+  deferral its reviewer kept on the merged source is held review debt like
+  any other (`deferred_rechecked`), not a batch stop. Also from the same
+  terminal: `unexecuted_acceptance[].discharged_at` stayed null while the
+  typed rows showed t6's bound cases ran. `_mark_not_run_display` writes
+  the display from the one discharge decision on every refresh and at the
+  run's end, and `tools/truth_check.py` reports a display that disagrees
+  with the record either way; and a documented `python -m unittest
+  <module>` NOT RUN item (t5's, bound to nothing) binds to the module's
+  cases under a `command` binding that only a complete run of exactly that
+  command from the project root, on the same resolved interpreter,
+  discharges, in the engine and the checker alike; the same cases under
+  pytest never stand in. Interpreter identity is the invocation's
+  (`_resolved_interpreter`: `shutil.which` for a bare name, the real path
+  of the executable, and the environment the invoked path runs under, the
+  directory holding `pyvenv.cfg` above its `bin` or the base installation,
+  recorded on the binding when the item is bound and on every check
+  receipt when it ran, so no later PATH changes the comparison), never the
+  basename and never the real path alone: a nonexistent path and the
+  configured venv interpreter both read as `python` (root's review of
+  d48014d), and two venvs whose `bin/python` links converge on one base
+  executable collapsed to one identity by real path, so a command that
+  would fail in the second venv read as cleared (root's review of 405f856).
+  Equivalence that cannot be read from the invoked path is a mismatch. For the
+  declared route to work end to end, `integration.runner_of` names the
+  plain module form `python -m unittest <module>...` (`unittest_modules`),
+  so its selection is established and `operand_paths` reads a whole module
+  as its file; `discover`, a file path, a selection inside a module and a
+  filter stay unrecognised, and an undeclared report still shows no case.
+  No cap, allowance, review, grader or baseline changed. Controls:
+  `tests/test_completion_workflow_units.py`,
+  `tests/lifecycle/test_completion_workflow.py`.
+- **A whole-class NOT RUN claim is discharged by the runner's own
+  attestation of the class, never by the passed list, the command's syntax
+  or a static read of the file** (class-claim batch, Davis, 2026-10-30,
+  after completion-workflow-02 ended with R14 to R16 NOT MET on t6's `NOT
+  RUN: tests/test_api.py::HandlerDependencyTests`, bound to nothing while
+  both final gate receipts showed all eight methods passed; corrected after
+  root's reviews on 6527479725 and 6528355944). Two proposals fell before
+  it. The first bound the class to the methods its body declares and
+  cleared it when they were among a complete run's passed cases; root's
+  `python -m unittest tests.test_sample.Target.test_own` reports one
+  passing method with a complete list and reads as a complete run by
+  execution success (completeness is not selection scope). The second
+  read the collection scope from the command's argv and the pytest
+  configuration files; root ran `from helper import choose as
+  load_tests`, a conditional `load_tests`, `pytest -c custom.ini` with
+  `python_functions = test_own` and the same key in a default
+  `pytest.ini`, each a real run that omitted an inherited failing test,
+  and the first three cleared in both consumers while the fourth split
+  them (engine held, checker cleared) because the checker cannot read
+  configuration. One cause: the receipt carried no collection facts, and
+  syntax plus an AST floor cannot prove membership. So the harness
+  producers now attest it inside the run: for each class of a collected
+  or held test, `classes[] = {id, members}` where members are every
+  `test*` callable on the live class object (`_class_members`: inherited
+  and dynamically attached ones included, the same set
+  `TestLoader.getTestCaseNames` and pytest's default prefix read),
+  bounded (1000 classes, 1000 members, else `classes_truncated` and
+  nothing attested), validated by the parser (`quadratus-pytest/7`,
+  `quadratus-unittest/3`; a report without the field is still valid and
+  attests nothing). An item that is exactly `<file>.py::<Class>`
+  (`_CLASS_CLAIM`) binds under kind `class` to the methods the class body
+  declares (`_class_declaration`, ast) as a floor and typed case list,
+  held with a named problem when the class is not defined exactly once at
+  top level or declares no test case in its body; a class beside any other
+  claim, a bare name, a nested class or `Class.extra` is held as written.
+  Discharge (`_class_run_cases`) needs a later complete run from the
+  project root on the current source, gate and environment whose own
+  parsed report, with its passed list and class list complete, attests
+  this class and shows every attested member, every method the claim
+  recorded and every method the class declares now among the cases passed
+  directly under `file::Class::`; the discharged set is the attested
+  population (inherited and dynamic members ride along because the runner
+  attested them, not because a file was named). A hook or pattern that
+  left a member out is a member attested and not passed; a selection
+  inside a module attests the whole class and passes part of it; an
+  unattested, truncated, skipping, filtered or `::`-selected run, a nested
+  class's case, a longer class name, or a class whose membership changed
+  since the claim clears nothing, and nothing is rebound. For root's first
+  gap, `unittest_modules`/`runner_of` with a root resolve a dotted token
+  to an existing module file first, so a dotted selection is an
+  unrecognised runner with an unestablished selection. The typed row takes
+  the ordinary gate route and runs only on such a receipt.
+  `tools/truth_check.py` (`_class_not_run_cleared`) reads the same
+  attestation off the row's report, requires the typed cases to equal the
+  recorded floor, refuses two records for one class, a parametrised or
+  non-`test` member name, a truncated or absent field, and never reads an
+  engine mark, the command text (beyond the shared filter rule, which now
+  counts a `::` operand as the engine does), a configuration file or the
+  module source: engine and checker read one fact. The lead's prompt names
+  the class form. No permission, model, role, limit or extra call. On the
+  sealed completion-workflow-02 record (written before the producers
+  attested) the item binds and nothing discharges it: an old receipt
+  attests nothing, which is the honest reading. Controls: real runs of all
+  four of root's cases and of inherited and dynamic positives under the
+  shipped producers in `tests/test_completion_workflow_units.py` section
+  9, the attestation rules in sections 7 and 8, and the controller in
+  `tests/lifecycle/test_completion_workflow.py` section 7.
+- **Optional reporting never damages the run it observes** (root's
+  review of 55e07d4, 2026-10-30). Two real regressions in the new
+  attestation path, both passing on 3e4b93f: a metaclass whose `__dir__`
+  raised on its second call aborted a passing unittest run inside
+  `attest -> _class_members -> dir()` before any test ran (report
+  missing), and 20 classes of 1000 long-named members, within both count
+  bounds, serialized to about 1.8 MB, put the report over the harness's 1
+  MiB read bound and erased a valid 20-pass result. One boundary, fixed
+  once in both producers: membership is read statically (the `test*`
+  names in each MRO class `__dict__`, resolved through
+  `inspect.getattr_static`, `staticmethod`/`classmethod` unwrapped; no
+  `__dir__`, no descriptor, no project code run), any exception while
+  reading a class's identity or membership attests nothing for that class
+  (never a smaller set), a failure of the whole pass leaves an empty
+  flagged list, and the serialized report with the attestation may not
+  pass `MAX_REPORT_BYTES_WITH_CLASSES` (900,000 bytes, under the 1 MiB
+  read bound): over it the field is dropped and flagged and the core
+  report is written exactly as without it. The parser accepts a flagged
+  list of any length (empty when dropped) and reads it as attesting
+  nothing; no bound was raised. Root's two record-consistency controls
+  (a true complete attested receipt whose saved command was edited to
+  `python -c unrelated` or to `python -m unittest
+  tests.test_sample.Target.test_first`) were refused by the syntax rule
+  and cleared by the attestation alone; a cheap command/report
+  consistency check (`integration.report_consistent_command`, mirrored
+  in `truth_check._report_consistent_command`) refuses a command that
+  starts no runner with a producer and a dotted unittest operand that
+  extends the module of a case the report names; it reads no membership
+  from argv and leaves an operand naming no reported module alone.
+  Controls in `tests/test_completion_workflow_units.py` section 10: root's
+  metaclass fixture under both runners (run intact, class attested, claim
+  discharged), an unplaceable class (not attested, run intact), root's
+  size fixture (core report parsed with 20 passes, attestation dropped
+  and flagged, claim held), the static membership rules and the contained
+  whole pass at the producer level, the parser's acceptance of a dropped
+  field, and the two contradictory saved commands refused in both
+  consumers while the plain module form still clears.
+- **The attestation's boundary is ordinary classes with understood
+  attribute kinds, read through the built-in `type` descriptors; a custom
+  metaclass or an unknown `test*` attribute holds the class** (root's
+  review of e916a0a, 2026-10-30). Two cases, both passing on 3e4b93f: an
+  inherited `test_hidden` that was a custom descriptor raising once
+  `load_tests` had hidden the failing test read as "not callable" under
+  `getattr_static` and was skipped, so both consumers cleared the class;
+  and `kind.__mro__` and `vars(base)` went through a metaclass
+  `__getattribute__`, which set a flag the test asserted on, turning a
+  passing test into an attributed body failure. The prior statement "never
+  invokes any project code" was not true on e916a0a. Now `_class_members`
+  supports exactly: a class whose metaclass is `type` (so every class on
+  its MRO is ordinary), each of whose `test*` names along the MRO (first
+  definition in MRO order decides, as lookup does) is a plain function, a
+  built-in `staticmethod`/`classmethod` of one, a `property` or plain data
+  (`int`, `float`, `str`, `bytes`, `bool`, `None`). The dictionary, MRO and
+  qualified name are read by invoking `type.__dict__['__dict__']`,
+  `['__mro__']` and `['__qualname__']` directly, and the module name from
+  the class dictionary, with exact `type()` checks and no attribute access
+  on the class; classes are told apart by `id()`, never hashed. Anything
+  else (a custom metaclass, a custom descriptor, a nested class, a
+  `partial`, a bound or built-in callable) holds the whole class: unknown
+  membership is not evidence a member is not a test. Inherited and
+  dynamically attached plain functions stay supported. The unittest
+  producer's passed-case identity (`_class_id`) takes the same reads, so a
+  held class's cases are still placed, and the collected count and the
+  attestation are made in one pass over the suite, as the count always
+  was. Measured, not asserted: a metaclass that logs every attribute name
+  read through it logs the same set under the reported run as under plain
+  `python -m unittest` (`test_the_reported_unittest_run_reads_no_class_attribute_the_plain_runner_does_not`).
+  A former positive, the `__dir__` metaclass class clearing, is now an
+  explicit hold while its test still passes. Controls in
+  `tests/test_completion_workflow_units.py` section 10: root's descriptor
+  fixture (run passes 1, nothing attested, both consumers hold), both
+  metaclass fixtures under both runners (run passes, class held), the
+  parity measurement, and the attribute-kind table at the producer level.
+- **Every held NOT RUN item has a real route, a removed bound case is
+  stale at once, and DONE meets the record before the audit** (cycle02,
+  PR73 6705254133, after completion-cycle01: every grader passed, O15
+  named production modules no check can run, O24 stayed bound to a case
+  t5 removed, and a 307k audit plus 266k of planning used the room the
+  repair needed).
+  - *Unexecutable NOT RUN.* An item is marked `executable` when recorded
+    (cases bound, or only test files named). One that is not is restated
+    only by its own task's lead, or a task naming `DISCHARGES: O<n>` (the
+    takeover is kept on the item as `taken_over_by`; refused in a parallel
+    batch), writing `RUNS: O<n> - file::[Class::]test_case` lines for cases
+    defined now. The restatement is kept with its author and what it
+    replaced; the item clears only from a complete passing run on the
+    current source, gate and environment AND an independent
+    `<O-id>: SUFFICIENT <why>` line on exactly those cases, by the
+    restating task's reviewer (review or recheck) or the audit, never by
+    the restatement's author (`_restated_judged`, the same rule in
+    `truth_check._restated_not_run_cleared`, which requires the saved
+    judgment's revisions to name exactly the typed row's requirements with
+    the same whole-number revisions; an empty, partial, extra or boolean
+    map clears nothing). Executed but not yet judged sufficient is shown
+    as such: `discharged_at` stays null while `executed_at`/`executed_run`/
+    `executed_cases` and `discharge_state: executed, awaiting judgment`
+    record the run, so the display and the checker agree. The judgment is of the
+    current source and the item's requirement revisions: one made before a
+    later edit (root review of 7a141e3: t2 rewrote the judged case to
+    `assert True` and both readers still cleared it) is stale, and any
+    later independent reviewer or the audit may judge it afresh on the
+    current receipts, with no rerun. A RUNS declaration with a malformed
+    line for an item applies none of that item's lines, and one naming no
+    item applies none of the reply's; an id two items hold names neither.
+    A parallel child's items take their typed rows' parent ids at the merge
+    (`child_oid` kept), so two children's O2 stay two items. The ask is folded into the
+    revision prompt and the cycle01 declaration call; no call is added for
+    it. The route text never promises that a repair run clears it.
+    Misassociation dispositions are not implemented: the item stays held
+    and the takeover route applies.
+  - *Stale bindings.* `_mark_stale_bindings` marks a row stale only for a
+    case the record once showed executed for it (`discharged_cases`),
+    when the latest check on the current source passed with a complete
+    case-recorded run that lacks it and the source no longer defines it;
+    anything less is unknown. Execution and any judgment of the old
+    binding are dropped, never moved; the row keeps its history. The
+    planner is told the existing exact-redeclaration (supersession) route,
+    and a verification-only task may take it.
+  - *DONE.* Before an audit, the requirements the record already holds not
+    met (`_deterministic_blockers`: standing NOT RUN items; rows stale,
+    without a runner or failed; a bound row merely not executed is left to
+    the audit) are sent back once per blocker set and source, with their
+    routes, when a slot is left and the continuation's actual route is
+    admitted (`_continuation_admission`): the planning call that names it
+    (sized like `_planning_stages`), the lead draft priced as dispatch
+    prices it (`_plan_stages`: the editing ceiling whenever the run grants
+    writes; root review of bae3830: a cheaper "declaration" quote named a
+    route the controller does not take, since the named task is ordinary
+    and its lead holds the grant), one review, and the planning call
+    after it where a slot would still be left (root review of 7a141e3: the
+    first quote left out the planner and admitted a route that could not
+    be paid); `done_gates` records it with the stages, the shortfall and
+    whether a blocker needed an edit (recorded, never priced). A repeated DONE, or no admissible continuation, gets the
+    audit as before.
+  - *The cap's goal question* is not asked when an audit already judged
+    the current source and such blockers remain (`goal_question_skipped`,
+    with the reason, slots and budget); the stop says so and names the
+    cap or the forfeit as before.
+  - *Guidance.* A framework's or server's default responses are held to
+    the interface contract, and an assertion accepting more than one
+    outcome where the goal names one proves neither. Effect unmeasured.
+- **Cycle03: failure context up front, and planning that leaves the
+  continuation payable** (PR73 6710677736, after completion-cycle02 ended
+  INCOMPLETE: its planning call 36, 70,670 characters, held neither the
+  failed case, its error nor the check's output artifact; the planner spent
+  a 347,776-token FETCH re-ask and the next task was then refused).
+  - *Failure context.* A failed command's facts carry its failure records
+    from the harness's own parsed report (`_failure_rows`: case id, phase,
+    exception type, assertion in the body or not; at most 5, ids bounded,
+    omissions counted, any other report state said as unavailable). Review
+    seats get one redacted excerpt of the shown check's stored output; the
+    planner gets a "Failed checks still standing" block and each
+    `check.failed` line names its output artifact; a lead whose task
+    RESOLVES such a finding or CONTINUES the failing task gets the same
+    block (`_failure_context`). Excerpts are at most 1,500 characters,
+    redacted against every recorded and configured command path (the
+    gate-fix call's own boundary), fenced and labelled untrusted data, at
+    most two per prompt; identical output (artifacts are content addressed)
+    is excerpted once, while every attempt keeps its own task, attempt, gate,
+    source label and failed cases (root review of d8225fc: deduplicating the
+    attempt dropped an earlier task, its case and its EARLIER label).
+    Nothing here settles a check, finding or requirement.
+  - *Planning.* `_continuation_admission` now quotes the terminal
+    alternative dispatch itself takes (no next planning call) when the
+    ordinary route cannot be paid. Before a planning call
+    (`_planning_forfeit`), only when the record holds work no DONE, audit or
+    decision can settle (`_editing_work`: a failing check not settled, the
+    merge gate, capped work, an open render finding, a deterministic blocker
+    that needs an edit) and neither route can be paid, the existing route
+    forfeit is recorded (site `before planning`) and no planner call is
+    bought. Inside a planning decision every re-ask (FETCH, evidence, an
+    operator answer, a correction, on the seated planner or a fallback seat)
+    is priced first (`_reask_refusal`): refused only when editing work is
+    known and, after the re-ask, no continuation of it could be paid;
+    refused, it raises `PlanningUnaffordable` before any call, the forfeit
+    is recorded (site `planning re-ask`) and the cap's decision applies.
+    With no known editing work no re-ask is refused at any budget, even
+    when an edit happens to fit before it (root review of d8225fc: a FETCH
+    on the way to DONE was refused at 450 left and the slots forfeited for a
+    hypothetical edit); DONE, evidence and the audit are reached and the
+    shared budget's own admission and the finish hold decide. An operator's answer is recorded as a ruling before
+    its re-ask is priced. When the rule would refuse, the prompt says FETCH
+    and EVIDENCE are unavailable (`_REASK_CLOSED`) instead of offering them.
+    Only future calls are priced: a spent planning call is already in the
+    reported total. Refused quotes are kept in `planning_refusals`
+    (result.json, checkpoint). Quotes are estimates (the last planning
+    call's size); per-call admission and the post-return ceiling are
+    unchanged, and nothing here guarantees a dispatch or a completion.
+- **Cycle04: scope-blocked repair is routed, and an unsettled check finding
+  names its cause** (PR73 6713487831, after completion-cycle03's t5, a
+  README/tests task whose blocker was in production code, received a second
+  revision, its recheck and a gate fix under the same grant).
+  - *Declaration.* The owning lead's draft, revision and gate-fix prompts
+    under a restricted grant teach one line, `OUTSIDE SCOPE: <finding id |
+    failed case id> - <path>[, <path>...]` (`_OUTSIDE_SCOPE_RULE`; at most 8
+    lines read per reply, 5 paths per id). No call is made to ask for it.
+    `_record_scope_declarations` keeps every line with its reasons, and
+    accepts one only for an open blocking finding of this task or a failed
+    case of its latest check or observed run, and only for paths that
+    `_scope_path_problem` finds are project files outside the grant: an
+    absolute, home, glob, parent-escaping, linked, dependency-tree, harness
+    or version-control path is refused, an operator-forbidden or
+    policy-denied one is `forbidden` (no route is invented), and a path the
+    grant permits (an unrestricted scope permits everything) is inside it.
+    A review-only task declares nothing. Repeats change nothing. A path
+    that is empty, `.`, contains a `.` or `..` component, or names an
+    existing directory is refused (a new file's name is kept), and a reply
+    whose declaration cannot be read keeps its work, the line recorded as
+    rejected (root review of b9d136e, R1).
+  - *Current failure only* (root review of b9d136e, R2). Runs carry a run
+    number (`seq`), and a case is declarable only from the task's latest
+    run. A case claim lasts for its failure episode
+    (`_case_declaration_current`): every later run must still show the case
+    failing with the same failure identity, the exception type plus the
+    crash site and a message digest that the pytest and unittest producers
+    now record per failure (`site`: the innermost frame that is not
+    unittest's or pytest's own, project-relative, or `outside:<line>`;
+    `message_sha`: a digest of the message's first line, never its text).
+    A run that passes it, or any other failure (root review of 8bab1f4: a
+    new unrelated AssertionError in the same permitted test was read as the
+    production one), ends the claim, so a gate fix for the new failure is
+    bought. A failure with no recorded identity (an older report, the node
+    producer) cannot be shown to continue and never covers a gate. A source change alone does not end it: in-scope edits beside a
+    production blocker keep the route. A reviewer's typed restatement of a
+    scope-routed finding lapses the route (`route_history` keeps it).
+  - *Effect.* An accepted finding is routed `scope` and leaves the editor's
+    lines (`_routed_ids`); other findings keep their rounds. A gate fix is
+    skipped only when every failed case of a complete, parsed, test-body
+    failure record is declared (`_scope_covers`); mixed, unparsed, setup,
+    truncated or no-result failures keep the existing repair route, and a
+    finding naming a file covers no case. The failed check's debt carries
+    `scope` (paths, cases declared and not), the review finding
+    `scope_paths`, and both reach the planner's lines. A RESOLVES task whose
+    SCOPE permits none of the declared paths is sent back once per finding
+    and path set; named again as written, it proceeds. Closure is
+    unchanged: the resolving task's own exact-source check and the original
+    reviewer's recheck. Nothing is granted, edited, closed or proved by a
+    declaration; a false one defers work and leaves the finding open.
+    Records: `scope_declarations`, `scope_gate_skips`, `scope_sendbacks`
+    (result.json, checkpoint); a parallel child's come back whole.
+  - *Cause.* A FindingsUnresolved stop over a check finding persists
+    `unsettled` on the finding (`_explain_unsettled_check`): the resolving
+    task's latest check (missing, failed or passed; current or earlier
+    source; counts), the blocking findings it left open, the latest refused
+    repair or correction round with tokens needed, available and short (from
+    `plan_admissions`, which now keeps `needed` and `left`), and the owner
+    resolution outcomes. The stop text, result.json and truth_check read
+    that one record; a passing check is stated, never treated as acceptance,
+    and an unasked recheck stays `not_attempted`.
+- **Cycle05: DONE settles declaration-only debt without a task, and the
+  audit asks for one list of lines** (PR73 6715806056, after cycle04
+  routed restatable NOT RUN items through editing tasks and its audit
+  reply omitted O21/O50/O51/O55 while marking their requirements MET).
+  - *DONE declarations.* Before the DONE send-back, when every
+    deterministic blocker is one a declaration settles
+    (`_done_declaration_plan`), each owning lead gets one bounded
+    `proof-binding` call for all its ids (`_declare_at_done`): no planner
+    call, no task slot, a read-only copy, the declaration round cap, priced
+    at the reserve (`plan_admissions` scope `done-declaration`) and refused
+    by the finish hold like any ordinary call. Eligible: a NOT RUN item that
+    names nothing a check can run, with no cases yet, owned by the task that
+    reported it or the last one that took it over; or a test scenario row
+    whose bound case went stale, with a runner. Never eligible (the edit
+    route and its pricing stand): any blocker that needs an edit, known
+    editing work, a skip fact, a bound item, a failed or runner-less row,
+    an ambiguous id, an unknown, unavailable or already-asked owner, an
+    owner whose lead is the auditor (its restatement could never be judged
+    independently), a latest check that did not pass on the current source,
+    or no complete run naming an executed case. Only RUNS and PROVES lines
+    naming the listed ids are read, through the editing readers with the
+    owner as the active task; another id is dropped and recorded, a line
+    naming no id unreads the reply. A cap, a finish refusal, a provider
+    failure or a source, gate or environment that moved leaves every id
+    held. The record (`done_declarations`, result.json, checkpoint, merged
+    from children) is written before the call: one attempt per owner and
+    decision for the job, never retried. The decision
+    (`_declaration_decision`) is the source, gate and environment, the ids
+    asked, the items and rows as recorded and the revisions of the
+    requirements they hold; any answer, a refusal or an unreadable one
+    included, leaves it as it was, so the same state is never asked twice,
+    while a later source or a new held item is a new decision with its own
+    one call (root on 9c17005, PR73 6716888092: an owner-only lock refused a
+    new item after later work). A record from 9c17005 without a decision
+    matches by its source and ids, and holds its owner if it has no source.
+    Settlement is the existing exact receipt
+    (`_discharge_record`), and the audit judges sufficiency; nothing is
+    closed and no reviewer is stood in for.
+  - *Audit contract.* Executed restatements are listed under their own
+    heading ("Executed restatements awaiting your judgment"), never under
+    "Not shown to have run" and never as a debt row to judge nothing about;
+    the NOT MET rule names only its own heading. `_audit_required_ids` is
+    the one list (requirements, carried findings, acceptance rows the audit
+    reads that no current judgment holds, awaiting restatements), printed as
+    "Lines this reply must contain" and used to find omissions
+    (`_audit_omitted`: no line led by the id; a malformed line is an
+    answer). "Nothing else" is gone.
+  - *Completion.* Omitted ids get one same-auditor completion
+    (`_complete_audit` over `_complete_judgment`, role auditor, finishing
+    stage audit) on the shared `max_judgment_completions`; only lines led by
+    an omitted id are appended to the reply, so an answered verdict is never
+    overwritten and a conflict in the completion judges nothing. Spent
+    allowance, a refusal or a provider failure leaves the omission as it was;
+    nothing is inferred from a requirement's MET. The audit record keeps
+    `reply_artifact`, `required`, `omitted` and `completion`.
+  - *Trial corrections* (root's assessment of 20261108T050923Z-c63988ae,
+    PR73 6718066718).
+    - A recheck after a binding declaration is told, as a routing fact
+      (`_declaration_facts`), what the lead declared after the revised work,
+      the declaration artifact, the source, and the harness's execution
+      with its receipt on that source. It says that a NOT RUN in the revised
+      work is the lead's own copy, and that the finding stays the reviewer's.
+      The t6 recheck saw only the revision and asked for a truthful NOT RUN
+      to be deleted.
+    - A requirement whose whole claim is that a named test command passes
+      needs no proof scenario (`_TEST_COMMAND_RULE`, stated to
+      the planner, and to the lead and reviewers that cover one). The
+      harness's exact receipt is cited and the audit judges it. It stays NOT
+      MET when no configured check runs the command. t5/t6 built a test that
+      ran the suite inside itself. Classification is conservative
+      (`_test_command_requirement`; root review of 63fbef7, PR73 6718399838):
+      exactly one command, of a runner's own shape (`_test_runner_shape`:
+      `pytest` or `python -m pytest|unittest` with only options,
+      `discover`, test paths or `tests`; exactly `npm test` or `make test`),
+      and every other word in run-and-pass vocabulary (`_PASS_ONLY_WORDS`).
+      A runner name as an application argument, a `-k` selection, or any
+      behaviour beside the command keeps the scenario.
+    - The task cap reaches the declaration route (`_declare_at_cap`) before
+      it skips the goal question as known incomplete, and before the final
+      audit. It uses the same plan, decision accounting and pricing, with no
+      slot. Records go on `done_gates` with site `cap`.
+    - `_ERROR_CLAUSE` reads a returned 4xx/5xx status and "does not exist"
+      as error language, so an unknown-ID 404 requirement reaches the 2**63
+      boundary candidate. The review lens names a value one layer accepts
+      and a later one cannot represent. `_PROTOCOL_RULE` (audit and review)
+      reads requirements under the named protocol's semantics, for example
+      no body on HEAD.
+- **A typed overload on a read-only call is re-sent, boundedly; nothing else
+  is** (cycle06 run 20261108T075040Z-4454b282, PR73 6719287741). The
+  planner's Claude CLI answered "API Error: 529 Overloaded" with zero usage.
+  `_extract_claude_result` raised a plain ProviderError and `_generate_once`
+  rethrows every ProviderError, so the run ended with 32 calls, 2.36M tokens
+  and 3 slots left.
+  - *The one retried failure.* A claude error envelope whose status is 529
+    (`api_error_status`, or the client's own "API Error: 529" line,
+    `_envelope_status`) and that carries usage is `TransientOverload`. A
+    model's prose is never read for it, and a 5xx other than 529 is not one.
+  - *When it is re-sent* (`_generate_once`, `_transient_wait`):
+    - at most `MAX_TRANSIENT_RETRIES` (2) times, and never past
+      `max_retries`, so a summary view's single attempt stays single;
+    - only on a call that cannot write, so it is never an ambiguous replay;
+    - only with settled usage;
+    - only when the budget leaves an attempt beyond the finishing calls
+      still held, and the wait is under half the wall time left after the
+      finish hold.
+  - *What a re-send is.* The same seat, model, role and prompt; no other
+    model or API key. Each re-send is its own admitted attempt (reserve,
+    settle, ledger row, finish hold). The re-sent row carries
+    `retry_wait_seconds` and `retry_cause: overloaded`.
+  - *Unchanged.* TurnLimitReached, refusals, PartialWorkSuspected, window
+    and auth exhaustion, unknown usage and every other ProviderError keep
+    their behaviour.
+- **A documentation assertion about behaviour is not the behaviour**
+  (cycle07 run 20261108T091024Z-75154efd, PR73 6720016289). R23 was "README
+  documents the new Store methods, HTTP endpoints and CLI commands,
+  including the refusal rules, without narrowing the contract". Every
+  reading proof for it was refused because `_error_clause` matched
+  "refusal", and the final task was sent back until the correction budget
+  stopped the run. The audit lowering and the review hold read the same word
+  and would have demanded an executed case for a README. This was a guard
+  design failure, a keyword promoted to an unconditional stop. It is
+  corrected by classification, not by a larger cap.
+  - *The reading* (`_behaviour_text`, `_behavioural_error`). A clause
+    whose subject is documentation the work writes (a README, the docs or
+    documentation, a changelog, a guide or manual, a named .md/.rst/.adoc
+    file) with a documenting verb, or a clause starting with the
+    imperative Document/Describe/Explain, asserts what that text says. Only
+    its confident part is removed:
+    - the documenting verb's own object, up to the first
+      `_SEGMENT_BOUNDARY` (a comma or semicolon, and/or/but/while/whereas/
+      then/so that/ensure/which/whose);
+    - later segments that open with an `_OBJECT_CONTINUATION` word
+      (including, such as, with, without, for, of, in, as, ...).
+
+    A coordinated item (and, or, a comma) also continues the object when it
+    carries no `_PREDICATE` (an auxiliary or modal, or a runtime verb form
+    such as rejects, returns, raises, exits, answers). So "including refusal
+    rules and invalid ID responses" is a noun list (root review of 621df07,
+    PR73 6720918371). A segment opened by a subordinator (but, while, then,
+    ensure, ...), or carrying a predicate, is a claim. It stays, with
+    everything after it, and the error rule applies to it. Root's review of
+    06c708d (PR73 6720550674) found "and API rejects", "and the HTTP API
+    rejects", ", while the service rejects" and "and ensure ... are
+    rejected" discarded under the earlier grammar. The remaining
+    uncertainty is stated: the predicate list is lexical, so a coordinated
+    item whose only verb is outside it ("and the API emits 400") is read as
+    a noun.
+  - *Consumers.* All of these read `_behavioural_error`:
+    - `_proof_problem`, for reading and capture evidence;
+    - `_lower_unexercised_errors`, the audit;
+    - `_hold_unexercised_errors`, the review;
+    - `boundary_classes`.
+
+    A refused reading proof names each behavioural requirement, quotes the
+    behaviour it asserts, and says the claim takes an executed scenario
+    while the documentation claim keeps reading evidence.
+  - *Unchanged.*
+    - Reading evidence still needs a documentation-file location.
+    - A behaviour in docs, or a mixed requirement, still needs an executed
+      case.
+    - Sufficiency stays with the original judges.
+    - The covers-correction allowance is unchanged.
+  - *Prompts.* The planner's reading rule and `_EXECUTED_ERROR_RULE` state
+    the same distinction.
+- **A pure suite-pass claim is read in its ordinary forms and reaches the
+  audit on the gate's own receipt** (cycle08 run 20261108T121411Z-720c5d46,
+  PR73 6721926382).
+  - *What happened.* R17 was "All existing tests keep passing and `python3
+    -m unittest discover -s tests` passes on the delivered source". It was
+    read as a behaviour for the one word "keep". t6 was sent back, and the
+    re-plan reported 148,417 tokens. The planner then dropped R17 and R21
+    from COVERS, and DONE stopped on "not covered" while the gate's unittest
+    run on the delivered source was passing. t7's terminal route was 95,181
+    tokens short, less than that re-plan.
+  - *Vocabulary.* `_PASS_ONLY_WORDS` now carries ordinary grammatical
+    variants: keep, continue, still, remain, stay, also, both, each, after,
+    to, change, passed, ran, executed, complete, current, final, clean.
+    Words that change the claim stay outside it (unchanged, preserved, a
+    behaviour, a value, an endpoint).
+  - *Actionable refusal.* A requirement that names a runner-shaped command
+    but claims more is refused with the words it claims besides the command
+    (`_test_command_extra_words`). The message says to give that claim a
+    scenario and keep the requirement in COVERS.
+  - *Coverage from the receipt* (`_cover_by_receipt`, at DONE and at the
+    cap, before the coverage check). A pure test-command requirement that no
+    task covered and no audit found NOT MET is covered for the audit by
+    `_command_receipt_citation`. That is the exact command, run whole and
+    passed on the current source, gate and environment, with cases executed
+    and none skipped. A missing, stale, failed, filtered or skipping receipt
+    covers nothing. The fact is the receipt; the MET is the independent
+    audit's, and a NOT MET goes back to the planner as before. Kept on
+    `receipt_coverage` (result.json, checkpoint).
+- **A repair is read by typed ids, a bare command by its own words, and a
+  repeated limitation is inherited** (cycle09 terminal, PR73 6722947726).
+  - *RESOLVES with requirement ids* (`_normalize_resolves`, before COVERS
+    is read). The planner wrote `RESOLVES: R17 (audit), R24 (audit)` for
+    what the final audit held NOT MET; every token was an unknown finding
+    and the sendbacks spent the correction allowance until RunStalled. A
+    parenthesised annotation is dropped. A requirement id whose only hold is
+    the audit's NOT MET (no open finding names it) moves to COVERS, which
+    is the route the DONE refusal names, and the same independent audit
+    judges the repair. Any other requirement id stays and is refused with
+    its typed route: held by open findings (named back), not NOT MET, or
+    not listed. A line left with no id is refused as naming none. Kept on
+    `resolves_normalized` (result.json, checkpoint). The DONE refusal says
+    RESOLVES names only finding ids. Caps and the allowance are unchanged.
+  - *Bare commands* (`_command_words`, `_RUNNER_VALUED`). An unquoted
+    command is the runner, its options, a valued option's operand, paths and
+    patterns, unittest's `discover`, and `test` after npm or make. It stops
+    at the first other word, so "successfully", "cleanly" and the like are
+    prose, and the extracted argv is the command's identity for the receipt.
+    A `-k` selection, an application command and a mixed claim stay
+    scenarios.
+  - *Inherited NOT RUN* (`_inherited_not_run`; corrected after root's
+    review of f7fc186, PR73 6723584415). Equal path sets inherited a
+    different scenario about the same test file, and a repeat made after the
+    application under test changed. A repeat is now the same report only
+    when all of these hold:
+    - the whole item text and its binding are the same;
+    - it names a path and no `| for:` requirement;
+    - the gate and environment are the same;
+    - the source fingerprint recorded with the earlier report (each entry's
+      `source`) equals the current one, both known;
+    - this task's measured changes, where the harness has them, are empty.
+    Such a repeat is kept on `inherited_not_run` and as `repeated_by` on
+    the original, with no new obligation and no declaration call. Anything
+    different or unknown is the task's own report and holds its own
+    requirements. That debt still reaches its owning lead through the DONE
+    declaration route, one call per owner.
+  - *Declarations before the coverage gate.* DONE's declaration route and
+    the cap's `_declare_at_cap` now run before the "not covered" refusal,
+    once per DONE. In cycle09 an uncovered or audit-NOT-MET requirement
+    refused DONE first and `done_declarations` stayed empty. The plan's own
+    rules decide as before: a mixed set with editing debt asks nobody, and
+    nothing is met without the audit.
+- **The planner sees the registry as it is now, a recheck sees the question
+  still standing, and a population clause is part of a command claim**
+  (cycle10 run 20261108T163004Z, PR73 6724518561).
+  - *Current dispositions* (`_closed_findings_note`). t4's close-out, frozen
+    in the append-only ledger, listed RFT4-14 as unresolved. The post-merge
+    recheck then closed it, but the planner prompt still carried only the
+    close-out. t5 and t6 named the id in RESOLVES, were refused as "already
+    resolved", and the shared correction allowance stopped the run with
+    three slots left.
+    - The ledger stays as written. The findings section now ends with the
+      findings the registry holds closed, with their judge, labelled as
+      current, with the close-outs above labelled as history.
+    - `_normalize_resolves` drops a closed id (review or audit) from
+      RESOLVES and records it (`closed_dropped`). The task then stands on
+      its COVERS and ordinary admission; nothing reopens and nothing is
+      judged.
+    - An unknown id is never dropped. The same reading runs in a parallel
+      batch.
+  - *The question still standing* (`_finding_lines`). RFT4-14's author kept
+    it open at its penultimate recheck with a concrete counterexample (no
+    indirect-only case). The post-merge recheck packet showed only the
+    original claim, and it closed on a generic citation.
+    - Every recheck packet (in-task, settlement, post-merge) now carries the
+      author's latest UNRESOLVED reason, with whether it was made on this
+      source or an earlier one, and says a RESOLVED answers it.
+    - What answers it stays the reviewer's. The history keeps both
+      judgments, and an adverse verdict binds as before.
+  - *Population clauses* (`_population_clause`, `_population_problem`). An
+    "including …" clause after a test-command claim is read by grammar.
+    - Its items are noun phrases headed by a test noun (test, case, suite,
+      file, module), optionally "in <path>", or bare test paths. "tests for
+      malformed JSON" or "tests that check …" stay behaviours with
+      scenarios.
+    - Such a requirement needs no scenario. The receipt covers it only when
+      that receipt's own executed case identities show every named file,
+      every new test case for "new"/"added" tests (at least one), or every
+      test file in the project for any other phrase, as a superset.
+    - New tests are new cases, not new files (root review of c653d94, PR73
+      6725376982: a case appended to an existing test file was refused as
+      "the run added no test file"). `_new_case_problems` reads the cases each
+      Python test file defines (`_python_case_defs`, static) at run start
+      (`_original_tests`) and now:
+      - a name a file did not define at run start is new;
+      - a name whose body is that of a run-start case now gone from its
+        file is that test renamed, not new;
+      - each new case must be among the receipt's executed ids;
+      - a changed file whose cases cannot be read (not Python, or not
+        parseable) is named as unknown;
+      - changed bytes alone are not a new test.
+    - A Markdown code span is a command only when it starts with a runner
+      (`_command_rest`). A backticked path beside a backticked command is a
+      path; two command spans, or a command span beside an unquoted second
+      command, are refused.
+    - A run with no case identity shows nothing. A missing file, no added
+      test, or an unexecuted file stays debt, and the DONE refusal names
+      exactly what the receipt lacks.
+- **An audit's question travels with its requirement, and refusals stay
+  goal-bounded at every seat** (cycle11 run 20261108T191017Z-f99f6e43,
+  root's reconciliation in PR73 6726933807). The run ended at the 8-task cap
+  with R16 NOT MET. Each audit found one more defect of R16 and R18 (post-
+  commit reads, then boundary evidence, then a malformed ordinary header),
+  and `requirement_audits` held every question while no later prompt showed
+  one.
+  - *History transport* (`_audit_history`). Earlier audits' own NOT MET
+    words, for the requirements a call is about, reach:
+    - the draft lead, the revision and every later editing call (through
+      `_goal_block`);
+    - the reviewer, the in-task recheck and the settlement or post-merge
+      recheck (for the requirements of the findings rechecked);
+    - every later audit, which is told to judge afresh.
+
+    The rules for what is shown:
+    - It is read from `requirement_audits` only; there is no second history.
+    - Only the auditor's own words appear (`stated_reasons`, now recorded
+      whole); a harness lowering is not a counterexample.
+    - Entries are deduplicated, with the auditor, the source (this one or
+      earlier), the requirement revision (`revisions`, recorded per audit;
+      "revised since" when it moved), the reply artifact, a later MET, and
+      a decision or ruling naming the requirement.
+    - It is bounded by one shared total of 6,000 characters that includes
+      the header, decisions, rulings and the omission line (root review of
+      b54a28c: the first entry of every requirement was admitted after the
+      bound was spent, and 23 requirements rendered 24,515 characters).
+      - Each requirement enters as a unit: its newest entry with every
+        decision or ruling naming it, so an older condition is never shown
+        without what supersedes it.
+      - Older entries (up to 3 per requirement) fill what is left.
+      - Explanations are 500 characters, and the example is kept apart up
+        to 400 with an explicit artifact pointer past that.
+      - A decision or ruling over 600 characters is named with where to read
+        it, never cut.
+      - Whatever does not fit is counted in one bounded line: the counts, at
+        most eight ids per list, and the audit-reply artifacts to retrieve.
+    - It is labelled as historical questions: not current findings, not
+      proof, no owner or finding transferred, nothing reopened.
+    - A parallel child reads its parent's audits. The new fields ride in
+      `requirement_audits`, which the checkpoint already carries.
+  - *Goal-bounded parsing.* The shared lens now says a parser or library
+    can accept input the requirement calls invalid, not only raise on it.
+    The goal decides what is invalid and what must stay accepted, and an
+    input the goal leaves unspecified is never one that must be refused.
+    `_EXECUTED_ERROR_RULE`, which the auditor gets, carries the same
+    caveat: an implementation-exposed representation the goal leaves
+    unspecified is a candidate risk, never a rejection to require. Executed
+    rejecting-path evidence for real error requirements is unchanged.
+  - *Basis as provenance* (`_not_met_basis`, root's adjustment). The audit's
+    NOT MET line asks for `basis:` (the goal, requirement or ruling words
+    contradicted, and how) and `evidence:` (executed reproduction, source
+    reading, or untested risk).
+    - The harness records what was stated and which texts any quoted words
+      occur in (`bases`). A match validates nothing, and no match discards
+      nothing.
+    - A missing basis is labelled for the planner ("no basis stated; the
+      verdict stands"). It costs no extra call and adds no gate or MET
+      shortcut. The existing completion and challenge paths are unchanged.
+  - *BOUNDARY notes.* For a covered error requirement the reviewer is
+    offered an optional line `BOUNDARY R<n>: <layers checked> - <case or
+    file:line> (executed | read)`.
+    - It is recorded on `boundary_notes` (8 per reply, 400 characters each;
+      result.json, checkpoint, merged back from parallel children).
+    - The audit is shown each note, or "none stated", as observations.
+    - A note is never proof or a gate, and never makes a clean review
+      unfinished (`_clean_goal_review`).
+- **The audit packet states each record once** (cycle12 run
+  20261108T231038Z-c546ec92, root's reconciliation).
+  - *What happened.* The run stopped on `call_token_ceiling`: the third
+    audit reported 504,836 tokens against the 500,000 per-call ceiling.
+    Its 114,325-character prompt carried 47,266 characters of evidence
+    obligations and 44,619 of task-review observations. Repetition plausibly
+    contributes; no saving is claimed until it is measured. Separately, the
+    audit's R17 NOT MET (a malformed field name reaching mutation) was a real
+    defect.
+  - *Obligations* (`_behavior_is_generated`). A behaviour that is exactly
+    the summary generated from its own scenario is replaced by "scenario P<n>
+    (stated once below)".
+    - Shown whole: a legacy row, a behaviour that differs in any character,
+      and any row whose scenario is over the render bound (the "leave
+      unjudged" line stays).
+  - *Superseded rows* (`_superseding_rows`). A superseded row names the row
+    that holds its scenario now, and keeps everything of its own: task,
+    requirements, modality, runner, execution, its pre-supersession reason,
+    sufficiency and judge, and bound cases that differ.
+    - `superseded_by` is a task id, so the successor must be that task's
+      single acceptance row with the same scenario (proof id aside), the
+      same requirement revisions and the same modality, followed through a
+      chain with no revisit.
+    - No successor, two candidates, a cycle, or a successor whose scenario
+      is not shown keeps the full row.
+    - Only a row whose own behaviour is exactly its generated summary and
+      whose own scenario (its own proof id and bound cases) is shown may
+      refer to a successor. A distinct claim, or an own scenario over the
+      bound, keeps the full row with its "leave unjudged" line (root review
+      of 10a9433: the compact line dropped a distinct adverse claim). The
+      line names the predecessor's own proof id beside the successor's.
+    - Required lines, supersession and judgment are unchanged.
+  - *Review observations* (`_review_notes_grouped`).
+    - Texts identical character for character are listed once. Whitespace
+      is never normalized, since a quoted input can depend on it.
+    - Every raising review is kept: task, reviewer, its own association
+      (named, or "naming no requirement") and its source label.
+    - The repeated explanation moved to the header. Nothing is dropped or
+      cut.
+  - *History wording.* For editing and reviewing seats, the history asks
+    them to identify the rule the goal entitles at that input layer, hold it
+    across its cases, and keep the forms it allows accepted. It adds no
+    requirement and guarantees nothing.
+  - *`tools/audit_packet_size.py`.* Offline, read-only and call-free. It
+    reads the committed checkpoint, restores it onto a bare Session (an
+    empty private project folder, the saved audit source as the identity,
+    no provider), and renders the compared sections with the old renderer
+    (`_compact_audit_packet = False`) and the new one, like for like. It
+    reports characters per section and missing required row ids, and writes
+    only outside the run folder.
+    - It never claims to reconstruct the historical prompt; `state_match`
+      lists the mismatches.
+    - It refuses a stateless checkpoint.
+- **One execution truth, and a restatement the auditor wrote has a judge**
+  (cycle14, root's reconciliation of the cycle13 run, PR73 6731607762).
+  - *Split truth.* O59, O63 and O64 were path-only NOT RUN items registered
+    while the gate did not name their file. The final `public-pytest`
+    receipt named the file whole, so each item read discharged, yet its
+    typed row kept `runner: null, execution: missing` and lowered R14 to
+    R17. `_refresh_obligations` never asked a runnerless row for a receipt.
+    Such a row now asks the item's own decision (`_obligation_receipt` over
+    `_discharge_record`, read from the recorded checks, never a stored
+    marker). It takes the gate as runner only when that decision is on its
+    own gate, environment and requirement revisions and its own task's
+    item, and it records `runner_basis`; `delivery.discharge` then checks
+    every identity as before. A filtered, failed, skipping, caseless or
+    optional run, another file, a production path, another source, gate,
+    environment or revision, a check before the report, or a marker alone
+    gives no runner.
+  - *Same-author dead end.* O60 was restated by `openai:sol`, the auditor;
+    the old `claude:opus` SUFFICIENT was on an earlier source, and the DONE
+    declaration refused "lead is the auditor". The declaration is now
+    refused for that reason only when no other independent seat is
+    eligible (a scenario row's lead still is, since its sufficiency is the
+    audit's). At DONE, the final check and the cap,
+    `_judge_restatements` offers each executed, unjudged restatement the
+    auditor wrote to `_independent_judge`: a brain-trust seat, recorded
+    judges first, available, not the author, not of its vendor, never a
+    worker. One read-only `recheck` call per judge covers all its items,
+    admitted at the reserve, on the shared judgment allowance
+    (`_complete_judgment`), and its answer is read only after the binding
+    held (the generic recheck hook skips it). Each item's decision (judge,
+    item, cases, source, revisions) is asked once for the job, across
+    resumes and parallel merges (`restatement_judgments`, checkpointed and
+    in `result.json`). No eligible seat, no allowance, a cap, a stop, an
+    INSUFFICIENT line or no line leaves the item held with the reason
+    recorded. Self-judgment stays void, a stale judgment is never reused,
+    the auditor is not rotated, and no seat, task or write grant is added.
+    A current independent INSUFFICIENT (`_restated_current`: same cases,
+    source and revisions, not the author) is the decision: it stays held,
+    is recorded once and is never asked again (root review of c69fb36: the
+    route read it as missing and a new call could replace it). Only a
+    missing or stale judgment is eligible.
+  - *Guidance.* `_REPAIR_OUTCOME_RULE` (in the DONE refusal and the open
+    findings) asks a repair to state the goal's outcome and the class of
+    cause, never a narrower condition one reproduction showed. The review
+    lens asks a seat checking a failure-class mapping to read where the
+    framework or server can refuse that input before the code's own
+    handling, and the forms the goal keeps valid. No new gate.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
@@ -1347,6 +3591,1311 @@ Key design decisions already settled:
   its Project tab can run commands. The page has no controls at all, which
   is what makes it the thing that may be reached from another device.
 
+- **A reviewer judges evidence the harness has already shown on the exact
+  source** (workflow repair, 2026-10-24, after the ticket run stopped on
+  open findings). `_observe_checks` already ran the task's gate before
+  every review and recheck, but only `self.checks` could discharge a proof
+  row, so reviewers read "execution missing" on cases the harness had just
+  run and passed, and spent rounds on it. `_obligation_receipt` now reads
+  the observations too (receipt ids `observed-N`, same identity rules,
+  only a passing run discharges, a failed one is named in the rows);
+  `_observe_checks` skips a source a task check or merge gate already ran
+  under the same gate; the rows are refreshed before any judgment binding
+  is taken; the post-merge recheck is handed the child's rows under the
+  merge gate's receipt. A parallel child runs no checks in its copy
+  (snapshots carry no dependency tree, the r08 lesson), so its rows say
+  so and settle after the merge. The task's own gate still runs after the
+  fix cycles: the observation is evidence, never the mandatory check.
+- **Two typed findings leave the editor out of it** (same batch).
+  `BLOCKING: SCENARIO P<n> - <contradiction> | proposal: <operation|state|
+  expect>: <text>` goes to the seated planner once per task
+  (`_correct_scenarios`): it may change that one field, KEEP the text, or
+  say the REQUIREMENT itself would have to change, which raises the
+  operator's question (`OperatorInputNeeded` with no channel) and changes
+  nothing. The goal, requirement texts, scope, the scenario's requirements,
+  location, evidence kind and id never move; the row keeps its prior text,
+  execution and judgment as `scenario_lineage` and starts again; the
+  reviewer who raised it re-checks the corrected scenario. `BLOCKING:
+  EVIDENCE P<n> - <what is not shown>` goes to the harness (an observation
+  if none exists on this source) and back to the same reviewer; in a child
+  it is held for the post-merge recheck. When the scenario binds no case
+  (no PROVES line, or an invalid one) no run can show it, so since cycle01
+  (bounded-recovery-01 t3) it goes first to one declaration-only call to
+  the task's own lead (`proof-binding`, a declaration role: source copy,
+  no write grant, `DECLARATION_MAX_TURNS`), which may only state PROVES
+  lines for the named scenarios; any other PROVES line is dropped and
+  recorded in `proof_binding_problems`, and prose is ignored.
+  The binding settles against checks already recorded on that exact source
+  (the exact case executed and passed, unskipped; no suite rerun), the
+  same reviewer rechecks it, and a reviewer's own PROVES line binds
+  nothing. A second request for the same scenario is not made while the
+  source (known) and the scenario's binding and cases are what the first
+  request left: the finding takes the harness route. A child declares and
+  still holds it for the post-merge recheck. A round whose every blocking line
+  was routed makes no editing call and the planner stage is costed in the
+  fix-cycle admission. A kept, unanswered or stray SCENARIO finding, and
+  every UNRESOLVED verdict, takes the ordinary editor round: the plan
+  channel cannot make a finding disappear, and nothing closes one but its
+  reviewer. Records: `scenario_corrections`, `evidence_routes`.
+- **A requirement no task took on is said at the stop.** The ledger and
+  the planner's obligation view already held it ("taken on by no task
+  yet"; DONE refused until covered); `report.md` now names it when a run
+  stops incomplete, because the ticket run's report did not say R23 had
+  never been scheduled.
+
+- **A seat names a family; the installed client names the release**
+  (2026-10-24). Roster keys are families: `claude:opus`, `openai:sol`,
+  `openai:astra`, `openai:luna`, `openai:terra`, `grok:default`. Legacy
+  version keys (`openai:gpt-5.6-sol`) still resolve through
+  `registry.resolve`/`canonical_key` so histories and operator inputs keep
+  reading; they are never wire strings. `latest.resolve_model` answers per
+  vendor: Claude's family alias goes on the wire as written (the CLI
+  resolves it; the probe's alias cache is a record, never a source, so a
+  dated id probed months ago cannot pin the seat); Codex takes the family's
+  latest visible, client-compatible slug from the installed client's own
+  `~/.codex/models_cache.json` (`catalog.read_codex_catalog`: schema,
+  freshness within `QUADRATUS_CATALOG_MAX_AGE_HOURS`, default 168, and the
+  writing client compared to the installed one), ordered numerically
+  (6.10 above 6.9, a 7 above any 6.x); Grok sends no flag and the
+  `grok models` default is recorded beside the call. A missing, stale,
+  malformed or mismatched catalogue makes the family *unavailable*, with
+  the reason on the status line and in `result.json` `models`; nothing
+  older is selected from memory and no slug is invented (the installed
+  Terra is 5.6; no 6 exists). `QUADRATUS_ALIAS_<VENDOR>_<FAMILY>` is the one
+  visible exception. A job resolves each family once (`Fleet._resolution`),
+  a parallel child shares the parent's answers, a resumed episode keeps
+  the job's (`model_resolution` rides the checkpoint; the current
+  catalogue's drift is recorded, never followed). The API backend still
+  needs dated ids: the configured OpenAI model stands for Sol, every other
+  family an explicit `QUADRATUS_API_MODEL_*`.
+- **Effort is decided from facts the harness holds, on every call**
+  (`effort.select`, policy `effort/1`). Inputs: role, the task's declared
+  complexity and kind, work class, security, the fix cycle, the worst
+  impact a recheck is about. Planner `high` and held for the session
+  (the cache survives); `decide` and declarations `low`; implementation
+  `medium`, `low` for rote, `high` for complex or security-grade work
+  (security, concurrency, perf, architect, iac); every judging seat floors
+  at `medium`, `high` for complex, security-grade or review-kind work, a
+  repeated or immediate-risk recheck, the verifier and the final audit; a
+  second fix cycle raises the editor one step; `xhigh`/`max` only for
+  complex, risk-bearing work still open at cycle 2 on a ladder that has
+  the level, and `ultra` never (the catalogue calls it automatic task
+  delegation). Bounded seats keep their roster effort. The session passes
+  the inputs on the invocation context (`effort_inputs`); the Fleet decides
+  against the resolved model's ladder (codex per slug, claude
+  low/medium/high/max, grok low/medium/high/xhigh), validates, and refuses
+  a level the ladder lacks (`UnsupportedEffort`) instead of lowering a
+  floor; only an elevated level is bounded, to high, with the reason. Every
+  ledger row carries `effort`, `effort_reasons`, `effort_policy` and
+  `resolution_source`; no call inherits a CLI default (the installed Sol
+  defaults to `low` where its API documents `medium`). The budget never
+  reads effort.
+- **Root's seven dispatch corrections on bcd2b52** (2026-10-25). An
+  unknown effort ladder is not permission: a catalogue entry that lists no
+  ladder, or only levels this engine cannot send (`ultra`, names it does
+  not know), makes the family *unavailable* before any call, and a pinned
+  slug outside the catalogue needs its ladder declared in
+  `QUADRATUS_EFFORT_LADDER_<VENDOR>_<FAMILY>` (recorded as the operator's
+  assertion; never overriding a catalogued ladder). The job's resolution
+  state is one shared object (`runtime._JobResolution`) across the parent
+  and every forked child, keyed by family, under one lock, so a family
+  first resolved in a worker is the parent's resolution and its record;
+  legacy spellings share it and the ledger keeps the requested spelling.
+  Exhaustion is marked and read by family (`canonical_key`), so an alias
+  cannot retry a spent seat. Risk outranks the size label: a `security
+  rote` task runs its lead at high. The sealed checkpoint carries the
+  terminal `model_resolution` (`checkpoint.seal(state_patch=...)`) and
+  every quiescent point refreshes it first; a resumed episode freezes the
+  job's resolutions before any seat or availability decision. The bare
+  factory (`providers.build_provider`) resolves a configured family through
+  `latest.resolve_model` after the provider is built (so the installed
+  client's version is known) and reports an unresolvable family as
+  unavailable instead of sending its name as a model id; a Fleet passes
+  `resolve_family=False`, because it binds each seat's family per call and
+  a vendor's transport must not depend on the settings' default family
+  (root's isolation control on aab4fe7: a catalogue without Sol took Luna
+  and Astra down with it). A view that sets its own effort (the retained closeout view,
+  a probe at low) records the effort it sends, with the seat's policy
+  decision named beside it. The effort inputs a recheck sets are cleared
+  on every exit of the call, and a task entry resets them.
+- **One finding identity, from the review to the planner to the close**
+  (Davis, 2026-10-28; controller-continuation-01). t4's second revision hit
+  the turn cap, `_close_turn_limited` returned before the fix loop's block
+  that writes open findings into `unresolved_reviews`, and eight of Opus's
+  open ids were in the registry but in no held entry: the post-merge
+  recheck asked about one DEFERRED finding, the planner read the eight
+  under "Review findings open by id", named them in RESOLVES, and
+  `_resolves_problem` sent it back as naming findings that do not exist
+  (it read only the audit ledger `self.findings`); the replacement planning
+  call cost the room the last task needed. Now: `_hold_open_finding` is the
+  one block (the legacy text or the audit-carried note, plus the held
+  entry) and `_hold_task_findings` runs it at every capped and failed close
+  with `hold` on the record saying why. RESOLVES accepts `RFT<task>-<n>`
+  ids beside `F<n>`; a review finding settles only in
+  `_settle_review_findings`, after a clean close with its checks passing,
+  by one recheck call per original reviewer (`_recheck_open_findings`, the
+  post-merge recheck generalised); a continuation inherits its chain's open
+  findings (`inherited_by`, the lead's handoff block names them) and the
+  same recheck follows its clean close without naming them. The resolving
+  task's lead, another reviewer and the harness close nothing; a closed
+  finding makes no requirement met. An explicit RESOLVES its owner
+  rechecked and did not accept is the FindingsUnresolved stop as for an
+  audit finding; an inherited finding kept open stays held debt. Since
+  cycle01 (PR73 6702597850) a recheck that was never asked (the task
+  closed with findings of its own, its gate failed, its ledger changed),
+  an unavailable owner, or an owed (capped, refused, verdict-less) recheck
+  is pending work held like other review debt, never an adverse verdict:
+  each target's outcome (`closed`, `adverse`, `owed`, `unavailable`,
+  `not_attempted`) is on `review_resolutions[].outcomes` and the finding's
+  `resolution_attempts`, the task's settlement edge stays unsatisfied,
+  and it is satisfied by fact once an owner's later recheck closes every
+  finding it named (`settled_later_by`). No count bounds this: task slots,
+  calls, tokens and time do, RunStalled catches the same task twice, and
+  the same finding left again without its owner's verdict in an unchanged
+  decision state is no progress and stops FindingsUnresolved. The state
+  (`_decision_state`, kept on each attempt) is the known source, every
+  acceptance row's scenario, binding, cases, execution and judgment read
+  as a set without task, row or receipt ids, the open blocking findings by
+  claim without ids, the settlement reason and the owner's availability;
+  identical bytes with a newly declared binding or new exact-source
+  evidence are progress (root review of 9b0280b, R1), and an unknown
+  source proves no repeat. `truth_check` names
+  each unestablished RESOLVES by its outcome. A reviewer that is
+  unavailable cannot be named. The rechecks are costed on the route (`resolution recheck by
+  <peer>`), recorded in `review_resolutions` (result.json, checkpoint).
+- **Deferred child evidence is declared, never discovered** (same batch).
+  A parallel child measures no execution, so its reviewer was told every
+  unexecuted row was an EVIDENCE gap and filed one finding per row (t4:
+  seven findings, seven holds) for a fact the harness held. The child marks
+  its executable rows `deferred` to the merge gate (`_mark_deferred_rows`),
+  the proof rows say so, the reviewer is told not to file their
+  non-execution, and the deferral is declared per (task, reviewer)
+  (`deferred_evidence`) when the reviewer is handed the rows. The parent
+  clears the mark on its re-based rows, the merge gate runs them, and the
+  same reviewer's post-merge recheck carries them (`_deferred_rows_block`):
+  `P<n>: NOT SHOWN` registers that reviewer's EVIDENCE finding held open;
+  `SHOWN` is a recorded reading that makes nothing met (the audit judges
+  sufficiency) and is refused on a row that did not run; no line is no
+  reading. A merge gate that does not pass leaves the deferral "not
+  rechecked" and the rows missing, listed for the planner. The recheck is
+  the one call per reviewer the EVIDENCE findings already bought; the
+  saving is review lines and hold records.
+- **A correction line carries the operation first and its explanation
+  after `| because:`, and its size bound is the declaration's** (same
+  batch; root on 6c1b922). The live correction was refused at 869
+  characters with the explanation inside the text, against a 400 bound
+  the prompt never stated; the first repair stated the 400 and root's
+  probe showed a 683-character state `read_proofs` accepts refused only
+  for being over it. There is no character count now: `_split_explanation`
+  takes the text before the segment, the explanation is kept on the record
+  and never counted, the shape rules stay (empty, multi-line, equal to
+  the declared text, ambiguous lines), and the one size bound a corrected
+  field meets is the one a declared field meets, the task's role packet
+  limit, checked on a trial scope that is discarded
+  (`_correction_packet_problem`). The prompt asks for a field as concise
+  as a declared one and says what the limit is. KEEP and REQUIREMENT take
+  their reason the same way. Correctness and authority are stated as
+  mandatory: the text must hold against the requirement texts, which only
+  a REQUIREMENT line can question, and the finding's reviewer re-checks the
+  corrected scenario.
+- **FETCH serves an artifact whole, in exact windows** (root on 6c1b922:
+  with the completed work rendered as an index, FETCH is the one path to
+  an original, and a ~25,000-character draft came back as its first
+  12,000 and "[...truncated]"). `FETCH: <id>` returns characters 0 to
+  `_FETCH_CHAR_CAP` (40,000); a window that ends before the end says how
+  many characters remain and the exact next request, `FETCH: <id> FROM
+  <n>`; each window is one fetch against `max_fetches`; nothing inside a
+  window is elided; an offset past the end says so. The window bounds one
+  prompt's growth per request, not what can be read.
+- **The sealed terminal state is one snapshot of the end** (root on
+  6c1b922: a last-slot batch's sealed checkpoint kept the pre-batch
+  `review_findings=[]` and `unresolved_reviews=[]` beside the end's capped
+  lists, so the terminal record named no reviewer's debt while result.json
+  did). `_terminal_state_patch` now carries `checkpoint.carried_snapshot`,
+  every carried key, the task outcomes, the history and the ledger as the
+  session ends, encoded per key with any key that cannot be encoded named
+  under `terminal_patch_omitted`; sealed runs stay non-resumable and older
+  sealed records are left as they were.
+- **A raised or unmerged child's open findings are held before its failed
+  record is written** (`_record_unmerged_failure` calls
+  `_hold_task_findings` with the child's outcome; root on 6c1b922: the
+  raised child's RFT2-1 had no hold and its failed handoff carried no
+  review debt). The scope conflict goes through the same call. Nothing is
+  merged, retried, or turned into a continuable cap; the findings stay
+  their reviewer's and a continuation inherits them by task id.
+- **The completed work reaches the planner and the lead as an index, and
+  every prompt is measured** (same batch; root's measurement on the last
+  saved run: the final ledger rendered 100,752 characters with previews
+  against 14,251 as the index, inside a 149,250-character planning prompt;
+  the last lead prompt was 130,574 characters with 23 earlier artifacts
+  shown in full). `with_previews=False` at the planner, the plan gate and
+  the lead draft, which keep the goal, rules, rulings, requirements, every
+  summary, reasoning, dead end and harness record, every artifact id, and
+  FETCH for any of them; the handoff and source pack of a continued task,
+  the map, the obligations and the open debt blocks are unchanged. Review,
+  revision, recheck and audit prompts carried no ledger previews and are
+  untouched. `_measure_context` records each such prompt's characters by
+  block, with the completed block both as sent and as the preview render
+  would have been (`prompt_measurements`, result.json): a rendering
+  comparison, never a token claim; tokens are the CLI's reported usage in
+  the delegation ledger. A route's admission now counts the planning call
+  that follows it (`_planning_stages`: one reserve call at the larger of
+  the reserve and the last planning call's reported size; none in the
+  final slot, for a terminal route, an explicit list or a child), because
+  the two post-audit planning calls reported 451,817 and 358,436 tokens
+  against a 200,000 reserve.
+- **An ordinary review covers the whole error boundary and inherited
+  failures** (`_ERROR_BOUNDARY_LENS`, same batch): malformed, missing,
+  out-of-range and oversized input, edge values, missing resources,
+  failures of what the code calls, where each is caught and what the caller
+  sees, construction and parsing outside the handler, and a failure the
+  task inherits from code its own path reaches. Generic by design: it names
+  classes, never a candidate's defect.
+- **A NOT RUN report binds to an identity the harness can execute, or
+  to nothing** (evidence lifecycle batch, Davis, 2026-10-29;
+  `Session._bind_not_run`). finding-lifecycle-02: t7's lead reported
+  scenarios (`P5`) and cases (`ApiDependencies.test_handler_...`) it could
+  not run in its sandbox, the harness's own gate then ran the suite whole
+  five times, and five requirements stayed NOT MET on runner-less rows no
+  record could discharge. Each item is now bound at the report: a declared
+  scenario (`P<n>`, every one the item names, through the cases its
+  acceptance row binds; PROVES is read before NOT RUN so the same reply
+  binds both, and a later rebinding re-binds the item and resets its row),
+  an explicit `file::[Class::]test` id checked against its file, or a
+  `Class.test`/bare `test_*` name defined in exactly one test file (read
+  with `ast`), reading the whole item in every grammar at once: a mixed
+  claim (`P1 and Other.test_absent`, `TestX.test_complete and P2`) binds
+  the union or nothing, a parametrized id keeps its whole bracketed
+  parameter (spaces included; `_CASE_CITATION` and `_CASE_NAME` read an
+  id to a boundary, so `test_x[not a real parameter]` is that instance,
+  never its base, and `test_x.extra` or a stray bracket is "a case id the
+  harness cannot read whole", held as written and never a path; root's
+  controls on d88d8c0; an id ends at whitespace, a separator, a closing
+  quote or backtick, or sentence punctuation, so a quoted id followed by
+  prose still cites, and a NOT RUN reason is split at the first ` - `
+  outside the brackets, so `test_x[a - b]` keeps its parameter; root's
+  addendum on 3b99f5f) and is discharged only by a run showing that
+  instance, and the complete item is the identity (root's control on bd0164f: a 300-character display
+  prefix of `P1 <detail> and P2` bound P1 alone; prompts bound the display
+  with `_display_item`, the record, the dedupe key, the merge, the
+  checkpoint and the checker read it whole). Ambiguous, undefined,
+  wrong-class, suffix, partial or prose items bind nothing and are held
+  as written, with the problem on the record. An identity claim, valid or
+  not, never falls back to the file-level route (root's control: an
+  undefined case cleared when its file ran other cases). The discharge is
+  one decision with its evidence (`_discharge_record`: the check, the
+  command receipt within it and the case identities that run was verified
+  to have executed for the record), and the typed receipt
+  (`_obligation_receipt`) carries exactly that record: root's six-case
+  diagnosis on 01cfaf8 found the receipt re-reading the check under a
+  whole-run rule, which dropped bare Node names and a named-case recovery
+  beside an unrelated historical skip, so the prompts said discharged
+  while the typed row read invalid. A skip fact's decision
+  (`_discharge_named`: same command, each name executed and unskipped,
+  held by the same file or runner-qualified) now keeps its run and names
+  on the entry (`discharged_run`, `discharged_cases`); never the claim
+  itself, and a marker from an earlier checkpoint that carries no names
+  is re-verified from the recorded check through the same rule
+  (`_named_skip_run`) or is no discharge. The checker's skip route
+  (`_skipped_cleared`) reads the same receipt id's own executed and
+  skipped counters (integers, each name at least as often as the fact
+  names it, skipped zero; never a set of keys), demands a complete case
+  record first (`_complete_cases`: `executed` and `skipped` mappings
+  whose counters are non-negative ints, the skipped counters accounting
+  for exactly the skipped total the runner itself reported, read from the
+  parsed report's count else the runner's summary line, unknown never
+  zero; root's control on 5ce8ebc: the real Node recovery with its
+  `cases.skipped` emptied under a raw `skipped 1` cleared, when the record
+  could no longer show the named case was not among the counted skips),
+  and holds a fact with a typed row in the record to that row's current
+  identity read
+  independently (the final source recorded on the check, the row's gate
+  and environment, its requirement revisions); only a record with no
+  typed row and no identity keys on the entry takes the separate
+  historical rule (same command's counters, final source where recorded).
+  Root's review of e1d9c01: zero executions, a duplicate debt with one
+  execution, a check without a source and another gate all cleared. A bound item's typed row
+  gets the gate as runner and the cases as identity (kept even
+  runner-less, so a parallel child's row re-bases to the parent's gate);
+  it is discharged only by a later complete required run on the current
+  source, under the entry's own gate and environment, whose own case
+  record shows every bound case passed. `_standing_not_run` and
+  `_discharging_check` now apply that identity too (root's control: a
+  passing run on another source, gate or environment left the typed row
+  unexecuted while the prompts showed no debt), so prompt and record
+  agree. The lead is told the two forms.
+- **Sufficiency is an explicit scoped judgment, never a verdict on a
+  requirement** (`_judge_obligations`, `sufficiency_source`; root's
+  correction on finding-lifecycle-02 and review of bd0164f). The old
+  implication read requirement flags over every requirement a shared row
+  binds: `_read_audit`'s lowering of R9 for a NOT RUN item cascaded into
+  R3, R4 and R11 the auditor had passed, and on first judgment R1 MET plus
+  R5 NOT MET labelled a shared row insufficient while all MET labelled an
+  unjudged row sufficient. There is no implication now: an executed test
+  row is judged only by its own `<O-id>: SUFFICIENT|INSUFFICIENT` line in
+  the reply the seat was already asked for (no call added), the audit and
+  reassessment prompts and the obligations block say so, a fresh or stale
+  row left without one stays unjudged and lowers its requirement through
+  the acceptance predicate, a judgment about exactly this evidence
+  (`sufficiency_current`) stands until a seat speaks again, and conflicts
+  stay unjudged. The fixture contract follows and is as strict: a
+  scripted auditor in `tests/lifecycle` authors its own row lines for the
+  named evidence it means to approve (`replies.judged`, keyed by the
+  scenario text the obligations block renders), an overridden handler's
+  reply is carried exactly as written, and only the default `Script`
+  auditor judges, and only the default fixture's own add scenario
+  (`default_audit`). No test-side transform adds lines from verdicts
+  (root's blocker on the first draft of this correction: a blanket
+  adapter would have moved the removed inference into the test
+  transport and masked missing-judgment negatives). Execution facts,
+  explicit sufficiency and requirement verdicts are three records; none
+  is derived from another.
+- **A requirement that names a command is shown by the harness's exact
+  receipt** (`_command_requirement`, `_command_receipt_citation`,
+  `citation_receipts`). R21 ("run the suite before declaring completion")
+  was lowered as uncited while the gate had run that suite five times. A
+  MET with no file or test citation now stands when a required receipt on
+  the current source, gate and environment, from the project root, ran the
+  named command (interpreter by public name, report token and
+  `-p no:cacheprovider` removed, everything else exact; `_command_key`)
+  whole and successfully: cases executed, a known zero skipped, none
+  failed or errored, no selection, and the audit record names the
+  receipt. A check whose source, gate or environment is not recorded is
+  an unknown identity and is refused (root's control on bd0164f), as is a
+  failed, optional, filtered, other-source, other-gate,
+  other-environment, other-directory, zero-case, skipping or failing
+  receipt, each with its reason. The citation names the command in the
+  requirement's own public spelling and never the argv that ran (a
+  private interpreter path; root's addendum), which stays in the check
+  record. The receipt is a citation of that successful complete run and
+  nothing more: the requirement's scenarios still have to execute and be
+  judged. The reassessment uses the same resolver.
+- **The finish routes each unmet requirement and withholds a challenge
+  that cannot clear it** (`_evidence_route`, `finish_routing`, carried and
+  exported). finding-lifecycle-02 spent three challenges, about 594k
+  tokens, on requirements held by NOT RUN rows. A standing NOT RUN item
+  (execution debt), an obligation with no runner (prerequisite), a failed
+  required execution, or an open review finding touching the requirement
+  is not offered: a read-only proof cannot discharge any of them, and the
+  prompt and the DONE refusal say where each goes instead (a task whose
+  checks run what the item binds, a repair task, the finding's own
+  reviewer). A finding on the behaviour, including one whose bound case is
+  missing or stale, stays challengeable, because the challenge's own proof
+  may be that case executed on this source and a false positive is a
+  legitimate dispute.
+- **Framing is part of the error boundary** (`_ERROR_BOUNDARY_LENS`). The
+  one product defect finding-lifecycle-02 left (a short body parsed as a
+  complete prefix and acted on) is not named in the lens; the lens says a
+  body shorter or longer than its declared length, an early EOF, a partial
+  read and a record cut mid-field are input, that code must not act on
+  what it did not fully receive, and that a rejected input must leave no
+  change behind, checked by reading the state after the refusal.
+- **The independent checker validates a bound NOT RUN entry itself**
+  (`tools/truth_check.py::_bound_not_run_cleared`). It reads the saved
+  binding's provenance (a declared scenario of the same task whose
+  acceptance row binds exactly these cases, or an item that itself names
+  each bound case), then a later check on the final source under the
+  entry's own gate and environment, required, passed, unfiltered, zero
+  skips, from the project root, whose own report shows every bound case
+  passed, in both directions (every bound case is spelled by the item or
+  its scenarios; every case the item spells is bound). It never reads an
+  engine discharge mark, and an entry that carries a `binding` key is
+  decided by the binding alone, never by the older file-level route
+  (root's control on bd0164f: a rejected explicit-case record cleared on
+  its file); only a record without the key takes that route. Forged,
+  stale, mismatched, partial, parametrized-instance, malformed or
+  historical entries stay unverified. Since d88d8c0 the item's whole text
+  decides the route (`_claim`): an identity claim (a scenario, an id, a
+  class or bare case name, anything shaped like a case id) is decided by
+  the saved binding alone, whether the key is present, empty, missing or
+  forged as `paths`; a path-only item takes `_paths_cleared`, which keeps
+  every identity check (final source, the entry's gate and environment
+  where recorded, required, unfiltered, zero skips, project root) and
+  needs the command to name the file whole and the report to show a case
+  of it passed; a historical record without identity keys is held to the
+  final source and the same passed-case reading. The checker reads both
+  record shapes (root's control on 3b99f5f): a gate suite's aggregate
+  command is the literal `gate suite` with no aggregate report and the
+  evidence in one receipt per command, so `_rows` normalises a check into
+  per-command rows (receipt status, required flag, command, cwd,
+  selection, report, count) or one row from a single-command gate, and
+  `_row_ok` demands of each row a whole successful run (passed, required,
+  no selection or filter, project root, a report in state `parsed` with
+  known counts, zero skipped, failed and errored and at least one passed
+  case; a report in any other state carries nothing, whatever fields it
+  still holds); nothing is fabricated across the shapes and `gate suite`
+  is never read as argv. A path-only record written before bindings
+  existed (no `binding` key) keeps the older executed-case reading, held
+  to the final source wherever the check records one. A parsed
+  report that lost its skipped count reads as unknown
+  (`integration.skipped_count`), never zero and never a crash, so a
+  citation refuses it.
+- **Execution debt is settled by execution and judged by nobody**
+  (quality/completion batch, Davis on #73, 2026-10-31; P12,
+  evidence-selector-01-ticket-2ac2f85). A lead's NOT RUN report and a
+  check's skipped cases are records of what did not run, bound to the
+  task's whole COVERS; t6's two items ran at check 3, the engine still put
+  the executed rows to the auditor for sufficiency, and its INSUFFICIENT
+  lowered six METs. Every obligation now carries a typed `purpose`
+  (`delivery.PURPOSES`: `execution` for a `not_run` or `skipped` row with a
+  test modality, `acceptance` for everything else) and the typed row keeps
+  its `kind`. The purpose is read from the whole record, fail closed
+  (`delivery.purpose_of`): a declared purpose that contradicts the kind, a
+  kind the engine does not write, a non-test modality or no kind at all is
+  acceptance, which never settles by execution alone. The predicate
+  (`delivery.acceptance`) settles an execution row on an authorized runner
+  and `execution == "ran"` on the current identity and asks nothing else of
+  it; unsettled, it holds its requirements exactly as before (no runner,
+  missing, pending, stale, failed, skipped, invalid, revision moved).
+  Settled, it holds nothing and proves nothing: the acceptance evidence is
+  the declared scenario rows. The audit and reassessment prompts list debt
+  under its own heading ("## Execution debt", `_obligations_block`) and ask
+  for sufficiency lines on executed acceptance rows only; a line a seat
+  writes about a debt row (one, or a conflicting pair) is kept as
+  `sufficiency_note` and applied to nothing (`_judge_obligations`), and the
+  typed `judge_sufficiency` refuses such a row outright. The packet
+  identity carries purpose and kind (`packet/4`) and the audit binding is
+  `audit/5`, so a cached audit is not reused across a purpose change and a
+  job checkpointed on the older engine re-draws its final audit once on
+  resume. Skip facts are symmetric with NOT RUN rows. The independent checker (`tools/truth_check.py::_debt_lowering`)
+  names a final-audit lowering that cites the judged sufficiency of a
+  debt row the record shows executed as unshown, from the record alone,
+  never as the requirement met. `_discharge_record`'s skipped and paths
+  routes now read the check's result like every other route. Not changed:
+  which requirements a NOT RUN entry binds, the entry-level standing rule
+  (`_lower_unexecuted`), and the genuine candidate defects P12 found
+  (R17, R19, R22 and the R2 ambiguity), which no rule here removes.
+- **One contract rule reaches every seat that reads the goal**
+  (`_CONTRACT_BOUNDARY_RULE`, same batch). P12's real findings were four
+  readings of the goal: a library's leniency taken as the goal's language
+  (NaN accepted by a JSON parser), an argument parser's usage exit taken
+  as the required JSON refusal, mutation after a refusal never read from
+  the state, and a README exception narrowing a requirement. One compact
+  rule closes those four readings and keeps the open one (where the goal is
+  silent or two rules collide, name the ambiguity for a decision). It rides
+  the routes that already exist: the planner's task request, the lead
+  prompt (once; a parallel child's lead gets it through the goal block),
+  every editing call after the draft (`_writer_goal`), every task review
+  (`_goal_authority`), the final audit and both reassessments
+  (`_authority_context`). No new model pass, no second long paragraph. The
+  recheck was first left out as a route because it carries the reviewer's
+  own finding; root's review of 0c5c6f1 read the actual recheck prompts
+  and found them byte-identical to baseline, with no goal, no requirement
+  text and no precedence, so the recheck is a route now (`_finding_contract`,
+  next note). A prompt that states a rule is not proof a seat applies it:
+  the lifecycle control shows the sentence reaching each seat and a
+  scripted reviewer acting on it, nothing about generation.
+- **A slot is charged at dispatch, and the ledger says what was charged**
+  (`_run_tasks`, `slot_ledger`, `_slot_event`; same batch). `used += 1`
+  sat at the top of the loop, so P12 spent two of its eight slots on a
+  declaration the intake refused and a DONE that was sent back, and the
+  cap ended the run with its requirements open. Now admitted work is
+  charged once when it is dispatched (a serial task, or a parallel wave
+  once `_run_batch` is past its admission, `_wave_started`), whatever
+  follows: a clean close, a cap, a failure, a stop raised inside it. A
+  planner reply the intake refuses (nine send-back sites, a batch sent
+  back, a verification-only task), a DONE sent back and a task or batch
+  not started spend nothing; each lands on the carried `slot_ledger`
+  (`sent_back`, `done_sent_back`, `not_started`) with the count as it
+  stood, and the uncharged paths stay bounded by what already bounded
+  them: the correction allowance (`max_requirement_reopens` to
+  `RunStalled`), the completion decision's reopen allowance, the repeated
+  task stall, the call, token and wall budgets. `_slots_used` keeps its
+  convention (slots charged before the current task) for `_final_work_slot`,
+  `_commit_terminal`, the planning admission and the capped-child review;
+  the planner's note says what spends a slot. A route forfeit now names the
+  refused task's own slot unused (nothing of it ran) and the charged count
+  stays as charged; the DONE-site RequirementsUnmet names capped or failed
+  work not continued, because a run the cap used to end now reaches that
+  stop. Legacy checkpoint counts are restored as recorded and an older
+  checkpoint resumes with an empty ledger. Not changed: the explicit-task
+  entry, the recovery allowance (charged at dispatch, never refunded), and
+  the quiescent checkpoint, which still predates the dispatch it precedes.
+- **A capped revision meets its reviewer in any serial slot, once**
+  (`_capped_revision_recheck`, `_checked_source`; same batch). The r10
+  handoff applied in the last slot only; P12's t3 and t4 each left a
+  gated, in-scope source whose findings were never rechecked and each cost
+  a continuation. The same bounded one-shot now applies with slots left:
+  the original reviewers, no fresh writer, no retry, the write ceiling,
+  the scope, measured in-scope edits and a passing observation of exactly
+  the current source and gate by this task (the pre-review observation
+  covers a revision that changed nothing; never another task's, never an
+  explicit list, never a parallel child). The recheck route is admitted
+  whole before it is promised (`_admit_repair`, as the no-edit retry's
+  is); refused, the capped close applies with nothing written to the
+  transcript. The outcome is read from the registry, never from the
+  recheck's return alone (workflow refutation, 2026-10-31: a capped,
+  refused or verdict-less recheck returns nothing for a finding that
+  stays open): resolved only when every pending finding is closed, none
+  was raised during the recheck and the source is unchanged. Resolved
+  closes the task clean with the cap fact on its record and a
+  `capped-checked-revision` artifact; anything else with slots left
+  (UNRESOLVED, a capped or refused recheck, a finding raised by the
+  recheck, a source that changed, another reviewer's finding still open
+  at the fix-cycle site) returns to the capped-task path, with the
+  reviewer's own verdict standing on the registry and the task owed for
+  the planner to continue by name, so nothing is accepted on the writer's
+  behalf and the breaker and the survey count one cap. PROVES lines are
+  recorded once, by the handoff or by the capped close. The record handed
+  to the reviewer says the gate passed in the harness's own observation,
+  where the run-start original tests are not re-run. Every handoff is on
+  `capped_handoffs` (task, stage, slot, reviewers, outcome, a stop's
+  exception name if the recheck raised; carried, in `result.json`). The
+  last slot closes on the recheck as before; `_capped_final_draft` stays
+  last-slot only. Two more facts from
+  the same batch: `result.json.slots_unaccounted` is the recorded count
+  minus the ledger's charges (non-zero only for a job resumed from a
+  checkpoint written under the old rule), and the loop carries a tripwire
+  (`RunStalled` past `2 * max_requirement_reopens + 1` uncharged turns)
+  that today's paths cannot reach, so a future uncharged `continue` never
+  plans for free.
+- **Seven repairs from root's review of 0c5c6f1** (6538988187, 2026-10-31;
+  the same three families, finished). Each was read off the delivered
+  prompts, record or checker, not inferred.
+  - *Both rechecks carry the finding's own contract* (`_finding_contract`).
+    `_recheck_blocking` (a reviewer re-checking its finding against the
+    revision, the capped-revision handoff) and `_recheck_open_findings`
+    (a held finding settled when a later task continues or resolves its
+    task, the post-merge recheck) now open with the verbatim goal, the
+    text of each requirement the named findings were raised under (read
+    from the finding's own requirement or basis where the ledger knows
+    that id, else the raising task's COVERS; never the current task's),
+    each line naming the finding and task it binds, every operator ruling
+    whole, the order of authority and the boundary rule, once. The block adds no finding, asks no
+    verdict on a requirement and reopens no review: the recheck grammar,
+    its expected ids and its named-finding-only scope are unchanged, and
+    the full review's per-requirement duty is not appended. The held
+    route in the control is a t1/R1 finding rechecked during a t2 that
+    covers R2 and continues t1, because the engine refuses RESOLVES on a
+    task that does not cover the finding's requirement.
+  - *The serial lead is told the order of authority* (`_lead_prompt`): the
+    one sentence (`_AUTHORITY_ORDER`) beside the boundary rule, once; a
+    parallel child already had it through its goal block. The serial
+    lead's goal is not repeated. A parallel child's prompt has carried the
+    goal twice since before this batch (the ledger render and the child's
+    goal block); that is outside this item and left as it is.
+  - *The audit's reassessment states the rules it enforces* (`_reassess`):
+    `_EXECUTED_ERROR_RULE` beside `_ERROR_PATH_RULE`, as the full audit
+    has it, so a MET on an error or refusal requirement is asked for the
+    exact executed case identities `_lower_unexercised_errors` requires,
+    and the full audit's resolution sentence (a citation resolves only as
+    a project file path with an extension or a `test_*` function in a
+    `test*.py` file; the scratch test the harness ran is not a project
+    file), so the auditor cites the executed identities beside a project
+    file that resolves. Neither the lowerer nor `_resolve_citations` is
+    changed: a bare test name still lowers, and the scratch identity alone
+    is still held.
+  - *A repair after the final audit renews the audit hold before its
+    writer is admitted* (`_renew_audit_hold`, `RunBudget.renew_finish`).
+    `protect_finish` never re-held a stage already started, so a NOT MET
+    audit followed by a repair ran the writer with no audit reserved. The
+    renewal is durable (persisted to the budget record), checked before
+    `_refuse_unpayable_dispatch` on the serial and batch routes, bounded
+    by `max_requirement_reopens`, and refused as `FinishReserved` when the
+    repair plus the renewed finish cannot fit; nothing spent is reset, the
+    started history stays, the allowance is not enlarged. `protect_finish`
+    keeps a renewed stage held while its renewal is owed (`_owed`: starts
+    no more than renewals), so naming the same stages again never frees
+    the renewed audit's capacity to ordinary work; once the renewed call
+    starts nothing re-holds it (root's independent reproduction on the
+    recovered head). While a renewed audit hold is pending, the repair's
+    route also counts the planner's DONE call between it and that audit,
+    even with no token reserve (counted as a call, tokens not counted;
+    zero-reserve admission elsewhere unchanged), and a renewal made for
+    work that is then not started (serial or batch) is released, so the
+    cap's goal question is not refused against it; the renewal stays
+    counted against its bound. A review-only
+    task is held to the same renewal (its close makes the next DONE's
+    audit necessary); only the explicit-task entry keeps its route. On
+    "never repeatedly audit unchanged source": a DONE repeated over
+    nothing is sent back by the coverage check on the recorded verdict
+    before any audit is asked; a task that re-covers a requirement closes
+    with receipts and obligation rows the auditor consumes, so its packet
+    is new by the engine's own definition of what an audit was about
+    (`test_every_evidence_the_audit_consumes_is_in_the_packet`) and is
+    audited under the renewed hold even when the source is byte-identical;
+    the cap's exact-state cache still releases the hold on a resume.
+    Every audit now records its `_audit_binding`, so the record shows
+    which packet each judged. A source-only reuse was tried in this batch
+    and refused by those controls, and a DONE-route binding reuse was
+    found unreachable (the coverage check fires first), so neither is in.
+  - *A task's admission is committed before its first effect*
+    (`_admit_dispatch`, `task-admissions` on the job store, carried on the
+    checkpoint). After the payable-route check and before any call, the
+    task ids, slot, count, authority digest and attempt count are
+    published under the committed authority; a store that cannot commit
+    stops the run with nothing started (`JobStoreUnavailable`), recorded
+    as not started with no slot charged and the typed outcome
+    `not_started` (`_refuse_admission_record`). The same holds for the
+    authority commit one step before it (a task start's or a wave's) and
+    for a parallel wave, a store refusal with no open admission for the
+    task means nothing ran, and an explicit list's `ran` entry is taken
+    back. A batch child on the security route publishes nothing of its
+    own; its wave's admission stands. The charge keeps its place
+    and its convention, and each ledger charge names its admission. A resume past an admission the checkpoint does not carry is
+    refused by the existing unconsumed-operation guard (the planner's
+    settled call that named the task), and the refusal now names the
+    admission beside the retained receipts: nothing dropped, nothing
+    re-planned, no refund. `_count_interrupted_admissions` is the
+    conservative count should a later checkpoint cadence admit such a
+    resume; today only the unit control reaches it.
+  - *A capped close after a handoff says what was performed*
+    (`_handoff_account`, `_close_turn_limited`): the hold reason and the
+    planner's summary name the recheck, its reviewer and what each
+    finding came to, and call the passing gate what it was, the harness's
+    observation for the reviewers, not the task's canonical gate with the
+    run-start originals. The handoff carries a per-finding outcome read
+    from the registry (`findings`: unresolved only where this recheck
+    wrote the reviewer's UNRESOLVED, no verdict, raised, source changed;
+    `resolved` and `invalidated` as the registry closed them;
+    `others_open` whenever another reviewer's finding is open), and the
+    close words every finding from it (`_handoff_holds`,
+    `_handoff_came_to`): a capped recheck reads "no verdict", a finding
+    the recheck raised reads raised, INVALIDATED is never RESOLVED, and a
+    finding outside the recheck is never credited to its reviewer. Each
+    hold states its own outcome first, inside the planner's 120-character
+    view of a hold. The cap, the
+    open finding and the unfinished outcome are unchanged; a plain capped
+    close keeps "before its recheck".
+  - *The independent checker compares requirement revisions*
+    (`tools/truth_check.py`: `_typed_not_run_rows`, `_revisions_match`,
+    `_bound_to_row`). A saved record whose clearing check moved R1 from
+    revision 1 to 2 while the typed row binds R1@1 and reads ran was
+    `verified`; now every clearance route (case, path, the older
+    unbound path route, class, command, skip) and `_met_over_debt`
+    require the check to carry the row's revisions exactly. One lookup
+    (`_typed_not_run_rows`, `_row_item`) serves both halves: the entry's
+    item or the row's behavior, the task compared as text, every live row
+    held (a decoy beside the live row clears nothing), and a superseded
+    `not_run` row, which the engine never writes, still binds when it is
+    the only one. Every bound reference must be an (id, revision) pair,
+    and a malformed one refuses the match rather than being dropped. A
+    revision must be a whole number present on both sides; a null never
+    equals a missing map entry. A legacy entry with no
+    typed row keeps the route's identity test; a typed row against a
+    check with no revision map never matches, and a missing map is never
+    read as approval.
+- **A judgment that did not finish is owned review debt, and every stop is
+  an occurrence on one record** (Davis on #73, 2026-10-31, 6545870693;
+  `quadratus/recovery.py`). A live run stopped after two of eight slots
+  because one reviewer reached its round cap and the no-verdict review was
+  a bare open string nothing could hold, recheck or settle (6544825528).
+  Root's baseline (6545984480) reproduced three families across nine
+  controls. One lifecycle now covers them:
+  - *Recover once, else own the debt.* A capped or verdict-less first
+    review, recheck, final-child review, design review or text
+    verification writes an occurrence (`Session.recoveries`, `RV<task>-<n>`:
+    identity, source, class, the failed call's invocation id and measured
+    cost, allowlisted observations, prior attempts, the open question, the
+    allowance left, the decision and result). The same seat completes its
+    judgment once (`_complete_judgment`, the job's one completion, claimed
+    and never refunded); failing that, the judgment is held as owned debt:
+    a recheck's findings stay open under their own ids for their author
+    (`Finding.owed_recheck`: never audit-carried until the author judges
+    again), and anything else registers one `unreviewed` finding
+    (`delivery.FINDING_KINDS`) for the seat that owes it. Not a defect, not
+    an approval, not carried to the audit, never settled by an id line
+    (`apply_reading`). A design reply with neither APPROVED nor a BLOCKING
+    line is owed the same way, never a bare string. Protective stops
+    (uncertain write, permission, integrity, cancel) stay stops; timeout
+    and unknown usage name reconciliation; a quota stop names the seat. A
+    terminal occurrence is classed by exception type, cause chain and the
+    budget's structured reason, never by message text (a provider error
+    carries model text), names a failed call only when the newest call
+    failed, and keeps only the type as its detail. No fallback vendor, no
+    larger cap, no allowance increase.
+  - *Only the owner settles it, on a real route.* RESOLVES or CONTINUES
+    closing clean, the post-merge recheck, the explicit list's end and the
+    cap each give the owner one review of the work as it now stands
+    (`_settle_owed`): at most two attempts and never twice on the same
+    source, both counted over every occurrence that names the record
+    (`_owed_settlements`), each attempt stamped with the source the owner
+    was shown; the owner only; a change to the full judgment identity
+    during the call (source, checks, requirement texts, contract, packet:
+    `_judgment_binding`) voids it. The reply passes the ordinary review
+    qualification (`_judge_goal_review`, the executed negative-path rule
+    included) before any finding is registered or any cap is lifted. Every
+    recheck route, the post-merge and settlement rechecks included, takes
+    the same typed transition for a cap, a refusal or a missing or malformed
+    verdict (`_owe_review` with the ids), and records itself as the owner
+    settlement of findings already owed. An occurrence reads "recovered"
+    only when the debt's own author closed it.
+    A completed review closes the record by the owner's RESOLVED
+    disposition with the settling call's id; its BLOCKING lines and every
+    covered requirement it calls NOT MET open as new held findings. Owed
+    rechecks get one author recheck at the list's end and the cap. A clean
+    settlement of a capped final-batch child lifts its cap as the review
+    would have (`_lift_final_cap`). A design review or verification is
+    settled only by the same owner's own completed judgment of the same
+    kind (APPROVED or its own BLOCKING line, on renders delivered and not
+    stale; a harness-written verdict judges nothing; for a verification,
+    its own VERDICT line or prefixed finding on an unchanged identity, so
+    narration settles nothing). DONE and the cap
+    never complete over it, and the auditor's MET does not lift it. An
+    occurrence's result is re-read from the registry when its debt closes.
+  - *Context is harness facts, never model text.* The completion and the
+    owner review are told what the harness measured
+    (`_recovery_context`): the cap or the arrived reply (never repeated),
+    or that no call was made; project files a reader tool was observed
+    opening, stated as observation and never as "unread"
+    (`recovery.safe_observations`:
+    existing project-relative paths only; search patterns, command text,
+    out-of-project paths, narration and reasoning never pass, since
+    `trace.shareable` keeps grep patterns in `files_read`), counts, the
+    changed files left unread, and the source binding; observations from an
+    earlier source are labelled history. The trace is read while the run is
+    live (`project_run._live_call_trace`), because `build_traces` runs only
+    after Session exits; when it is missing the prompt says so. The reader
+    measures the transcript's own integrity (`_transcript_integrity`):
+    `observed` only for a record read whole, `partial` with its reason and
+    lower-bound counts for unreadable lines, missing files or the size
+    bound, `unavailable` for none readable. A completion's attempts carry
+    its pre-call source; a stopped completion exports only the exception
+    type (the message is a private artifact) and the occurrence reads
+    stopped. Carried, not fixed: a single-seat claude envelope with no
+    auxiliary `modelUsage` loses `model_calls` and cache metadata in
+    `cli_providers._ending_only` (unchanged since before this batch; the
+    token totals stay right).
+  - *Proposals, not causes.* `result.json` carries `recoveries` and
+    `improvement` (families by class, role and vendor; evidence; cost from
+    `InvocationEvent`s, each outer call once, unknown usage counted and
+    never zeroed; a recommendation; a regression scenario; status
+    `proposed: not adopted`), and the report a section. The checkpoint
+    carries the occurrences; an interrupted episode's later ones ride its
+    committed terminal record and a resume merges them by id
+    (`_carry_recoveries`), so no attempt is lost and no retry resets.
+- **A stop is charged to the call that caused it, not to the admission it
+  refused** (root on 113f4e1, 6549956979). The P16 run's Grok lead reasoned
+  for fifteen minutes with no tool call, hit the 900 s transport timeout,
+  and left no usage; the budget latched `unknown_usage` and refused the
+  orchestrator's replan, and the terminal record named the orchestrator
+  with zero calls. Three changes, one family:
+  - *Causes by operation.* Every settlement without usage is kept on the
+    budget as `unknown_usage_operations` (op id, task, role, seat, editing;
+    bounded to 50, no text), and the ledger row carries the same op id
+    (`InvocationEvent.operation`, from the provider's `last_operation`).
+    The terminal occurrence binds each cause to the row carrying its op id
+    (`_bind_unknown_causes`). A row with no op id at all may stand in only
+    when it is the one unclaimed unknown-usage row of that task, role and
+    seat and no other unbound op of that seat could claim it; a row with a
+    different op id never does, and no row serves two ops (root's review
+    of 56ab825: a fallback that ignored the id merged two causes into one
+    cost). It takes its identity from the first bound cause, keeps the
+    refused admission as `stopped_call` (`invoked: false`, never a cost),
+    and reads the cause's trace. Several serial or concurrent causes are
+    all kept; an unbound cause counts once as unidentified, never zero.
+  - *Failed tasks are occurrences.* `_close_failed` writes a `task`
+    occurrence (`provider_timeout`/`provider_error` by type chain, else
+    `task_failed`; action `hand_back`) with the failed call, its trace and
+    `effect` (inspected, changed files, changed lines). Nothing is retried.
+  - *Grok identity and progress.* `GROK_SPEC.session_id_flag` is
+    `--session-id`, so the UUID exists before launch and a timeout that
+    returns no envelope still locates the native folder. The live reader
+    adds `progress` from that folder's `events.jsonl` (root qualified the
+    schema against the retained 1.0.62 session: `phase_changed` rows with
+    `phase` and `ts`). Labels are a fixed allowlist, not a pattern
+    (`recovery.GROK_PHASES`: waiting_for_model, streaming_reasoning;
+    `GROK_EVENT_TYPES`: turn_started, loop_started, phase_changed,
+    first_token, and the trace parser's tool_completed and
+    permission_resolved); any other phase or type is counted as
+    `other_phase`/`other_type` with its text dropped. A time is used only
+    when it is finite epoch seconds or milliseconds in 2001 to 2100 or a
+    zone-aware ISO string; anything else is counted in `timing_invalid`,
+    `timing` reads partial, and nothing raises. `activity` is tool_use,
+    reasoning, waiting (only waiting_for_model seen), other_events or
+    no_events; `status` is partial when a row is not a JSON object or the
+    read was cut. `_safe_progress` re-checks every field, including finite,
+    bounded durations. Only native session folders get it. The envelope,
+    usage, stop semantics, deadlines and retries are unchanged.
+  Limits: the allowlist is one CLI version's vocabulary, so a new phase
+  reads as `other_phase` until it is added; a harness crash mid-call leaves
+  the id only in the CLI's own folder; stderr is exported as a character
+  count.
+- **A concurrency proof of existing behaviour does not invent a bug**
+  (same comment). The gate still needs a test that really interleaves and
+  runs in an approved check; the failing-first run applies only when the
+  task corrects a demonstrated defect, and an invariant proof that fails
+  has found one. The lead's check guidance now states the coverage rule
+  `uncovered_tests` already applied: a new test file counts when a listed
+  command names it, names its folder, or discovers it.
+
+- **A review starts from the measured change; a recheck from what changed
+  since that review** (Davis, 2026-11-04, after grok-worker-01: 1.72M of
+  5.72M reported tokens went to reviews and rechecks, 97% of all tokens
+  were input, and seats explored their copies to find what changed). The
+  in-task reviewer prompt carries the task's diff since it began
+  (`Session._measured_change`, file list with changed-line counts, diff
+  inline up to `REVIEW_DIFF_CHARS`, 24,000 characters, the rest named); a
+  recheck from `_recheck_blocking` carries the diff since the capture taken
+  when the review ran (`_review_before`), or says the source is unchanged.
+  A review after a merge (`_review_capped_final_child`) passes no capture,
+  because the parent's is not that task's. The same run caught a failure
+  on one entry point while its counterpart on the same operation survived
+  to the final audit, so the review lens (`_COUNTERPART_LENS`), the
+  revision and fix prompts (`_COUNTERPART_FIX`) and the recheck
+  (`_COUNTERPART_RECHECK`, a NEW line) each name counterparts: other entry
+  points the task adds or changes that perform the same operation or run
+  the same code. Generic by construction, pinned by test. Context and
+  instructions only: what a seat may read, run or edit is unchanged, and
+  the token effect is unmeasured until a run shows it. Reusing the
+  harness's own check runs on an unchanged source already existed
+  (`_observe_checks` skips a repeat; review seats get `harness_checks`).
+
+- **Rounds per call are recorded, and the monitor shows where the tokens
+  went** (Davis, 2026-11-05: grok-worker-01's 40 calls recorded no model
+  turns, so rounds × context could not be separated). Claude's single-seat
+  envelope went through `cli_providers._ending_only`, which dropped the
+  turn count, the cached-input subset and the vendor's stated cost (the
+  metadata loss carried since the recovery batch); it now keeps all three.
+  codex reports no turn count, so its tool steps are counted from the event
+  stream (`CODEX_TOOL_ITEMS`: command, file change, MCP call, web search)
+  into `InvocationEvent.tool_steps`; a completed turn with none is 0,
+  measured, and a stream with no turn records nothing. The monitor reads
+  the run's whole `invocations.jsonl` (bounded, `BREAKDOWN_BYTES`) into
+  `monitor.call_breakdown`: each invoked call's input, output, cached,
+  turns, tool steps, seconds and input per turn, and the same by role. The
+  terminal view prints the by-role table (`--monitor --calls` adds every
+  call); the GUI Monitor tab and the phone page show both
+  (`render_breakdown_html`, escaped). A blank is not recorded, never zero.
+  Every role sum is over the calls that recorded its figure and says how
+  many: input per turn pairs each call's own input with its own turns
+  (`calls_with_input_per_turn`), seconds and tokens carry an unknown
+  count, and a role with no known figure reads unknown, not 0 (root's
+  pre-live review of f4d34a2). It counts per call; it is not a per-turn
+  activity ledger. Observational only, like the rest of the monitor.
+- **A reading is reviewed, a NOT RUN holds what it serves, a scenario is
+  corrected whole, and a boundary nobody tested is a risk** (Davis,
+  2026-11-06, batch 6674444836 on turn-tracking-01; root's correction
+  6674996693 on a3de6d6). O10: every editing seat was told "Use Read, Grep
+  and Glob", claude's tool names; a codex revision reported reading two
+  files as NOT RUN and it held nine requirements as runner-less execution
+  debt. `runtime.inspection_tools` now names each vendor's own way to read
+  and says reading is never a NOT RUN item. Only a *pure* reading (a
+  reading verb, then existing file paths and joiners, nothing else;
+  `_pure_reading`) becomes an inspection gap (`inspection_gaps`, id
+  `IG-<10 hex>`, unique across parallel children); anything mixed stays
+  execution debt. A gap is handed to the task's next review or recheck
+  (or a review-only verification task) with the files' digests and source
+  at dispatch; only that seat's completed reply with `READ <id> - <what
+  they show>` (one line, never borrowing the next) and no `UNREAD <id>`
+  attests it, on the dispatched bytes, so
+  a file changed while the review ran is not attested and a later change
+  reopens it. An open gap holds the reporting task's requirements at the
+  audit, the evidence route and the verification handoff; tests never stand
+  in for it. The live reader (`_inspection_attested`) and `truth_check`
+  require the same authority (seat, stage, READ judgment, a consumed
+  hand-off of exactly those bytes), so a carried or resumed record with
+  less is open live and unverified saved. O34: a NOT RUN item's hold narrows only when
+  the whole item is bound to the task's declared scenarios: every scenario
+  and case it names, and every path it names that is not a bound case's
+  file, whatever grammar bound the rest; an item the binder could not bind
+  never narrows. One unmatched part keeps every covered requirement held
+  and is named. The seat's `| for: R<n>` is
+  kept as `association_claimed` and never narrows the hold. O11: a
+  correction may change several fields of one scenario, applied as one
+  revision with every field's before and after, or not at all. R19: the
+  goal block lists, for error requirements about integer or ID inputs,
+  candidate boundary classes, each with the condition under which it
+  applies (2**63 where values reach a signed 64-bit or SQLite INTEGER
+  store; one digit past `sys.get_int_max_str_digits()` where text goes
+  through int()). They are candidates, never requirements: the
+  requirement's own contract decides the behaviour, a value it accepts
+  (an opaque or arbitrary-precision ID) stays accepted, and no limit is
+  lowered or added. A held MET says "untested risk, no counterexample
+  observed".
+  Since PR73 6693873055 no NOT RUN reading creates a gap (carried gaps are
+  still read and held), and the boundary note no longer asks for crash
+  wrappers: a raw exception buys the bounded repair.
+- **A failed check buys a bounded repair; the protections judge the
+  outcome** (Davis, 2026-11-06, PR73 6693873055, after acceptance-routing-01
+  stopped on a generated fixture with 3.2M tokens left). Codex 5858008514
+  required every non-assertion failure to stop with zero repair calls; the
+  class of an exception never decided who could fix it. `integration.
+  repair_route` now stops (`CheckUnattributable`, operator) only on what no
+  project edit can change: a launch that failed (runner or cwd unavailable
+  or unconfigured), a source that changed under the gate, a report from
+  another invocation, leftover processes not confirmed stopped (a suite
+  command that exits 0 with them is `error`, never passed). An exit status
+  alone, 126 and 127 included, names no cause (root review of b49a0cb). A raw
+  exception, a broken generated fixture, a collection error (including
+  restored originals executing nothing after a product syntax error), a
+  timeout whose processes stopped, an exit other than 1, or a mix with
+  assertions gets the task's existing gate fix (`max_gate_fixes`), with the
+  harness's diagnosis (`attribute` reasons, kept as the record and the fact
+  class) in the prompt. What it achieved is judged by the next check,
+  restored run-start tests, scope, scenarios bound to executed cases and,
+  for any generated test the repair changed or removed, the task's
+  original reviewer comparing it with its pre-repair text
+  (`generated_test_repairs`, root review of b49a0cb): one capped
+  `test-comparison` call reserved on the repair route (a task that drew no
+  reviewer gets an available brain-trust member of another vendor than the
+  lead; with none at all the rewrite is an open unverified finding),
+  showing every changed line as a unified diff with context, whole per
+  file, up to 60k characters per call with the rest judged in one more
+  in-task call or the owed settlement; exactly one
+  `TEST INTACT|WEAKENED <exact path> - <why>` line per file, read by one
+  reader (`_test_verdict`) live and saved, each verdict bound to the reply
+  that gave it and to the bytes handed (`_test_repair_verified`, the same
+  rule in `truth_check`); a file whose changes cannot be shown whole is
+  named incomplete and never certified INTACT (root reviews of b49a0cb and
+  0ffc9e9). No verdict gets the one judgment completion, then
+  becomes the owner's owed review debt (owed kind `test comparison`), which
+  holds completion like any owed review and settles only by that owner's
+  comparison; WEAKENED is the owner's blocking finding, ledger or not (root,
+  PR73 6695526328: a no-ledger run completed over it). In a task it buys
+  the ordinary bounded correction (one admitted `revision` call carrying
+  only those findings, the check again, then the same reviewer's recheck);
+  it settles only by that reviewer's RESOLVED or reasoned INVALIDATED
+  (`_test_repair_settled`, the same rule in `truth_check`), and anything
+  else is held as open work. No byte-change rule: the reviewer may retract
+  its own finding on unchanged source. A failure that survives is the ordinary check debt or
+  `CheckFailing`, cause unestablished. A bounded editor's reply is read by
+  `runtime.bounded_patch`: one `PATCH:`-marked fenced diff, CRLF, BOM and
+  framing prose normalised, no model call; more than one marker or diff,
+  or `NO CHANGES:` beside it, is refused before anything applies, and
+  every rejection, application failures included, keeps the reply as
+  returned, before any path rewrite (`runtime.response_record`: text
+  labelled whole or a retained 200k prefix, the whole reply's length and
+  sha256, `parse_stage`, whether the parser read a rewritten form), stored
+  by the session (`rejected-response` artifact, metadata on
+  `rejected_responses`, a failed store recorded) and by the worker seam. A capped revision or
+  fix whose recheck settled at least one finding, with a fix cycle left,
+  continues in the task on only the open findings (each shown with its
+  original text) instead of a continuation task re-sending the bundle;
+  no cap, budget or allowance grew.
+
+- **A headless permission block is a denial, and a restricted seat is told
+  its readers** (cycle15, root's reconciliation of the cycle14 terminal,
+  PR73 6734704072). cycle14 t5, `grok:worker` as a restricted editing seat in
+  a source copy, opened README.md through Fetch on a `file://` URL. Grok
+  printed `permission required: Fetch: <target> was not run, as a headless
+  run cannot ask for approval`, the turn came back cancelled with nothing
+  changed, and the record called it transport with "its files are kept".
+  - *Diagnostic.* `_extract_grok_permission_block` reads only that exact
+    stderr line into `{tool, scheme, headless_approval, target_digest}`. The
+    raw target stays in the private stderr tail, never in a message, record
+    or prompt. A failed turn with the line raises `PermissionBlocked`
+    (`providers.py`, class `denial`). A refusal, a cap and an authentication
+    failure keep their own types first. The block rides on the invocation
+    row (`safe_diagnostics`), the task fact and the failed handoff.
+  - *Never retried.* The draft handler re-raises it before any lead recovery,
+    so an unpinned serial lead gets no fallback rung. A worker's block stops
+    as raised instead of going back to the lead to reissue. In a batch the
+    child stays unmerged and stops `FindingsOpen` like a refusal. The terminal
+    record classes it `permission` (protective), after integrity and
+    uncertain writes. An unmerged child that changed nothing says "it changed
+    no files".
+  - *Guidance.* `CLISpec.local_read_tools` (grok: read_file, grep, list_dir,
+    all already in `restricted_args`) puts one sentence in a restricted
+    seat's copy prompt (`runtime.local_read_rule`). It says to read files
+    with those tools by relative path, never through a web or fetch tool or
+    a `file://` URL, and to report a denied action without retrying it
+    another way. Argv, tools and approvals are unchanged. Whether `read_file`
+    runs headless on grok 1.0.62 is not proven; the next fresh run shows it.
+  - `_close_policy`'s docstring now says what happens: serial capped or
+    failed tasks re-plan before it; a batch always reaches it.
+
+- **The owner's standing question reaches the planner and the resolving
+  lead** (cycle16, root's reconciliation of the cycle15 terminal, PR73
+  6737404225). In cycle15, RFT4-11's owner rechecks said which declared
+  scenarios were missing. The planner, the only seat that admits a scenario,
+  saw a 140-character claim, so t7 declared P1 to P9 without them. Its lead
+  could bind only declared scenarios, and the owner was rightly adverse.
+  - `_standing_reason` is the one reading for the owner's recheck, the
+    planner and the lead. It takes only the latest judged history entry,
+    which must be by the finding's own author, UNRESOLVED and non-empty. An
+    older reason is never resurrected past a newer RESOLVED or another
+    seat's entry. It is labelled with the same, an earlier or an unrecorded
+    source.
+  - The planner view's open-review lines carry it, bounded to
+    `_STANDING_REASON_CHARS` (400), attributed and marked "recorded, not a
+    verdict". `_MISSING_SCENARIO_RULE` says a missing-scenario finding is
+    resolved only by a task whose SCOPE declares a scenario per missing
+    behaviour. The planner stays the only admitter and the owner the only
+    closer.
+  - `_resolution_findings_block` shows a lead (draft, revision) exactly its
+    own RESOLVES targets, read from its own dispatch record and never from
+    another task's working state, plus inherited CONTINUES findings, once
+    each, with the reason. A parallel child holds none, since RESOLVES is
+    refused in a batch.
+  - `_record_proves`: a whole, valid one-case line naming an undeclared
+    `P<n>` is recorded as a problem, binds nothing and no longer resets the
+    declared bindings (cycle15 t4's P8 wiped P1 to P7). Every other
+    malformed, scenario-less, non-test or non-case line still fails closed.
+  - A planner may still ignore the context; the owner's adverse verdict
+    still stops `FindingsUnresolved`.
+
+- **An exact `unittest discover` receipt is a command citation, and only
+  that** (cycle17, root's reconciliation of the cycle16 terminal, PR73
+  6740463929). R21 named `python3 -m unittest discover -s tests`, and the
+  frozen gate ran exactly that and passed 66 cases. The citation refused it
+  as "a selection" because `runner_of` names no runner for `discover` and
+  `config_selection` records that as unknown selection, and the planner then
+  asked Davis a configuration question the record answered.
+  - `integration.unittest_discover_command` is a strict shape:
+    `python[N[.M]] -m unittest discover`, the plain runner flags, the report
+    annotation, and `-s`/`-p`/`-t` (short with a separate value, long with a
+    separate or `=` value), each at most once with a non-empty value.
+    Anything else (`-k`, a positional, an attached short value, an unknown
+    option, a wrapper) is not the shape. It names no runner, file or case.
+  - `_check_runs` keeps `filtered` and `files` as they were, so discover
+    still discharges no NOT RUN path, case, class, scenario or skip fact. It
+    adds `command_reasons` / `command_filtered`: argv filters, external
+    selection, deselection and an unrecognised runner. The only exception
+    is that the exact `RUNNER_UNKNOWN` diagnostic, as a whole element, is
+    dropped for that shape. `-t` still counts as an argv selection flag, a
+    narrow false negative. A record without the field keeps the file-level
+    refusal.
+  - `_command_receipt_citation` reads the command reasons and says which
+    fact holds, naming only the receipt id and the requirement's public
+    spelling ("configured check X runs `cmd`; its receipt does not count as
+    evidence: …"). It shows no argv, interpreter path or environment value.
+    `_command_key` strips `-p no:cacheprovider` only for pytest; a unittest
+    `-p` is the discovery pattern.
+  - A citation says only that the exact command ran and passed on this
+    source. A custom `load_tests` that narrows discovery is still that
+    command; the audit judges the requirement.
+- **An independent restatement judgment is asked, not completed, and its
+  adverse reason reaches the repair** (cycle18, root's reconciliation of
+  the cycle17 terminal, PR73 6742757517).
+  - What went wrong in cycle17: `_judge_restatements` made its first ask
+    through `_complete_judgment` with `raw=""`. That claimed the job's one
+    judgment completion and stored the no-reply placeholder (fe723bcdb73a)
+    as if a reply had arrived. Opus's INSUFFICIENT on O22/O46 at 40e7 was
+    the only judgment the job could buy. On 33dd and fb880 the new decisions
+    got "allowance spent", O66 was never judged, and the reason reached no
+    planner or lead.
+  - The first ask is now a direct read-only `recheck` call
+    (`_ask_restatement_judgment`), admitted at the reserve as before. It is
+    one per decision (`_restatement_decision_key`: judge, restatement
+    author, item, cases, source, gate, environment, revisions), asked at
+    most once whatever the outcome. The `_judgment_binding` identity is
+    compared after the call, and a change voids the reply.
+  - Lines are applied to exactly the asked ids (`_judge_restated(oids=)`).
+  - Only an arrived reply that leaves an asked id without a single verdict
+    buys the shared completion, for exactly those ids, with that reply as
+    its raw.
+  - A cap, finish hold, refusal or transport stop, an empty reply or a void
+    claims nothing, is held, and says which. `max_judgment_completions` is
+    unchanged.
+  - Who reads the reason: `_restatement_status` gives a current independent
+    INSUFFICIENT its reason (the judge's words, bounded, labelled recorded
+    evidence, never an instruction) and the DISCHARGES/RUNS route. The
+    finish route, the planner's evidence rows and the DISCHARGES lead block
+    all show it.
+  - A stale judgment is named stale, a missing one names its judge, and a
+    decision already asked is named as spent. The judge is
+    `_restatement_judge`: the audit, the independent seat, or a hold.
+  - Where the latest audit's own NOT MET on the current source sits beside
+    held evidence, the route names both.
+  - The audit prompt shows the auditor's own restatements under "another
+    seat judges" with their status. It never asks for a line it ignores,
+    and it reads restatement lines only for its required ids.
+  - `_EARLY_REJECTION_SCENARIO_RULE` in the SCOPE scenario grammar asks for
+    one declared scenario where the goal fixes every error response and a
+    framework can reject before the handler runs. It is guidance only: no
+    gate, task, audit or benchmark case.
+  - The pre-last-slot audit (assessment 5a) is deferred on evidence: the
+    33dd DONE audit marked R17 MET before t8, and t8 changed only tests, so
+    that was detection variance.
+
+- **A signature is a definition or an asserted signature; a quoted call is
+  an example** (cycle19, root's reconciliation of the cycle18 terminal, PR73
+  6745520095).
+  - What went wrong in cycle18: the planner declared `def main(argv=None)`
+    and said a test helper runs `main(argv)`. `scope.declared_signatures`
+    collected every backticked `name(args)` for a `def`-declared name, read
+    the call as a second signature, and refused the batch and then its one
+    correction. The run stalled before the CLI or README task ran.
+  - What counts as a signature now:
+    - a `def name(args)` form, in a code block or backticks, in the
+      description, `intended_result` or acceptance;
+    - a backticked `name(args)` placed directly after the anchored
+      assertion grammar `_ASSERTED` on its line: "signature" or "signature
+      is", "define(s)", "defined as", "declare(s)", "declared as", "make it".
+      These are the historical attempt-2, acceptance and f6 forms.
+  - Everything else is an invocation or example and is never collected,
+    including a deliberately wrong call a negative test expects to raise.
+    No call-fit or binding rule was added: a call's validity is the task's
+    behaviour to test.
+  - Real assertions are compared exactly as normalised text, so a rename or
+    changed default still conflicts.
+  - A form whose parentheses do not parse as a parameter list
+    (`_parameter_list`: static `ast`, bounded, nothing executed) states
+    nothing and is skipped. That covers elisions and placeholders.
+  - Unchanged limits: no class or module resolution (two methods of one
+    name are one name), qualified calls are never the declared name, and
+    nested parentheses are not read.
+  - The refusal message and `_SCOPE_REQUEST` both state the distinction.
+    The one-correction bound is unchanged.
+
+- **A clipped finish reason names where it is whole; quotes pair; an audit
+  may name up to three examples** (cycle20, root's reconciliation of the
+  cycle19 terminal, PR73 6748219666).
+  - Clipped reasons, before: the DONE send-back and `finish_routing` cut
+    each reason at 300 characters in silence and named no artifact, so the
+    planner could not FETCH the rest.
+  - Clipped reasons, now: `_shown_reason` keeps the 300-character payload
+    (`_FINISH_REASON_CHARS`) and adds `[... N more characters in <what> <id>;
+    read it whole with FETCH: <id>]`. `finish_routing` gains `why_omitted`,
+    `why_artifact` and `why_source`.
+  - Where the pointer points (`_reason_source`, `_audit_text_artifact`):
+    the audit reply or its completion reply that holds those exact words.
+    A harness-written or revised reason is stored as its own artifact,
+    named "the reason as recorded". The history head uses the same check,
+    and a stored id that does not hold the words reads unavailable.
+  - The terminal summary (`completion_decision._why`) keeps whole lines
+    within 400 characters. It cuts a line at a word, never inside a
+    provenance label, keeps the requirement id, and says where each whole
+    reason is.
+  - Quotes in a basis: `_QUOTED_SPAN` pairs its marks. Straight and curly
+    double quotes are read, and single quotes only at word boundaries; an
+    apostrophe inside a word (goal's, isn't) never opens or closes a span.
+  - Why the quote fix: the old pattern read "the goal's rule" as a quote
+    and reported spans no text contains. This did not cause cycle19's
+    label; that basis quoted a literal ellipsis, honestly absent, and no
+    fuzzy match was added.
+  - Audit examples: the NOT MET form allows up to `_AUDIT_EXAMPLES` (3)
+    distinct examples found, separated by ` | `, in the same call. There is
+    no minimum, the grammar is unchanged, and the effect on a live run is
+    unproven.
+
+- **What dispatch would refuse is refused at intake, before any charge**
+  (cycle21, root's reconciliation of the cycle20 terminal, PR73
+  6751283026).
+  - What went wrong in cycle20: t8's role packet (the P1-P9 SCOPE, kept as
+    `tests/lifecycle/cycle20_t8_scope.json`) was refused for size only in
+    `_prepare_dispatch`, after slot 8 was charged. The run stopped with no
+    correction, admission or lead. Earlier, t7 named `readme.md` while the
+    file is `README.md`, and was refused at merge after the whole task.
+  - Packet size: `policy.role_packet` raises `PacketTooLarge` (a
+    `PolicyError`, same message). It carries `needed`, `limit` and the
+    scope's parts (`TaskScope.component_bytes`), measured by the builder's
+    shared `_packet_contract`. Bytes are UTF-8 and exclusions are exempt, as
+    before.
+  - Intake check: `Session._packet_problem` builds every required packet
+    the dispatch would, with the same `policy.scope`, `_packet_roles`,
+    `_role_packet` and cap. A size refusal goes back to the planner, serial
+    and batch, on the shared `_covers_corrections` allowance, before the
+    slot, recovery or listed-task marks, the admission or any call. The
+    send-back gives measured sizes; `packet_refusals` records it.
+  - Unchanged: other policy refusals stop at dispatch as before, and no
+    scope or checklist text is cut.
+  - Backstop: a `PacketTooLarge` that still reaches dispatch before the
+    task's admission (and before `_dispatch_prepared` names it) is recorded
+    not started and uncharged. `_unmark_not_started` undoes its recovery
+    charge, listed-task ran mark and takeover. After admission it stays
+    charged.
+  - The prompt: `_scope_request` states the policy's `packet_limit` and
+    measured `packet_overhead`. The old "well under 20,000 bytes" was the
+    no-policy packet's limit (`_FALLBACK_PACKET_BYTES`), stated only when
+    no policy applies.
+  - Path spelling: `_path_case_problem` / `_case_collision` send back a
+    SCOPE path that differs only in letter case from an existing path.
+    Spellings come from `os.listdir` as stored, never `Path.exists`, so a
+    case-insensitive host gives the same answer. A glob component ends the
+    walk, links are not followed, ambiguity names nothing, and a spelling
+    in an excluded or forbidden path is not disclosed. Nothing is corrected.
+  - `repo_scan` names the README as stored (`readme_name`).
+  - Command label: `_without_command_label` drops one parenthetical that
+    only labels the command, "(configured unittest check)" or "(the
+    required test command)", inside `_command_rest`, so detection and the
+    correction's extra words agree. Any other word keeps the claim mixed:
+    "(configured database check)", another runner's name, a filter or a
+    second label.
+
+- **A task may carry a larger role packet only under a granted extension**
+  (Davis, 2026-11-09: "the orchestrator should have latitude to extend that
+  if the lead can show justification for it").
+  - The default stays: the policy's `packet_limit` (12,000, and a policy
+    still cannot set its default past 24,000). A task's allowance is passed
+    to the builder as `limit`, so that clamp does not bound a grant.
+  - Intake (`_packet_problem`, serial and per batch block): over the
+    default, the task's lead is asked once per task and scope
+    (`_packet_justify`, role `packet-justification`, a declaration-capped
+    call in a source copy with no role packet). It answers `PACKET
+    EXTENSION: <bytes>` with `NECESSARY:` and `WHY NOT SHORTER:`, or
+    `PACKET NARROW:`. A justified request goes to the planner in the
+    send-back with its id; only the planner's own `PACKET GRANT: <id>
+    <bytes> | because: <reason>` line grants it (from the measured need to
+    the lead's request, within the ceiling). `PACKET REFUSE` refuses it.
+    Lines are read from the planner's reply only (`_read_packet_decisions`);
+    a grant the lead wrote, an unknown id, another task's id or an id
+    measured on a different scope applies nothing. Nothing is charged
+    before the grant. The send-back carrying a new justified request is the
+    protocol's step, paid by its call, and spends no correction for a
+    task's first two requests (`_PACKET_FREE_REQUESTS`; the run's correction
+    allowance is never reset, so it would otherwise stall the fourth task
+    that needs an extension). A repeat, a malformed or narrowing answer, an
+    undecided request or a refusal named again spends one.
+  - The grant is bound to its task id and the scope fingerprint it measured
+    (`_packet_fingerprint`, roles plus the rendered scope). Every packet of
+    that task, any role, serial or batch child, correction or resume, is
+    built under it (`_role_packet` → `_packet_allowance`). A reviewed
+    scenario correction is measured against it and recorded as a revision.
+    A later task, a batch sibling or a changed scope needs its own request.
+  - The ceiling (`_packet_ceiling`) is the run's own bound: half of what one
+    round of a capped call is planned to spend (per-call threshold ×
+    `TURN_CAP_MARGIN` / lead turns, or `TURN_CONTEXT_TOKENS`), at the
+    meter's bytes per token. That is 100,000 bytes on the canonical 500k
+    per call and 8 derived rounds. Over it, or when
+    `_packet_budget_problem` finds no room, no request is made.
+  - During a task the lead may ask once in its draft (the same three
+    lines); the seated orchestrator decides in one bounded call
+    (`_serve_packet_request`).
+  - On the record: `result.json` `packet_extensions` (requests with
+    justification, decision lines, grant, reasons, revisions; rejected
+    decision lines), the task outcome's `packet_allowance`, and the
+    checkpoint. A listed task has no orchestrator and gets no grant.
+
+- **Four settlement routes from run21's terminal** (cycle22, root's
+  reconciliation of assessment 6754811165).
+  - *A renamed case is declaration debt* (O37). A case-bound NOT RUN item
+    whose bound case is gone (`_bound_cases_gone`) reads as not runnable
+    (`_not_run_runnable`, the one reader every route uses). Gone means both:
+    - the exact-case resolver finds no definition;
+    - the latest check passed on the current source with a complete run
+      whose cases exclude it.
+    Anything unknown, failing, skipped, filtered or still executing stays
+    runnable and needs its execution or repair. Effects:
+    - the route note names `RUNS`/`DISCHARGES`;
+    - `_blockers_need_editing` is not set for it;
+    - the DONE declaration plan asks its owning lead (or a DISCHARGES
+      taker) for exact current cases, settled on the receipt already on
+      record (no new run, no slot), with the replaced cases kept on the
+      restatement;
+    - an independent judge is told to judge against the whole original item.
+    Nothing is aliased or deleted.
+  - *The editing seat is told the NOT RUN forms* (`scope.NOT_RUN_RULE`, the
+    same sentence the planner gets). `P<a>-P<b>` with an ASCII hyphen or an
+    en dash binds the full inclusive range only when every id is declared
+    by the reporting task. A reversed, single-point, chained or partly
+    undeclared range binds nothing and says why. A mutation claim beside
+    scenarios stays held: a passing suite never shows a mutant was detected.
+  - *A binding stage folds into an editor revision in the same bundle*
+    (`_folds_binding`, read by both the admission and the serve):
+    - the revision prompt names the unbound or invalid scenarios
+      (`_fold_note`);
+    - its PROVES/RUNS lines are read by the editing readers, and the route
+      is recorded after it (`_settle_folded`);
+    - bindings settle on the post-edit source.
+    Run21 t8's scenario + binding + editor + recheck + resolution-recheck
+    bundle is four calls. Without an editor the separate declaration call
+    stays. Both rechecks always run.
+  - *A later reviewer may name an earlier task's scenario*, `SCENARIO
+    t<k>:P<n>`; an unqualified `P<n>` is always the reviewing task's own.
+    - The planner corrects it once through the ordinary bundle, on that
+      task's own rows only (`_apply_prior_scenario_correction`): lineage
+      with `raised_in` and the owner lead, execution and sufficiency reset
+      and re-settled, requirements, location, evidence kind, binding and
+      id unchanged.
+    - The frozen contract and outcome are untouched. The packet is measured
+      against that task's own allowance (its grant if any, recorded as a
+      revision).
+    - Not routed: no earlier closed task, no standing row, already
+      corrected, an unreachable owner, or a scope not on record. Each stays
+      held for its reviewer.
+    - The raising reviewer rechecks, shown the corrected text.
 - **The project folder is not a source of trusted configuration** (whole-repo
   review 2026-11-10, trust 1 to 5; `policy.py`, `project.py`). A clone can
   ship a file and an editing call can write one. The project's own

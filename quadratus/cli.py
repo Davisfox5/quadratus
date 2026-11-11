@@ -131,6 +131,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 **({"repair_tests": tuple(args.repair_tests)} if getattr(args, "repair_tests", None) else {}),
                 **({"test_changes": args.test_changes} if getattr(args, "test_changes", None) else {}),
                 max_tasks=args.max_tasks, mode=args.mode,
+                **({"resume_from": args.resume} if getattr(args, "resume", None) else {}),
                 security_verdict_json=getattr(args, "security_verdict_json", False),
                 survey=survey,
                 # Passed only when chosen, so a run with no limit flag and no
@@ -442,7 +443,7 @@ def _run_monitor(args: argparse.Namespace) -> int:
     project = status.get("project")
     history = run_history(project, state_dir=args.state_dir, limit=args.history) \
         if project and project != "unknown" else []
-    print(render_text(status, history))
+    print(render_text(status, history, calls=bool(getattr(args, "calls", False))))
     return 0
 
 
@@ -562,6 +563,9 @@ _WATCHED_ENV = "QUADRATUS_ACCEPT_WATCHED_PATHS"
 #: Monitor flags only the served page reads: the one-screen status checks no
 #: host name and takes no folder from a request.
 _SERVE_ONLY = ("allow_host", "allow_project")
+#: Monitor flags only the one-screen status reads: the served page lists
+#: every call whether or not it is asked to.
+_PRINT_ONLY = ("calls",)
 
 #: Parse-time defaults are None so a flag that was typed can be told from one
 #: that was not; the real defaults are filled in once the line is accepted.
@@ -670,6 +674,10 @@ def _misplaced(parser, args) -> str:
         if unserved and args.serve is None:
             return (f"{', '.join(unserved)} require --serve: only the served page checks a host "
                     "name or takes a folder from a request")
+        printed = [_flag_name(a) for a in given if a.dest in _PRINT_ONLY]
+        if printed and args.serve is not None:
+            return (f"{', '.join(printed)} cannot be combined with --serve: the served page lists "
+                    "every call already")
         return ""
     met = {
         "project": bool(args.project),
@@ -789,6 +797,14 @@ def build_parser() -> argparse.ArgumentParser:
          help="Create and switch to a new branch in --project before running.")
     flag(engine, "--session", action="store_true",
          help="Run the session engine instead of the collaboration pipeline.")
+    flag(
+        engine, "--resume", needs="project", metavar="RUN",
+        help=("Resume an interrupted run of the same job (a folder under the state "
+              "directory's runs) as its next episode: its record, lineage and spent "
+              "allowance carry over. Refused before any call when the run is sealed, "
+              "already resumed, ended with a call in flight or unknown usage, or when "
+              "the source, goal, policy, limits, settings, gates or dependency trees differ."),
+    )
     flag(
         engine, "--max-tasks", needs="engine", type=int, default=None,
         help=(
@@ -983,7 +999,9 @@ def build_parser() -> argparse.ArgumentParser:
          help="An existing test file this run may repair (exact path). Its original cases must "
               "still run unskipped; every other original test is restored. Repeat as needed.")
     flag(engine, "--test-changes", needs="project", metavar="FILE",
-         help="Operator-authored exact goal-bound test replacements/retirements as JSON.")
+         help="Operator JSON approval for exact existing test cases intentionally replaced or retired "
+              "under this goal. Planned changes still require approval of the resulting diff "
+              "unless its exact current_sha256 is preapproved.")
 
     solo = parser.add_argument_group(
         "baseline",
@@ -1091,6 +1109,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "A Stage B series directory (manifest.json and run.lock). Supplies the "
             "running cell's project and the packet's token limits to --monitor."
+        ),
+    )
+    flag(
+        watch, "--calls", needs="monitor", action="store_true",
+        help=(
+            "With --monitor: also print every call of the run (task, role, seat, input, output, "
+            "cached input, model turns, tool steps, input per turn, seconds) under the by-role summary."
         ),
     )
     flag(watch, "--history", needs="monitor", type=int, default=None, metavar="N",

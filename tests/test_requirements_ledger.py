@@ -4,6 +4,7 @@ import pytest
 
 from quadratus.artifacts import ArtifactStore
 from quadratus.session import Session, SessionConfig, TaskSpec, _read_covers, _read_requirements
+from tests.lifecycle.test_lifecycle_matrix import covered_met
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -35,7 +36,7 @@ class Script:
         if "The task is finished" in prompt:
             return "SUMMARY: done\nREASONING: done"
         if "contributing an independent read" in prompt:
-            return "NO FINDINGS"
+            return "NO FINDINGS\n" + covered_met(prompt)
         return "work"
 
 

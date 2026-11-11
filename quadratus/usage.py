@@ -77,10 +77,10 @@ PRICES: Dict[str, Price] = {
     # it is priced here at its own line's flagship rate as a placeholder that
     # errs high. Every figure in this dict is a seed, but this one is a guess
     # on top of a seed -- correct it before any decision turns on it.
-    "openai:gpt-6-astra": Price(2.5, 20.0),
-    "openai:gpt-5.6-sol": Price(1.25, 10.0),
-    "openai:gpt-5.6-terra": Price(0.6, 5.0),
-    "openai:gpt-5.6-luna": Price(0.25, 2.0),
+    "openai:astra": Price(2.5, 20.0),
+    "openai:sol": Price(1.25, 10.0),
+    "openai:terra": Price(0.6, 5.0),
+    "openai:luna": Price(0.25, 2.0),
     # Priced at what the default resolves to today (4.6). A vendor-default row
     # is the one most likely to drift away from its price line, which is the
     # accepted cost of not pinning the model: a wrong figure on a
@@ -146,7 +146,9 @@ class UsageMeter:
         # price for it but has one for the key the call was made under
         # (``fallback_model``: jev-latest answering as a dated release), that
         # price is used and both names are kept, instead of the default price.
-        price, priced_as = PRICES.get(model), ""
+        # A legacy version key is priced as the family row that answers for it.
+        from .registry import canonical_key
+        price, priced_as = PRICES.get(canonical_key(model)), ""
         if price is None and fallback_model and fallback_model in PRICES:
             price, priced_as = PRICES[fallback_model], fallback_model
         if price is None:

@@ -32,8 +32,10 @@ they outrank nearly every per-model preference below:
 1. **Size dominates model choice for review.** Review F1 measured 0.657 on
    diffs under 10 lines and 0.043 on diffs over 150. That spread is far wider
    than any gap between frontier reviewers, which is why
-   :data:`MAX_TASK_LINES` exists and why it is enforced at decomposition time
-   rather than left to a model's discretion.
+   :data:`TASK_SIZE_GUIDE` exists and is stated at decomposition time. It is
+   a guide, not a limit (operator directive 2026-10-20): a task is sized for
+   what correctness and its proofs need, the measured size reaches every
+   reviewer, and a reviewer judges whether it was necessary.
 2. **Precision and recall split across vendors.** No single reviewer is good;
    two with opposite failure modes are. This is why REVIEW pins *both* rather
    than choosing.
@@ -63,7 +65,7 @@ __all__ = [
     "KindPolicy",
     "ROUTING",
     "DIFFICULTY_LADDER",
-    "MAX_TASK_LINES",
+    "TASK_SIZE_GUIDE",
     "policy_for",
     "route",
     "guidance_for",
@@ -78,14 +80,18 @@ __all__ = [
 ]
 
 
-#: The size ceiling handed to the orchestrator at decomposition time.
+#: The size the orchestrator is asked to aim for at decomposition time.
 #:
 #: Not a style preference. Review quality collapses with diff size -- roughly
 #: an order of magnitude of F1 between a sub-10-line change and a 150-line one
-#: -- so a task that produces a large diff has already lost most of the review
-#: that was supposed to catch its defects. Splitting the task is the only
-#: intervention that recovers it; no reviewer choice comes close.
-MAX_TASK_LINES = 100
+#: -- so a task that produces a large diff has lost most of the review that
+#: was supposed to catch its defects, and splitting is what recovers it. A
+#: guide, not a limit (operator directive 2026-10-20, replacing the ceiling
+#: that stopped tasks and refused plans): a requirement is never split from
+#: the tests that prove it, tests are never omitted or compressed to fit a
+#: number, a plan above this figure is not refused, and the measured size
+#: reaches the reviewers, who judge whether it was necessary.
+TASK_SIZE_GUIDE = 100
 
 
 class Confidence:
@@ -114,7 +120,7 @@ class TaskKind:
 
     #: Turning an operator's request into a stated goal and constraints.
     SCOPE = "scope"
-    #: Breaking a goal into tasks. Where MAX_TASK_LINES is applied.
+    #: Breaking a goal into tasks. Where TASK_SIZE_GUIDE is stated.
     DECOMPOSE = "decompose"
     #: Open-ended structural judgement, before code exists.
     ARCHITECT = "architect"
@@ -189,12 +195,12 @@ class KindPolicy:
 
 
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"            # the family; its release is the installed client's latest
 # LUNA and SONNET are on no pin and no rung today: both pins were retired
 # (see the GLUE and DOCS rows). Kept as names for those rows' history.
-LUNA = "openai:gpt-5.6-luna"
+LUNA = "openai:luna"
 SONNET = "claude:sonnet"
-GROK = "grok:default"          # xAI's current default, whatever it is
+GROK = "grok:default"          # xAI's full agent; off the ladder and the trust since 2026-11-01
 GROK_WORKER = "grok:worker"   # same line, bounded call, low effort
 FABLE = "claude:fable"
 
@@ -212,12 +218,12 @@ FABLE = "claude:fable"
 #: The rungs, per the operator's read of current capability:
 #: * COMPLEX -- many logical steps, high stakes -> Opus, top of the pack.
 #: * STANDARD -- real judgement, not the hardest -> GPT-5.6 Sol.
-#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok, addressed as
-#:   the CLI's current default rather than as an iteration; capable at this
-#:   grade and cheap against its own window.
+#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Sol since
+#:   2026-11-01; Grok held it until then (see below).
 #: * ROTE -- mechanical work -> Grok, called as a bounded worker.
 #:
-#: Four rungs across three vendors means one vendor takes two, and xAI is the
+#: The history of the split, kept because it explains the ROTE seat:
+#: four rungs across three vendors meant one vendor took two, and xAI was the
 #: one that should: Anthropic already carries the orchestrator seat and every
 #: COMPLEX task, and OpenAI carries STANDARD plus the security, testing and
 #: review pins plus the fallback orchestrator seat. xAI was left holding a
@@ -234,15 +240,27 @@ FABLE = "claude:fable"
 #:
 #: A rung that is unavailable or excluded escalates upward (a stronger model
 #: can always do easier work) before it degrades downward.
+#:
+#: **SIMPLE moved off Grok on 2026-11-01** (operator directive: "Turn Grok off
+#: as a brain trust member for now. Keep it as a worker. We will see if it
+#: can at least do rote tasks"). In two admitted runs the grok:default lead
+#: spent its whole 900 s deadline with no edit or reply. The SIMPLE rung now
+#: names Sol, which is where the ladder's own upward rule already sent a
+#: simple task whenever the Grok rung was out; spreading still alternates
+#: simple and standard leads across the two remaining trust vendors.
+#: grok:default is off ``_LADDER_ORDER`` too, so nothing escalates into it:
+#: a rote task the restricted worker cannot serve (it must run something)
+#: climbs straight to Sol. ROTE stays grok:worker, which is the trial Davis
+#: asked for. Restoring is putting GROK back on SIMPLE and in the order.
 DIFFICULTY_LADDER: Dict[str, str] = {
     "complex": OPUS,
     "standard": SOL,
-    "simple": GROK,
+    "simple": SOL,
     "rote": GROK_WORKER,
 }
 
 #: Least to most capable, for escalation.
-_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, GROK, SOL, OPUS)
+_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, SOL, OPUS)
 
 
 def _available_always(_key: str) -> bool:
@@ -502,11 +520,14 @@ ROUTING: Dict[str, KindPolicy] = {
         confidence=Confidence.HIGH,
         evidence=(
             "Same structural reason as SCOPE. The load-bearing part is not who "
-            f"decomposes but the {MAX_TASK_LINES}-line ceiling it must respect."
+            f"decomposes but the ~{TASK_SIZE_GUIDE}-line size guide it works to: "
+            "small diffs are the ones reviews catch defects in."
         ),
         gate=(
-            f"No task may be sized to produce more than ~{MAX_TASK_LINES} lines "
-            "of diff. Split it instead."
+            f"Aim for tasks of about ~{TASK_SIZE_GUIDE} lines of diff and split where a split "
+            "keeps each piece reviewable on its own; never split a requirement from the tests "
+            "that prove it, and never size a task below what its correctness needs. The figure "
+            "is a guide the reviewers see, not a limit the harness enforces."
         ),
     ),
     TaskKind.ARCHITECT: KindPolicy(
@@ -608,7 +629,13 @@ ROUTING: Dict[str, KindPolicy] = {
         gate=(
             "Concurrent code is not accepted on inspection. Add a test that "
             "actually interleaves -- stress, fuzz, or a deterministic scheduler "
-            "-- and show it failing before the fix and passing after."
+            "-- and runs in an approved check. When the task corrects a "
+            "demonstrated defect, show that test failing on the code before "
+            "the fix and passing after. When it proves behaviour that should "
+            "already hold, do not invent a defect to fix: the test must drive "
+            "the invariant adversarially, with enough concurrent operations "
+            "that a race would show, and pass on the delivered code; if it "
+            "fails, that failure is the defect, and the first rule applies."
         ),
         human_check=True,
     ),

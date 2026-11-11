@@ -243,7 +243,7 @@ def orchestrator_seat(
 #: excursion already routes around a refusal by other means. Do not re-add it
 #: here on the strength of the classifier tag.
 SECURITY_WORK_CHAIN: List[str] = [
-    "openai:gpt-5.6-sol",
+    "openai:sol",
     "claude:opus",
 ]
 

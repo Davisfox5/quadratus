@@ -420,7 +420,8 @@ def test_ci_actions_are_pinned_to_commits():
     uses = [step["uses"] for job in _workflow()["jobs"].values() for step in job["steps"] if "uses" in step]
     assert uses
     for action in uses:
-        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", action), action
+        # An action may live in a folder of its repository (actions/cache/restore).
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+(?:/[\w.-]+)*@[0-9a-f]{40}", action), action
 
 
 def test_ci_runs_the_tool_tests_and_checks_the_installed_wheel():

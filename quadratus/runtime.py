@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import tempfile
 import threading
 import time
@@ -60,7 +61,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .cli_providers import LIMIT_WORDING, SANDBOX_REFUSAL
+from . import catalog as _catalog
+from . import effort as _effort
+from .cli_providers import LIMIT_WORDING, SANDBOX_REFUSAL, client_version_at_least
 from .config import Settings
 from .delegation import (
     DelegationLedger,
@@ -73,7 +76,7 @@ from .delegation import (
     record_invocation,
     safe_diagnostics,
 )
-from .latest import alias_for, resolution_source
+from .latest import Resolution, resolve_model
 from .project import Project, withheld
 from .project_watch import (
     ALLOW_AGENT_CONFIG_ENV,
@@ -97,12 +100,32 @@ from .providers import (
     carry_transport_facts,
     scratch_root,
 )
-from .registry import VENDORS, resolve
+from .registry import VENDORS, canonical_key, resolve
+from .scope import NOT_RUN_RULE
 from .usage import UsageMeter
 
 log = logging.getLogger(__name__)
 
 __all__ = ["Fleet", "WindowExhausted", "UnknownModel", "new_session"]
+
+
+class _JobResolution:
+    """One job's resolution state, shared by a Fleet and every Fleet forked
+    from it: the families resolved so far (by family key), the records a
+    checkpoint froze, and the catalogue and grok listing read once. One
+    lock, because forks resolve from worker threads."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.resolutions: Dict[str, Resolution] = {}
+        self.frozen: Dict[str, dict] = {}
+        self.codex_catalog = None
+        self.grok_listing = None
+
+
+class UnsupportedEffort(ProviderError):
+    """The effort the policy selected is not on the resolved model's ladder.
+    Refused before the call, named in full; never lowered in silence."""
 
 
 class UnknownModel(ProviderError):
@@ -144,6 +167,24 @@ def _review_directory(project, source=None):
         yield root
 
 
+def local_read_rule(provider) -> str:
+    """The local-file contract for a restricted seat whose CLI spec names its
+    file readers (cycle15; cycle14 t5 opened README.md through Fetch on a
+    file:// URL, which a headless restricted call cannot get approved). Names
+    only tools the seat already has (``CLISpec.local_read_tools``, each in
+    ``restricted_args``); "" for every other seat. Guidance: it grants and
+    removes nothing."""
+    spec = getattr(provider, "spec", None)
+    tools = tuple(getattr(spec, "local_read_tools", ()) or ())
+    if not (tools and getattr(provider, "restricted", False)):
+        return ""
+    named = tools[0] if len(tools) == 1 else ", ".join(tools[:-1]) + " or " + tools[-1]
+    return ("\nRead files in this copy with " + named
+            + ", by path relative to the working directory. Never open a local file through a web or fetch "
+            "tool or a file:// URL: this call cannot get that approved, and the call stops. If an action you "
+            "need is denied, do not retry it with another tool or path; report what you could not do.")
+
+
 class WindowExhausted(ProviderError):
     """A model reported its subscription rate-limit window spent.
 
@@ -181,19 +222,54 @@ LEAD_CAPPED_ROLES = frozenset({"lead", "revision", "gate-fix", "design-fix"})
 #: bare pytest and ls in the copy); an audit that stops at the cap is a failed
 #: audit, which the session already counts as nothing met. The orchestrator,
 #: closeout and workers stay uncapped.
-REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor"})
+REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor",
+                                 "test-comparison"})
+
+
+def inspection_tools(model_key: str) -> str:
+    """How an editing seat reads the project, in its own vendor's tool names
+    (Davis, 2026-11-06, turn-tracking-01 O10: every editing seat was told
+    "Use Read, Grep and Glob for inspection", claude's tool names. A codex
+    seat has no tools by those names and reads through shell commands, and a
+    seat that took the sentence literally could report reading itself as
+    NOT RUN, which the harness then held as execution debt on every covered
+    requirement). Reading is never a check: it needs no approval and is
+    never a NOT RUN item."""
+    vendor = (model_key or "").partition(":")[0]
+    if vendor == "openai":
+        how = ("Read and search files with read-only shell commands (ls, cat, sed -n, head, rg, grep); "
+               "they need no approval and are not checks.")
+    elif vendor == "claude":
+        how = "Read and search files with Read, Grep and Glob; they need no approval and are not checks."
+    else:
+        how = "Read and search files with your own file-reading and search tools; they need no approval."
+    return (how + " Reading a file is always available to you and is never a NOT RUN item: NOT RUN is only for "
+            "a check or acceptance step that must execute.")
+
+
 #: Roles whose whole answer is one declared line (a CAPTURE: line, FIXTURE:
 #: blocks). They may read the copy to find a selector, not explore it: series
 #: rule-3572b72 f5's capture-redeclare ran 12 rounds and 403k tokens and
 #: returned no line at all. Bound well under the review cap, and never
 #: above the operator's lead cap where that is smaller.
-DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply"})
+DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply", "proof-binding",
+                               "packet-justification"})
 DECLARATION_MAX_TURNS = 6
 #: A contest's judge (quadratus.contest): one read-only call that picks
 #: between two diffs in its prompt. A review seat for the turn cap, and kept
 #: out of REVIEW_CAPPED_ROLES because its copy holds neither draft: it is told
 #: no check commands and handed no check records, which describe another source.
 JUDGE_ROLE = "judge"
+#: Seats that plan, judge or review and hold no bounded worker bridge: native
+#: delegation is denied on every call they make, with every read tool kept.
+#: Step 2 r04 on 5366412: the orchestrator's goal question at the cap ran in
+#: a source copy, used the CLI's own Agent tool and reported four parallel
+#: children still running; the call reported 1,272,024 tokens, 1,206,662 of
+#: them unattributed auxiliary usage, and stopped the job on the per-call
+#: ceiling. The only sanctioned delegation is the WorkerBridge a lead call
+#: carries; leads keep the vendor default (and lose it under granted checks).
+NO_NATIVE_DELEGATION_ROLES = frozenset({"orchestrator", "auditor", "requirements-review", "consultant"}
+                                       | REVIEW_CAPPED_ROLES)
 
 
 class Fleet:
@@ -229,8 +305,15 @@ class Fleet:
         delegation_ledger: Optional[DelegationLedger] = None,
         run_budget=None,
         system: str = "You are collaborating on a software engineering task.",
+        resolutions=None,
     ) -> None:
         self.settings = settings or Settings.from_env()
+        #: The job's one resolution state (quadratus.latest): each family
+        #: decided once at first use anywhere in the job (a forked child
+        #: shares this very object) and held; ``resolutions`` pre-seeds it
+        #: from a checkpoint so a resumed episode keeps the same wire models.
+        self._job = _JobResolution()
+        self.freeze(resolutions)
         self.allow_writes = allow_writes
         self.project = project if isinstance(project, Project) else Project(project) if project else None
         self.usage_meter = usage_meter
@@ -267,9 +350,13 @@ class Fleet:
                 if vendor not in VENDORS:
                     self._providers[vendor] = None
                 else:
+                    # The vendor's transport only: each seat's family is
+                    # bound per call (provider_for), so no default family's
+                    # resolution decides whether the vendor is usable.
                     provider = build_provider(
                         vendor, self.settings, allow_writes=False,
                         workdir=self.project.root if self.project else None,
+                        resolve_family=False,
                     )
                     if provider is not None and not provider.available():
                         log.warning("%s is not available: %s", vendor, provider.status)
@@ -277,7 +364,11 @@ class Fleet:
             return self._providers[vendor]
 
     def provider_for(self, key: str) -> LLMProvider:
-        """The provider for ``key``, bound to the alias it resolves to today."""
+        """The provider for ``key``, bound to the wire model its family
+        resolves to for this job and to the effort the policy selects for
+        this call (quadratus.effort), validated against the resolved
+        model's ladder. Never an empty effort: the CLI's own default is
+        not a choice this engine makes."""
         vendor = key.partition(":")[0]
         provider = self._vendor_provider(vendor)
         if provider is None:
@@ -290,11 +381,12 @@ class Fleet:
         spec = resolve(key)
         if spec is None:
             raise UnknownModel(f"{key} is outside the active roster")
-        bound = provider.for_seat(
-            self._alias(key),
-            effort=spec.effort if spec else "",
-            restricted=spec.restricted if spec else False,
-        )
+        wire = self._alias(key)
+        decision = self._effort_for(key, spec)
+        bound = provider.for_seat(wire, effort=decision.level, restricted=spec.restricted)
+        if bound is provider:
+            bound = copy.copy(bound)
+        bound.effort_decision = decision
         if getattr(self.settings, "neutral_preferences", False) and hasattr(bound, "neutral"):
             bound = copy.copy(bound)
             bound.neutral = True
@@ -312,12 +404,121 @@ class Fleet:
             bound.refusal_fallback_model = None
         return bound
 
+    # -- resolution ----------------------------------------------------------
+    def freeze(self, records) -> None:
+        """Pre-seed this job's resolutions from a checkpoint's record (a
+        mapping of key -> resolution dict). Only families not yet resolved
+        in this job are taken; a resumed episode keeps the wire models the
+        job already used, and the current catalogue is compared beside
+        them (``provenance.drift``), never substituted."""
+        with self._job.lock:
+            for key, record in dict(records or {}).items():
+                family = canonical_key(str(key))
+                if (isinstance(record, dict) and record.get("status") == "resolved"
+                        and family not in self._job.resolutions):
+                    self._job.frozen[family] = dict(record)
+
+    def _installed_client(self, vendor: str) -> Optional[str]:
+        provider = self._providers.get(vendor)
+        return getattr(provider, "client_version", None) if provider is not None else None
+
+    def _catalog(self):
+        job = self._job
+        if job.codex_catalog is None:
+            job.codex_catalog = _catalog.read_codex_catalog(installed_client=self._installed_client("openai"))
+        return job.codex_catalog
+
+    def _grok_catalog(self):
+        """The ``grok models`` listing, read once per job when the binary is
+        on PATH (no prompt, no generation); its default is recorded beside
+        every grok call. A listing that cannot be read is a status."""
+        job = self._job
+        if job.grok_listing is None:
+            provider = self._providers.get("grok")
+            client = getattr(provider, "_client", None)
+            switch = os.getenv("QUADRATUS_GROK_MODELS", "").strip().lower()
+            if switch in ("0", "off", "false", "no"):
+                job.grok_listing = _catalog.GrokCatalog("not read", reason="disabled by QUADRATUS_GROK_MODELS")
+            elif isinstance(client, str) and client:
+                job.grok_listing = _catalog.grok_catalog(client)
+            else:
+                job.grok_listing = _catalog.GrokCatalog("not read", reason="no grok binary path to run")
+        return job.grok_listing
+
+    def _resolution(self, key: str) -> Resolution:
+        """This job's resolution for ``key``: decided once for the family,
+        anywhere in the job (parent or any fork, under one lock), then held.
+        A legacy spelling shares its family's resolution; the record keeps
+        the family key and each call's requested spelling."""
+        job = self._job
+        family = canonical_key(key)
+        with job.lock:
+            found = job.resolutions.get(family)
+            if found is not None:
+                return found if found.requested == key else replace(found, requested=key)
+            vendor = key.partition(":")[0]
+            if vendor == "grok":
+                self._vendor_provider(vendor)
+            live = resolve_model(family, catalog=self._catalog() if vendor == "openai" else None,
+                                 installed_client=self._installed_client(vendor),
+                                 grok=self._grok_catalog() if vendor == "grok" else None)
+            frozen = job.frozen.get(family)
+            if frozen is not None:
+                held = Resolution.from_dict(dict(frozen, requested=family))
+                provenance = dict(held.provenance, frozen="kept from the job's earlier episode")
+                if live.available and live.wire != held.wire:
+                    provenance["drift"] = (f"the installed client now resolves {held.family or family} to "
+                                           f"{live.wire!r}; this job keeps {held.wire!r}")
+                elif not live.available:
+                    provenance["drift"] = (f"the installed client cannot resolve it now ({live.reason}); "
+                                           "this job keeps its own")
+                found = Resolution(family, held.key, held.vendor, held.family, held.wire, held.source + " (frozen)",
+                                   "resolved", supported=held.supported, provenance=provenance,
+                                   observed_default=live.observed_default or held.observed_default)
+            else:
+                found = live
+            job.resolutions[family] = found
+        return found if found.requested == key else replace(found, requested=key)
+
+    def resolution_record(self) -> dict:
+        """Every family this job resolved so far, anywhere in the job, with
+        its provenance, plus the catalogue and the grok listing as read:
+        result.json ``models`` and the checkpoint's ``model_resolution``."""
+        job = self._job
+        with job.lock:
+            record = {key: res.to_dict() for key, res in sorted(job.resolutions.items())}
+            extras = {}
+            if job.codex_catalog is not None:
+                extras["codex_catalog"] = job.codex_catalog.provenance()
+            if job.grok_listing is not None:
+                extras["grok_models"] = job.grok_listing.record()
+        return dict(resolutions=record, **extras)
+
+    def _effort_for(self, key: str, spec) -> "_effort.EffortDecision":
+        """The effort for the call being made: the policy's decision from the
+        context the session passed (role and task facts), on the resolved
+        model's ladder; a bounded seat keeps its roster effort. An
+        unsupported level is refused here, never lowered in silence."""
+        context = invocation_context.get() or {}
+        inputs = dict(context.get("effort_inputs") or {})
+        role = str(inputs.pop("role", None) or context.get("role") or "direct")
+        vendor = key.partition(":")[0]
+        supported = self._resolution(key).supported if self.settings.backend_for(vendor) == "cli" else None
+        decision = _effort.select(role=role, vendor=vendor, restricted=bool(spec.restricted),
+                                  seat_effort=spec.effort or "", supported=supported,
+                                  **{k: v for k, v in inputs.items()
+                                     if k in ("complexity", "kind", "work_class", "security", "cycle", "impact")})
+        problem = _effort.validate(decision.level, vendor, supported)
+        if problem:
+            raise UnsupportedEffort(f"{key}: {problem}")
+        return decision
+
     def _alias(self, key: str) -> str:
         """What to call this model on the wire today.
 
-        On the CLI backend that is the line or release alias the binary
-        accepts; on the API backend it is the configured dated model ID, since
-        an API takes no aliases.
+        On the CLI backend that is the family's resolution for this job
+        (quadratus.latest); on the API backend it is the configured dated
+        model ID, since an API takes no aliases.
         """
         vendor = key.partition(":")[0]
         if self.settings.backend_for(vendor) != "cli":
@@ -326,14 +527,23 @@ class Fleet:
                 return override
             spec = resolve(key)
             if vendor == "openai":
-                return spec.alias
+                # An API takes a dated id, never a family: the configured
+                # OpenAI model stands for Sol; every other family needs its
+                # explicit id, as the Claude seats do.
+                if spec is not None and spec.key == "openai:sol":
+                    return self.settings.openai_model
+                raise UnknownModel(f"Set QUADRATUS_API_MODEL_{re.sub(r'[^A-Z0-9]+', '_', key.upper())} "
+                                   "to the exact API model ID for this seat.")
             if vendor == "grok":
                 return self.settings.model_for(vendor)
             if key == "claude:opus":
                 return self.settings.claude_model
             raise UnknownModel(f"Set QUADRATUS_API_MODEL_{re.sub(r'[^A-Z0-9]+', '_', key.upper())} "
                                "to the exact API model ID for this seat.")
-        return alias_for(key)
+        found = self._resolution(key)
+        if not found.available:
+            raise ProviderError(f"{key} is not usable: {found.reason}")
+        return found.wire or ""
 
     def fork(self, root) -> "Fleet":
         """A Fleet for one parallel task's copy of the project at ``root``,
@@ -360,6 +570,9 @@ class Fleet:
             child._watch_parent = self
         except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
             pass
+        # One job, one resolution state: a family first resolved in a child
+        # is the parent's resolution too, and no fork reads its own catalogue.
+        child._job = self._job
         return child
 
     # -- liveness ------------------------------------------------------------
@@ -420,14 +633,19 @@ class Fleet:
             return False
         if self.project and self.settings.backend_for(vendor) != 'cli':
             return False
-        if key in self._exhausted:
+        if canonical_key(key) in self._exhausted:
+            return False
+        provider = self._vendor_provider(vendor)
+        if provider is None or not provider.available():
             return False
         try:
             self._alias(key)
-        except UnknownModel:
+        except (UnknownModel, ProviderError):
+            # A family the installed client cannot resolve now (no, stale
+            # or mismatched catalogue) is not usable; the reason is on the
+            # status line and in the run record, and nothing older is sent.
             return False
-        provider = self._vendor_provider(vendor)
-        return provider is not None and provider.available()
+        return True
 
     def mark_exhausted(self, key: str, detail: str = "") -> None:
         """Record that one model's window is spent for the rest of this run.
@@ -440,6 +658,8 @@ class Fleet:
         model -- exactly the failure the orchestrator fallback exists to avoid,
         caused by the code meant to detect it.
         """
+        # By family: a legacy spelling of a spent seat is the same seat.
+        key = canonical_key(key)
         if key not in self._exhausted:
             log.warning(
                 "%s reports its window exhausted; routing around it for the "
@@ -455,7 +675,13 @@ class Fleet:
 
     # -- invocation ----------------------------------------------------------
     def invoke(self, model_key, prompt, *, system=None, allow_writes=False):
-        with capture_invocations():
+        from .run_budget import admitted_as
+        # The write grant decides how the run budget exposes this call to
+        # the held finish (run_budget.admission). A worker is served inside
+        # its lead's call, so it never waits on calls in flight: one of them
+        # is its own parent.
+        origin = (invocation_context.get() or {}).get("origin")
+        with capture_invocations(), admitted_as(editing=allow_writes, may_wait=origin != "worker"):
             return self._invoke(model_key, prompt, system=system, allow_writes=allow_writes)
 
     def _invoke(self, model_key: str, prompt: str, *, system: Optional[str] = None,
@@ -493,7 +719,7 @@ class Fleet:
         # evidence/q9v2-rerun2-1m). Delegation is a plausible cause, not an
         # established one. The verifier keeps every read tool and loses only
         # native delegation, on a copy so no other seat inherits it.
-        verifying = (invocation_context.get() or {}).get("role") == "verifier"
+        verifying = (invocation_context.get() or {}).get("role") in NO_NATIVE_DELEGATION_ROLES
         # A lead's agentic turn limit, when the operator set one. Applied per
         # call on a view, never on the shared provider. A capped lead raises
         # TurnLimitReached with its edits still in place; the session keeps
@@ -550,15 +776,14 @@ class Fleet:
                     + "\n".join(checks)
                     + "\nRun these commands verbatim from the working directory. Do not add cd, pipes, "
                     "wildcards, shell wrappers or substitute a directory for the listed files. "
-                    "A new test file that no listed command names is not shown to have run: unless a "
-                    "listed test file runs it, its tests stay unverified, so add new tests to a "
-                    "file a listed command already names. "
-                    "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
+                    "A new test file is not shown to have run unless a listed command names it, names "
+                    "a folder that holds it, or discovers it (a pytest command with no test-file "
+                    "operands discovers every Python test file); otherwise its tests stay unverified, "
+                    "so add new tests to a file or folder a listed command already runs. "
+                    + inspection_tools(model_key) + " If an ungranted command is denied, "
                     "do not retry variants, delegate it or use another tool to execute it. "
-                    "Report each check or acceptance step you could not run on its own line "
-                    "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
-                    "with the edits and available evidence; a NOT RUN line keeps the requirement it "
-                    "serves open until a check runs it. "
+                    + NOT_RUN_RULE + " Put NOT RUN lines above the closing CHANGED line, and finish "
+                    "with the edits and available evidence. "
                     "A NOT RUN or BLOCKED line must name the test file it is about, alone or as the "
                     "file a command runs (tests/ui/search.test.js, or node tests/browser/run.js): a "
                     "line that names no file path, such as 'the browser scenario', can never be "
@@ -669,6 +894,12 @@ class Fleet:
                 context["changed_report"] = report
             return reply
         with _review_directory(self.project, review_source) as directory:
+            # The bytes this copy was handed, measured on the copy itself
+            # before anything else lands in it: a scratch proof is bound to
+            # them, never to the live source measured after the call returns
+            # (root review of 5ca254c: the live source moved during review).
+            handed_source = (Project(directory, exclude=self.project.exclude).fingerprint()
+                             if context.get("probe") else None)
             declared = (tuple(itertools.islice(iter(context.get("evidence_files") or ()), _MAX_EVIDENCE_FILES + 1))
                         if review_source is None else ())
             copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"),
@@ -711,7 +942,9 @@ class Fleet:
                          "It excludes later edits and written findings from the other seat. File modes "
                          "are not part of that byte capture. Judge this starting source; later "
                          "reconciliation will consider both independent reads and any written report.")
+            role += local_read_rule(provider)
             checks = tuple(getattr(self, "check_commands", ()) or ())
+            probe = _probe_commands(checks, directory) if context.get("probe") else ()
             if (checks and context.get("role") in REVIEW_CAPPED_ROLES and context.get("harness_checks")
                     and review_source is None):
                 # r03 (20261011T152432Z-4ceef6b5): seats re-ran the project's
@@ -724,6 +957,7 @@ class Fleet:
                     "This copy may lack browsers or other dependencies the harness has, so a command that "
                     "cannot run here is not evidence about the source. This copy is not a git repository: "
                     "git commands fail here, so read files and the task's own account of its changes instead."
+                    + _probe_exception(probe)
                 )
             elif checks and context.get("role") in REVIEW_CAPPED_ROLES:
                 # The same exact-command guidance the editing call gets (#51),
@@ -740,6 +974,7 @@ class Fleet:
                     "the task's own account of its changes instead. If a command is denied, do not "
                     "retry variants, delegate it or use another tool to execute it; report the "
                     "unrun check and judge from what you could read."
+                    + _probe_exception(probe)
                 )
             if allow_writes:
                 role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
@@ -752,13 +987,35 @@ class Fleet:
                 if worker_loop_control.get() is not None:
                     role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
             reply = self._generate(model_key, view, prompt, role)
+            # The text exactly as returned, before any path rewrite: what a
+            # rejection keeps (root review of b49a0cb, R6).
+            raw_reply = reply
             _raise_if_infrastructure(model_key, view)
             altered = _copy_altered(directory, handed)
+            if context.get("probe"):
+                # Measured, not read from the reply: the new test files the
+                # call left in its copy (r09 on ded0095).
+                from .integration import _test_family
+                digests = _copy_digests(directory)
+                context["scratch_tests"] = sorted(p for p in digests if p not in handed and _test_family(p))
+                # Their bytes, measured here while the copy exists: a later
+                # receipt names them, never a reconstruction (root on 9bedde0).
+                context["scratch_hashes"] = {p: digests[p] for p in context["scratch_tests"]}
             if altered:
                 raise ReviewCopyAltered(
                     f"{model_key} changed or removed files it was handed to read in its source copy "
                     f"({', '.join(altered[:5])}{', …' if len(altered) > 5 else ''}); its answer is not "
                     "accepted as a judgement of the delivered source and evidence.")
+            if context.get("scratch_tests") and context.get("probe_checks"):
+                # Executed, not inferred: the harness runs the approved check
+                # commands in this disposable copy and reads the scratch cases
+                # by identity (r09 root decision on 40b2133).
+                from .integration import checks_digest
+                context["scratch_proof"] = dict(
+                    _scratch_proof(directory, context["scratch_tests"], handed, context["probe_checks"],
+                                   private=_private_paths(self.project.root, getattr(self, "check_commands", ())
+                                                          or (), directory)),
+                    handed_source=handed_source, handed_checks=checks_digest(context["probe_checks"]))
             # Rewritten while the copy still exists, because its path is the
             # only thing that identifies which references need rewriting. A
             # reviewer that cited the copy by absolute path would otherwise
@@ -766,15 +1023,25 @@ class Fleet:
             # a reporting defect, separate from the isolation working correctly.
             reply = _relativise_snapshot_paths(reply, directory)
         if allow_writes:
-            match = re.fullmatch(r"\s*PATCH:\s*```(?:diff)?\n(.*?)```\s*", reply, re.DOTALL)
-            if match:
-                self.project.apply_patch(_add_missing_headers(match.group(1), prompt, self.project.root))
+            diff, stage = bounded_patch(reply)
+            if diff is not None:
+                try:
+                    self.project.apply_patch(_add_missing_headers(diff, prompt, self.project.root))
+                except Exception as exc:
+                    # A patch that does not apply is a rejection with the
+                    # reply kept, never a silent drop (PR73 6693873055).
+                    _attach_response(exc, raw_reply, "apply", normalized=reply)
+                    raise
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
             from .taskmeta import lead_request
-            if (not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply)
-                    and lead_request(reply) is None):
-                raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
+            if (stage == "no-marker" and not continuation
+                    and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply)
+                    and lead_request(reply) is None) or stage not in ("no-marker",):
+                raise _attach_response(ProviderError(
+                    "Bounded editor returned no PATCH or explicit NO CHANGES result"
+                    f" ({_PATCH_STAGES.get(stage, stage)}; reply {len(reply)} chars, sha256 "
+                    f"{hashlib.sha256(raw_reply.encode()).hexdigest()[:16]})."), raw_reply, stage, normalized=reply)
         return reply
 
     #: Vendor agent configuration the operator allowed in the project, as the
@@ -1001,6 +1268,9 @@ class Fleet:
         if len(prompt.encode('utf-8')) > 32_000:
             raise ProviderError("Closeout evidence exceeds its 32,000-byte prompt bound.")
         view = copy.copy(provider.for_seat(provider.model, effort="low", restricted=True))
+        # The record says what this view sends: low, fixed by the view, not
+        # the policy decision the seat was bound with.
+        view.effort_decision = _effort.EffortDecision("low", ("closeout summary view: fixed at low",), seat_fixed=True)
         view.summary_only = True
         view.max_tokens = min(view.max_tokens, 1024)
         view.timeout = min(view.timeout, 60.0) if view.timeout is not None else 60.0
@@ -1206,6 +1476,14 @@ class Fleet:
         try:
             usage = usage or {}
             raw = getattr(provider, "last_diagnostics", None) or {}
+            decision = getattr(provider, "effort_decision", None)
+            sent_effort = (getattr(provider, "effort", None) or None) or getattr(decision, "level", None)
+            if decision is not None and sent_effort == decision.level:
+                effort_reasons = list(decision.reasons)
+            elif decision is not None:
+                effort_reasons = [f"explicit view effort {sent_effort}; the seat's policy decision was {decision.level}"]
+            else:
+                effort_reasons = []
             # One cache figure per row: the usage dict's when the extractor
             # gives one (codex), else the envelope's re-read count (claude,
             # grok), which is the same subset of input_tokens.
@@ -1217,7 +1495,7 @@ class Fleet:
                 role=role or "-",
                 origin=origin or Origin.SEAT,
                 requested_model=key,
-                canonical_model=key,
+                canonical_model=canonical_key(key),
                 wire_model=getattr(provider, "model", None),
                 resolved_model=getattr(provider, "resolved_model", None),
                 invocation_id=uuid.uuid4().hex,
@@ -1236,15 +1514,25 @@ class Fleet:
                                     if isinstance(usage.get("input_tokens"), int) and isinstance(cached, int)
                                     and usage["input_tokens"] >= cached else None),
                 model_turns=raw.get("model_calls") if isinstance(raw.get("model_calls"), int) else None,
+                tool_steps=raw.get("tool_steps") if isinstance(raw.get("tool_steps"), int) else None,
                 max_turns=getattr(provider, "max_turns", None),
                 turn_limited=outcome == "TurnLimitReached",
                 prompt_artifact=prompt_artifact,
                 session_id=getattr(provider, "last_session_id", None),
                 cwd=InvocationEvent.directory_of(provider),
+                operation=getattr(provider, "last_operation", None),
                 post_return_failure=post_return_failure,
                 detail=detail,
                 stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),
                 tool_failures=bounded_tool_failures(getattr(provider, "last_tool_failures", None)),
+                # The effort the argv carried (``provider.effort``) is the
+                # fact; the decision explains it only when they agree, and
+                # a view that set its own level says so.
+                effort=sent_effort,
+                effort_reasons=effort_reasons,
+                effort_policy=getattr(decision, "policy", "") or "",
+                resolution_source=(self._job.resolutions[canonical_key(key)].source
+                                   if canonical_key(key) in self._job.resolutions else ""),
             )
             record_invocation(self.delegation_ledger, event)
             _recorded_event.set(event)
@@ -1319,16 +1607,54 @@ class Fleet:
             spent = [k for k in self._exhausted if k.startswith(f"{vendor}:")]
             if spent:
                 state += f" — window exhausted this run: {', '.join(sorted(spent))}"
+            version, minimum = getattr(provider, "client_version", None), getattr(provider, "minimum_client", None)
+            if version or minimum:
+                state += f"; client {version or 'unknown'}"
+                if minimum:
+                    state += f", qualified minimum {minimum}"
+                    state += {True: "", False: " (STALE: refused before any call)",
+                              None: " (version unreadable; not refused)"}[client_version_at_least(version, minimum)]
+            if vendor == "openai" and backend == "cli" and provider.available():
+                read = self._catalog()
+                state += (f"; catalogue {read.status}" + (f" ({read.reason})" if read.reason else "")
+                          + (f", fetched {read.fetched_at} by client {read.client_version}" if read.fetched_at else ""))
+            if vendor == "grok" and backend == "cli" and provider.available():
+                listing = self._grok_catalog()
+                state += (f"; grok models: {listing.status}" + (f", default {listing.default}" if listing.default else "")
+                          + (f" ({listing.reason})" if listing.reason else ""))
             lines.append(f"{vendor} [{backend}]: {state}")
         return lines
+
+    def stale_clients(self) -> List[str]:
+        """One line per CLI vendor whose installed client parses below the
+        version this engine qualified; the run preflight refuses
+        on any. A client whose version cannot be read is not listed (it is
+        shown as unknown on the status line), and a vendor whose seats are
+        not usable anyway is not listed either."""
+        stale = []
+        for vendor in VENDORS:
+            if self.settings.backend_for(vendor) != "cli":
+                continue
+            provider = self._vendor_provider(vendor)
+            if provider is None or not provider.available():
+                continue
+            version, minimum = getattr(provider, "client_version", None), getattr(provider, "minimum_client", None)
+            if minimum and client_version_at_least(version, minimum) is False:
+                stale.append(f"{vendor}: installed client {version} is below the qualified minimum "
+                             f"{minimum}; update the client before running")
+        return stale
 
     def alias_lines(self) -> List[str]:
         """What every roster key resolves to, and on whose authority."""
         out = []
         for vendor in VENDORS:
             for key in (m.key for m in _roster_for(vendor)):
-                alias, source = resolution_source(key)
-                out.append(f"{key} -> {alias} ({source})")
+                found = self._resolution(key)
+                if found.available:
+                    out.append(f"{key} -> {found.wire!r} ({found.source})"
+                               + (f"; vendor default now {found.observed_default}" if found.observed_default else ""))
+                else:
+                    out.append(f"{key} -> unavailable ({found.reason})")
         return out
 
     def close(self) -> None:
@@ -1551,6 +1877,102 @@ def _roster_for(vendor: str):
     return [m for m in ROSTER if m.provider == vendor]
 
 
+#: Why a bounded editor's reply was not one applicable patch: the parser's
+#: own stage, recorded with the kept reply (PR73 6693873055).
+_PATCH_STAGES = {
+    "no-marker": "no PATCH: marker",
+    "multiple-markers": "more than one PATCH: marker",
+    "no-fence": "no fenced block after PATCH:",
+    "unterminated-fence": "the fence after PATCH: is not closed",
+    "empty-diff": "the fenced block after PATCH: is empty",
+    "not-a-diff": "the fenced block after PATCH: is not a unified diff",
+    "multiple-diffs": "more than one unified diff in the reply",
+    "conflicting-no-changes": "both PATCH: and NO CHANGES:",
+    "apply": "the patch did not apply",
+}
+_PATCH_MARKER = re.compile(r"(?m)^[ \t]*(?:\*\*)?PATCH:(?:\*\*)?[ \t]*")
+_FENCE_OPEN = re.compile(r"[ \t]*\n?[ \t]*(```+|~~~+)[ \t]*(?:diff|patch|udiff)?[ \t]*\n")
+_DIFF_HEADER = re.compile(r"(?m)^(?:diff --git |--- \S|\+\+\+ \S|@@ )")
+#: The reply kept with a rejection, bounded; length and digest are of the whole.
+RESPONSE_KEEP_CHARS = 200_000
+
+
+def _attach_response(exc, reply: str, stage: str, *, normalized: Optional[str] = None):
+    """Keep the reply exactly as returned on a bounded-editor rejection
+    (before any path rewrite), with the parser stage, the whole reply's
+    length and digest, whether what is kept is only a prefix, and whether
+    the parser read a path-rewritten form. ``response_record`` is what the
+    session and worker seams persist (root review of b49a0cb, R6)."""
+    text = reply or ""
+    exc.provider_response = text[:RESPONSE_KEEP_CHARS]
+    exc.response_chars = len(text)
+    exc.response_sha256 = hashlib.sha256(text.encode()).hexdigest()
+    exc.response_truncated = len(text) > RESPONSE_KEEP_CHARS
+    exc.response_normalized = normalized is not None and normalized != text
+    exc.parse_stage = stage
+    return exc
+
+
+def response_record(exc) -> Optional[dict]:
+    """The durable record of a reply a rejection kept, or None: the kept
+    text labelled as the whole raw reply or a retained prefix of it, the
+    whole reply's length and sha256, the parser stage, and whether the
+    parser read a path-rewritten form. Diagnostics for the run record carry
+    everything but ``text``."""
+    text = getattr(exc, "provider_response", None)
+    if not isinstance(text, str) or not text:
+        return None
+    chars = getattr(exc, "response_chars", None)
+    truncated = getattr(exc, "response_truncated", None)
+    return dict(text=text,
+                text_kind=("retained prefix of the raw returned text" if truncated
+                           else "raw returned text" if truncated is False else "returned text (kept by the caller)"),
+                kept_chars=len(text), chars=chars if isinstance(chars, int) else len(text),
+                sha256=getattr(exc, "response_sha256", None) or hashlib.sha256(text.encode()).hexdigest(),
+                truncated=bool(truncated), normalized=bool(getattr(exc, "response_normalized", False)),
+                stage=getattr(exc, "parse_stage", None), error=type(exc).__name__)
+
+
+def bounded_patch(reply: str):
+    """(diff, stage) from a bounded editor's reply, deterministically, with
+    no model call (PR73 6693873055). Line endings (CRLF, CR) and a byte
+    order mark are normalised; prose before the one ``PATCH:`` marker and
+    after the closing fence is framing, not content. Exactly one marker,
+    followed by one fenced unified diff, and no other unified diff anywhere
+    in the reply; ``NO CHANGES:`` beside a patch is a conflict. ``diff`` is
+    None when the reply is not one applicable patch, and ``stage`` says why
+    ("ok" when it is). What applies is still held to the diff's own paths,
+    the task scope and atomic application, and the checks and review still
+    judge it."""
+    text = (reply or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    markers = list(_PATCH_MARKER.finditer(text))
+    if not markers:
+        return None, "no-marker"
+    if len(markers) > 1:
+        return None, "multiple-markers"
+    if re.search(r"(?m)^[ \t]*NO CHANGES:", text):
+        return None, "conflicting-no-changes"
+    after = text[markers[0].end():]
+    opened = _FENCE_OPEN.match(after)
+    if not opened:
+        return None, "no-fence"
+    fence = opened.group(1)
+    body_start = opened.end()
+    close = re.compile(r"(?m)^[ \t]*" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$")
+    closed = close.search(after, body_start)
+    if not closed:
+        return None, "unterminated-fence"
+    diff = after[body_start:closed.start()]
+    if not diff.strip():
+        return None, "empty-diff"
+    if not _DIFF_HEADER.search(diff):
+        return None, "not-a-diff"
+    outside = text[:markers[0].start()] + after[closed.end():]
+    if _DIFF_HEADER.search(outside):
+        return None, "multiple-diffs"
+    return diff if diff.endswith("\n") else diff + "\n", "ok"
+
+
 def _relativise_snapshot_paths(reply: str, directory) -> str:
     """Rewrite absolute paths into a disposable source copy as project paths.
 
@@ -1672,6 +2094,139 @@ class ReviewCopyAltered(ProviderError):
     the call means the answer was formed on bytes other than the ones the
     session hashed and will record, so the answer is refused (Codex review
     of 2ffa7f6 on #52)."""
+
+
+def _probe_commands(checks, directory) -> tuple:
+    """The approved model-facing commands that would run a new scratch test
+    file a review added to its copy: discovery confined to directories inside
+    that copy (integration.discovers_added_tests). Any other command, and any
+    command naming a path outside the copy, is never repeated here."""
+    from .integration import discovers_added_tests
+    out = []
+    for command in checks:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        if discovers_added_tests(argv, directory):
+            out.append(command)
+    return tuple(out)
+
+
+def _probe_exception(commands) -> str:
+    """The one run a scratch demonstration may make (root review of b24b6db:
+    the review prompt asked for it while this role forbade running checks)."""
+    if not commands:
+        return ""
+    return ("\nONE EXCEPTION, FOR A NEW SCRATCH TEST ONLY: to run a new test file you added to this copy "
+            "for the review's demonstration, run exactly one of these approved commands, verbatim:\n"
+            + "\n".join(commands)
+            + "\nPut the file where that command discovers tests and name it the way its runner collects "
+            "them. Run it for that file only, not to confirm the delivered source again: the records "
+            "above stand. If its output does not show your scratch test executed and passed, the "
+            "condition is not demonstrated.")
+
+
+def _private_paths(project_root, checks, directory) -> List[str]:
+    """What a scratch run must not read: the live project, and every
+    existing absolute path an approved check names outside the copy (an
+    operator's private grading files). Never shown to any model."""
+    copy = os.path.realpath(directory)
+    out = [os.path.realpath(project_root)] if project_root else []
+    for command in checks:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        for arg in argv[1:]:
+            value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+            if not os.path.isabs(value):
+                continue
+            real = os.path.realpath(value)
+            if os.path.lexists(real) and not (real == copy or real.startswith(copy + os.sep)):
+                out.append(real)
+    return sorted(set(out))
+
+
+def _scratch_isolation(directory, private) -> Optional[tuple]:
+    """``(launcher, env)`` holding a scratch run to what the codex reviewer's
+    copy policy allows (``CODEX_SPEC.copy_args``: the copy is the only
+    writable root, /tmp and $TMPDIR excluded, no extra roots, and no network)
+    and hiding ``private`` from reads; None when no such sandbox is available
+    here, which makes the run not run (root review of 1c14ea9: the gate
+    runner let a scratch test write outside the copy). The launcher's own
+    refusal to start is read from the output (SANDBOX_REFUSAL)."""
+    import platform
+    copy = os.path.realpath(directory)
+    temp = os.path.join(copy, ".quadratus-scratch-tmp")
+    env = {"TMPDIR": temp, "TMP": temp, "TEMP": temp}
+    if any(path == copy or copy.startswith(path + os.sep) for path in private):
+        return None
+    if platform.system() == "Darwin" and os.path.exists("/usr/bin/sandbox-exec"):
+        def quote(path):
+            return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        hidden = " ".join(f"(subpath {quote(p)})" if os.path.isdir(p) else f"(literal {quote(p)})"
+                          for p in private)
+        profile = ("(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n"
+                   f"(allow file-write* (subpath {quote(copy)}) (literal \"/dev/null\") (literal \"/dev/tty\"))\n"
+                   + (f"(deny file-read* {hidden})\n" if hidden else ""))
+        return ("/usr/bin/sandbox-exec", "-p", profile), env
+    # Pinned paths, never PATH: a launcher found by lookup could be anything.
+    bwrap = "/usr/bin/bwrap"
+    if platform.system() == "Linux" and os.path.isfile(bwrap):
+        launcher = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net",
+                    "--die-with-parent", "--new-session", "--bind", copy, copy]
+        for path in private:
+            launcher += (["--tmpfs", path] if os.path.isdir(path) else ["--ro-bind", "/dev/null", path])
+        return tuple(launcher), env
+    return None
+
+
+def _scratch_proof(directory, scratch, handed, checks, private=()) -> dict:
+    """The harness's own run, in the disposable copy, of each approved gate
+    command that discovers a new test file there, as the reviewer would run
+    it (its model-facing argv), inside _scratch_isolation, and what it shows
+    about the scratch files' cases (integration.scratch_receipt). Same
+    commands, timeouts and owned cleanup as the gate; nothing is linked in
+    from the project, so a check that needs the project's dependency tree
+    records not run."""
+    from dataclasses import replace as _replace
+
+    from .cli_providers import SANDBOX_REFUSAL
+    from .integration import (
+        GateSuite,
+        _test_family,
+        discovers_added_tests,
+        model_facing,
+        scratch_receipt,
+        scratch_report_env,
+    )
+    root = Path(directory).resolve()
+    commands = [_replace(c, argv=tuple(model_facing(c.argv))) for c in checks if not c.skip_reason
+                and discovers_added_tests(model_facing(c.argv), root / c.cwd)]
+    base = dict(files=sorted(scratch), cases=[], receipts=[])
+    if not commands:
+        return dict(base, status="not run", reason="no approved command discovers a new test file in this copy")
+    isolation = _scratch_isolation(directory, private)
+    if isolation is None:
+        return dict(base, status="not run", reason="no sandbox here holds a scratch run to its copy")
+    launcher, env = isolation
+    try:
+        files = {p: (root / p).read_bytes() for p in scratch}
+        others = {p: (root / p).read_bytes() for p in handed if _test_family(p) and (root / p).is_file()}
+        Path(env["TMPDIR"]).mkdir(exist_ok=True)
+        results = [GateSuite([c], cwd=root, exclude=(env["TMPDIR"],),
+                             report_env=dict(scratch_report_env(c.argv), **env), isolation=launcher).run()
+                   for c in commands]
+    except (OSError, ValueError) as exc:
+        return dict(base, status="not run", reason=f"the approved runner could not run here: {type(exc).__name__}")
+    if any(SANDBOX_REFUSAL.search(r.output or "") for result in results for r in result.receipts):
+        return dict(base, status="not run", reason="the scratch sandbox could not start")
+    proof = scratch_receipt(results, files, others)
+    if _copy_altered(directory, handed):
+        # A scratch test that rewrote handed source proved nothing about it.
+        return dict(proof, status="not run", reason="a handed file changed during the run")
+    return proof
 
 
 def _copy_digests(directory) -> Dict[str, str]:

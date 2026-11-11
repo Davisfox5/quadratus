@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_explicit_tasks import ADD_TASK, README_TASK, _run, _script
+from tests.lifecycle.test_explicit_tasks import ADD_TASK, READING_JUDGED, README_TASK, _run, _script
+from tests.lifecycle.test_lifecycle_matrix import judging
 
 
 def test_exactly_full_list_never_invokes_orchestrator(tmp_path, monkeypatch):
@@ -56,7 +57,8 @@ def test_a_list_with_requirements_and_covers_runs_under_the_default_ledger(tmp_p
     reqs = "REQUIREMENTS:\nR1: README documents add\n"
     replay = _run(tmp_path, monkeypatch, [reqs + README_TASK + "\nCOVERS: R1"], max_tasks=1,
                   script=_script(**{"requirements-review": lambda c, r: "COMPLETE",
-                                    "auditor": lambda c, r: "R1: MET - README.md"}))
+                                    "auditor": judging(lambda c, r: "R1: MET - README.md",
+                                                       reading=READING_JUDGED)}))
     assert replay.of("orchestrator") == []
     assert replay.result.completed, replay.result.error
     assert replay.result.report.startswith("# Listed tasks completed; the goal was not judged")
@@ -87,7 +89,8 @@ def test_an_explicit_run_audits_only_what_its_tasks_claimed(tmp_path, monkeypatc
         prompts.append(call.prompt)
         return "R1: MET - README.md"
     replay = _run(tmp_path, monkeypatch, [REQS2 + README_TASK + "\nCOVERS: R1"], max_tasks=1,
-                  script=_script(**{"requirements-review": lambda c, r: "COMPLETE", "auditor": auditor}))
+                  script=_script(**{"requirements-review": lambda c, r: "COMPLETE",
+                                    "auditor": judging(auditor, reading=READING_JUDGED)}))
     assert replay.of("orchestrator") == []
     assert replay.result.completed, replay.result.error
     assert len(prompts) == 1 and "R1: README documents add" in prompts[0] and "R2:" not in prompts[0]
@@ -112,8 +115,21 @@ def test_the_audit_prompt_carries_the_design_review_verdict(tmp_path, monkeypatc
     prompts = []
 
     def auditor(call, replay):
+        # The favicon scope declares no proof scenarios, so its two
+        # acceptance strings are legacy rows (mapping unknown), each judged
+        # only by this case's own explicit line about what the delivered
+        # source and the harness check show; a MET on R1 implies nothing.
         prompts.append(call.prompt)
-        return "R1: MET - static/favicon.svg"
+        lines = ["R1: MET - static/favicon.svg"]
+        for oid in H.obligation_ids(call.prompt, modality="legacy"):
+            row = call.prompt.split(f"- {oid} (", 1)[1].split("\n", 1)[0]
+            if "static/favicon.svg exists" in row:
+                lines.append(f"{oid}: SUFFICIENT static/favicon.svg is on the delivered source as a non-empty "
+                             "SVG and templates/index.html links it as the icon")
+            elif "tests pass" in row:
+                lines.append(f"{oid}: SUFFICIENT the harness check ran tests/test_basic.py::test_favicon_file "
+                             "and tests/test_app.py::test_add on this source and both passed")
+        return "\n".join(lines)
     reqs = "REQUIREMENTS:\nR1: GET /favicon.ico returns 200 with an SVG icon\n"
     replay = _run(tmp_path, monkeypatch, [reqs + FAVICON_TASK + "\nCOVERS: R1\nTIER: direct"], max_tasks=1,
                   direct_tier=True,
