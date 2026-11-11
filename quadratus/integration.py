@@ -1176,25 +1176,32 @@ _ONLY_UNEXECUTED = re.compile(r'\d+ (?:skipped|deselected)(?:,? \d+ (?:skipped|d
 #: scenario passed. WebdriverIO's "Spec Files: 1 passed, 1 total" counts
 #: files, as jest's "Test Suites:" row does, and a file whose every case was
 #: skipped passes: it is no count of cases and stays unread.
-#: @web/test-runner's row: one a browser, on adjacent lines.
-_BROWSER_ROW = re.compile(r'[ \t]*[A-Z][A-Za-z ]{1,30}:[ \t]+\|[^|\n]{0,200}\|[ \t]+\d+/\d+ test files[ \t]+\|'
-                          r'[ \t]+(\d+ passed, \d+ failed(?:, \d+ skipped)?)[ \t]*')
+#: @web/test-runner's row: one for each browser, on adjacent lines.
+#: behave (1.3) words its scenario row another way again, and an all-skipped
+#: behave run exits 0 as cucumber's does (found in the review of this fix):
+#:   0 scenarios passed, 0 failed, 2 skipped
+#:   0 scenarios passed, 0 failed, 1 error, 0 skipped
+#: Its "N features" and "N steps" rows are not its cases and stay unread.
+_BROWSER_ROW = re.compile(r'[ \t]*([A-Z][A-Za-z ]{1,30}):[ \t]+\|[^|\n]{0,200}\|[ \t]+\d+/\d+ test files[ \t]+\|'
+                          r'[ \t]+(?P<items>\d+ passed, \d+ failed(?:, \d+ skipped)?)[ \t]*')
 _RUNNER_ROWS = (
-    re.compile(r'[ \t]*(?:0 scenarios|\d+ scenarios? \((\d+ [a-z]+(?:, \d+ [a-z]+){0,6})\))[ \t]*'),
-    re.compile(r'[ \t]*\d+ tests?(?: total)?, (\d+ passed, \d+ failed(?:, \d+ skipped)?)[ \t]*'),
-    re.compile(r'[ \t]*(?:OK|FAIL)[ \t]+\|[ \t]+(\d+ passed(?:, \d+ (?:failed|failedHooks|skipped)){0,3})'
+    re.compile(r'[ \t]*(?:0 scenarios|\d+ scenarios? \((?P<items>\d+ [a-z]+(?:, \d+ [a-z]+){0,6})\))[ \t]*'),
+    re.compile(r'[ \t]*(?P<items>\d+) scenarios?(?P<more> passed, \d+ failed(?:, \d+ [a-z_]+){1,6})[ \t]*'),
+    re.compile(r'[ \t]*\d+ tests?(?: total)?, (?P<items>\d+ passed, \d+ failed(?:, \d+ skipped)?)[ \t]*'),
+    re.compile(r'[ \t]*(?:OK|FAIL)[ \t]+\|[ \t]+(?P<items>\d+ passed(?:, \d+ (?:failed|failedHooks|skipped)){0,3})'
                r'[ \t]*(?://.{0,80})?'),
     _BROWSER_ROW,
 )
-_ROW_ITEM = re.compile(r'(\d+) ([A-Za-z]+)')
+_ROW_ITEM = re.compile(r'(\d+) ([A-Za-z_]+)')
 #: Where one of those rows may begin behind a wrapper's label. Tried only
 #: on a line the count lines' own search read nothing from, so it adds
 #: readings and changes none.
 _ROW_START = re.compile(r'(?<![^\s=*|])(?:\d+ scenarios?\b|\d+ tests?(?: total)?, \d|(?:OK|FAIL)[ \t]+\|'
                         r'|[A-Z][A-Za-z]{1,30}:[ \t]+\|)')
 #: What a row's word means. A case that reached no result (cucumber's
-#: pending, undefined, ambiguous and unknown, or a word not known here) did
-#: not run: a skip, never an execution. A failed hook is not a case.
+#: pending, undefined, ambiguous and unknown, behave's error, or a word not
+#: known here) did not run: a skip, never an execution. A failed hook is
+#: not a case.
 _ROW_WORDS = {'passed': 'passed', 'failed': 'failed', 'failedHooks': None}
 
 
@@ -1206,7 +1213,9 @@ def _runner_row(line: str, rows=_RUNNER_ROWS) -> Optional[list]:
     for row in rows:
         found = row.fullmatch(line)
         if found:
-            pairs = [(count, _ROW_WORDS.get(word, 'skipped')) for count, word in _ROW_ITEM.findall(found.group(1) or '')]
+            # behave puts "scenarios" between its first count and "passed".
+            items = (found.group('items') or '') + (found.groupdict().get('more') or '')
+            pairs = [(count, _ROW_WORDS.get(word, 'skipped')) for count, word in _ROW_ITEM.findall(items)]
             return [(count, outcome) for count, outcome in pairs if outcome]
     return None
 
@@ -1293,14 +1302,23 @@ def _summary_outcomes(text) -> Optional[list]:
             row = _runner_row(line)
             if row is None:
                 continue
-            if _BROWSER_ROW.fullmatch(line):
+            browser = _BROWSER_ROW.fullmatch(line)
+            if browser:
                 # A row for each browser: all of them, so one browser's
-                # skips are not lost behind another's passes.
+                # skips are not lost behind another's passes. A browser
+                # named twice is the same row printed again, not more cases.
+                seen, below = {browser.group(1)}, line
                 for earlier in reversed(lines[:index]):
-                    more = _runner_row(earlier, (_BROWSER_ROW,))
-                    if more is None:
+                    again = _BROWSER_ROW.fullmatch(earlier) if len(earlier) <= _MAX_SCAN_LINE else None
+                    if again is None:
+                        if earlier != below and earlier.endswith(below):
+                            continue    # the row below as a wrapper printed it, label in front
                         break
-                    row += more
+                    if again.group(1) in seen:
+                        break
+                    seen.add(again.group(1))
+                    row += _runner_row(earlier, (_BROWSER_ROW,)) or []
+                    below = earlier
             return row
         found = _SUMMARY_ITEM.findall(line)
         if not head.group('row'):

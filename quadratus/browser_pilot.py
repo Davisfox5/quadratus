@@ -283,7 +283,8 @@ def drive(
     that lands outside it is closed before anything is read from it. A
     connection the page's own guards do not see (a worker's WebSocket,
     WebRTC, WebTransport) ends at the harness's dead-end proxy
-    (``browser._Sink``) and is listed in ``blocked``.
+    (``browser._Sink``) and is listed in ``blocked``; a browser that cannot
+    be shown to hold them is refused before the start page opens.
 
     Raises:
         ValueError: when ``start_url`` is neither a local preview, a file
@@ -303,6 +304,7 @@ def drive(
         _seen,
         _Sink,
         _watch_targets,
+        held_proxy,
         hold_to_origin,
         pinned_launch_args,
         unpinned_note,
@@ -325,16 +327,17 @@ def drive(
         write_bound(out, (name,), page.screenshot(**options))
         return str(out / name)
 
-    # Where the browser's connections off those origins end: a worker's
+    # Where the context's connections off those origins end: a worker's
     # WebSocket, WebRTC and WebTransport pass the page's own guards.
     sink = _Sink()
     with _closing_sink(sink), sync_playwright() as pw:
         launch_kwargs = {"executable_path": executable_path} if executable_path else {}
-        browser = pw.chromium.launch(args=pinned_launch_args(sink=sink, origins=[url, *allow_origins]),
-                                     **launch_kwargs)
+        browser = pw.chromium.launch(args=pinned_launch_args(sink=sink), **launch_kwargs)
         try:
             watch = _watch_targets(browser, strangers)
-            context = browser.new_context(service_workers="block", accept_downloads=False)
+            context = browser.new_context(service_workers="block", accept_downloads=False,
+                                          proxy=held_proxy(sink, [url, *allow_origins]))
+            sink.prove(context, NAVIGATION_TIMEOUT_MS)
             page = context.new_page()
             page.on(
                 "console",
@@ -425,6 +428,8 @@ def drive(
             browser.close()
 
     run.console_errors = list(errors)
-    run.blocked = (list(blocked) + list(failed) + sink.close()
+    # sink.elsewhere: refused as well, but not to a local address, so it may
+    # be the browser's own connection and not the page's.
+    run.blocked = (list(blocked) + list(failed) + sink.close() + list(sink.elsewhere)
                    + [unpinned_note(kind, where) for kind, where in strangers])
     return run

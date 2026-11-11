@@ -22,6 +22,7 @@ Design constraints, in order:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import socket
@@ -36,7 +37,8 @@ from urllib.parse import urlparse
 from .config import env_with_legacy
 from .integration import _bound_folder, write_bound
 
-__all__ = ["PageEvidence", "render_page", "PlaywrightMissing", "hold_to_origin", "pinned_launch_args"]
+__all__ = ["PageEvidence", "render_page", "PlaywrightMissing", "hold_to_origin", "pinned_launch_args",
+           "held_proxy"]
 
 #: What a page can make the harness keep: entries per list and characters
 #: per entry, bounded where the events arrive (review 2026-11-10, checks
@@ -127,10 +129,15 @@ class PageEvidence:
 #: process. What that session never sees (a worker's WebSocket, WebRTC,
 #: WebTransport) is held at the network instead: :class:`_Sink`.
 _PIN_ARGS = ("--disable-site-isolation-trials",)
-#: With a proxy configured, WebRTC sends no UDP at all (STUN and TURN over
-#: UDP reached another loopback port without it; probed on Chromium 153),
-#: and its TCP goes to the proxy like everything else.
-_NO_WEBRTC_UDP = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+#: WebRTC sends no UDP at all (STUN and TURN over UDP reached another
+#: loopback port without these), and its TCP goes where the context's
+#: proxy sends it, like everything else. Two spellings, because two builds
+#: of one Chromium (153) each honour one and ignore the other: the headless
+#: shell takes the first, a full Chromium only the second (probed on both;
+#: with the first alone a full build still sent every datagram). A browser
+#: that honours neither is refused by ``_Sink.prove``, not trusted.
+_NO_WEBRTC_UDP = ("--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                  "--webrtc-ip-handling-policy=disable_non_proxied_udp")
 #: A shared worker is its own target too, and nothing a Playwright session
 #: can reach pauses its requests before it starts: an on-origin page reached
 #: another loopback port through one while the capture read clean (review
@@ -164,26 +171,91 @@ def _direct_rule(url: str) -> Optional[str]:
     return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
+#: The path of the harness's own question to its sink (``_Sink.prove``).
+_HOLD_CHECK = "quadratus-hold-check"
+#: And its question about datagrams: gather WebRTC candidates against a
+#: STUN address the harness listens on. With UDP off there is nothing to
+#: gather and it is "complete" at once (0.15 s on both builds probed); with
+#: UDP on the browser sends its request there and waits for an answer.
+_DATAGRAM_CHECK = """async ([url, wait]) => {
+  if (typeof RTCPeerConnection !== 'function') return 'absent';
+  let pc;
+  try {
+    pc = new RTCPeerConnection({iceServers: [{urls: url}]});
+    pc.createDataChannel('x');
+    const done = new Promise(resolve => {
+      pc.addEventListener('icegatheringstatechange',
+                          () => pc.iceGatheringState === 'complete' && resolve('complete'));
+      setTimeout(() => resolve('waited'), wait);
+    });
+    await pc.setLocalDescription(await pc.createOffer());
+    return await done;
+  } catch (error) {
+    return 'absent';
+  } finally {
+    if (pc) pc.close();
+  }
+}"""
+#: How long that question waits for "complete" before the browser is taken
+#: to be waiting on a datagram it sent. Spent only by a browser that fails.
+_GATHER_WAIT_MS = 8000
+_LOCAL_NAMES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
+
+
+def _local_address(host: Optional[str]) -> bool:
+    """Whether ``host`` names this machine or its own network: a loopback,
+    private or link-local address, or a name only a local resolver answers.
+    One that cannot be read counts as local, the stricter reading."""
+    host = (host or "").strip("[]").lower().rstrip(".")
+    if not host:
+        return True
+    try:
+        return not ipaddress.ip_address(host).is_global
+    except ValueError:
+        return host == "localhost" or "." not in host or host.endswith(_LOCAL_NAMES)
+
+
 class _Sink:
-    """A dead-end proxy the harness owns, where a pinned browser sends every
-    connection that is not to an origin it is held to.
+    """A dead-end proxy the harness owns, where a pinned browser context
+    sends every connection that is not to an origin it is held to.
 
     The page's session pauses HTTP requests, and Playwright's WebSocket guard
     is a script in each frame. A dedicated worker's WebSocket, a WebSocket
     taken from a new frame's window before that script ran, a WebRTC TURN
     or STUN exchange and a WebTransport session passed both: each reached
     another loopback port while the capture read clean (final review
-    2026-11-11, gate 2, confirmed with a browser). So a pinned browser also
-    starts with this listener as its only proxy and the held origins as the
-    only addresses it connects to directly (:func:`pinned_launch_args`).
-    Probed on Chromium 153: any other TCP connection, from any target, comes
-    here; it is noted in ``hits`` and closed, and nothing is forwarded. A
-    proxied WebTransport session is refused by the browser, and WebRTC sends
-    no UDP. A hit leaves the render unclean, as a paused request does."""
+    2026-11-11, gate 2, confirmed with a browser). So the page's context has
+    this listener as its only proxy and the held origins as the only
+    addresses it connects to directly (:func:`held_proxy`). Probed on
+    Chromium 153: any other TCP connection, from any target of the context,
+    comes here and is closed, and nothing is forwarded. A proxied
+    WebTransport session is refused by the browser, and WebRTC sends no UDP.
+
+    A connection to a local address (:func:`_local_address`) is noted in
+    ``hits`` and leaves the render unclean, as a paused request does: only
+    a page asks for one. A connection anywhere else is refused the same way
+    and noted in ``elsewhere``, which the capture records as an observation
+    and not as a fault: a browser makes such connections for itself, and
+    which of the two asked cannot be told here.
+
+    The proxy is the context's, not the whole browser's, for the same
+    reason. A browser's own services (its clock, its updater, its sign-in
+    check) connect from outside any page's context. With the whole browser
+    sent here and every arrival counted against the page, the connections a
+    full Chromium makes as it starts left every capture of a plain page
+    unclean (review of this fix, with ``QUADRATUS_CHROMIUM`` naming a full
+    build); one of them, to its search engine, is made from the page's own
+    context. A page cannot make a request from outside its context.
+
+    Whether this Playwright and this Chromium hold a context this way is
+    asked of each browser, not assumed: :meth:`prove`."""
 
     def __init__(self):
         self.hits: List[str] = []
+        self.elsewhere: List[str] = []
         self._closing = False
+        self._proving = False
+        self._through_proxy = threading.Event()
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._socket.bind(("127.0.0.1", 0))
@@ -211,21 +283,90 @@ class _Sink:
                 head = connection.recv(2048)
             except OSError:
                 head = b""
-            finally:
-                connection.close()
+            # Noted before the connection is closed, so whoever waits for
+            # the refusal finds the note already made.
             self._note(head)
+            try:
+                connection.close()
+            except OSError:
+                pass
 
     def _note(self, head: bytes) -> None:
         # "CONNECT host:port HTTP/1.1" (a WebSocket, WebRTC over TCP) or
         # "GET http://host/path HTTP/1.1" (a request no session paused).
         words = head.split(b"\r\n", 1)[0].decode("latin-1").split(" ")
-        if len(words) >= 2 and words[0] == "CONNECT":
-            where = "a connection to " + words[1]
+        if self._proving and len(words) >= 2 and words[0] == "GET" and words[1].endswith("/" + _HOLD_CHECK):
+            # The harness's own question. Through the proxy the request
+            # names the whole URL; one that came straight here names only
+            # its path, and is no proof.
+            if words[1] == f"http://127.0.0.1:{self.port}/{_HOLD_CHECK}":
+                self._through_proxy.set()
+            return
+        try:
+            if len(words) >= 2 and words[0] == "CONNECT":
+                where, host = "a connection to " + words[1], urlparse("//" + words[1]).hostname
+            elif len(words) >= 2:
+                where, host = words[1], urlparse(words[1]).hostname
+            else:
+                where, host = "a connection that named no address", None
+        except ValueError:
+            where, host = "a connection to an address that could not be read", None
+        if _local_address(host):
+            kept, note = self.hits, "blocked outside the preview: " + where
         else:
-            where = words[1] if len(words) >= 2 else "a connection that named no address"
-        note = ("blocked outside the preview: " + where)[:MAX_EVENT_CHARS]
-        if note not in self.hits and len(self.hits) < MAX_PAGE_EVENTS:
-            self.hits.append(note)
+            kept, note = self.elsewhere, where + " was refused at the harness's proxy"
+        note = note[:MAX_EVENT_CHARS]
+        if note not in kept and len(kept) < MAX_PAGE_EVENTS:
+            kept.append(note)
+
+    def prove(self, context, timeout_ms: float = 10_000) -> None:
+        """Ask the browser two questions before ``context`` opens its first
+        real page, and raise RuntimeError unless both answers show the hold
+        in force. A request for a loopback address the context is not held
+        to (this listener's own) must arrive here through the proxy. And
+        WebRTC, asked to gather candidates against a STUN address the
+        harness listens on, must send no datagram there.
+
+        Which switch and which proxy setting a browser honours differs by
+        build (two builds of Chromium 153 disagree on the WebRTC switch's
+        name), so neither is taken on trust: where one fails, a capture
+        that went on would read clean with a page free to reach another
+        local service."""
+        self._through_proxy.clear()     # an earlier answer proves nothing about this context
+        self._proving = True
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as datagrams:
+                datagrams.bind(("127.0.0.1", 0))
+                datagrams.setblocking(False)
+                probe = context.new_page()
+                try:
+                    gathered = probe.evaluate(_DATAGRAM_CHECK, [f"stun:127.0.0.1:{datagrams.getsockname()[1]}",
+                                                                _GATHER_WAIT_MS])
+                    try:
+                        probe.goto(f"http://127.0.0.1:{self.port}/{_HOLD_CHECK}", timeout=timeout_ms)
+                    except Exception:  # noqa: BLE001 -- nothing is answered here, so the load fails as meant
+                        pass
+                finally:
+                    probe.close()
+                try:
+                    datagrams.recvfrom(64)
+                    sent = True
+                except OSError:
+                    sent = False
+            proxied = self._through_proxy.wait(2.0)
+        except Exception as exc:  # noqa: BLE001 -- fail closed, named
+            raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
+        finally:
+            self._proving = False
+        if not proxied:
+            raise RuntimeError("request pinning is unavailable in this browser: a connection to another "
+                               "local address did not go through the harness's proxy, so a worker's "
+                               "WebSocket, WebRTC and WebTransport could not be held to the preview")
+        if sent or gathered not in ("complete", "absent"):
+            raise RuntimeError("request pinning is unavailable in this browser: WebRTC still sends datagrams "
+                               "(it honoured neither switch that turns them off), so a page could reach "
+                               "another local service over UDP. Playwright's own Chromium does not: unset "
+                               "QUADRATUS_CHROMIUM to use it")
 
     def close(self) -> List[str]:
         """Stop listening, after what is already queued has been noted.
@@ -249,22 +390,23 @@ def _closing_sink(sink: Optional[_Sink]):
             sink.close()
 
 
-def pinned_launch_args(shared_workers: bool = False, *, sink: Optional[_Sink] = None,
-                       origins: Sequence[str] = ()) -> List[str]:
-    """The extra Chromium switches a pinned browser starts with.
+def pinned_launch_args(shared_workers: bool = False, *, sink: Optional[_Sink] = None) -> List[str]:
+    """The extra Chromium switches a pinned browser starts with. With
+    ``sink`` (the context's network is held, :func:`held_proxy`) WebRTC is
+    kept from sending datagrams, which no proxy would see."""
+    return [*_PIN_ARGS, *(() if shared_workers else (_NO_SHARED_WORKERS,)),
+            *(_NO_WEBRTC_UDP if sink is not None else ())]
 
-    With ``sink``, the browser's whole network is held as well: the sink is
-    its only proxy, loopback is not exempt from it, and only ``origins``
-    (http or https URLs; a file page has none) are reached directly."""
-    args = [*_PIN_ARGS, *(() if shared_workers else (_NO_SHARED_WORKERS,))]
-    if sink is not None:
-        direct = sorted({rule for rule in map(_direct_rule, origins) if rule})
-        # "<-loopback>" first: later rules win, and without it Chromium
-        # connects to every loopback address directly.
-        args += [f"--proxy-server=http://127.0.0.1:{sink.port}",
-                 "--proxy-bypass-list=" + ";".join(["<-loopback>", *direct]),
-                 _NO_WEBRTC_UDP]
-    return args
+
+def held_proxy(sink: _Sink, origins: Sequence[str] = ()) -> dict:
+    """The ``proxy`` setting of a pinned browser context: ``sink`` is its
+    only proxy, loopback is not exempt from it, and only ``origins`` (http
+    or https URLs; a file page has none) are reached directly."""
+    direct = sorted({rule for rule in map(_direct_rule, origins) if rule})
+    # "<-loopback>" first: later rules win, and without it Chromium connects
+    # to every loopback address directly. Written here whatever Playwright
+    # would add by itself, so the list is the same under every version.
+    return {"server": f"http://127.0.0.1:{sink.port}", "bypass": ",".join(["<-loopback>", *direct])}
 
 
 def _watch_targets(browser, strangers: list) -> Callable[[], None]:
@@ -309,9 +451,9 @@ def hold_to_origin(context, page, allow: Optional[Callable[[str], bool]], *, pin
     this page's session sees is paused before it is sent and one off the
     origin is failed; a WebSocket a frame opens is held by a guard in the
     frame. Neither reaches a worker's WebSocket, WebRTC or WebTransport: the
-    caller holds those at the network by starting the browser with a
-    :class:`_Sink` (``pinned_launch_args``), as the capture and the pilot
-    do. Any new window or tab is refused and closed, and where the main
+    caller holds those at the network by giving the context a
+    :class:`_Sink` for its proxy (``held_proxy``), as the capture and the
+    pilot do. Any new window or tab is refused and closed, and where the main
     frame lands is checked as well."""
     def guard(route):
         request = route.request
@@ -489,7 +631,7 @@ def render_page(
         if budget.active:
             launch_kwargs["timeout"] = budget.ms(30_000)
         if pinned:
-            launch_kwargs["args"] = pinned_launch_args(shared_workers, sink=sink, origins=[url])
+            launch_kwargs["args"] = pinned_launch_args(shared_workers, sink=sink)
         browser = pw.chromium.launch(**launch_kwargs)
         try:
             strangers: list = []
@@ -497,7 +639,10 @@ def render_page(
             # A service worker is its own target, outside the page's request
             # interception below, so a pinned capture allows none.
             context = browser.new_context(viewport=viewport, **(
-                {"service_workers": "block"} if pin_requests else {}))
+                {"service_workers": "block"} if pin_requests else {}), **(
+                {"proxy": held_proxy(sink, [url])} if pinned else {}))
+            if pinned:
+                sink.prove(context, budget.ms(10_000))
             page = context.new_page()
             page.on(
                 "console",
@@ -576,10 +721,12 @@ def render_page(
         finally:
             browser.close()
     if sink is not None:
-        # What the browser tried to reach past every guard above: stopped at
-        # the sink, and the render is not clean.
+        # What the context tried to reach past every guard above, stopped at
+        # the sink. A local address is the page's doing and the render is
+        # not clean; anything else may be the browser's own and is recorded.
         for note in sink.close():
             failed_requests.append(note)
+        observations.extend(sink.elsewhere)
 
     evidence = PageEvidence(
         url=url,

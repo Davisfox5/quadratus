@@ -31,6 +31,17 @@ class _Services:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 services.preview_hits.append(self.path)
+                if self.headers.get("Upgrade", "").lower() == "websocket":
+                    # The preview's own socket: accepted, then left idle.
+                    import base64
+                    import hashlib
+                    key = self.headers.get("Sec-WebSocket-Key", "") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+                    self.send_response(101)
+                    self.send_header("Upgrade", "websocket")
+                    self.send_header("Connection", "Upgrade")
+                    self.send_header("Sec-WebSocket-Accept", base64.b64encode(hashlib.sha1(key.encode()).digest()).decode())
+                    self.end_headers()
+                    return
                 body, kind = services.pages.get(self.path.split("?")[0], ("", "text/plain"))
                 self.send_response(200 if self.path.split("?")[0] in services.pages else 404)
                 self.send_header("Content-Type", kind)
@@ -119,12 +130,48 @@ _PAGES = {
     "/wt.js": ("try{new WebTransport('https://127.0.0.1:{UDP}/worker')}catch(e){}", _JS),
     "/own": ("<!doctype html><title>o</title><script>new Worker('/own.js')</script><p>x</p>", _HTML),
     "/own.js": ("try{new WebSocket('ws://'+location.host+'/own-socket')}catch(e){}", _JS),
+    # WebRTC and nothing else: no console error would make this one unclean.
+    "/rtc-udp": ("<!doctype html><title>d</title><script>" + _RTC.replace("URL", "stun:127.0.0.1:{UDP}")
+                 + ";" + _RTC.replace("URL", "turn:127.0.0.1:{UDP}?transport=udp") + "</script><p>x</p>", _HTML),
+    # An ordinary page: everything it loads is its own, on other paths.
+    "/app": ("<!doctype html><title>a</title><link rel=stylesheet href=/app.css><img src=/pixel.png>"
+             "<p id=out>x</p><iframe src=/plain></iframe><script src=/app.js></script>", _HTML),
+    "/app.css": ("@font-face{font-family:F;src:url(/font.woff2)}p{font-family:F,serif;"
+                 "background:url(/pixel.png?bg)}", "text/css"),
+    "/app.js": ("fetch('/data.json');new WebSocket('ws://'+location.host+'/page-socket');"
+                "new Worker('/app-worker.js');import('/module.js')", _JS),
+    "/app-worker.js": ("fetch('/data.json?worker')", _JS),
+    "/module.js": ("export default 1", _JS),
+    "/data.json": ("{}", "application/json"),
+    "/pixel.png": ("", "image/png"),
+    "/font.woff2": ("", "font/woff2"),
 }
 
 
-@pytest.fixture
-def services():
+def _full_chromium():
+    """A full Chromium build, when this machine has one: what an operator
+    names in QUADRATUS_CHROMIUM. Playwright's own default is the headless
+    shell, which is a different build of the same browser."""
+    import os
+    for path in (os.environ.get("QUADRATUS_CHROMIUM"), "/opt/pw-browsers/chromium"):
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+@pytest.fixture(params=["playwright's own", "a full build"])
+def services(request, monkeypatch):
+    """Every browser test runs in both builds. They differ where it matters
+    here: the full one makes connections of its own as it starts, and it
+    takes a different switch to turn WebRTC's datagrams off."""
     pytest.importorskip("playwright")
+    monkeypatch.delenv("MULTI_LLM_CHROMIUM", raising=False)
+    if request.param == "a full build":
+        if not _full_chromium():
+            pytest.skip("no full Chromium build on this machine")
+        monkeypatch.setenv("QUADRATUS_CHROMIUM", _full_chromium())
+    else:
+        monkeypatch.delenv("QUADRATUS_CHROMIUM", raising=False)
     served = _Services(_PAGES)
     yield served
     served.close()
@@ -176,18 +223,85 @@ def test_no_datagram_leaves_a_pinned_browser(services, tmp_path):
     evidence = _render(services, "/datagrams", tmp_path)
     assert services.udp_hits == [] and services.tcp_hits == [], "nothing reached the other service"
     assert not evidence.clean and any("WebTransport" in e or "ERR_TUNNEL" in e for e in evidence.console_errors)
+    # WebRTC alone, where no console error stands in for the hold: the full
+    # build ignored the one switch the first fix sent, and every datagram
+    # left while this page read clean.
+    _render(services, "/rtc-udp", tmp_path)
+    assert services.udp_hits == [], "nothing reached the other service"
 
 
 def test_the_preview_itself_is_still_reached_and_an_ordinary_page_reads_clean(services, tmp_path):
     """gate 2: the hold is on what is off the origin. A worker's WebSocket to
     the preview's own address still arrives there, and a page that reaches
-    nothing else reads clean."""
+    nothing else reads clean: the browser's own connections as it starts
+    (a full build makes five) are not the page's failed requests."""
     own = _render(services, "/own", tmp_path)
     assert "/own-socket" in services.preview_hits, "the origin is reached directly"
-    assert not any("blocked outside the preview" in f for f in own.failed_requests)
+    assert own.clean and own.failed_requests == []
     plain = _render(services, "/plain", tmp_path)
-    assert plain.clean and plain.failed_requests == [] and plain.observations == []
+    assert plain.clean and plain.failed_requests == [] and plain.console_errors == []
+    assert all("was refused at the harness's proxy" in note for note in plain.observations)
     assert services.tcp_hits == [] and services.udp_hits == []
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
+def test_a_page_that_loads_its_own_files_reads_clean_under_either_name(services, tmp_path, host):
+    """gate 2: what an ordinary preview does. A stylesheet, a font, an image,
+    a script, a module, a frame, a fetch, a worker's fetch and the page's
+    own WebSocket all go to the preview, by 127.0.0.1 or by localhost."""
+    from quadratus.browser import render_page
+    base = f"http://{host}:{services.preview.server_port}"
+    evidence = _launched(lambda: render_page(
+        base + "/app", out_dir=tmp_path / "out", wait_ms=1500, pin_requests=True,
+        allow_navigation=lambda url: url == base or url.startswith(base + "/")))
+    assert evidence.clean, (evidence.failed_requests, evidence.console_errors)
+    assert {"/app", "/app.css", "/font.woff2", "/pixel.png", "/pixel.png?bg", "/app.js", "/module.js", "/plain",
+            "/data.json", "/data.json?worker", "/app-worker.js", "/page-socket"} <= set(services.preview_hits)
+    assert services.tcp_hits == [] and services.udp_hits == []
+
+
+def _ask(sink, args, proxy):
+    """Start a browser with ``args``, give a context ``proxy``, and put the
+    harness's two questions to it."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=args)
+        try:
+            sink.prove(browser.new_context(**({"proxy": proxy} if proxy else {})))
+        finally:
+            browser.close()
+
+
+def test_a_browser_that_is_not_shown_to_hold_is_refused(monkeypatch):
+    """gate 2: which switch and which proxy setting a browser honours is
+    asked of each browser (two builds of one Chromium disagree). One whose
+    loopback connections go round the proxy, or whose WebRTC still sends
+    datagrams, is refused before any page opens; it never reads clean."""
+    pytest.importorskip("playwright")
+    from quadratus import browser
+    monkeypatch.setattr(browser, "_GATHER_WAIT_MS", 1200)
+    sink = browser._Sink()
+    try:
+        held = browser.held_proxy(sink)
+        _launched(lambda: _ask(sink, browser.pinned_launch_args(sink=sink), held))
+        for proxy in (None, dict(held, bypass="127.0.0.1")):   # no proxy; loopback exempt from it
+            with pytest.raises(RuntimeError, match="did not go through the harness's proxy"):
+                _ask(sink, browser.pinned_launch_args(sink=sink), proxy)
+        with pytest.raises(RuntimeError, match="WebRTC still sends datagrams.*unset QUADRATUS_CHROMIUM"):
+            _ask(sink, browser.pinned_launch_args(), held)
+    finally:
+        assert sink.close() == [], "the harness's own questions are nobody's failed request"
+
+
+def test_a_capture_in_a_browser_that_does_not_hold_fails_and_writes_no_evidence(services, tmp_path, monkeypatch):
+    """gate 2, at the capture: with the switches gone the render raises; it
+    does not go on to a clean page.png."""
+    from quadratus import browser
+    monkeypatch.setattr(browser, "_GATHER_WAIT_MS", 1200)
+    monkeypatch.setattr(browser, "_NO_WEBRTC_UDP", ())
+    with pytest.raises(RuntimeError, match="request pinning is unavailable in this browser"):
+        _render(services, "/plain", tmp_path)
+    assert not (tmp_path / "out" / "page.png").exists() and not (tmp_path / "out" / "evidence.json").exists()
 
 
 def test_the_harness_capture_holds_a_workers_socket(services, tmp_path):
@@ -213,35 +327,58 @@ def test_the_pilot_holds_a_workers_socket_and_lists_it(services, tmp_path):
 
 
 def test_only_the_held_origins_are_reached_directly():
-    """gate 2: the switches a pinned browser starts with. Loopback is not
-    exempt from the proxy, and a host that could write a rule of its own
-    gets none."""
-    from quadratus.browser import _Sink, pinned_launch_args
+    """gate 2: the proxy a pinned context is given. Loopback is not exempt
+    from it, and a host that could write a rule of its own gets none. The
+    proxy is the context's: the browser itself starts with none, so its own
+    services are not sent to the sink."""
+    from quadratus.browser import _Sink, held_proxy, pinned_launch_args
     sink = _Sink()
     try:
-        args = pinned_launch_args(sink=sink, origins=["http://127.0.0.1:5000/a", "https://localhost",
-                                                      "http://[::1]:8080", "file:///x/index.html",
-                                                      "http://localhost;*:80/", "http://*/"])
+        proxy = held_proxy(sink, ["http://127.0.0.1:5000/a", "https://localhost", "http://[::1]:8080",
+                                  "file:///x/index.html", "http://localhost;*:80/", "http://*/",
+                                  "http://a,b/"])
+        args = pinned_launch_args(sink=sink)
     finally:
         assert sink.close() == []
-    assert f"--proxy-server=http://127.0.0.1:{sink.port}" in args
-    assert "--proxy-bypass-list=<-loopback>;127.0.0.1:5000;[::1]:8080;localhost:443" in args
-    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args
-    assert not any(a.startswith("--proxy") for a in pinned_launch_args())
+    assert proxy == {"server": f"http://127.0.0.1:{sink.port}",
+                     "bypass": "<-loopback>,127.0.0.1:5000,[::1]:8080,localhost:443"}
+    # Both spellings: the headless shell honours the first, a full build the second.
+    assert {"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            "--webrtc-ip-handling-policy=disable_non_proxied_udp"} <= set(args)
+    assert not any(a.startswith("--proxy") for a in [*args, *pinned_launch_args()])
+    assert not any("webrtc" in a for a in pinned_launch_args())
 
 
 def test_the_sink_notes_each_address_once_and_forwards_nothing():
-    from quadratus.browser import _Sink
+    """gate 2: a connection to a local address is the page's, and is a failed
+    request. One anywhere else is refused the same way and noted apart: a
+    browser makes those for itself."""
+    from quadratus.browser import _HOLD_CHECK, _Sink
     sink = _Sink()
-    for head in (b"CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n",
-                 b"CONNECT 127.0.0.1:9 HTTP/1.1\r\n\r\n", b"GET http://127.0.0.1:9/x HTTP/1.1\r\n\r\n", b""):
+    heads = (b"CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n", b"CONNECT 127.0.0.1:9 HTTP/1.1\r\n\r\n",
+             b"GET http://127.0.0.1:9/x HTTP/1.1\r\n\r\n", b"", b"CONNECT [::1]:8080 HTTP/1.1\r\n\r\n",
+             b"CONNECT db:5432 HTTP/1.1\r\n\r\n", b"CONNECT 192.168.1.20:80 HTTP/1.1\r\n\r\n",
+             b"CONNECT printer.local:631 HTTP/1.1\r\n\r\n", b"CONNECT [not-an-address HTTP/1.1\r\n\r\n",
+             b"CONNECT www.google.com:443 HTTP/1.1\r\n\r\n", b"CONNECT www.google.com:443 HTTP/1.1\r\n\r\n",
+             b"GET http://clients2.google.com/time HTTP/1.1\r\n\r\n",
+             # The harness's own question is exempt only while it is being asked.
+             f"GET http://127.0.0.1:{sink.port}/{_HOLD_CHECK} HTTP/1.1\r\n\r\n".encode())
+    for head in heads:
         with socket.create_connection(("127.0.0.1", sink.port), timeout=5) as client:
             client.sendall(head)
             client.shutdown(socket.SHUT_WR)
             assert client.recv(100) == b"", "closed with nothing sent back"
     assert sink.close() == ["blocked outside the preview: a connection to 127.0.0.1:9",
                             "blocked outside the preview: http://127.0.0.1:9/x",
-                            "blocked outside the preview: a connection that named no address"]
+                            "blocked outside the preview: a connection that named no address",
+                            "blocked outside the preview: a connection to [::1]:8080",
+                            "blocked outside the preview: a connection to db:5432",
+                            "blocked outside the preview: a connection to 192.168.1.20:80",
+                            "blocked outside the preview: a connection to printer.local:631",
+                            "blocked outside the preview: a connection to an address that could not be read",
+                            f"blocked outside the preview: http://127.0.0.1:{sink.port}/{_HOLD_CHECK}"]
+    assert sink.elsewhere == ["a connection to www.google.com:443 was refused at the harness's proxy",
+                              "http://clients2.google.com/time was refused at the harness's proxy"]
 
 
 # --------------------------------------------------------------------------
@@ -288,8 +425,29 @@ _WTR_MIXED = _wtr(f"Chromium: |{_BAR}| 1/1 test files | 3 passed, 0 failed, 1 sk
 _WTR_FAILED = _wtr(f"Chromium: |{_BAR}| 1/1 test files | 1 passed, 1 failed") + (
     "Finished running tests in 0.3s with 1 failed tests.\n\n")
 
+# behave 1.3.3, captured the same way (found in the review of the fix: its
+# all-skipped run exits 0 and read as no summary at all).
+_BEHAVE_HEAD = "USING RUNNER: behave.runner:Runner\nfeatures/f.feature  "
+_BEHAVE_SKIPPED = _BEHAVE_HEAD + ("SS\n\n0 features passed, 0 failed, 1 skipped\n"
+                                  "0 scenarios passed, 0 failed, 2 skipped\n0 steps passed, 0 failed, 4 skipped\n"
+                                  "Took 0min 0.000s\n")
+_BEHAVE_PASSED = _BEHAVE_HEAD + ("..\n\n1 feature passed, 0 failed, 0 skipped\n"
+                                 "2 scenarios passed, 0 failed, 0 skipped\n4 steps passed, 0 failed, 0 skipped\n"
+                                 "Took 0min 0.000s\n")
+_BEHAVE_MIXED = _BEHAVE_HEAD + (".SF\n\n\nFailing scenarios:\n  features/f.feature:9  three\n\n"
+                                "0 features passed, 1 failed, 0 skipped\n1 scenario passed, 1 failed, 1 skipped\n"
+                                "3 steps passed, 1 failed, 2 skipped\nTook 0min 0.000s\n")
+_BEHAVE_UNDEFINED = _BEHAVE_HEAD + ("E\n\n\nErrored scenarios:\n  features/f.feature:2  one\n\n"
+                                    "0 features passed, 0 failed, 1 error, 0 skipped\n"
+                                    "0 scenarios passed, 0 failed, 1 error, 0 skipped\n"
+                                    "1 step passed, 0 failed, 0 skipped, 1 undefined\nTook 0min 0.000s\n")
+
 #: name: (argv, stdout, cases executed, cases skipped)
 _REAL_SUMMARIES = {
+    "behave, all skipped": (("behave",), _BEHAVE_SKIPPED, 0, 2),
+    "behave, passed": (("behave",), _BEHAVE_PASSED, 2, 0),
+    "behave, mixed": (("behave",), _BEHAVE_MIXED, 2, 1),
+    "behave, an undefined step": (("behave",), _BEHAVE_UNDEFINED, 0, 1),
     "cucumber-js, all skipped": (("npx", "cucumber-js"), _CUCUMBER_SKIPPED, 0, 2),
     "cucumber-js, mixed": (("npx", "cucumber-js"), _CUCUMBER_MIXED, 2, 1),
     "cucumber-js, passed": (("npx", "cucumber-js"), _CUCUMBER_PASSED, 1, 0),
@@ -351,7 +509,7 @@ def test_a_run_in_which_nothing_executed_fails_the_gate(name, tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("name", ["cucumber-js, passed", "robot, passed", "codeceptjs, mixed",
-                                  "web-test-runner, mixed"])
+                                  "web-test-runner, mixed", "behave, passed"])
 def test_the_same_suites_under_npm_test_pass_with_their_count(name, tmp_path, monkeypatch):
     """gate 1: `npm test` needs a count (minimum 1), and these runners' rows
     gave none, so a passing suite was blocked at its first gate."""
@@ -374,6 +532,9 @@ def test_the_same_suites_under_npm_test_pass_with_their_count(name, tmp_path, mo
     "  ✔ OK  | 3 passed, 1 skipped   // 20ms",                # a case's own line
     "loaded 0 scenarios",                                          # a log line, not a run of nothing
     "the plan has 2 scenarios (2 skipped)",
+    "0 features passed, 0 failed, 1 skipped",                      # behave counts features and steps too
+    "4 steps passed, 0 failed, 0 skipped",
+    "2 scenarios passed, see the report",
 ])
 def test_a_count_inside_another_line_is_still_no_summary(line):
     """gate 1: the rows are read whole. A count behind "(" is admitted for
@@ -403,10 +564,18 @@ def test_a_row_behind_a_wrappers_label_is_read_and_browsers_are_summed():
     assert _read("svc-1  | 3 tests, 1 passed, 1 failed, 1 skipped\n") == (2, 1)
     assert _read("e2e:test:   OK  | 3 passed, 1 skipped   // 20ms\n") == (3, 1)
     assert _read("0 scenarios\n0 steps\n0m00.000s\n")[0] == 0
-    both = (f"Chromium: |{_BAR}| 2/2 test files | 3 passed, 0 failed, 1 skipped\n"
-            f"Firefox:  |{_BAR}| 2/2 test files | 0 passed, 0 failed, 4 skipped\n\n"
-            "Finished running tests in 1.2s, all tests passed!\n")
-    assert _read(both) == (3, 5)
+    assert _read("api:test: 0 scenarios passed, 0 failed, 2 skipped\napi:test: 0 steps passed, 0 failed, 4 skipped\n"
+                 ) == (0, 2)
+    rows = (f"Chromium: |{_BAR}| 2/2 test files | 3 passed, 0 failed, 1 skipped\n"
+            f"Firefox:  |{_BAR}| 2/2 test files | 0 passed, 0 failed, 4 skipped\n")
+    done = "\nFinished running tests in 1.2s, all tests passed!\n"
+    assert _read(rows + done) == (3, 5)
+    # Behind a wrapper's label each browser still counts: read as the last
+    # row alone, this passing run had executed nothing.
+    assert _read("".join("web:test: " + row + "\n" for row in rows.splitlines()) + done) == (3, 5)
+    # The same browser's row printed again is the same cases, not more.
+    again = f"Chromium: |{_BAR}| 1/2 test files | 2 passed, 0 failed\n" + rows.splitlines()[0] + "\n"
+    assert _read(again + done) == (3, 1)
 
 
 def test_an_unknown_count_is_never_a_complete_or_verified_run():

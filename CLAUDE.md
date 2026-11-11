@@ -1513,10 +1513,11 @@ Key design decisions already settled:
   turned a failing check green, so the watch walks those too and what a
   runner loads by position there is a watched change. The standing-finding
   preflight reads every recent run record, and an acceptance lasts. A
-  pinned browser's whole network ends at a dead-end proxy apart from the
+  pinned page's browser context ends at a dead-end proxy apart from the
   held origins, because a worker's WebSocket reached another loopback
-  service while the render read clean. A baseline runs an approved
-  policy's command checks as a project run does.
+  service while the render read clean; each browser is asked before its
+  first page whether it holds, and refused by name if not. A baseline runs
+  an approved policy's command checks as a project run does.
 - **The repo's statements about itself are tested** (review 2026-11-10,
   design 4 and 7; `tests/test_review1110_docs.py`,
   `tests/test_review1110_docs_final.py`). Every drifted statement the review
