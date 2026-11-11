@@ -1517,6 +1517,8 @@ _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
 #: An editing call's own account of acceptance it could not run (runtime
 #: check guidance). Read only to lower an audit verdict, never to raise one.
 _NOT_RUN_LINE = re.compile(r"^\s*(?:NOT RUN|BLOCKED):\s*(.+?)\s*$", re.MULTILINE)
+#: How many standing reports a DONE refusal spells out (Session._not_run_remedy).
+_NOT_RUN_REMEDY_LINES = 6
 def _check_runs(check: dict, root=None) -> List[dict]:
     """Each command of a recorded check as execution evidence: whether it
     passed and was required, whether it ran only part of what it names, how
@@ -1724,25 +1726,11 @@ def _enclosing_call(text: str, at: int):
     stack, i, end = [], open_at, min(len(text), open_at + 200_000)
     while i < end:
         ch = text[i]
-        if ch in "'\"`":
-            close = i + 1
-            while close < end and text[close] != ch:
-                if ch == "`" and text.startswith("${", close):
-                    return None
-                close += 2 if text[close] == "\\" else 1
-            if close >= end:
-                return None
-            i = close
-        elif text.startswith("//", i):
-            newline = text.find("\n", i)
-            i = end if newline == -1 else newline
-        elif text.startswith("/*", i):
-            close = text.find("*/", i + 2)
-            if close == -1:
-                return None
-            i = close + 1
-        elif ch == "/":
+        last = _skip_lexeme(text, i, end)
+        if last is None:
             return None
+        if last != i:
+            i = last
         elif ch in "([{":
             stack.append(ch)
         elif ch in ")]}":
@@ -1752,6 +1740,74 @@ def _enclosing_call(text: str, at: int):
                 return text[start:i + 1]
         i += 1
     return None
+
+
+def _skip_lexeme(text: str, i: int, end: int):
+    """One step of the bounded lexical scan: where the string or comment
+    that starts at ``i`` ends (the index of its last character), ``i`` itself
+    for any other character, or None when what starts there cannot be read
+    with certainty: an unclosed string or block comment, a template literal
+    with ``${``, or a ``/`` that may start a regex literal. A line comment
+    with no newline runs to ``end``."""
+    ch = text[i]
+    if ch in "'\"`":
+        close = i + 1
+        while close < end and text[close] != ch:
+            if ch == "`" and text.startswith("${", close):
+                return None
+            close += 2 if text[close] == "\\" else 1
+        return None if close >= end else close
+    if text.startswith("//", i):
+        newline = text.find("\n", i)
+        return end if newline == -1 else newline
+    if text.startswith("/*", i):
+        close = text.find("*/", i + 2)
+        return None if close == -1 else close + 1
+    if ch == "/":
+        return None
+    return i
+
+
+def _named_outside_comments(text: str, name: str, python: bool) -> bool:
+    """Whether ``name`` appears in a test file's text anywhere but inside a
+    comment. A comment that mentions a test file does not run it (review
+    2026-11-10, second half 21: a comment naming a new test file removed the
+    unnamed-file observation and the audit lowering that depends on it).
+
+    A Python file is read by the language's own tokenizer; any other test
+    file by the same lexical step the registration scan uses, up to the
+    first thing that step cannot read. What cannot be read for certain
+    counts as a mention, as before: unknown is not uncovered."""
+    if name not in text:
+        return False
+    if python:
+        import io
+        import tokenize
+        try:
+            inside = sum(token.string.count(name)
+                         for token in tokenize.generate_tokens(io.StringIO(text).readline)
+                         if token.type == tokenize.COMMENT)
+        except Exception:  # noqa: BLE001 -- not readable as Python: unknown, so it counts
+            return True
+        return text.count(name) > inside
+    from bisect import bisect_right
+    starts, ends, i, certain = [], [], 0, len(text)
+    while i < certain:
+        last = _skip_lexeme(text, i, certain)
+        if last is None:
+            certain = i
+            break
+        if last != i and text[i] == "/":
+            starts.append(i)
+            ends.append(last)
+        i = last + 1
+    at = text.find(name)
+    while at != -1:
+        k = bisect_right(starts, at) - 1
+        if at >= certain or k < 0 or at > ends[k]:
+            return True
+        at = text.find(name, at + 1)
+    return False
 
 
 def _complete_run(run: dict) -> bool:
@@ -1927,6 +1983,13 @@ def _read_continues(spec):
         return None, spec
     description = _CONTINUES.sub("", spec.description).strip()
     return (values[0] if len(values) == 1 else None), replace(spec, description=description or spec.description)
+
+
+#: Stands in a check finding's ``failed_checks`` when the check failed with no
+#: failed command id: the tree moved under the gate, or only the scope
+#: receipt failed. No command id could ever match it, so the finding is
+#: settled by a later gate that passes as a whole and reran the same commands.
+_WHOLE_GATE = "(whole gate)"
 
 
 def _check_ids(receipts, *, passed: bool) -> List[str]:
@@ -2281,7 +2344,24 @@ class Session:
         self._partial_tasks: set = set()
         self._done_refusal = ""
         self._requirement_reopens = 0
-        self._covers_corrections = 0
+        from collections import Counter
+        #: Send-backs before any lead call, counted per kind (covers,
+        #: resolves, handoff, capture, batch) and cleared when a task is
+        #: dispatched: one shared, never-reset count stalled a long run whose
+        #: every send-back had been corrected first time.
+        self._covers_corrections: Counter = Counter()
+        #: Why the requirements audit the last DONE asked for did not run
+        #: ("" when it ran), and how many such misses in a row. An audit that
+        #: did not happen judges nothing (_audit_did_not_run).
+        self._audit_unavailable = ""
+        self._audit_misses = 0
+        #: Test function name -> "file::name", built once per audit and kept
+        #: only while that audit reads its reply (``_auditing``), so no later
+        #: audit resolves a citation against a stale index.
+        self._audit_tests: Optional[dict] = None
+        self._auditing = False
+        #: Name sets of changed test selection already on ``original_test_runs``.
+        self._selection_recorded: set = set()
         self._leads_by_vendor: dict = {}
         self._batch: List[TaskSpec] = []
         self.parallel_batches: List[dict] = []
@@ -5531,14 +5611,16 @@ class Session:
                 if not self._run_batch(batch):
                     # Sent back before any lead call (map G6): the same as a
                     # serial send-back, one slot spent, not one per task, and
-                    # it counts against the same correction allowance.
+                    # its own count is held to the same correction allowance.
                     used -= len(batch) - 1
-                    self._covers_corrections += 1
-                    if self._covers_corrections > self.config.max_requirement_reopens:
+                    self._covers_corrections["batch"] += 1
+                    if self._covers_corrections["batch"] > self.config.max_requirement_reopens:
                         raise RunStalled("the orchestrator kept naming parallel batches that were sent back: "
                                          + (self._done_refusal or "").replace("--- BATCH SENT BACK ---", "")
                                          .strip()[:300])
                     continue
+                # Dispatched: earlier send-backs were corrected.
+                self._covers_corrections.clear()
                 if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed']):
                     self._name_findings_stop({s.task_id for s in batch} | {f"{batch[-1].task_id}-merge"})
                     break
@@ -5562,11 +5644,13 @@ class Session:
                 name = decision.stop.name if decision.stop else ""
                 if name == "RequirementsUnmet":
                     self._note("requirements still open after the reopen allowance; stopping incomplete")
+                elif name == "AuditUnavailable":
+                    self._note("the requirements audit did not run; stopping for the operator")
                 self._apply_completion(decision)
                 if self._explicit_tasks is not None:
                     self._note("listed tasks " + ("completed" if self.completed else "incomplete")
                                + "; the goal was not judged")
-                elif name not in ("FindingsUnresolved", "RequirementsUnmet"):
+                elif name not in ("FindingsUnresolved", "RequirementsUnmet", "AuditUnavailable"):
                     self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
@@ -5600,8 +5684,8 @@ class Session:
             if problem:
                 # Corrected before any lead call is spent (Codex review of #25).
                 self._refuse_listed(spec, problem)
-                self._covers_corrections += 1
-                if self._covers_corrections > self.config.max_requirement_reopens:
+                self._covers_corrections["covers"] += 1
+                if self._covers_corrections["covers"] > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks without valid COVERS: {problem}")
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again "
                                       "with a COVERS line using the listed requirement ids.")
@@ -5614,8 +5698,8 @@ class Session:
             if problem:
                 # The same allowance as COVERS: refused before any lead call.
                 self._refuse_listed(spec, problem)
-                self._covers_corrections += 1
-                if self._covers_corrections > self.config.max_requirement_reopens:
+                self._covers_corrections["resolves"] += 1
+                if self._covers_corrections["resolves"] > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks with an invalid RESOLVES: {problem}")
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
                 previous_description = None
@@ -5626,8 +5710,8 @@ class Session:
                 # source, so the requirements wait for the final audit, which
                 # judges them independently (r02, r03: a verification task
                 # re-ran the tests where it could not run them).
-                self._covers_corrections += 1
-                if self._covers_corrections > self.config.max_requirement_reopens:
+                self._covers_corrections["handoff"] += 1
+                if self._covers_corrections["handoff"] > self.config.max_requirement_reopens:
                     raise RunStalled("the orchestrator kept naming verification-only tasks over a source "
                                      "the harness had already verified")
                 self._done_refusal = handoff
@@ -5636,14 +5720,17 @@ class Session:
             problem = self._capture_problem(spec, resolves)
             if problem:
                 self._refuse_listed(spec, problem)
-                self._covers_corrections += 1
-                if self._covers_corrections > self.config.max_requirement_reopens:
+                self._covers_corrections["capture"] += 1
+                if self._covers_corrections["capture"] > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming UI tasks without a valid capture: {problem}")
                 self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
                 previous_description = None
                 continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
             self._resolution_candidate = None
+            # Past every send-back: the task is dispatched, so each kind's
+            # count starts again (a correction made is not a stall).
+            self._covers_corrections.clear()
             if self.config.survey is not None and (continues or resolves):
                 if self.survey["recovery_used"] >= self.config.survey.recovery_tasks:
                     self._stop_with("budget", (f"SurveyAllowanceSpent: the recovery allowance of "
@@ -6066,6 +6153,9 @@ class Session:
             elif decision.step == CHECK_REQUIREMENTS:
                 answers["requirements_satisfied"] = bool(self._requirements_satisfied())
                 answers["done_refusal"] = self._done_refusal or ""
+                # An audit that did not run is its own answer, never "not met".
+                answers["audit_unavailable"] = self._audit_unavailable or ""
+                answers["audit_misses"] = self._audit_misses
             else:
                 self._verify_dependencies("at DONE")
                 answers["dependencies_verified"] = True
@@ -6942,7 +7032,10 @@ class Session:
                                                  "COMPLETE or only ADD/AMBIGUOUS lines",
                                                  reply=(reply or "")[:400]))
             return
-        next_id = len(ledger.requirements) + 1
+        # From the highest number in use, not the count: a list numbered with
+        # gaps (R1, R3, R4) has three entries and already has an R4, which a
+        # count-based id overwrote.
+        next_id = max((int(r[1:]) for r in ledger.requirements if re.fullmatch(r"R\d{1,9}", r)), default=0) + 1
         for text in added:
             rid = f"R{next_id}"
             next_id += 1
@@ -6959,9 +7052,14 @@ class Session:
 
         Not satisfied means DONE goes back to the orchestrator with the gap
         named. No requirements listed means the ledger is inactive for this
-        run; that is recorded, not invented.
+        run; that is recorded, not invented. An audit that did not run is not
+        satisfied either, but it judged nothing: ``_audit_unavailable`` says
+        why, no status is written, and the completion decision sends DONE
+        back once and then stops for the operator (``AuditUnavailable``).
         """
         ledger = self.memory.ledger
+        # Only the audit this check asks for counts as its answer.
+        self._audit_unavailable = ""
         refusal = self._original_tests_at_done()
         if refusal:
             self._done_refusal = refusal
@@ -7006,11 +7104,20 @@ class Session:
         uncovered = [r for r in ledger.requirements
                      if r in claimed and not status.get(r, "").startswith(("covered", "met"))]
         if uncovered:
+            # The same split as the audit refusal below: a requirement whose
+            # NOT RUN report nothing can lift is not asked for a task here and
+            # told "do not name one" two lines later.
+            remedy, stuck = self._not_run_remedy(uncovered)
+            nameable = [r for r in uncovered if r not in stuck]
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nThese requirements are not covered by any finished "
                 f"task: {', '.join(uncovered)} (never covered, or found not met by the audit and not "
-                "covered again since). Name a task for them (with COVERS), or explain in the task "
-                "why one cannot be done.")
+                "covered again since)."
+                + (" Name a task for them (with COVERS), or explain in the task why one cannot be done."
+                   if not stuck else
+                   f" Name a task for {', '.join(nameable)} (with COVERS), or explain in the task why one "
+                   "cannot be done." if nameable else "")
+                + remedy)
             self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
             return False
         if self._explicit_tasks is not None:
@@ -7019,14 +7126,34 @@ class Session:
             verdicts = self._audit_requirements(ids=self.explicit["requirements_claimed"]) if claimed else {}
         else:
             verdicts = self._audit_requirements()
+        if self._audit_unavailable:
+            # The audit did not happen, so nothing was judged and nothing is
+            # written: the statuses stay as the tasks left them. Marking them
+            # NOT MET made the orchestrator cover finished work again before
+            # the audit was even retried (review 2026-11-10, second half 4).
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nThe independent requirements audit did not run "
+                f"({self._audit_unavailable[:300]}). No requirement was judged, so none is recorded as "
+                "not met and nothing needs covering again. Reply DONE to have the audit tried once "
+                "more; if it still does not run, the run stops for the operator. Name a task only if "
+                "work really remains.")
+            self._note(f"DONE sent back: the requirements audit did not run ({self._audit_unavailable[:160]})")
+            return False
         unmet = {r: why for r, (ok, why) in verdicts.items() if not ok}
         for rid, (ok, why) in verdicts.items():
             status[rid] = "met (audited)" if ok else f"NOT MET: {why[:160]}"
         if unmet:
+            # A requirement held down by a NOT RUN report is not fixed by a
+            # task that covers it again: say what lifts each report, and which
+            # nothing in this run can (review 2026-11-10, second half 12).
+            remedy, stuck = self._not_run_remedy(unmet)
+            fixable = [r for r in unmet if r not in stuck]
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
                 + "\n".join(f"- {r}: {why[:300]}" for r, why in unmet.items())
-                + "\nName a task that fixes them (with COVERS).")
+                + ("\nName a task that fixes them (with COVERS)." if not stuck else
+                   f"\nName a task that fixes {', '.join(fixable)} (with COVERS)." if fixable else "")
+                + remedy)
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
         return True
@@ -7049,17 +7176,45 @@ class Session:
             path = token.split("::")[0].lstrip("./")
             if path and (root / path).is_file():
                 found.append(path)
-        for name in re.findall(r"\btest_\w+", text):
-            for test_file in root.rglob("test*.py"):
-                if ".quadratus" in test_file.parts:
-                    continue
-                try:
-                    if f"def {name}" in test_file.read_text(errors="ignore"):
-                        found.append(f"{test_file.relative_to(root)}::{name}")
-                        break
-                except OSError:
-                    continue
+        names = re.findall(r"\btest_\w+", text)
+        if names:
+            # One index for the whole audit, read from the project's source
+            # files: a walk per cited name went through node_modules and
+            # .venv every time (review 2026-11-10, second half 22).
+            index = self._audit_tests
+            if index is None:
+                index = self._test_functions()
+                if self._auditing:
+                    self._audit_tests = index
+            found += [index[name] for name in names if name in index]
         return found
+
+    def _test_functions(self) -> Dict[str, str]:
+        """Test function name -> ``file::name`` for the project's source: the
+        ``def test_*`` lines of files named ``test*.py``, from
+        ``Project.files()`` (dependency trees and ``.quadratus`` are not
+        source), first file in path order. Bounded: at most 1 MiB per file.
+        An unreadable project has no resolvable test names."""
+        from .project import Project
+        index = {}
+        try:
+            project = Project(self.project, exclude=self.config.project_excludes)
+            # The root the files are listed under, so relative_to cannot raise.
+            root, files = project.root, sorted(project.files())
+        except Exception:  # noqa: BLE001 -- unreadable: nothing resolves, so nothing is MET by it
+            return index
+        for path in files:
+            if not (path.name.startswith("test") and path.suffix == ".py"):
+                continue
+            try:
+                if path.stat().st_size > 1 << 20:
+                    continue
+                source = path.read_text(errors="ignore")
+            except OSError:
+                continue
+            for name in re.findall(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(test_\w+)", source, re.MULTILINE):
+                index.setdefault(name, f"{path.relative_to(root).as_posix()}::{name}")
+        return index
 
     def _audit_requirements(self, ids: Optional[List[str]] = None) -> dict:
         """One read-only call: each requirement met or not, with evidence.
@@ -7068,9 +7223,10 @@ class Session:
         otherwise."""
         ledger = self.memory.ledger
         audited = {r: t for r, t in ledger.requirements.items() if ids is None or r in ids}
+        self._audit_unavailable, self._auditing, self._audit_tests = "", True, None
         auditor = self._auditor()
         if auditor is None:
-            self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
+            self._audit_did_not_run(None, "no auditor from another vendor available")
             return {r: (False, "no auditor from another vendor available") for r in audited}
         before = self._capture_source() if self.project else None
         checks = _audit_check_facts(self.checks[-3:], self._source_fingerprint())
@@ -7126,15 +7282,15 @@ class Session:
             with invocation("audit", "auditor"):
                 reply = self._invoke_model(auditor, prompt)
         except ProviderError as exc:
-            # An audit that could not run is not a pass. Budget stops and
-            # every other exception propagate as from any other call.
-            reply = ""
-            self._note(f"requirements audit failed: {type(exc).__name__}: {str(exc)[:160]}")
+            # An audit that could not run is not a pass, and it is not a
+            # verdict either. Budget stops and every other exception
+            # propagate as from any other call.
+            self._audit_did_not_run(auditor, f"the auditor call failed: {type(exc).__name__}: {str(exc)[:160]}")
+            return {r: (False, "the auditor call failed") for r in audited}
         finally:
             self._active_spec = saved
         if self.project and before is not None and self._capture_source() != before:
-            self._note("the source changed during the requirements audit; its verdicts are void")
-            self.requirement_audits.append(dict(auditor=auditor, result="void: the tree changed during the audit"))
+            self._audit_did_not_run(auditor, "void: the tree changed during the audit")
             return {r: (False, "the tree changed during the audit") for r in audited}
         found = {}
         for rid, met, why in _audit_lines(reply):
@@ -7144,11 +7300,33 @@ class Session:
                     met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
             found[rid] = (met, why)
         lowered = self._lower_unexecuted(found)
+        self._auditing, self._audit_tests = False, None
+        if audited and not any(r in found for r in audited):
+            # A reply with no verdict for any audited requirement judged
+            # nothing; one missing among others is still that one's NOT MET.
+            self._audit_did_not_run(auditor, "the auditor's reply held no verdict for any audited requirement",
+                                    reply=(reply or "")[:400])
+            return {r: (False, "the auditor gave no verdict") for r in audited}
+        self._audit_misses = 0
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
                                                                        for r, (ok, why) in verdicts.items()},
                                             lowered=lowered))
         return verdicts
+
+    def _audit_did_not_run(self, auditor, reason: str, **kept) -> None:
+        """Record an audit that judged nothing: no auditor, a failed call, a
+        tree that moved under it, or a reply with no verdict at all.
+
+        It is its own result. ``_requirements_satisfied`` reads
+        ``_audit_unavailable`` and leaves every status as it was; the caller
+        still gets all-False verdicts, so nothing can read this as met. The
+        record carries ``ran=False`` for the run's readers (truth_check)."""
+        self._auditing, self._audit_tests = False, None
+        self._audit_unavailable = reason
+        self._audit_misses += 1
+        self.requirement_audits.append(dict(auditor=auditor, result=reason, ran=False, **kept))
+        self._note(f"the requirements audit did not run: {reason[:200]}")
 
     def _record_not_run(self, key, role, reply) -> None:
         """Keep each 'NOT RUN:' line an editing call wrote, with the
@@ -7255,7 +7433,9 @@ class Session:
         try:
             contents = Project(self.project, exclude=self.config.project_excludes).contents() if self.project else {}
         except Exception:  # noqa: BLE001 -- unreadable: nothing is stable
-            return {}, lambda key: False
+            # The same two arguments as ``stable`` below: callers pass both,
+            # and a one-argument stand-in raised TypeError inside the gate.
+            return {}, lambda key, qualified=False: False
         texts = {n: d.decode("utf-8", "replace") for n, d in contents.items() if is_test_support(n)}
         start = {n: d.decode("utf-8", "replace") for n, d in originals.items()}
 
@@ -7422,6 +7602,45 @@ class Session:
         return ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
                 + "\nA requirement whose only evidence is a file listed here is NOT MET, and so is a "
                 "requirement a task covering it reported NOT RUN: name what did not run.")
+
+    def _not_run_remedy(self, rids) -> tuple:
+        """``(text, stuck)`` for a DONE refusal: what lifts each standing NOT
+        RUN or skip record on the requirements ``rids``, and the requirements
+        whose record nothing in this run can lift.
+
+        The lowering rule is unchanged. This is its signpost: the refusal used
+        to say only "name a task that fixes them", and a task that covers the
+        requirement again never lifts a report, so the reopen allowance went
+        on tasks that could not clear it. An item that names no file path
+        (``_item_paths``) cannot be matched to any check: it stands for the
+        rest of the run, and the orchestrator is told not to plan for it."""
+        lines, stuck = [], []
+        for entry in self._standing_not_run():
+            hit = [r for r in entry["requirements"] if r in rids]
+            if not hit:
+                continue
+            head = f"- {', '.join(hit)}: task {entry['task']} reported NOT RUN: {entry['item'][:160]}. "
+            paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
+            if entry.get("kind") == "skipped":
+                lines.append(head + f"Lifted when a later run of required check {entry['receipt']} passes "
+                             "with those cases executed and none skipped.")
+            elif paths:
+                lines.append(head + "Lifted only when a later required check passes while naming "
+                             f"{', '.join(paths)[:160]} as a whole file, with no filter and nothing skipped.")
+            else:
+                lines.append(head + "A report is lifted only by a later required check that names its "
+                             "file, and this one names none: it stands for the rest of this run.")
+                stuck += [r for r in hit if r not in stuck]
+        if not lines:
+            return "", []
+        more = len(lines) - _NOT_RUN_REMEDY_LINES
+        text = ("\nA NOT RUN report is lifted by execution, never by covering its requirement again. "
+                "The harness runs only the configured checks, and a task cannot add one:\n"
+                + "\n".join(lines[:_NOT_RUN_REMEDY_LINES])
+                + (f"\n- and {more} more standing report(s)" if more > 0 else ""))
+        if stuck:
+            text += f"\nNo task lifts the report on {', '.join(stuck)}: do not name one for it."
+        return text, stuck
 
     def _lower_unexecuted(self, found: dict) -> List[dict]:
         """Turn a MET into NOT MET where the record shows its acceptance did
@@ -8192,13 +8411,24 @@ class Session:
         last = outcome.checks[-1]
         fid = f"F{len(self.findings) + 1}"
         failed_checks = _check_ids(last.get("receipts") or [], passed=False)
+        whole = {}
+        if not failed_checks:
+            # Every command's own receipt passed, yet the check failed (the
+            # tree moved under it, or only the scope receipt failed). An empty
+            # list was read back as ["check"], an id a multi-command gate
+            # never has, so the finding could not be resolved by any repair.
+            # The gate's own commands; the harness's derived receipts exist
+            # only while test files differ and must pass with the gate anyway.
+            whole = dict(gate_checks=[c for c in _check_ids(last.get("receipts") or [], passed=True)
+                                      if not c.startswith("original-tests:") and c != "repair-check"])
+            failed_checks = [_WHOLE_GATE]
         message = (f"the project check still failed after {spec.task_id}'s work (attempt "
                    f"{last.get('attempt', '?')}, gate {last.get('gate', 'full')}; failed: "
-                   f"{', '.join(failed_checks)})")
+                   + ("no single command, the gate as a whole" if whole else ", ".join(failed_checks)) + ")")
         self.findings.append(dict(
             id=fid, task=spec.task_id, requirements=list(covers), kind="check.failed",
             target=None, steps=[], view=None, width=None, viewport=None, message=message[:300],
-            check=dict(attempt=last.get("attempt"), gate=last.get("gate"), failed_checks=failed_checks,
+            check=dict(attempt=last.get("attempt"), gate=last.get("gate"), failed_checks=failed_checks, **whole,
                        output_artifact=last.get("output_artifact"), attribution=last.get("attribution")),
             evidence=None, status="open"))
         for rid in covers:
@@ -8256,19 +8486,38 @@ class Session:
         settle it). ``gates`` are the checks this task ran. The task that
         left the failure keeps its record; its check facts become history
         (a recovered failure, quadratus.outcome)."""
-        passed = set()
+        passed, whole = set(), []
         for gate in gates:
+            # Only a gate that passed as a whole counts: one whose tree moved
+            # is recorded failed although its receipts read passed.
             if gate.get("passed"):
-                passed |= set(_check_ids(gate.get("receipts") or [], passed=True))
+                ids = set(_check_ids(gate.get("receipts") or [], passed=True))
+                passed |= ids
+                whole.append(ids)
         for finding in self.findings:
             if (finding["id"] not in self._current_resolves or finding["status"] != "open"
                     or finding.get("target")):
                 continue
-            failed = list((finding.get("check") or {}).get("failed_checks") or ["check"])
-            missing = [c for c in failed if c not in passed]
-            if missing:
-                finding["last_attempt"] = (f"{spec.task_id}: its checks did not rerun {', '.join(missing)} "
-                                           "with a passing receipt")
+            check = finding.get("check") or {}
+            # Only a finding recorded with the sentinel is settled by a whole
+            # gate. One with no failed ids on record keeps the old reading,
+            # the single check "check": a finding that is not a check finding
+            # must not be closed by any passing gate.
+            failed = list(check.get("failed_checks") or ["check"])
+            if failed == [_WHOLE_GATE]:
+                # No single command failed, so one whole passing gate must
+                # have rerun every command the failed gate ran (a smaller
+                # gate chosen by policy does not settle it).
+                need = set(check.get("gate_checks") or ())
+                problem = "" if any(need <= ids for ids in whole) else (
+                    "none of its checks passed as a whole"
+                    + (f" with {', '.join(sorted(need))} rerun" if need else ""))
+            else:
+                missing = [c for c in failed if c not in passed]
+                problem = (f"its checks did not rerun {', '.join(missing)} with a passing receipt"
+                           if missing else "")
+            if problem:
+                finding["last_attempt"] = f"{spec.task_id}: {problem}"
                 continue
             finding.update(status="resolved", resolved_by=spec.task_id, reopened=None,
                            resolution=dict(checks=failed, gates=[g.get("command") for g in gates]))
@@ -9009,6 +9258,7 @@ class Session:
     def _named_by_a_run_test(self, path: str, argvs, *, limit: int = 2000) -> bool:
         """Whether a test file some required check runs names ``path``: a
         listed test file, or a Python test file when a check discovers them.
+        A mention inside a comment does not count (``_named_outside_comments``).
         Bounded: at most ``limit`` files of at most 1 MB are read."""
         from .integration import _test_family
         root = Path(self.project)
@@ -9035,7 +9285,8 @@ class Session:
             seen += 1
             try:
                 if candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size <= 1 << 20:
-                    if name in candidate.read_text(encoding="utf-8", errors="replace"):
+                    if _named_outside_comments(candidate.read_text(encoding="utf-8", errors="replace"),
+                                               name, rel.endswith(".py")):
                         return True
             except OSError:
                 continue
@@ -9459,7 +9710,12 @@ class Session:
                 f"{', '.join(names)} changed since run start, so the original tests cannot be run as "
                 "they were; their result is not established.")
         self._unverified_once(text)
-        self.original_test_runs.append(dict(task=where, changed=names, passed=None, problem=text, receipts=[]))
+        # One record per distinct set of files: this runs on every check and
+        # every DONE while the selection stays changed, and the same record
+        # was appended each time.
+        if tuple(names) not in self._selection_recorded:
+            self._selection_recorded.add(tuple(names))
+            self.original_test_runs.append(dict(task=where, changed=names, passed=None, problem=text, receipts=[]))
         return True
 
     def _source_drift(self, current: dict) -> str:

@@ -144,7 +144,10 @@ def test_a_sent_back_batch_spends_one_slot_like_a_serial_send_back(tmp_path):
     session.invoke = invoke
     session.run(max_tasks=2)
     assert len(session.history) == 1, "the task named next ran in the second slot"
-    assert (project / "c.py").read_text() == "# c.py\n" and session._covers_corrections == 1
+    assert (project / "c.py").read_text() == "# c.py\n"
+    # Counted as a batch correction, then cleared when the next task was
+    # dispatched: a corrected send-back no longer counts toward a stall.
+    assert not session._covers_corrections
 
 
 def test_repeated_sent_back_batches_exhaust_the_correction_allowance(tmp_path):
@@ -155,4 +158,4 @@ def test_repeated_sent_back_batches_exhaust_the_correction_allowance(tmp_path):
     session, _ = parallel_session(tmp_path, script, max_requirement_reopens=2)
     with pytest.raises(RunStalled, match="parallel batches that were sent back"):
         session.run(max_tasks=12)
-    assert session.history == [] and session._covers_corrections == 3
+    assert session.history == [] and session._covers_corrections == {"batch": 3}

@@ -29,6 +29,12 @@ Parity first. The stop names, kinds and texts are the ones the session
 writes today, byte for byte. Where today's decision looks wrong, the
 decision says so in ``divergences`` and still returns today's answer: this
 candidate carries no authority to change final DONE behaviour.
+
+One rule added since (review of 2026-11-10): a requirements audit that did
+not run judged nothing. DONE is sent back once so the next DONE asks for it
+again; a second miss, or a miss with no DONE left to ask (the cap, an
+explicit list, a spent allowance), is the operator stop ``AuditUnavailable``,
+never ``RequirementsUnmet``.
 """
 
 from __future__ import annotations
@@ -161,6 +167,11 @@ class CompletionInputs:
     requirements_satisfied: Optional[bool] = None
     #: The refusal text the requirements check left (``_done_refusal``).
     done_refusal: str = ""
+    #: Why the requirements audit did not run ("" when it ran or was not
+    #: reached), and how many DONE checks in a row it has now missed. An
+    #: audit that did not happen judged nothing: it is never "not met".
+    audit_unavailable: str = ""
+    audit_misses: int = 0
     dependencies_verified: bool = False
 
 
@@ -297,6 +308,8 @@ def _validate(inputs: CompletionInputs) -> None:
         raise ValueError("requirements cannot fail with the ledger off; today's check returns True")
     if inputs.site == DONE_REPLY and inputs.goal_confirmed is not None:
         raise ValueError("the goal question is asked only at the cap")
+    if inputs.audit_unavailable and inputs.requirements_satisfied is not False:
+        raise ValueError("an audit that did not run cannot leave the requirements satisfied or unasked")
 
 
 def _done_reply(inputs: CompletionInputs, debt: Debt) -> Decision:
@@ -315,6 +328,13 @@ def _done_reply(inputs: CompletionInputs, debt: Debt) -> Decision:
             raise ValueError("dependencies are verified at DONE only after the requirements check")
         return Decision(STEP, site, debt, step=CHECK_REQUIREMENTS)
     if not satisfied:
+        if inputs.audit_unavailable:
+            # Nothing was judged, so there is nothing to cover again: the next
+            # DONE asks for the audit once more, then the operator is told.
+            if inputs.audit_misses <= 1 and inputs.reopens < inputs.max_reopens:
+                return Decision(SEND_BACK, site, debt,
+                                reopen_fact="DONE sent back: the requirements audit did not run")
+            return _audit_stop(inputs, debt, f"in {max(inputs.audit_misses, 1)} attempt(s) at DONE")
         if inputs.reopens < inputs.max_reopens:
             return Decision(SEND_BACK, site, debt, reopen_fact="DONE sent back: requirements open")
         return _classed(Decision(INCOMPLETE, site, debt, stop=Stop("unverified", (
@@ -367,6 +387,10 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
                                  stop=Stop("cap", (f"GoalUnconfirmedAtCap: the task cap ({cap}) was reached and "
                                                    "the orchestrator did not confirm the goal met. "
                                                    "Work preserved."))))
+    if confirmed and satisfied is False and inputs.audit_unavailable:
+        # No slot is left for a DONE that would ask for the audit again.
+        return _audit_stop(inputs, debt, f"when the task cap ({cap}) was reached with the goal confirmed",
+                           done_accepted=False, partial_mismatches=mismatches)
     if confirmed and satisfied is False:
         return _classed(Decision(INCOMPLETE, site, debt, done_accepted=False, partial_mismatches=mismatches,
                                  stop=Stop("unverified", (
@@ -380,6 +404,16 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
 def _why(inputs: CompletionInputs) -> str:
     why = (inputs.done_refusal or "").replace(_SENT_BACK, "").strip()
     return why[:400] or "the requirements check did not pass"
+
+
+def _audit_stop(inputs: CompletionInputs, debt: Debt, where: str, **fields) -> Decision:
+    """The requirements audit did not run and no retry is left: an operator
+    stop under its own name. Never RequirementsUnmet, which says an audit
+    judged a requirement and found it missing."""
+    return _classed(Decision(INCOMPLETE, inputs.site, debt, stop=Stop("operator", (
+        f"AuditUnavailable: the independent requirements audit did not run {where} "
+        f"({(inputs.audit_unavailable or '').strip()[:300]}). No requirement was judged met or not met. "
+        "Work preserved.")), **fields))
 
 
 def _checks_standing_failed(debt: Debt) -> bool:
@@ -474,6 +508,9 @@ class RequirementsAnswer:
     satisfied: bool
     refusal: str
     ledger: LedgerSnapshot
+    #: Why the audit did not run, and its misses in a row (CompletionInputs).
+    audit_unavailable: str = ""
+    audit_misses: int = 0
 
 
 def resolve(inputs: CompletionInputs, *, confirm_goal: Callable[[], bool],
@@ -496,7 +533,9 @@ def resolve(inputs: CompletionInputs, *, confirm_goal: Callable[[], bool],
         elif decision.step == CHECK_REQUIREMENTS:
             answer = check_requirements()
             inputs = replace(inputs, requirements_satisfied=bool(answer.satisfied),
-                             done_refusal=answer.refusal or "", ledger=answer.ledger)
+                             done_refusal=answer.refusal or "", ledger=answer.ledger,
+                             audit_unavailable=answer.audit_unavailable or "",
+                             audit_misses=answer.audit_misses)
         else:
             verify_dependencies()
             inputs = replace(inputs, dependencies_verified=True)

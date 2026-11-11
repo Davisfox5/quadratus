@@ -7,7 +7,8 @@ must not also be a bug in the check of it. No model is called.
 
 Three verdicts, and missing evidence is never success:
 
-- ``verified``: completed, every listed requirement met by an audit, the final
+- ``verified``: completed, every listed requirement met by an audit and the
+  last audit asked for actually ran, the final
   passing check ran test cases against the final source, nothing required was
   skipped, nothing reported NOT RUN still stands, no finding is open, no
   authorized test repair is left unreviewed, and every
@@ -455,8 +456,14 @@ def judge(run_dir, project=None) -> dict:
                            f"({str(run.get('problem') or run.get('passed'))[:120]})")
     if not listed:
         unshown.append("no requirements were recorded, so none was audited")
-    audits = [a for a in requirements.get("audits") or [] if isinstance(a.get("verdicts"), dict)]
+    recorded = [a for a in requirements.get("audits") or [] if isinstance(a, dict)]
+    audits = [a for a in recorded if isinstance(a.get("verdicts"), dict)]
     final = audits[-1]["verdicts"] if audits else {}
+    if recorded and not isinstance(recorded[-1].get("verdicts"), dict):
+        # The last audit the run asked for did not run (no auditor, a failed
+        # call, a tree that moved). An earlier audit judged an earlier source,
+        # so its verdicts do not stand in for it.
+        unshown.append(f"the last requirements audit did not run ({str(recorded[-1].get('result'))[:120]})")
     for rid in sorted(listed):
         verdict = final.get(rid) or {}
         if not str(status.get(rid, "")).lower().startswith("met"):

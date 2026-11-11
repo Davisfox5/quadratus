@@ -62,7 +62,9 @@ _EXCEPTION_CLASS = {
 #: ``stop_reason`` prefixes the session writes, to outcome class.
 _STOP_PREFIX = {"TurnLimitBreaker": "cap", "TaskFailureBreaker": "failed", "SurveyRepeatStop": "failed",
                 "SurveyAllowanceSpent": "budget", "FindingsUnresolved": "unverified",
-                "DesignUnverified": "unverified", "CompletionUnproven": "unverified"}
+                "DesignUnverified": "unverified", "CompletionUnproven": "unverified",
+                #: The requirements audit did not run (completion_decision._audit_stop).
+                "AuditUnavailable": "operator"}
 
 
 def classify(exc: BaseException) -> str:

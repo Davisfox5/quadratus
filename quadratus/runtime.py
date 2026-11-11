@@ -480,6 +480,10 @@ class Fleet:
                     "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
                     "with the edits and available evidence; a NOT RUN line keeps the requirement it "
                     "serves open until a check runs it. "
+                    "A NOT RUN or BLOCKED line must name the test file it is about, alone or as the "
+                    "file a command runs (tests/ui/search.test.js, or node tests/browser/run.js): a "
+                    "line that names no file path, such as 'the browser scenario', can never be "
+                    "matched to a later check and keeps its requirement open for the rest of the run. "
                     "Do not change permissions."
                 )
             before = self.project.contents()
