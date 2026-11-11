@@ -482,7 +482,16 @@ that changes each:
   file, a runner config) is a watched change too. A change in build output
   (`dist`, `build`, `.tox`, `.nox`) is recorded and shown to reviewers, not
   failed, and the truth check reports a run unverified when that change
-  was to code.
+  was to code. The exceptions fail the task like any watched path: in
+  `dist` and `build`, a `conftest.py`, `sitecustomize.py`,
+  `usercustomize.py`, a `.pth` file or anything under `__mocks__`; in
+  `.tox` and `.nox`, anything under `__mocks__`. A build that really emits
+  one of those will trip this. What the watch still does not see: a
+  `conftest.py` or `.pth` file written into a `.tox` or `.nox` environment
+  (an observation only), a test file of another language planted in a tool
+  cache, and anything outside the project. A finding lives in the run's
+  record inside the project; a run whose own record folder is removed
+  makes it again and stops as `RunRecordLost`.
   The watch brackets editing calls only, and nothing outside the project is
   watched. Its bounds are `QUADRATUS_WATCH_MAX_ENTRIES`,
   `QUADRATUS_WATCH_MAX_BYTES` and `QUADRATUS_WATCH_SECONDS`.
@@ -504,7 +513,9 @@ that changes each:
   scratch live under `~/.cache/quadratus/scratch` (or
   `QUADRATUS_SCRATCH_DIR`): a real folder only you can read, outside the
   project. A run removes its own leftovers older than 24 hours when it
-  starts, and only in a folder the harness itself made and marked.
+  starts, and only in a folder the harness itself made and marked. A
+  scratch folder you created yourself is never swept; put an empty file
+  named `.quadratus-scratch` in it to allow that.
 - **The GUI answers only to this machine and to its own page.** It checks
   the Host header (127.0.0.1, localhost or [::1] on its own port; no setting
   changes that), refuses requests a browser marks as coming from another

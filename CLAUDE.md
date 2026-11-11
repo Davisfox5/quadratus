@@ -1366,8 +1366,9 @@ Key design decisions already settled:
   it is in place the run stops (`SensitiveChangeInPlace`), because a
   reproduced run completed over a planted `conftest.py` link, and the next
   run is refused before any model call unless the operator accepts it
-  (`--accept-watched-paths`). Build output is an observation shown to
-  reviewers, never a failure. The watch brackets editing calls only.
+  (`--accept-watched-paths`). Build output is an observation, except what
+  no build writes and a runner loads by position there (a `conftest.py`, a
+  `.pth` file, a `__mocks__` folder). The watch brackets editing calls only.
 - **No child inherits credentials it does not need** (review 2026-11-10,
   transport 2, checks_fs 4, gui_records 6; `child_env.py`). Vendor CLI
   calls, checks, previews, captures and probes get the environment with

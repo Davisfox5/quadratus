@@ -705,7 +705,8 @@ _CAPTURE_SCOPE_REQUEST = (
     'A file step\'s path is project-relative and names either a '
     'non-hidden file already in the project (a committed sample such as '
     'tests/fixtures/sample.csv) or .quadratus/capture-fixtures/<task id>/<name> for a '
-    'capture-only sample the harness writes; nothing hidden, absolute or outside the '
+    'capture-only sample the harness writes (a data sample: never conftest.py, a .py or .pth '
+    'file, package.json or a test-runner config); nothing hidden, absolute or outside the '
     'project. Declare steps only when '
     'the change is reached by interaction; a change visible without interaction (a '
     'favicon, a header, copy) declares "steps": []. A final wait must name something only '
@@ -1393,6 +1394,14 @@ def _confined_fixture_target(root, path: str, task_id: str):
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task_id)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", parts[3])):
         return None, f"{path}: not this task's own fixture path"
+    # The harness writes this file on a model's word, between calls, in a
+    # folder no listing reads. A name a test runner or interpreter loads by
+    # position (conftest.py, any .py, package.json, a runner config) would be
+    # planted code written by the harness itself.
+    from .project_watch import loaded_by_position
+    if loaded_by_position(parts):
+        return None, (f"{path}: a file of that name is loaded by a test runner or an interpreter "
+                      "because of where it sits, so it is not written as a capture sample")
     base = Path(root)
     current = base
     for part in parts:

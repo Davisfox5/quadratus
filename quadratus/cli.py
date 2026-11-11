@@ -959,8 +959,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Start although the last run on this project recorded a change to a path outside the "
             "measured source that no task may change (a git hook, an env file, a link, vendor agent "
             "configuration) and that change is still in place. Such a project is otherwise refused "
-            "before any model call, with each path named: inspect them first. Accepts them for this "
-            f"run only. Same as {_WATCHED_ENV}=1."
+            "before any model call, with each path named: inspect them first. An acceptance is "
+            "written to this run's record, and later runs do not ask about the same paths again. "
+            f"Same as {_WATCHED_ENV}=1."
         ),
     )
     flag(

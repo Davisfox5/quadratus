@@ -754,6 +754,28 @@ def _state_folder(project, state_dir):
     return state
 
 
+def _restore_run_folder(run_dir) -> bool:
+    """Make the run's own record folder again when it is gone. True when it was.
+
+    An editing call can remove it. In the reproduced case (review of the
+    trust-boundary fixes, 2026-11-11) the same call planted a git hook, the
+    watch saw the hook, writing the record then raised, no result.json
+    existed, and the next run started over the hook. The folder is made
+    again so the record always lands, and the caller makes the loss the
+    run's stop. A link left in the folder's place is removed first: the
+    name is the harness's own, and a record is never written through one.
+    """
+    run_dir = Path(run_dir)
+    if run_dir.is_dir() and not run_dir.is_symlink():
+        return False
+    if run_dir.is_symlink():
+        run_dir.unlink()
+    prepare_state_dir(run_dir.parent.parent)
+    make_private_dir(run_dir.parent)
+    make_private_dir(run_dir)
+    return True
+
+
 def _new_run_dir(state):
     """A fresh, owner-only ``runs/<stamp>-<id>`` folder under ``state``."""
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -1023,7 +1045,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     fleet = _fleet_for(fleet_type, settings, project=project, allow_writes=allow_writes, meter=meter,
                        delegation=delegation, budget=budget, progress=progress, plan=plan,
                        agent_config=agent_config)
-    in_flight = {}
+    in_flight, folder_lost = {}, False
     try:
         if preview and preview['blocked']:
             raise ValueError('; '.join(preview['blocked']))
@@ -1044,10 +1066,22 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # rather than merely honest about having failed.
         partial = getattr(exc, 'partial', None)
         in_flight = dict(getattr(session, 'in_flight', {}) or partial or {})
+        folder_lost = _restore_run_folder(run_dir)
         if in_flight:
             write_private(run_dir / 'in-flight.json', json.dumps(in_flight, indent=2))
     finally:
         fleet.close()
+    # Before anything below is written. The record carries a watch finding
+    # to the next run's preflight, so it must land whatever a call did to
+    # the folder it lands in.
+    folder_lost = _restore_run_folder(run_dir) or folder_lost
+    if folder_lost:
+        lost = ('RunRecordLost: this run\'s own record folder was removed while the run was going. '
+                'Its artifacts and call records are gone, so nothing in this record can be checked '
+                'against them.')
+        error = f'{error} {lost}' if error else lost
+        if progress:
+            progress(lost)
     if not error and session is not None and getattr(session, 'stop_reason', ''):
         # A stop the session chose rather than one an exception forced (the
         # turn-limit breaker, unverified design evidence). Reported as the

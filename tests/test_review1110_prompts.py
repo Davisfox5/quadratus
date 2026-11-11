@@ -308,9 +308,11 @@ def _fixed_rule_bytes(session, prompt):
 #: new rule a reply is held to still gets its sentence, and whoever adds it
 #: raises the figure here on purpose, in the same change. Raised from 7,000 and
 #: 9,600 for the rule that a task changing a rendered file names it in SCOPE
-#: (session._UNDECLARED_RENDER_RULE; measured 7,166 and 9,832).
+#: (session._UNDECLARED_RENDER_RULE; measured 7,166 and 9,832). The capture
+#: figure was raised again, by 100, for the rule that a capture-only sample
+#: is never a name a test runner loads (session._confined_fixture_target).
 MAX_FIXED_RULE_BYTES = 7_230
-MAX_FIXED_RULE_BYTES_WITH_CAPTURE = 9_890
+MAX_FIXED_RULE_BYTES_WITH_CAPTURE = 9_990
 
 
 def _over(fixed, ceiling):
