@@ -671,7 +671,10 @@ def _outcome(result: Dict[str, Any], open_reason: str):
     (project_run's report says so in its title); that is not a completed
     goal, and the monitor must not call it one."""
     error = _first_line(result.get("error"))
-    completed = result.get("completed") is True
+    # A baseline run (quadratus.baseline) is one model alone and is never
+    # judged: whatever its record says, the monitor does not call it complete.
+    baseline = result.get("mode") == "baseline"
+    completed = result.get("completed") is True and not baseline
     explicit = result.get("explicit_tasks")
     if completed and isinstance(explicit, dict) and explicit.get("goal_judged") is not True:
         return "listed tasks complete", "listed tasks complete; the goal was not judged"
@@ -681,6 +684,8 @@ def _outcome(result: Dict[str, Any], open_reason: str):
         return "error", error
     budget = result.get("budget")
     stop = budget.get("stop_reason") if isinstance(budget, dict) else None
+    if baseline and not stop:
+        return "baseline, not judged", "baseline run: one model alone; the goal was not judged"
     return "incomplete", (f"budget: {_first_line(stop)}" if stop else open_reason)
 
 

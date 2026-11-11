@@ -141,13 +141,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
             raise ValueError(f'max_tasks ({max_tasks}) must cover the {len(tasks)} listed task(s)')
     if not isinstance(project, Project):
         project = Project(project)
-    state = Path(state_dir).expanduser() if state_dir else Path('.quadratus')
-    if not state.is_absolute():
-        state = project.root / state
-    state = state.resolve()
-    if state == project.root or project.root.is_relative_to(state):
-        raise ValueError('Run state must not contain the project source folder.')
-    project.exclude.add(state)
+    state = _state_folder(project, state_dir)
 
     repair_tests = _repair_tests(project.root, repair_tests, forbid)
     test_changes = _test_changes(project.root, test_changes, goal=goal, forbid=forbid)
@@ -407,13 +401,21 @@ def _merge_extras(gates, extras):
     return [*gates, *extras]
 
 
-def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
-         session_options=None,
-         mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
-         default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
-         extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
-         decider=None, decider_labels="unstated", repair_tests=(), test_changes=None,
-         declared_checks=True, agent_config=None):
+def _state_folder(project, state_dir):
+    """Where a run's records go, resolved against the project and left out of
+    its measured source. Never a folder that contains the source."""
+    state = Path(state_dir).expanduser() if state_dir else Path('.quadratus')
+    if not state.is_absolute():
+        state = project.root / state
+    state = state.resolve()
+    if state == project.root or project.root.is_relative_to(state):
+        raise ValueError('Run state must not contain the project source folder.')
+    project.exclude.add(state)
+    return state
+
+
+def _new_run_dir(state):
+    """A fresh, owner-only ``runs/<stamp>-<id>`` folder under ``state``."""
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     # Closed to other users before the first record is written, not when the
@@ -422,23 +424,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     prepare_state_dir(state)
     make_private_dir(state / 'runs')
     os.mkdir(run_dir, 0o700)
-    from .run_activity import RunActivity
-    activity = RunActivity(run_dir, progress)
-    progress = activity
-    activity.record('run-started', goal=str(goal)[:4000])
-    stale_fixtures = _retire_stale_fixtures(project.root, run_dir, progress)
-    before = project.contents()
-    scan = scan_repo(project.root)
-    # A damaged map costs the damaged lines, never the run: this load is
-    # outside the run's own error handling.
-    code_map = CodebaseMap(state / 'codebase-map.jsonl')
-    map_notices = _report_map(code_map, progress, 0)
-    seed_map(scan, code_map)
-    if not declared_checks:
-        # The operator's own checks only: nothing the project declares is
-        # added beside them or run in their place. The map above still says
-        # what the project declares; that is a fact about it, not a gate.
-        scan = dataclasses.replace(scan, check_command=None, declared_checks=[], interpreter_note='')
+    return run_dir
+
+
+def _gate_for(project, check, extras, gates, scan, run_dir, progress=None):
+    """The run's gate and its plan: ``(gate or None, plan)``. The plan is
+    written to ``gate-plan.json`` and told to the operator here."""
     command = shlex.split(check) if check else scan.check_command
     gates = _merge_extras(list(gates), extras) if gates is not None else _gate_plan(command, extras, scan)
     plan = [dict(id=g.id, argv=list(g.argv), cwd=g.cwd, required=g.required, minimum_tests=g.minimum_tests)
@@ -461,6 +452,93 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
             else IntegrationGate(command, cwd=project.root,
                                  minimum_tests=1 if _is_test_suite(command) else None) if command else None)
+    return gate, plan
+
+
+def _lead_cap(settings, run_limits, progress=None):
+    """``(settings, lead_turns, lead_source)`` with the lead turn cap applied."""
+    # A per-call ceiling with no turn cap stops a lead only after the
+    # oversized call returns (both Stage B series on b1ff751); the cap
+    # derived here acts before it, and the operator's own value wins.
+    from .run_budget import effective_lead_turns
+    lead_turns, lead_source = effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits)
+    if lead_turns is not None and getattr(settings, 'lead_max_turns', None) is None:
+        settings = dataclasses.replace(settings, lead_max_turns=lead_turns)
+        if progress:
+            progress(f'Lead turn cap: {lead_turns} rounds, derived from max_tokens_per_call '
+                     f'{run_limits.max_tokens_per_call:,}')
+    return settings, lead_turns, lead_source
+
+
+def _fleet_for(fleet_type, settings, *, project, allow_writes, meter, delegation, budget, progress,
+               plan, agent_config):
+    """The run's Fleet, told its progress line, the checks it may run and the
+    vendor agent configuration the operator allowed."""
+    fleet = fleet_type(settings, project=project, allow_writes=allow_writes,
+                       usage_meter=meter, delegation_ledger=delegation,
+                       **({'run_budget': budget} if budget else {}))
+    try:
+        fleet.progress = progress  # one live line per call as it ends
+        # The checks are the commands a granted editing call may run
+        # unapproved and the denials that count as a capability failure.
+        from .integration import model_facing
+        # What a seat is told to run: the harness's report declaration is
+        # its own and never reaches a model's argv (series rule-58a4625 f3).
+        fleet.check_commands = tuple(shlex.join(model_facing(g['argv'])) for g in plan if g.get('argv'))
+        # The vendor agent configuration the operator saw and allowed at the
+        # preflight, if any. An editing call refuses anything else.
+        fleet.agent_config_allowed = dict(agent_config or {})
+    except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+        pass
+    return fleet
+
+
+def _collect_traces(run_dir, project, delegation, progress=None):
+    """``(traces, interrupted)``: what each call did inside its own session,
+    with the native children those transcripts name put on the record."""
+    traces, trace_interrupted = [], False
+    try:
+        from .trace import build_traces
+        traces = build_traces(run_dir, run_dir / 'invocations.jsonl', project.root)
+    except KeyboardInterrupt:
+        # A second Ctrl-C lands here, in the slow copy, more often than
+        # anywhere else. It ends the copy and nothing more: the run's own
+        # record below is quick, and without it the run left no result.
+        traces, trace_interrupted = [], True
+        if progress:
+            progress('Interrupted while copying call transcripts; writing the run record without them.')
+    except Exception:  # noqa: BLE001 -- tracing never fails a run
+        traces = []
+    _observe_transcript_children(traces, delegation)
+    return traces, trace_interrupted
+
+
+def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
+         session_options=None,
+         mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
+         default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
+         extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
+         decider=None, decider_labels="unstated", repair_tests=(), test_changes=None,
+         declared_checks=True, agent_config=None):
+    run_dir = _new_run_dir(state)
+    from .run_activity import RunActivity
+    activity = RunActivity(run_dir, progress)
+    progress = activity
+    activity.record('run-started', goal=str(goal)[:4000])
+    stale_fixtures = _retire_stale_fixtures(project.root, run_dir, progress)
+    before = project.contents()
+    scan = scan_repo(project.root)
+    # A damaged map costs the damaged lines, never the run: this load is
+    # outside the run's own error handling.
+    code_map = CodebaseMap(state / 'codebase-map.jsonl')
+    map_notices = _report_map(code_map, progress, 0)
+    seed_map(scan, code_map)
+    if not declared_checks:
+        # The operator's own checks only: nothing the project declares is
+        # added beside them or run in their place. The map above still says
+        # what the project declares; that is a fact about it, not a gate.
+        scan = dataclasses.replace(scan, check_command=None, declared_checks=[], interpreter_note='')
+    gate, plan = _gate_for(project, check, extras, gates, scan, run_dir, progress)
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
@@ -476,16 +554,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # Said before any task text is sent, and kept in the activity record.
         from .decisions import disclosure
         progress(disclosure(decider))
-    # A per-call ceiling with no turn cap stops a lead only after the
-    # oversized call returns (both Stage B series on b1ff751); the cap
-    # derived here acts before it, and the operator's own value wins.
-    from .run_budget import effective_lead_turns
-    lead_turns, lead_source = effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits)
-    if lead_turns is not None and getattr(settings, 'lead_max_turns', None) is None:
-        settings = dataclasses.replace(settings, lead_max_turns=lead_turns)
-        if progress:
-            progress(f'Lead turn cap: {lead_turns} rounds, derived from max_tokens_per_call '
-                     f'{run_limits.max_tokens_per_call:,}')
+    settings, lead_turns, lead_source = _lead_cap(settings, run_limits, progress)
     # The allowance this run was given, saved before any model call so an
     # interrupted run still says what it was allowed (Codex GUI plan, #35),
     # with the lead turn cap the session is about to be built with.
@@ -526,22 +595,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             max_per_task=run_limits.max_calls,
             max_concurrent=run_limits.max_concurrent_workers,
         )
-    fleet = fleet_type(settings, project=project, allow_writes=allow_writes,
-                       usage_meter=meter, delegation_ledger=delegation,
-                       **({'run_budget': budget} if budget else {}))
-    try:
-        fleet.progress = progress  # one live line per call as it ends
-        # The checks are the commands a granted editing call may run
-        # unapproved and the denials that count as a capability failure.
-        from .integration import model_facing
-        # What a seat is told to run: the harness's report declaration is
-        # its own and never reaches a model's argv (series rule-58a4625 f3).
-        fleet.check_commands = tuple(shlex.join(model_facing(g['argv'])) for g in plan if g.get('argv'))
-        # The vendor agent configuration the operator saw and allowed at the
-        # preflight, if any. An editing call refuses anything else.
-        fleet.agent_config_allowed = dict(agent_config or {})
-    except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
-        pass
+    fleet = _fleet_for(fleet_type, settings, project=project, allow_writes=allow_writes, meter=meter,
+                       delegation=delegation, budget=budget, progress=progress, plan=plan,
+                       agent_config=agent_config)
     in_flight = {}
     try:
         if preview and preview['blocked']:
@@ -584,20 +640,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             write_private(run_dir / 'in-flight.json', json.dumps(in_flight, indent=2))
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
-    traces, trace_interrupted = [], False
-    try:
-        from .trace import build_traces
-        traces = build_traces(run_dir, run_dir / 'invocations.jsonl', project.root)
-    except KeyboardInterrupt:
-        # A second Ctrl-C lands here, in the slow copy, more often than
-        # anywhere else. It ends the copy and nothing more: the run's own
-        # record below is quick, and without it the run left no result.
-        traces, trace_interrupted = [], True
-        if progress:
-            progress('Interrupted while copying call transcripts; writing the run record without them.')
-    except Exception:  # noqa: BLE001 -- tracing never fails a run
-        traces = []
-    _observe_transcript_children(traces, delegation)
+    traces, trace_interrupted = _collect_traces(run_dir, project, delegation, progress)
     diff = project.diff(before)
     completed = bool(session and session.completed and not error)
     checks = session.checks if session else []

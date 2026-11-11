@@ -29,6 +29,19 @@ on). On a planned jev cell the orchestrator is asked not to label and the
 decider routes every task (``decider_labels="all"``); the rule cell's
 orchestrator labels as usual. The comparison is between arms on the same
 frozen goal, never between a run and an edited version of itself.
+
+A fourth command runs the third arm, one model alone, beside the pair:
+
+    python3 tools/jev_stage_b/pairs.py solo --out /abs/runs --model claude:opus [--only TASK] [--fix-rounds 1]
+
+``solo`` spends too. It makes a fresh worktree per task and repeat, runs
+``quadratus.baseline.run_baseline`` there under the packet's limits, checks,
+readiness probes and declared paths, grades it with the same frozen graders,
+and keeps its cells in ``solo.json``. The packet, the manifest and its digest
+are not written, and ``collect`` does not read the solo cells: it prints one
+``tools/compare_runs.py`` command per task instead. A solo cell that could
+not measure the model (a spent window, an interrupt, unreported usage, a
+denied capability, an error before any call) stops the arm.
 """
 
 from __future__ import annotations
@@ -37,15 +50,23 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 ARMS = ("jev", "rule")
+#: The third arm: one model alone on the same frozen goal (quadratus.baseline).
+#: Kept out of ARMS on purpose. The pair, its counterbalanced order, its
+#: packet and its manifest are unchanged; a solo cell has its own record
+#: (``solo.json``) and is run only by the ``solo`` command.
+SOLO_ARM = "solo"
+SOLO_RECORD = "solo.json"
 
 #: Why a series stops before its next launch (plan, "Stop rules"). Each is
 #: read off the cells that have run; none is a model's opinion.
@@ -57,6 +78,7 @@ STOP_CELL_ERROR = "cell-error"        # a cell raised before the engine produced
 STOP_INTERRUPTED = "interrupted-cell"  # a cell was still "running" when a later run began: its launch never finished
 STOP_INTEGRITY = "integrity-failure"   # a frozen input or the engine checkout changed at a launch or grading boundary
 STOP_CAPABILITY = "capability-failure"  # a lead granted writes was denied them, or the engine saved CapabilityUnavailable
+STOP_WINDOW = "window-exhausted"        # solo arm only: the one model's subscription window is spent
 
 #: The file tools a lead needs; a denial of any of them on a lead call is
 #: read from the run's trace.jsonl (Codex 5969458776: the terminal error
@@ -437,6 +459,14 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
     their reason, which is recorded too."""
     if arm is not None and arm not in ARMS:
         raise ValueError(f"arm must be one of {ARMS}")
+    with _series_lock(out):
+        return _run_locked(out, launcher=launcher, pairs=pairs, only=only, arm=arm, engine=engine,
+                           override_stop=override_stop, versions=versions)
+
+
+@contextmanager
+def _series_lock(out: Path):
+    """The one process a series runs from, pairs and solo cells alike."""
     lock = out / LOCK_NAME
     try:
         fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
@@ -452,13 +482,24 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
     with os.fdopen(fd, "w") as handle:
         handle.write(f"pid={os.getpid()} at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
     try:
-        return _run_locked(out, launcher=launcher, pairs=pairs, only=only, arm=arm, engine=engine,
-                           override_stop=override_stop, versions=versions)
+        yield
     finally:
         try:
             lock.unlink()
         except OSError:
             pass
+
+
+def _integrity(packet: dict, frozen, identify) -> tuple:
+    """(problem or None, engine identity now). Never raises: a failed check
+    is recorded on the cell, never a crash mid-series."""
+    try:
+        check_frozen(packet, frozen)
+        ident = identify()
+        check_engine(packet, ident)
+    except Exception as exc:  # noqa: BLE001 -- the problem is the record
+        return f"{type(exc).__name__}: {exc}"[:400], None
+    return None, ident
 
 
 def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop, versions) -> dict:
@@ -489,15 +530,7 @@ def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop,
     identify = engine if callable(engine) else (lambda: engine) if engine is not None else engine_identity
 
     def integrity() -> tuple:
-        """(problem or None, engine identity now). Never raises: a failed
-        check is recorded on the cell, never a crash mid-series."""
-        try:
-            check_frozen(packet, manifest.get("frozen"))
-            ident = identify()
-            check_engine(packet, ident)
-        except Exception as exc:  # noqa: BLE001 -- the problem is the record
-            return f"{type(exc).__name__}: {exc}"[:400], None
-        return None, ident
+        return _integrity(packet, manifest.get("frozen"), identify)
 
     problem, engine = integrity()
     if problem:
@@ -571,6 +604,210 @@ def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop,
                 break
     save()
     return manifest
+
+
+def solo_goal(task: dict, packet: dict) -> str:
+    """What the single model is asked: the task's goal as the pair's cells get
+    it, and for a listed task the one frozen task text after it."""
+    goal = task.get("goal") or packet["goal"]
+    text = str(task.get("text") or "").strip()
+    return goal if not text else f"{goal}\n\nThe task (verbatim):\n{text}"
+
+
+def solo_launcher(cell: dict, packet: dict) -> dict:
+    """One real baseline run: the packet's checks, limits, readiness probes
+    and path fence, one model, no orchestrator and no reviewers. No capture
+    profile: a baseline has no design review to hand renders to."""
+    from quadratus.baseline import run_baseline
+    from quadratus.config import Settings
+    from quadratus.project import Project
+    from quadratus.run_budget import RunLimits
+    settings = Settings.from_env()
+    if packet.get("lead_max_turns"):
+        settings.lead_max_turns = int(packet["lead_max_turns"])
+    result = run_baseline(
+        cell["goal"], Project.open(cell["project"]), settings, model=cell["model"],
+        check=packet.get("check", ""), extra_checks=packet.get("extra_checks") or (),
+        readiness=packet.get("readiness"), run_limits=RunLimits(**packet["limits"]),
+        declared_paths=tuple(cell.get("declared_paths") or ()), fix_rounds=int(cell.get("fix_rounds", 1)),
+        progress=lambda message: print(f"[{cell['name']}] {message}", flush=True))
+    return dict(run_dir=str(result.run_dir), completed=False, result_error=result.error or None)
+
+
+def solo_stop(cell: dict, packet: dict) -> Optional[str]:
+    """The stop rule a finished solo cell trips, or None. The pair's own rules,
+    read off the same kind of record (``series_stop``: a failed launch, an
+    integrity failure, a denied capability, an access failure, an error saved
+    before any call was answered, usage the CLI did not report), and two more.
+    A solo cell has one model and nowhere to re-route, so a spent subscription
+    window would end every later cell the same way, and a cell is never rerun.
+    And a baseline keeps its record when the operator interrupts it and
+    returns, so the interrupt is read here: Ctrl-C must not start the next cell."""
+    try:
+        why = series_stop(cell, packet)
+    except Exception as exc:  # noqa: BLE001 -- a record that cannot be read stops the arm, never crashes it
+        return f"{STOP_CELL_ERROR}: the record of {cell['name']} could not be read ({type(exc).__name__})"
+    if why or cell.get("state") != "ran":
+        return why
+    try:
+        info = json.loads((Path(cell["run_dir"]) / "result.json").read_text()).get("baseline")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        info = None
+    cause = info.get("stop_cause") if isinstance(info, dict) else None
+    if cause == "window exhausted":
+        return f"{STOP_WINDOW}: {cell.get('model')} reported its subscription window spent in {cell['name']}"
+    if cause == "interrupted":
+        return f"{STOP_INTERRUPTED}: the operator interrupted {cell['name']}; no further cell was launched"
+    return None
+
+
+def solo(out: Path, *, model: str, only: Optional[str] = None, fix_rounds: int = 1,
+         launcher: Callable[[dict, dict], dict] = solo_launcher,
+         worktree: Callable[[Path, Path, str], None] = None, engine: Optional[dict] = None,
+         override_stop: Optional[str] = None) -> dict:
+    """Run the solo arm on a prepared series: for each task and repeat, one
+    fresh worktree at the packet's baseline, ``model`` alone on the task's
+    frozen goal under the packet's limits and checks, then the same frozen
+    graders. One cell at a time, under the series lock.
+
+    Nothing the pair owns is written: the manifest, its cells and the packet
+    digest stay as ``prepare`` and ``run`` left them, and the solo cells are
+    kept in ``solo.json``. The frozen inputs and the engine are checked at
+    the same three boundaries as a pair cell's. A cell is never rerun."""
+    from quadratus.baseline import baseline_model
+    baseline_model(model)  # refused before a lock, a worktree or a call
+    if type(fix_rounds) is not int or fix_rounds < 0:
+        raise ValueError("fix_rounds must be a whole number of at least 0")
+    with _series_lock(out):
+        manifest = json.loads((out / "manifest.json").read_text())
+        packet = manifest["packet"]
+        if _sha(packet) != manifest.get("packet_digest"):
+            raise RuntimeError("the manifest's packet no longer matches the digest written at prepare; "
+                               "a packet changed after prepare is not run")
+        path = out / SOLO_RECORD
+        record = (json.loads(path.read_text()) if path.exists()
+                  else dict(format=1, packet_digest=manifest["packet_digest"], cells=[]))
+        if record.get("packet_digest") != manifest["packet_digest"]:
+            raise RuntimeError(f"{path} belongs to a different packet than the manifest")
+
+        def save():
+            tmp = out / (SOLO_RECORD + ".tmp")
+            tmp.write_text(json.dumps(record, indent=2) + "\n")
+            os.replace(tmp, path)
+
+        def now():
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        for cell in record["cells"]:
+            if cell.get("state") == "running":
+                cell.update(state="interrupted", error=f"{STOP_INTERRUPTED}: launch started "
+                                                       f"{cell.get('started_at')} and never recorded an outcome; "
+                                                       "not relaunched")
+        identify = engine if callable(engine) else (lambda: engine) if engine is not None else engine_identity
+        problem, ident = _integrity(packet, manifest.get("frozen"), identify)
+        if problem:
+            raise RuntimeError(problem)
+        if record.get("stopped") and not override_stop:
+            raise RuntimeError(f"the solo arm stopped: {record['stopped']['reason']} (after "
+                               f"{record['stopped']['after']}); pass --override-stop with a reason to continue")
+        if record.get("stopped"):
+            record.setdefault("overrides", []).append(dict(stopped=record.pop("stopped"), reason=override_stop,
+                                                           at=now()))
+        repo, base = Path(packet["project"]["repo"]), packet["project"]["base_sha"]
+        slug = re.sub(r"[^A-Za-z0-9.]+", "-", model).strip("-")
+        done = {c["name"] for c in record["cells"]}
+        for task in packet["tasks"]:
+            if only is not None and task["id"] != only:
+                continue
+            for repeat in range(int(packet.get("repeats", 1))):
+                name = f"{task['id']}/{SOLO_ARM}-{slug}-r{repeat}"
+                if name in done:
+                    continue
+                target = out / name
+                if target.exists():
+                    raise FileExistsError(f"{target} exists; a prepared cell is never reused")
+                # Boundary 1: this cell's own launch.
+                problem, ident = _integrity(packet, manifest.get("frozen"), identify)
+                cell = dict(task=task["id"], arm=SOLO_ARM, model=model, repeat=repeat, name=name,
+                            goal=solo_goal(task, packet), declared_paths=list(task.get("declared_paths") or []),
+                            fix_rounds=fix_rounds, project=str(target), started_at=now())
+                record["cells"].append(cell)
+                if problem:
+                    cell.update(state="integrity-failed", error=f"{STOP_INTEGRITY}: {problem}")
+                    record["stopped"] = dict(reason=STOP_INTEGRITY, after=name, at=now())
+                    save()
+                    return record
+                target.parent.mkdir(parents=True, exist_ok=True)
+                (worktree or _git_worktree)(repo, target, base)
+                cell.update(state="running", engine_sha=ident.get("sha"))
+                save()  # durable before the launch: a crash here leaves "running"
+                started = time.perf_counter()
+                try:
+                    cell.update(launcher(cell, packet), state="ran")
+                except Exception as exc:  # noqa: BLE001 -- a failed cell is a result
+                    cell.update(state="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+                cell.update(seconds=round(time.perf_counter() - started, 1), finished_at=now())
+                save()
+                # Boundary 2: before grading. Boundary 3: after it.
+                problem, ident = _integrity(packet, manifest.get("frozen"), identify)
+                if not problem and ident.get("sha") != cell["engine_sha"]:
+                    problem = (f"engine checkout moved from {cell['engine_sha'][:12]} to "
+                               f"{str(ident.get('sha'))[:12]} during the cell")
+                if problem:
+                    cell.update(integrity=f"before grading: {problem}", grade=None, grade_withheld=problem[:300])
+                else:
+                    cell["grade"] = grade_cell(cell, packet)
+                    problem, _ = _integrity(packet, manifest.get("frozen"), identify)
+                    if problem:
+                        cell.update(integrity=f"after grading: {problem}", grade_unverified=True)
+                why = solo_stop(cell, packet)
+                save()
+                if why:
+                    record["stopped"] = dict(reason=why, after=name, at=now())
+                    save()
+                    return record
+        save()
+        return record
+
+
+def write_grades(out: Path) -> Dict[str, str]:
+    """Each graded cell's grade as its own file beside the cell
+    (``<task>/<arm>-r<n>.grade.json``), pairs and solo cells alike, so
+    ``tools/compare_runs.py --grade`` can read one per run. A grade that was
+    withheld or is unverified is not written. Returns cell name to file."""
+    cells = list(json.loads((out / "manifest.json").read_text())["cells"])
+    if (out / SOLO_RECORD).exists():
+        cells += json.loads((out / SOLO_RECORD).read_text())["cells"]
+    written = {}
+    for cell in cells:
+        if not isinstance(cell.get("grade"), dict) or cell.get("grade_unverified") or cell.get("integrity"):
+            continue
+        target = out / (cell["name"] + ".grade.json")
+        target.write_text(json.dumps(cell["grade"], indent=2) + "\n")
+        written[cell["name"]] = str(target)
+    return written
+
+
+def compare_commands(out: Path) -> List[List[str]]:
+    """One ``tools/compare_runs.py`` command per task and repeat that has a
+    solo cell with a run folder: the solo run first, then each pair cell
+    that ran, with the grade files ``write_grades`` wrote."""
+    if not (out / SOLO_RECORD).exists():
+        return []
+    grades = write_grades(out)
+    pair = json.loads((out / "manifest.json").read_text())["cells"]
+    tool = str(Path(__file__).resolve().parents[1] / "compare_runs.py")
+    commands = []
+    for cell in json.loads((out / SOLO_RECORD).read_text())["cells"]:
+        if not cell.get("run_dir"):
+            continue
+        row = [cell] + [c for c in pair if c["task"] == cell["task"] and c["repeat"] == cell["repeat"]
+                        and c.get("run_dir")]
+        if len(row) < 2:
+            continue  # nothing to compare it with yet
+        commands.append([sys.executable, "-I", tool, *[c["run_dir"] for c in row],
+                         *[arg for c in row for arg in ("--grade", grades.get(c["name"], "-"))]])
+    return commands
 
 
 def _read_cell(cell: dict) -> dict:
@@ -877,6 +1114,14 @@ def main(argv=None) -> int:
                    help="continue past a recorded series stop; the reason is recorded on the manifest")
     c = sub.add_parser("collect")
     c.add_argument("--out", type=Path, required=True)
+    s = sub.add_parser("solo", help="the third arm: one model alone on each task's frozen goal")
+    s.add_argument("--out", type=Path, required=True)
+    s.add_argument("--model", required=True, help="an unrestricted roster key, for example claude:opus")
+    s.add_argument("--only", help="run only this task id's solo cell")
+    s.add_argument("--fix-rounds", type=int, default=1,
+                   help="editing calls a failing gate may buy the model (default 1, as a lead gets)")
+    s.add_argument("--override-stop", metavar="REASON", default=None,
+                   help="continue past a recorded solo stop; the reason is recorded")
     args = parser.parse_args(argv)
     if not args.out.is_absolute():
         parser.error("--out must be absolute")
@@ -888,6 +1133,15 @@ def main(argv=None) -> int:
         print(json.dumps({c["name"]: c["state"] for c in manifest["cells"]}, indent=2))
         if manifest.get("stopped"):
             print(f"series stopped: {manifest['stopped']['reason']} (after {manifest['stopped']['after']})")
+    elif args.command == "solo":
+        import shlex
+        record = solo(args.out, model=args.model, only=args.only, fix_rounds=args.fix_rounds,
+                      override_stop=args.override_stop)
+        print(json.dumps({c["name"]: c["state"] for c in record["cells"]}, indent=2))
+        if record.get("stopped"):
+            print(f"solo arm stopped: {record['stopped']['reason']} (after {record['stopped']['after']})")
+        for command in compare_commands(args.out):
+            print(shlex.join(command))
     else:
         print(render(collect(args.out)))
     return 0

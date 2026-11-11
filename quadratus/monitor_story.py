@@ -380,6 +380,10 @@ def _run_outcome(status, budget, last):
         return 'Completed — goal recorded as met', 'confirmed', 'Quadratus recorded the overall goal as complete.'
     if terminal == 'listed tasks complete':
         return 'Planned tasks finished — overall review not run', 'idle', 'The listed tasks finished. This run did not review the overall goal.'
+    if terminal == 'baseline, not judged':
+        # One model alone (quadratus.baseline): the tests are shown in their
+        # own box, and nothing here reviewed the goal.
+        return 'Baseline run: one model alone, goal not judged', 'idle', 'One model worked alone. Nothing in this run reviewed the overall goal.'
     reason = str(status.get('stop_reason', ''))
     match = re.search(r'timed out after (\d+)s', reason)
     if match:
@@ -574,7 +578,9 @@ def _render_story(status):
         checking = any(e.get('kind') == 'check-started' for e in active[-3:])
         progress = f'<div class="qm-big">{"Testing the changes" if checking else "In progress"}</div>{now}'
     elif finished:
-        progress = '<div class="qm-big">' + ('Finished' if terminal == 'complete' else 'Stopped') + '</div>'
+        progress = '<div class="qm-big">' + ('Finished' if terminal == 'complete' else
+                                             'Ended, not judged' if terminal == 'baseline, not judged'
+                                             else 'Stopped') + '</div>'
         last_work = next((work[_text(e.get('task'))] for e in reversed(events)
                           if e.get('kind') == 'call-started' and work.get(_text(e.get('task')))), None)
         if last_work:
@@ -663,7 +669,8 @@ def _render_story(status):
             out.append(f'<p><strong>Last saved test output:</strong> {_safe(saved_checks[-1]["summary"])}</p>')
         else:
             out.append('<p><strong>Tests:</strong> No independent test result was saved.</p>')
-        out.append(f'<p><strong>{"Result" if terminal in ("complete", "listed tasks complete") else "Why it stopped"}:</strong> {_safe(why)}</p>')
+        ended = ("complete", "listed tasks complete", "baseline, not judged")
+        out.append(f'<p><strong>{"Result" if terminal in ended else "Why it stopped"}:</strong> {_safe(why)}</p>')
         if preserved and terminal not in ('complete', 'listed tasks complete'):
             out.append('<p><strong>Still unfinished:</strong> The final team reply was saved when the run stopped. '
                        'Quadratus did not finish independently checking and accepting that reply. '

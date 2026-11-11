@@ -18,6 +18,10 @@ Three verdicts, and missing evidence is never success:
 - ``not-met``: the record itself says the run failed, stopped or left a
   requirement unmet.
 
+A baseline run (``mode: "baseline"``, one model alone) is never verified: it
+has no judge, so it is unverified when it ran clean and its gate passed, and
+not met when it stopped or its last check failed.
+
 Usage: ``python -I tools/truth_check.py RUN_DIR [--project PATH] [--json]``.
 Exit status 0 verified, 1 unverified, 2 not met. Adopted from Codex's review
 of the efficiency plan (2026-10-10): the check must look at the right tests,
@@ -397,8 +401,13 @@ def judge(run_dir, project=None) -> dict:
     except OSError:
         diff = None
 
-    # What the record itself says failed.
-    if not record.get("completed"):
+    # What the record itself says failed. A baseline run (one model alone,
+    # ``mode: "baseline"``) never claims completion, so "did not complete" is
+    # not its failure: it is unshown by construction, and can never read as
+    # verified whatever else its record says.
+    if record.get("mode") == "baseline":
+        unshown.append("baseline run: one model alone; nothing judged the goal or its requirements")
+    elif not record.get("completed"):
         failed.append("the run did not complete")
     if record.get("error"):
         failed.append(f"the run stopped with an error: {str(record['error'])[:200]}")
