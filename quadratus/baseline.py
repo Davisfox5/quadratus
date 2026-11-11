@@ -407,6 +407,13 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
     try:
         if preview['blocked']:
             raise ValueError('; '.join(preview['blocked']))
+        # A project run binds an approved policy's command checks to every
+        # task (policy.task_gate). The baseline runs the same ones, or its
+        # gate result would mean less than the policy plan it writes says
+        # (final review of the 1110 batch, run_and_surfaces 4). Inside the
+        # try: a policy that cannot be bound is a recorded stop, no call made.
+        from .policy import task_gate
+        gate = task_gate(policy, preview, gate, exclude=project.exclude)
         # Before any model call: over the bounds is a stop with no call made.
         watch.start()
         if probes:

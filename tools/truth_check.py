@@ -45,6 +45,12 @@ EXIT = {VERIFIED: 0, UNVERIFIED: 1, NOT_MET: 2}
 #: is an unshown UI claim.
 UI_SUFFIXES = (".html", ".htm", ".css", ".scss", ".sass", ".less", ".jsx", ".tsx", ".vue", ".svelte")
 VIEWS = ("desktop", "mobile")
+#: File types a check can load. A changed file of one of these in a folder
+#: the measured diff does not read means the check did not run on the
+#: measured source alone.
+_CODE_SUFFIXES = (".py", ".pyc", ".pth", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json",
+                  ".so", ".dylib", ".wasm", ".rb", ".go", ".rs", ".java", ".class", ".sh")
+
 _DIFF_FILE = re.compile(r"^(?:\+\+\+|---) (.+)$")
 _PATH = re.compile(r"[\w./-]+\.\w+")
 
@@ -548,6 +554,25 @@ def _judge(run_dir, project, failed, unshown):
         named = ", ".join(str(w.get("path")) for w in watched[:5] if isinstance(w, dict))
         unshown.append(f"an editing call changed {len(watched)} watched path(s) outside the measured "
                        f"source, which no diff or check covers: {named[:160]}")
+    # Code an editing call changed in folders the measured diff does not read
+    # (build output, tool caches). The last check ran with it present, so it
+    # did not run on the measured source alone.
+    unmeasured = record.get("unmeasured_changes")
+    if isinstance(unmeasured, dict):
+        code = sorted({str(name) for names in unmeasured.values() if isinstance(names, list)
+                       for name in names if str(name).lower().endswith(_CODE_SUFFIXES)})
+        if code:
+            unshown.append(f"an editing call changed {len(code)} code file(s) in folders the measured diff "
+                           f"does not read, and the checks ran with them present: {', '.join(code[:5])[:160]}")
+    # A watched path an earlier run left changed, which the operator accepted
+    # at this run's start. Their call to make; no diff or check of this run
+    # covers what that path holds.
+    trust = record.get("trust")
+    accepted = trust.get("watched_paths_accepted") if isinstance(trust, dict) else None
+    if isinstance(accepted, list) and accepted:
+        named = ", ".join(str(a.get("path")) for a in accepted[:5] if isinstance(a, dict))
+        unshown.append(f"the run started over {len(accepted)} watched path(s) an earlier run left changed, "
+                       f"accepted by the operator and covered by no diff or check: {named[:160]}")
     designs = record.get("design_checks") or []
     for design in designs:
         task = design.get("task")
