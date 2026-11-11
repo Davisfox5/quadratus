@@ -262,9 +262,12 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
         run_limits, survey, tasks, *effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits))]
     yield notes[0], '', []
     with ThreadPoolExecutor(max_workers=1) as pool:
+        # ``tasks``, not a second int(max_tasks): that one was unguarded, so a
+        # cleared Task limit raised TypeError out of this generator instead
+        # of reaching the runner's refusal (review 2026-11-10, gui_records 17).
         future = pool.submit(run_project, goal, folder, settings,
                              allow_writes=allow_writes, check=check,
-                             mode=mode, max_tasks=int(max_tasks),
+                             mode=mode, max_tasks=tasks,
                              forbid=forbid, declared_paths=declared_paths,
                              capture_profile=capture_profile or None,
                              extra_checks=tuple(extra_checks), readiness=readiness or None,
@@ -574,6 +577,9 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                         raise gr.Error('Open a project first.')
                     try:
                         run_limits, survey = limits_from_form(*limit_values)
+                        # The Task limit is refused here by name, in the words
+                        # the form's own summary uses, like every other limit.
+                        limit = _whole(limit, 'max_tasks', 1)
                     except ValueError as exc:
                         raise gr.Error(f'Run limits are not valid: {exc}') from exc
                     yield from run_project_ui(goal, folder, writes, command, mode, limit, settings,
@@ -673,21 +679,43 @@ def resolve_share(settings) -> bool:
 DEFAULT_GUI_PORT = 7860
 
 
-def gui_port(argv=None) -> int:
-    """The local port to serve on: ``--port N``, else ``QUADRATUS_GUI_PORT``,
-    else 7860. Raises ValueError naming the bad value."""
-    raw, source = None, "QUADRATUS_GUI_PORT"
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if "--port" in argv:
-        at = argv.index("--port")
-        raw, source = (argv[at + 1] if at + 1 < len(argv) else ""), "--port"
-    elif os.environ.get("QUADRATUS_GUI_PORT", "").strip():
-        raw = os.environ["QUADRATUS_GUI_PORT"].strip()
+def _arguments(argv=None):
+    """The parsed ``quadratus-gui`` command line.
+
+    A real parser, because the hand-rolled one read only the two-token
+    ``--port N``: ``--port=8000`` and every unknown flag were ignored in
+    silence and the GUI served on 7860 (review 2026-11-10, gui_records 16).
+    An unknown flag is now an error with the usage. ``--port`` alone still
+    reaches ``gui_port``'s own message.
+    """
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="quadratus-gui", allow_abbrev=False,
+        description="Serve the Quadratus project interface on 127.0.0.1 only.")
+    parser.add_argument("--port", nargs="?", const="", default=None, metavar="N",
+                        help="Local port, 1024 to 65535 (default: QUADRATUS_GUI_PORT, else "
+                             f"{DEFAULT_GUI_PORT}).")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Print the address and do not open it in a browser.")
+    return parser.parse_args(sys.argv[1:] if argv is None else list(argv))
+
+
+def _port_from(flag) -> int:
+    raw, source = flag, "--port"
+    if raw is None:
+        raw, source = os.environ.get("QUADRATUS_GUI_PORT", "").strip() or None, "QUADRATUS_GUI_PORT"
     if raw is None:
         return DEFAULT_GUI_PORT
-    if not raw.isdigit() or not 1024 <= int(raw) <= 65535:
+    if not (raw.isascii() and raw.isdigit() and len(raw) <= 5 and 1024 <= int(raw) <= 65535):
         raise ValueError(f"{source} must be a port number from 1024 to 65535, not {raw!r}")
     return int(raw)
+
+
+def gui_port(argv=None) -> int:
+    """The local port to serve on: ``--port N`` or ``--port=N``, else
+    ``QUADRATUS_GUI_PORT``, else 7860. Raises ValueError naming the bad
+    value; an unknown flag ends the program with the usage, as argparse does."""
+    return _port_from(_arguments(argv).port)
 
 
 def _port_busy(port: int) -> bool:
@@ -713,14 +741,103 @@ def _free_port_near(port: int, tries: int = 50):
     return None
 
 
+#: Set to 1 to serve without the per-launch access token. The Host check and
+#: the own-page check stay on; nothing turns those off.
+NO_TOKEN_ENV = "QUADRATUS_GUI_NO_TOKEN"
+
+
+def launch_token() -> Optional[str]:
+    """A fresh access token for this launch, or None when the operator turned
+    the token off with ``QUADRATUS_GUI_NO_TOKEN=1``."""
+    from .local_http import new_token
+    if os.environ.get(NO_TOKEN_ENV, "").strip().lower() in ("1", "true", "yes"):
+        return None
+    return new_token()
+
+
+def guarded_app(demo, port: int, token: Optional[str], *, favicon=None):
+    """The application a launch serves: the interface behind ``LocalGuard``.
+
+    The Project tab opens folders and runs the operator's check commands, and
+    loopback alone did not protect it: a request with ``Host: evil.example``
+    created a folder and ran ``git init`` in it, which is what a DNS
+    rebinding page or any other local user can send (review 2026-11-10,
+    gui_records 1). ``Blocks.launch()`` has no place to put a check in front
+    of every route, and its own start-up request would be refused by one, so
+    the interface is mounted on an application of our own and the whole of
+    it is wrapped. Nothing is reachable around the wrapper: pages, API
+    routes, the queue, event streams, file routes and websockets all pass
+    the Host check, the own-page check and (unless turned off) the token.
+
+    Server-side rendering is off by name: with it on, Gradio starts a Node
+    process in front of this one, on a port and with headers we do not set.
+    """
+    import fastapi
+    import gradio as gr
+
+    from .local_http import LocalGuard
+    app = fastapi.FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    gr.mount_gradio_app(app, demo, path="/", server_name="127.0.0.1", server_port=port,
+                        css=INTERFACE_CSS, ssr_mode=False,
+                        favicon_path=str(favicon) if favicon is not None else None)
+    return LocalGuard(app, port=port, token=token)
+
+
+def local_server(app, port: int):
+    """The loopback-only server for ``app``; ``.run()`` serves until stopped."""
+    import uvicorn
+    # A short grace period: the Monitor tab holds an event stream open, and
+    # without one Ctrl-C would wait for the browser to let go of it.
+    return uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning",
+                                         timeout_graceful_shutdown=3))
+
+
+def _has_desktop() -> bool:
+    # Without one, the "browser" may be a text browser that takes over the terminal.
+    return sys.platform in ("darwin", "win32") or bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def open_in_browser(url: str) -> Optional[Path]:
+    """Open ``url`` in the operator's browser, through a private file.
+
+    The address carries the access token, and a browser started with it on
+    its command line shows it to every user of the machine in the process
+    list. So the browser is given a file only this user can read (mode 0600
+    in a 0700 folder), and that file moves on to the address. Returns the
+    folder to remove when the server stops, or None when nothing was opened;
+    never raises, because the printed address always works.
+    """
+    import html
+    import tempfile
+    import webbrowser
+    if not _has_desktop():
+        return None
+    folder = None
+    try:
+        folder = Path(tempfile.mkdtemp(prefix="quadratus-gui-"))
+        page = folder / "open.html"
+        target = html.escape(url, quote=True)
+        fd = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                      f'<meta http-equiv="refresh" content="0; url={target}"><title>Quadratus</title></head>'
+                      f'<body><p><a href="{target}">Open Quadratus</a></p></body></html>')
+        webbrowser.open(page.as_uri())
+    except Exception:  # noqa: BLE001 -- opening a browser is a convenience, never a launch failure
+        pass
+    return folder
+
+
 def main(argv=None) -> int:
+    args = _arguments(argv)
     try:
         import gradio  # noqa: F401
     except ImportError:
         print("Gradio is not installed. Run: pip install gradio", file=sys.stderr)
         return 1
     try:
-        port = gui_port(argv)
+        port = _port_from(args.port)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
@@ -732,15 +849,41 @@ def main(argv=None) -> int:
               f"{how} (or set QUADRATUS_GUI_PORT).", file=sys.stderr)
         return 2
     demo = build_interface(watch_project=os.environ.get('QUADRATUS_MONITOR_PROJECT', ''))
-    favicon = brand_asset("favicon.svg")
-    print(f"Quadratus is serving on http://127.0.0.1:{port}", flush=True)
-    demo.launch(
-        server_name="127.0.0.1",
-        server_port=port,
-        css=INTERFACE_CSS,
-        share=resolve_share(Settings.from_env()),
-        favicon_path=str(favicon) if favicon is not None else None,
-    )
+    # Says so when sharing was asked for. Nothing below can share: the
+    # server binds to 127.0.0.1 and no tunnel is ever started.
+    resolve_share(Settings.from_env())
+    token = launch_token()
+    app = guarded_app(demo, port, token, favicon=brand_asset("favicon.svg"))
+    address = f"http://127.0.0.1:{port}/"
+    if token is None:
+        url = address
+        print(f"Quadratus is serving on {address} with the access token turned off ({NO_TOKEN_ENV}): "
+              "any user or program on this computer can open it and run commands as you.", flush=True)
+    else:
+        url = f"{address}?token={token}"
+        print(f"Quadratus is serving on {url}", flush=True)
+        print("Open that address: it carries this launch's access token, and the page answers "
+              f"nothing without it. ({NO_TOKEN_ENV}=1 starts without a token.)", flush=True)
+    server = local_server(app, port)
+    opened: List[Optional[Path]] = []
+    if not args.no_browser:
+        def open_when_listening():
+            import time
+            deadline = time.monotonic() + 60
+            while not server.started and not server.should_exit and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if server.started and not server.should_exit:
+                opened.append(open_in_browser(url))
+        threading.Thread(target=open_when_listening, daemon=True).start()
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        import shutil
+        for folder in opened:
+            if folder is not None:
+                shutil.rmtree(folder, ignore_errors=True)
     return 0
 
 
