@@ -189,11 +189,28 @@ class AuditMixin:
             self._review_requirements()
             if not any(r.get("reviewer") and not str(r.get("result", "")).startswith(("failed", "no reviewer"))
                        for r in self.requirement_reviews):
+                # No second vendor read the list, so nothing was judged. That
+                # is the answer an audit that did not run gives, and it takes
+                # the same road: one more try at the next DONE, then the
+                # operator. A live run with one vendor signed in ended
+                # RequirementsUnmet here, three calls after its work was done
+                # (2026-11-11).
+                missed = str((self.requirement_reviews[-1] if self.requirement_reviews else {}).get("result")
+                             or "no review was made")
+                self._audit_unavailable = ("the requirement list was not reviewed against the goal by "
+                                           f"another vendor: {missed[:200]}")
+                self._audit_misses += 1
                 self._done_refusal = (
                     "\n\n--- DONE SENT BACK ---\nThe requirement list has not been reviewed against "
-                    "the goal by another vendor (no reviewer available, or the review failed).")
+                    "the goal by another vendor (no reviewer available, or the review failed). No "
+                    "requirement was judged, so none is recorded as not met and nothing needs covering "
+                    "again. Reply DONE to have the review tried once more; if it still does not run, the "
+                    "run stops for the operator. Name a task only if work really remains.")
                 self._note("DONE sent back: requirements not independently reviewed")
                 return False
+            # The review ran, so the audit that follows starts with its own
+            # one retry: a review miss before it is not an audit miss.
+            self._audit_misses = 0
             if any(not s.startswith(("covered", "met")) for s in
                    (ledger.requirement_status.get(r, "open") for r in ledger.requirements)):
                 return self._requirements_satisfied()

@@ -1401,12 +1401,15 @@ Key design decisions already settled:
   an unfinished review unless `REVIEW: COMPLETE` stands beside it. An audit
   line is `R1: MET - citation`, and no verdict is not met.
 - **An audit that did not run is not NOT MET** (review 2026-11-10, loop_c 4;
-  `completion_decision.py`, `session.py`). No auditor from another vendor, a
-  failed auditor call, a tree that moved during the audit, or a reply with
-  no verdict for any requirement judges nothing. No status is written, DONE
-  is sent back once, and a second miss (or a miss at the task cap or on an
-  explicit list) is the operator stop `AuditUnavailable`, never
+  `completion_decision.py`, `session_audit.py`). No auditor from another
+  vendor, a failed auditor call, a tree that moved during the audit, or a
+  reply with no verdict for any requirement judges nothing. No status is
+  written, DONE is sent back once, and a second miss (or a miss at the task
+  cap or on an explicit list) is the operator stop `AuditUnavailable`, never
   `RequirementsUnmet`. Completion still needs a MET verdict per requirement.
+  The requirement list's own review takes the same road since 2026-11-11:
+  the first real engine run after the batch had one vendor signed in, and
+  ended `RequirementsUnmet` over a list nobody had read.
 - **Task ids come from one counter, and a parallel batch is read like a
   serial task** (review 2026-11-10, loop_b; `Session._next_task_id`,
   `Session._read_directives`, `batch_evidence.py`). An id is spent at
