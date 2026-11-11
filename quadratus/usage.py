@@ -100,6 +100,9 @@ class InvocationRecord:
     #: False when tokens were estimated from characters rather than reported
     #: by the CLI. Estimates rank hot spots; they do not bill.
     measured: bool
+    #: The key whose price was used when ``model`` (the name the response
+    #: reported) has none on the sheet; empty when ``model`` priced itself.
+    priced_as: str = ""
 
 
 class UsageMeter:
@@ -125,6 +128,7 @@ class UsageMeter:
         reply: str = "",
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
+        fallback_model: Optional[str] = None,
     ) -> InvocationRecord:
         """Record one call. Real token counts win; characters estimate the rest."""
         measured = input_tokens is not None and output_tokens is not None
@@ -132,7 +136,15 @@ class UsageMeter:
             input_tokens = int(len(prompt or "") / CHARS_PER_TOKEN)
         if output_tokens is None:
             output_tokens = int(len(reply or "") / CHARS_PER_TOKEN)
-        price = PRICES.get(model, DEFAULT_PRICE)
+        # ``model`` is the name the response reported. When the sheet has no
+        # price for it but has one for the key the call was made under
+        # (``fallback_model``: jev-latest answering as a dated release), that
+        # price is used and both names are kept, instead of the default price.
+        price, priced_as = PRICES.get(model), ""
+        if price is None and fallback_model and fallback_model in PRICES:
+            price, priced_as = PRICES[fallback_model], fallback_model
+        if price is None:
+            price = DEFAULT_PRICE
         cost = (
             input_tokens * price.input_per_mtok
             + output_tokens * price.output_per_mtok
@@ -143,13 +155,17 @@ class UsageMeter:
             output_tokens=output_tokens,
             cost_usd=round(cost, 6),
             measured=measured,
+            priced_as=priced_as,
         )
+        row = asdict(entry)
+        if not priced_as:
+            del row["priced_as"]  # the line a record always had
         with self._lock:
             self._records.append(entry)
             if self.path is not None:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 with self.path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(asdict(entry)) + "\n")
+                    fh.write(json.dumps(row) + "\n")
         return entry
 
     def wrap(self, invoke):
@@ -200,12 +216,14 @@ class UsageMeter:
             return "No usage recorded."
         estimated = sum(1 for r in self.records if not r.measured)
         lines = ["# Usage report (API-price counterfactual)", ""]
+        priced_as = {r.model: r.priced_as for r in self.records if r.priced_as}
         for model in sorted(rows, key=lambda m: -rows[m]["cost_usd"]):
             agg = rows[model]
             lines.append(
                 f"- {model}: {agg['calls']} calls, "
                 f"{agg['input_tokens']:,} in / {agg['output_tokens']:,} out tokens, "
                 f"${agg['cost_usd']:.4f}"
+                + (f" (priced as {priced_as[model]})" if model in priced_as else "")
             )
         lines.append("")
         lines.append(f"**Total: ${self.total_cost():.4f}**")

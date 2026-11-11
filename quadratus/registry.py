@@ -82,6 +82,9 @@ __all__ = [
     "ControlPlaneRole",
     "control_plane_model",
     "assert_floating_orchestrators",
+    "assert_senior_seats_unrestricted",
+    "cross_vendor_peers",
+    "mode_audit_gap",
 ]
 
 
@@ -559,9 +562,14 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
         "planners": ["claude:opus", "openai:gpt-5.6-sol", "grok:default"],
     },
     "collaborative": {
-        "peers": ["claude:opus", "openai:gpt-5.6-terra"],
+        # Two vendors, both full peers. Terra sat here until 2026-11-10; it
+        # is a bounded worker row (restricted, an escalation target only),
+        # so as a lead it could only hand back a patch and as a peer it
+        # could not run anything (task_kinds.seat_capabilities). Sol is the
+        # unrestricted OpenAI peer the roster defines.
+        "peers": ["claude:opus", "openai:gpt-5.6-sol"],
         "reviewers": ["claude:opus"],
-        "planners": ["claude:opus", "openai:gpt-5.6-terra"],
+        "planners": ["claude:opus", "openai:gpt-5.6-sol"],
     },
     "solo": {
         "peers": ["claude:opus"],
@@ -652,6 +660,76 @@ def assert_floating_orchestrators(chain: Optional[Sequence[str]] = None) -> None
 
 
 assert_floating_orchestrators()
+
+
+def assert_senior_seats_unrestricted(
+    rosters: Optional[Dict[str, Dict[str, List[str]]]] = None,
+    chain: Optional[Sequence[str]] = None,
+) -> None:
+    """Fail loudly if a mode or the orchestrator chain seats a bounded row.
+
+    Called at import. A ``restricted`` row is a worker call: read-only, no
+    agent loop, no direct writes. Seated as a peer, lead or planner it still
+    answers, so nothing errors; the lead can only hand back a patch and the
+    reviewer cannot run anything. Collaborative mode carried Terra that way,
+    and the one test of the rule looked at adversarial mode alone.
+    """
+    seats = [(f"mode {mode!r} {role}", key)
+             for mode, roles in (MODE_ROSTERS if rosters is None else rosters).items()
+             for role, keys in roles.items() for key in keys]
+    seats += [("the orchestrator chain", key)
+              for key in (ORCHESTRATOR_CHAIN if chain is None else chain)]
+    for where, key in seats:
+        spec = _BY_KEY.get(key)
+        if spec is None:
+            raise ValueError(f"{where} names an unknown model: {key}")
+        if spec.restricted:
+            raise ValueError(
+                f"{where} seats {key}, a restricted worker row; senior seats "
+                f"(orchestrators, leads, peers, planners) are never restricted"
+            )
+
+
+assert_senior_seats_unrestricted()
+
+
+def cross_vendor_peers(mode: str, orchestrator: str) -> List[str]:
+    """Peers of ``mode`` from a vendor other than ``orchestrator``'s.
+
+    These are the only seats that may review the requirement list or audit
+    the result: a check that shares the planner's vendor is not independent.
+    ``Session._auditor`` takes the first available one.
+    """
+    vendor = orchestrator.partition(":")[0]
+    return [p for p in MODE_ROSTERS[mode]["peers"] if p.partition(":")[0] != vendor]
+
+
+def mode_audit_gap(mode: str) -> str:
+    """Why ``mode`` cannot pass the requirements audit, or "" when it can.
+
+    Judged against the primary orchestrator, the seat a run expects to hold.
+    Solo mode seats one peer from that seat's own vendor, so with the
+    requirements ledger on nobody may review the list or audit the result:
+    every requirement is recorded not met and DONE is sent back until the
+    run stops. Callers refuse such a run before any call rather than relax
+    the cross-vendor rule. A mode the table does not know is not judged
+    here; whoever seats it reports that.
+    """
+    seat = ORCHESTRATOR_CHAIN[0]
+    if mode not in MODE_ROSTERS or cross_vendor_peers(mode, seat):
+        return ""
+    peers = ", ".join(MODE_ROSTERS[mode]["peers"]) or "no peer"
+    usable = sorted(m for m in MODE_ROSTERS if cross_vendor_peers(m, seat))
+    return (
+        f"mode '{mode}' seats only {peers}, the same vendor as the orchestrator "
+        f"({seat}). The requirements ledger needs a peer from another vendor to "
+        f"review the requirement list and to audit the result, so every "
+        f"requirement would be recorded not met and the run could not finish. "
+        f"Use mode {' or '.join(repr(m) for m in usable)}, which seat a second "
+        f"vendor. The other way out is QUADRATUS_REQUIREMENTS_LEDGER=0, which "
+        f"turns the ledger off and with it the audit."
+    )
+
 
 def peers_for(mode: str, orchestrator: str) -> List[str]:
     """Brain-trust peers for ``mode``.

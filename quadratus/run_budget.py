@@ -135,17 +135,100 @@ class RunLimits:
             raise ValueError('wall_seconds must be positive and finite')
 
 
+#: The run-limit fields a form or a command line carries, in form order.
+LIMIT_FIELDS = ('max_calls', 'max_reported_tokens', 'wall_seconds', 'max_concurrent_workers',
+                'reserve_tokens_per_call', 'max_tokens_per_call', 'recovery_tasks')
+
+#: What each field is called when a value is refused. These are the Project
+#: form's labels; the command line passes its flag names instead.
+LIMIT_LABELS = {
+    'max_tasks': 'Task limit',
+    'max_calls': 'Maximum model calls',
+    'max_reported_tokens': 'Total reported tokens',
+    'wall_seconds': 'Time limit (seconds)',
+    'max_concurrent_workers': 'Parallel workers',
+    'reserve_tokens_per_call': 'Tokens that must remain before a call starts',
+    'max_tokens_per_call': 'Stop after a single call reports more than (tokens, 0 for none)',
+    'recovery_tasks': 'Extra recovery tasks after failures (0 for none)',
+}
+
+
+def whole_number(value, label, minimum):
+    """``value`` as a whole number of at least ``minimum``, or ValueError
+    naming ``label``. Accepts what a form or a command line hands over: an
+    int, a whole float or a numeric string; never a bool, a blank or a
+    fraction."""
+    if isinstance(value, bool) or value is None or (isinstance(value, str) and not value.strip()):
+        raise ValueError(f'{label}: enter a whole number.')
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{label}: {value!r} is not a number.') from None
+    if not math.isfinite(number) or number != int(number) or number < minimum:
+        raise ValueError(f'{label} must be a whole number of at least {minimum}.')
+    return int(number)
+
+
+def limits_from_fields(enabled, fields, labels=LIMIT_LABELS):
+    """The validated RunLimits and SurveyConfig that ``fields`` describe.
+
+    One rule for the Project form and the command line, so a run is bounded
+    the same way from either. ``fields`` maps LIMIT_FIELDS names to raw
+    values and ``labels`` says what to call each when it is refused. Returns
+    ``(None, None)`` when limits are off and no recovery task is asked for,
+    which is the run made before these options existed. Raises ValueError
+    naming the field otherwise, before any project, provider or model is
+    touched.
+    """
+    from .session import SurveyConfig
+    recovery = whole_number(fields.get('recovery_tasks', 0) or 0, labels['recovery_tasks'], 0)
+    survey = SurveyConfig(recovery_tasks=recovery) if recovery else None
+    if not enabled:
+        return None, survey
+    per_call = whole_number(fields.get('max_tokens_per_call', 0) or 0, labels['max_tokens_per_call'], 0)
+    limits = RunLimits(
+        max_calls=whole_number(fields.get('max_calls'), labels['max_calls'], 1),
+        max_reported_tokens=whole_number(fields.get('max_reported_tokens'), labels['max_reported_tokens'], 1),
+        wall_seconds=whole_number(fields.get('wall_seconds'), labels['wall_seconds'], 1),
+        max_concurrent_workers=whole_number(fields.get('max_concurrent_workers'),
+                                            labels['max_concurrent_workers'], 1),
+        reserve_tokens_per_call=whole_number(fields.get('reserve_tokens_per_call', 0) or 0,
+                                             labels['reserve_tokens_per_call'], 0),
+        max_tokens_per_call=per_call or None,
+    )
+    return limits, survey
+
+
+#: The source ``effective_lead_turns`` reports for the operator's own cap.
+OPERATOR_LEAD_SOURCE = 'operator setting'
+
+
 def effective_lead_turns(operator_turns, limits):
     """The lead turn cap a run will use and where it comes from: the
     operator's ``Settings.lead_max_turns`` when set, else one derived from
     the per-call threshold when the run has limits, else none. The same rule
     ``project_run`` applies, so what is shown and saved is what runs."""
     if operator_turns is not None:
-        return operator_turns, 'operator setting'
+        return operator_turns, OPERATOR_LEAD_SOURCE
     derived = lead_turns_for(getattr(limits, 'max_tokens_per_call', None)) if limits is not None else None
     if derived:
         return derived, f'derived from the {limits.max_tokens_per_call:,}-token per-call threshold'
     return None, None
+
+
+def lead_cap_overrun(lead_turns, limits):
+    """The tokens ``lead_turns`` rounds plan for one call when that is more
+    than the per-call threshold, else None.
+
+    A derived cap never goes below MIN_LEAD_TURNS, so under a threshold
+    smaller than those rounds cost (the "Small" shape with a 150k threshold
+    plans about 480k) the cap cannot honour the threshold it was derived
+    from. The arithmetic is left alone; this only lets the text say so."""
+    ceiling = getattr(limits, 'max_tokens_per_call', None) if limits is not None else None
+    if not lead_turns or not ceiling:
+        return None
+    planned = int(lead_turns) * TURN_CONTEXT_TOKENS
+    return planned if planned > ceiling else None
 
 
 def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_source=None) -> str:
@@ -168,7 +251,9 @@ def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_s
             reserve = limits.reserve_tokens_per_call
             parts.append(f'An ordinary call starts only while at least {reserve:,} tokens of the total '
                          f'remain; a one-turn summary call on a CLI whose flags hold it to one turn '
-                         f'(Claude, Grok) needs {min(reserve, SUMMARY_CALL_RESERVE_TOKENS):,}.')
+                         f'(Claude, Grok) needs {min(reserve, SUMMARY_CALL_RESERVE_TOKENS):,}. '
+                         'While a call is running, the amount it needed to start stays set aside, so '
+                         'a second call at the same time needs its own amount on top.')
         if limits.max_tokens_per_call:
             parts.append(f'A single call that reports more than {limits.max_tokens_per_call:,} tokens '
                          'stops the run after it returns; it cannot cut that call short.')
@@ -177,6 +262,16 @@ def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_s
     if lead_turns:
         parts.append(f'Lead turn cap: {lead_turns} rounds per lead or reviewer call ({lead_source}); '
                      'Codex seats have no turn flag and are not held to it.')
+        overrun = lead_cap_overrun(lead_turns, limits)
+        if overrun:
+            parts.append(
+                f'At about {TURN_CONTEXT_TOKENS:,} tokens a round, {lead_turns} rounds plan about '
+                f'{overrun:,} tokens for one call, more than the {limits.max_tokens_per_call:,}-token '
+                'per-call threshold: this cap does not keep a call under that threshold, and the '
+                'threshold still stops the run only after such a call returns.'
+                + (f' A derived cap is never below {MIN_LEAD_TURNS} rounds, which fit only in a '
+                   f'threshold of at least {MIN_LEAD_TURNS * TURN_CONTEXT_TOKENS:,} tokens.'
+                   if lead_source != OPERATOR_LEAD_SOURCE else ''))
     if survey is not None:
         parts.append(f'Recovery: up to {survey.recovery_tasks} extra continuation or repair task(s) '
                      'after failures.')
@@ -200,6 +295,13 @@ class RunBudget:
         self._responses = []
         self._oversized = []
         self._shaped = 0
+        self._price_fallbacks = {}
+
+    def _held(self):
+        """Tokens set aside for calls still running: the reserve each was
+        admitted with. They have reported nothing yet, so this much of the
+        remaining budget is already spoken for."""
+        return sum(reserve for _, _, reserve in self._active.values())
 
     def _snapshot(self):
         return {
@@ -208,14 +310,18 @@ class RunBudget:
             'api_cost_overshoot_usd': float(max(Decimal(0), self._api_cost - Decimal(str(self.limits.max_cost_usd or 0)))),
             'unknown_api_cost_attempts': self._unknown_cost,
             'cost_boundary': 'configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded',
-            'in_flight': len(self._active), 'input_tokens': self._input,
+            'in_flight': len(self._active), 'in_flight_reserved_tokens': self._held(),
+            'api_price_fallbacks': [dict(reported_model=reported, priced_as=priced_as, attempts=count)
+                                    for (reported, priced_as), count in self._price_fallbacks.items()],
+            'input_tokens': self._input,
             'output_tokens': self._output,
             'reported_tokens': self._input + self._output,
             'unknown_usage_attempts': self._unknown, 'stop_reason': self._reason,
             'preserved_responses': list(self._responses),
             'elapsed_seconds': max(0, self._clock() - self._started),
             'token_boundary': 'post-return threshold; in-flight calls can overshoot',
-            'reserve_boundary': ('no attempt starts unless the remaining token budget covers '
+            'reserve_boundary': ('no attempt starts unless the remaining token budget, less the '
+                                 'reserve each in-flight call was admitted with, covers '
                                  'reserve_tokens_per_call; a call that reports more than '
                                  'max_tokens_per_call stops the run after it returns'),
             'oversized_calls': list(self._oversized),
@@ -264,6 +370,11 @@ class RunBudget:
         the smaller of the operator's reserve and that allowance. It is not a
         hard size bound. It never raises the reserve, and the post-return
         threshold is unchanged.
+
+        The reserve is asked of what is left after the calls still running:
+        each ticket holds the reserve it was admitted with until it finishes
+        (three parallel attempts were each admitted on the same 500k of
+        headroom against a 400k reserve before this).
         """
         with self._lock:
             self._check()
@@ -279,14 +390,16 @@ class RunBudget:
             if reserve and expected_tokens and 0 < expected_tokens < reserve:
                 reserve = int(expected_tokens)
                 self._shaped += 1
-            if reserve and self.limits.max_reported_tokens - (self._input + self._output) < reserve:
-                # Refused before the call: the budget left could not hold a
-                # call of the size the operator said to expect.
+            remaining = self.limits.max_reported_tokens - (self._input + self._output) - self._held()
+            if reserve and remaining < reserve:
+                # Refused before the call: the budget left, after what the
+                # calls in flight were admitted on, could not hold a call of
+                # the size the operator said to expect.
                 self._reason = 'reported_token_reserve'
                 self._check()
             self._calls += 1
             ticket = self._calls
-            self._active[ticket] = (transport, price_key)
+            self._active[ticket] = (transport, price_key, reserve)
             try:
                 self._persist()
             except RunBudgetExceeded:
@@ -300,7 +413,7 @@ class RunBudget:
         with self._lock:
             if ticket not in self._active:
                 raise RuntimeError('Unknown or already-finished budget reservation')
-            transport, reserved_key = self._active.pop(ticket)
+            transport, reserved_key, _ = self._active.pop(ticket)
             usage = usage if isinstance(usage, dict) else {}
             counts = [usage.get('input_tokens'), usage.get('output_tokens')]
             if any(type(n) is not int or n < 0 for n in counts):
@@ -318,7 +431,18 @@ class RunBudget:
                 if self._input + self._output >= self.limits.max_reported_tokens:
                     self._reason = self._reason or 'reported_token_threshold'
             if self.limits.max_cost_usd is not None and transport == 'api':
-                rate = self._rates.get(price_key or reserved_key)
+                reported = price_key or reserved_key
+                rate = self._rates.get(reported)
+                if rate is None and reserved_key and reserved_key != reported:
+                    # The response named a model the operator gave no rate for
+                    # (jev-latest answered as jev-1.13.0). The call was
+                    # admitted under the reserved key's rate, so it is priced
+                    # there and both names are kept. With no reserved key
+                    # there is nothing to fall back to and the stop stands.
+                    rate = self._rates.get(reserved_key)
+                    if rate is not None:
+                        pair = (reported, reserved_key)
+                        self._price_fallbacks[pair] = self._price_fallbacks.get(pair, 0) + 1
                 if rate is None or any(type(n) is not int or n < 0 for n in counts):
                     self._unknown_cost += 1
                     self._reason = self._reason or 'unknown_api_cost'

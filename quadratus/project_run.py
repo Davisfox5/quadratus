@@ -53,6 +53,7 @@ def _project_lock(project):
 
 
 def run_project(goal, project, settings, *, allow_writes=False, check='',
+                session_options=None,
                 state_dir=None, max_tasks=20, mode='adversarial',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
@@ -96,6 +97,16 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         raise ValueError("decider_labels must be 'unstated' or 'all'")
     if max_tasks < 1:
         raise ValueError('max_tasks must be at least 1')
+    # Refused here, before the lock or any call. A mode with no peer from a
+    # vendor other than the orchestrator's cannot pass the requirements audit
+    # (registry.mode_audit_gap), and a session setting outside the table or
+    # under its floor is a caller's mistake (session_knobs).
+    from .registry import mode_audit_gap
+    from .session_knobs import session_options as _checked_options
+    audit_gap = mode_audit_gap(mode)
+    if audit_gap and SessionConfig(mode=mode).requirements_ledger:
+        raise ValueError(audit_gap)
+    session_options = _checked_options(session_options)
     if tasks is not None:
         tasks = list(tasks)
         if not tasks or any(not str(t).strip() for t in tasks):
@@ -137,6 +148,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     default_scope=default_scope,
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
+                    session_options=session_options,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
@@ -325,6 +337,7 @@ def _merge_extras(gates, extras):
 
 
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
+         session_options=None,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
@@ -399,6 +412,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         decider_labels=decider_labels,
         repair_tests=tuple(repair_tests), test_changes=tuple(test_changes or ()),
     )
+    # Session settings the caller chose (session_knobs); none is the old run.
+    for name, value in (session_options or {}).items():
+        setattr(config, name, value)
+    if session_options and progress:
+        progress('Session settings: ' + ', '.join(f'{k}={v}' for k, v in sorted(session_options.items())))
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
     (run_dir / 'policy-plan.json').write_text(json.dumps(preview, indent=2), encoding='utf-8')
