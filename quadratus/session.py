@@ -1504,10 +1504,15 @@ def _parallel_request(limit: int) -> str:
         "then each task as a complete block (KIND, SCOPE, COVERS and description), "
         "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
         "wildcards, and no file may appear in two blocks. Work that shares a file stays "
-        "one task at a time. A task that RESOLVES a finding, and a task the harness "
-        "captures, are named alone, never in a batch. A batch that breaks any of these "
+        "one task at a time. A batch that breaks any of these "
         "rules is not run in parallel: its first block runs alone and the rest are "
-        "dropped, so name them again next round."
+        "dropped, so name them again next round. A task that RESOLVES a finding, and a task the harness "
+        "captures, are named alone, never in a batch; so is a task that CONTINUES "
+        "another. A batch holding one of those is sent back whole and none of it runs. "
+        "Each block is otherwise held to the single-task rules, and a block refused "
+        "under one of them sends the whole batch back. A block that repeats a task "
+        "named in the previous round, or a task that repeats a block of the previous "
+        "round's batch, stops the run."
     )
 
 
@@ -1960,7 +1965,9 @@ def _tier_request(max_lines: int) -> str:
         "that one file: a write anywhere else, including under a declared path, is out of "
         "scope. A refused label runs the task normally and records "
         "why; the label proves nothing about risk on its own. A task carries one TIER line: "
-        "two that disagree are sent back once for correction."
+        "two that disagree are sent back once for correction. A direct task is named alone: "
+        "a PARALLEL batch runs no check for one task, so a batch holding the label is sent "
+        "back whole and none of it runs."
     )
 
 
@@ -2028,6 +2035,24 @@ _HYPOTHESIS_REQUEST = (
     "is the operator's: {left} continuation or repair task(s) remain, and a continuation "
     "that fails the same way as its predecessor with nothing new changed stops the run."
 )
+
+
+@dataclass(frozen=True)
+class _Intake:
+    """What one named task's directive lines said (Session._read_directives).
+
+    ``spec`` is the task without those lines, its requested tier set.
+    ``refused`` is "" when the task may be dispatched, else which check
+    refused it: ``covers``, ``resolves``, ``handoff`` (the harness has already
+    verified what the task would verify), ``capture``, or ``batch`` (a line a
+    parallel batch cannot honour). ``problem`` is that check's own text."""
+    spec: "TaskSpec"
+    continues: Optional[str] = None
+    covers: List[str] = field(default_factory=list)
+    #: None when the task carries no RESOLVES line; the raw tokens otherwise.
+    resolves: Optional[List[str]] = None
+    refused: str = ""
+    problem: str = ""
 
 
 def _handoff_note(record: dict) -> str:
@@ -2366,6 +2391,13 @@ class Session:
         self._leads_by_vendor: dict = {}
         self._batch: List[TaskSpec] = []
         self.parallel_batches: List[dict] = []
+        #: How many task ids this run has issued. Ids come from this counter,
+        #: never from the length of the history: a parallel child that failed
+        #: or was not merged leaves no history entry, and its id is still spent.
+        self._ids_issued = 0
+        #: The task texts dispatched in the previous round (one task, or every
+        #: block of a batch). Naming one of them again is the same-task stall.
+        self._named_last: tuple = ()
         self._design_note = ""
         #: Evidence files the current task's review calls are handed.
         self._review_evidence: List[str] = []
@@ -3757,6 +3789,8 @@ class Session:
         # P3.4: an unmerged parallel child's finding was otherwise untyped).
         prior, self._outcome = self._outcome, outcome
         self.task_outcomes.append(outcome)
+        # The id is spent from here on, whatever becomes of the task.
+        self._issue_task_id(spec.task_id)
         self._contract = None
         self._task_gate = None
         self._task_outer = None
@@ -4989,7 +5023,7 @@ class Session:
         index = self.explicit["listed"] - len(self._explicit_tasks) + 1
         self._explicit_index = index
         text = self._explicit_tasks.pop(0)
-        task_id = f"t{len(self.history) + 1}"
+        task_id = self._next_task_id()
         self._note(f"listed task {index} of {self.explicit['listed']} runs as {task_id}")
         spec, problem = self._read_listed(self._absorb_requirements(text), task_id)
         if spec is None:
@@ -5072,7 +5106,7 @@ class Session:
                 requirements = dict(found)
             elif found:
                 problems.append((index, "REQUIREMENTS may be listed once, on the first text"))
-            spec, problem = self._read_listed(rest, f"t{len(self.history) + index}", dry_run=True)
+            spec, problem = self._read_listed(rest, self._next_task_id(index - 1), dry_run=True)
             if spec is None:
                 problems.append((index, problem))
                 continue
@@ -5122,7 +5156,7 @@ class Session:
         if not wanted:
             return meta
         from .decisions import DecisionsUnavailable, describe
-        task_id = task_id or f"t{len(self.history) + 1}"
+        task_id = task_id or self._next_task_id()
         context = (meta.description or "")[:8000]
         updates, notes = {}, list(meta.notes)
         for key, attr, answers in wanted:
@@ -5208,7 +5242,7 @@ class Session:
                     + ("\n\n" + once(_SCOPE_REQUEST, "SCOPE")
                        if self.project and self.config.allow_writes else "")
                     + ("\n\n" + once(_CAPTURE_SCOPE_REQUEST, "capture")
-                       + f" This task's id will be t{len(self.history) + 1}."
+                       + f" This task's id will be {self._next_task_id()}."
                        if self._capture_guidance() else "")
                     + self._operator_limits_note()
                     + self._survey_request()
@@ -5364,7 +5398,7 @@ class Session:
             )
         try:
             return TaskSpec(
-                task_id=f"t{len(self.history) + 1}",
+                task_id=self._next_task_id(),
                 description=description,
                 kind=meta.kind,
                 complexity=meta.difficulty,
@@ -5585,7 +5619,7 @@ class Session:
                 return []
             # Approved: the plan rides into every decision (see _plan_note).
             self._approved_plan = getattr(self, "_planned", None)
-        previous_description: Optional[str] = None
+        self._named_last = ()
         # Slots, not iterations: a parallel batch spends one slot per task, so
         # the cap bounds tasks run however they are grouped (Codex review of
         # #25: a 3-task batch used to cost one slot).
@@ -5608,7 +5642,6 @@ class Session:
                 batch = None
             if batch:
                 used += len(batch) - 1
-                previous_description = None
                 if not self._run_batch(batch):
                     # Sent back before any lead call (map G6): the same as a
                     # serial send-back, one slot spent, not one per task, and
@@ -5654,34 +5687,14 @@ class Session:
                 elif name not in ("FindingsUnresolved", "RequirementsUnmet", "AuditUnavailable"):
                     self._note("the orchestrator reports the goal met")
                 break
-            if spec.description == previous_description:
-                raise RunStalled(
-                    f"the orchestrator named the same task twice in a row: "
-                    f"{spec.description!r}. The last close-out did not move "
-                    f"its view forward. Improve the summary, narrow the goal, "
-                    f"or intervene before re-running."
-                )
-            previous_description = spec.description
-            self._note(
-                f"task {len(self.history) + 1}: {spec.description} "
-                f"[{spec.kind}/{spec.complexity}]"
-            )
-            continues, spec = _read_continues(spec)
-            requested_tier, spec = _read_tier(spec)
-            spec = replace(spec, tier=requested_tier)
-            hypothesis, spec = _read_hypothesis(spec)
-            if self.config.survey is not None and (hypothesis is not None or self._survey_after_failure()):
-                # Diagnostic text, never a rule the reply can fail on (Codex on
-                # the survey design): an omitted line is recorded as omitted.
-                self.survey["hypotheses"].append(dict(
-                    task=spec.task_id, after=self.history[-1].task_id if self.history else None,
-                    text=hypothesis[:600] if hypothesis else None))
-                if hypothesis:
-                    self.store.put(hypothesis, kind="hypothesis",
-                                   author="operator" if self._explicit_tasks is not None else self.seat().key)
-                self._note(f"hypothesis for {spec.task_id}: {(hypothesis or 'none stated')[:160]}")
-            covers, spec = _read_covers(spec)
-            problem = self._covers_problem(covers)
+            # One reading of the task's directive lines, shared with every
+            # block of a parallel batch (Session._read_directives); the
+            # send-backs below stay the serial loop's own.
+            named = spec.description
+            intake = self._read_directives(spec)
+            self._named_last = (named,)
+            continues, spec, covers, resolves = intake.continues, intake.spec, intake.covers, intake.resolves
+            problem = intake.problem if intake.refused == "covers" else ""
             if problem:
                 # Corrected before any lead call is spent (Codex review of #25).
                 self._refuse_listed(spec, problem)
@@ -5690,12 +5703,9 @@ class Session:
                     raise RunStalled(f"the orchestrator kept naming tasks without valid COVERS: {problem}")
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again "
                                       "with a COVERS line using the listed requirement ids.")
-                previous_description = None
+                self._named_last = ()
                 continue
-            lines = len(_RESOLVES.findall(spec.description or ""))
-            resolves, spec = _read_resolves(spec)
-            problem = (self._resolves_problem(resolves, covers, spec) if lines <= 1 else
-                       "RESOLVES appears on more than one line; name every finding on one line.")
+            problem = intake.problem if intake.refused == "resolves" else ""
             if problem:
                 # The same allowance as COVERS: refused before any lead call.
                 self._refuse_listed(spec, problem)
@@ -5703,9 +5713,9 @@ class Session:
                 if self._covers_corrections["resolves"] > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks with an invalid RESOLVES: {problem}")
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
-                previous_description = None
+                self._named_last = ()
                 continue
-            handoff = self._verification_handoff(spec, covers, resolves, continues)
+            handoff = intake.problem if intake.refused == "handoff" else None
             if handoff is not None:
                 # Before any lead call: the harness has already verified this
                 # source, so the requirements wait for the final audit, which
@@ -5716,16 +5726,16 @@ class Session:
                     raise RunStalled("the orchestrator kept naming verification-only tasks over a source "
                                      "the harness had already verified")
                 self._done_refusal = handoff
-                previous_description = None
+                self._named_last = ()
                 continue
-            problem = self._capture_problem(spec, resolves)
+            problem = intake.problem if intake.refused == "capture" else ""
             if problem:
                 self._refuse_listed(spec, problem)
                 self._covers_corrections["capture"] += 1
                 if self._covers_corrections["capture"] > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming UI tasks without a valid capture: {problem}")
                 self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
-                previous_description = None
+                self._named_last = ()
                 continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
             self._resolution_candidate = None
@@ -5765,7 +5775,7 @@ class Session:
                 counted = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
                 if counted is not None:
                     self._breaker_counted.append(counted)
-                self._note(f"task {len(self.history)} "
+                self._note(f"task {self._task_number(spec.task_id)} "
                            + ("stopped at the lead's turn limit" if unfinished == "turn_limited"
                               else "failed on its own rules")
                            + "; its work is kept and the orchestrator re-plans")
@@ -5820,7 +5830,7 @@ class Session:
                     requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
             check_debt = self._record_check_debt(spec, covers)
             self._current_covers, self._current_resolves = [], []
-            self._note(f"task {len(self.history)} closed by {summary.author}")
+            self._note(f"task {self._task_number(spec.task_id)} closed by {summary.author}")
             if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed'] and not check_debt):
                 self._name_findings_stop({spec.task_id})
                 break
@@ -6749,6 +6759,113 @@ class Session:
         if self._outcome is not None:
             self._outcome.delivery = dict(reviewer=reviewer, files=dict(hashes))
 
+    def _next_task_id(self, offset: int = 0) -> str:
+        """The id the next dispatched task gets; ``offset`` counts on for the
+        later blocks of a batch. Read from the run's own counter, never from
+        the history (review 1110, session second half, item 2): an unmerged
+        parallel child has no history entry and its id is still spent. Naming
+        a task does not spend an id, so a task sent back and named again keeps
+        the id the orchestrator was told; dispatch spends it."""
+        return f"t{self._ids_issued + 1 + offset}"
+
+    def _issue_task_id(self, task_id: str) -> None:
+        """Spend ``task_id``: the counter moves past it and never comes back,
+        whether the task closes, fails, raises or is not merged."""
+        match = re.fullmatch(r"t(\d+)", task_id or "")
+        self._ids_issued = max(self._ids_issued + 1, int(match.group(1)) if match else 0)
+
+    @staticmethod
+    def _task_number(task_id: str) -> str:
+        """``t7`` as ``7`` for the progress notes, which the monitor reads
+        back as a task id; any other id as written."""
+        return task_id[1:] if re.fullmatch(r"t\d+", task_id or "") else str(task_id)
+
+    def _read_directives(self, spec, *, batch: bool = False) -> _Intake:
+        """Read the directive lines off one named task and say what, if
+        anything, refuses it before a lead call is spent.
+
+        The one reading for a serial task and for each block of a parallel
+        batch (review 1110, session second half, item 15: the batch kept its
+        own copy and drifted, so TIER and HYPOTHESIS lines stayed in the text
+        its lead recited and three checks never ran). In order: the same task
+        named again, the lines themselves (CONTINUES, TIER, HYPOTHESIS,
+        COVERS, RESOLVES), then COVERS, RESOLVES, the verification hand-off
+        and the capture declaration. The caller words and counts the
+        send-back; nothing here does.
+
+        ``batch``: a forked child has no ledger to settle a finding in, no
+        check of its own to finish a capped task's or to admit the direct
+        tier on, and no preview to capture from. A block that asks for one of
+        those is refused here rather than run without it.
+        """
+        if spec.description in self._named_last:
+            raise RunStalled(
+                f"the orchestrator named the same task twice in a row: "
+                f"{spec.description!r}. The last close-out did not move "
+                f"its view forward. Improve the summary, narrow the goal, "
+                f"or intervene before re-running."
+            )
+        if not batch:
+            self._note(
+                f"task {self._task_number(spec.task_id)}: {spec.description} "
+                f"[{spec.kind}/{spec.complexity}]"
+            )
+        continues, spec = _read_continues(spec)
+        requested_tier, spec = _read_tier(spec)
+        spec = replace(spec, tier=requested_tier)
+        hypothesis, spec = _read_hypothesis(spec)
+        if self.config.survey is not None and (hypothesis is not None or self._survey_after_failure()):
+            # Diagnostic text, never a rule the reply can fail on (Codex on
+            # the survey design): an omitted line is recorded as omitted.
+            self.survey["hypotheses"].append(dict(
+                task=spec.task_id, after=self.history[-1].task_id if self.history else None,
+                text=hypothesis[:600] if hypothesis else None))
+            if hypothesis:
+                self.store.put(hypothesis, kind="hypothesis",
+                               author="operator" if self._explicit_tasks is not None else self.seat().key)
+            self._note(f"hypothesis for {spec.task_id}: {(hypothesis or 'none stated')[:160]}")
+        covers, spec = _read_covers(spec)
+        lines = len(_RESOLVES.findall(spec.description or ""))
+        resolves, spec = _read_resolves(spec)
+        intake = _Intake(spec=spec, continues=continues, covers=covers, resolves=resolves)
+        if batch:
+            problem = ""
+            if resolves is not None:
+                # Findings are resolved by one serial task with its own
+                # verified renders; a forked child has no ledger to close them.
+                problem = "RESOLVES is not supported in a parallel batch; name that task alone."
+            elif continues:
+                # A continuation takes over the capped task's debt, its
+                # required check included, and a child runs none: such a run
+                # ended CompletionUnproven after the batch had been paid for.
+                problem = "CONTINUES is not supported in a parallel batch; name that task alone."
+            elif requested_tier == "direct" and self.config.direct_tier:
+                # Admission needs a check for the task itself; a child has
+                # none (the gate runs once, on the merged tree), so the label
+                # would be refused for a reason that is the batch's, not the
+                # task's. With the tier off the label is refused and recorded
+                # in the child exactly as a serial task's is.
+                problem = ("TIER: direct is not supported in a parallel batch; name that task alone, "
+                           "or drop the line to run it in the batch with review.")
+            elif self.config.capture_profile is not None and is_design_task(spec):
+                problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
+            if problem:
+                return replace(intake, refused="batch", problem=problem)
+        problem = self._covers_problem(covers)
+        if problem:
+            return replace(intake, refused="covers", problem=problem)
+        problem = (self._resolves_problem(resolves, covers, spec) if lines <= 1 else
+                   "RESOLVES appears on more than one line; name every finding on one line.")
+        if problem:
+            return replace(intake, refused="resolves", problem=problem)
+        handoff = self._verification_handoff(spec, covers, resolves, continues)
+        if handoff is not None:
+            return replace(intake, refused="handoff", problem=handoff)
+        problem = self._capture_problem(spec, resolves)
+        if problem:
+            return replace(intake, refused="capture", problem=problem)
+        return intake
+
     def _parallel_enabled(self) -> bool:
         policy = self.config.repository_policy
         return bool(self.config.fork and self.config.max_parallel_tasks > 1 and self.project
@@ -6763,6 +6880,11 @@ class Session:
             try:
                 meta = self._absorb_orientation(_read_metadata(block), seat)
                 scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+                # Built once here, before any paid routing decision, so a
+                # block the task record itself refuses (an unknown NEEDS)
+                # falls back like any other invalid block instead of raising
+                # raw out of next_task.
+                TaskSpec(task_id=self._next_task_id(i), description=description, scope=scope)
                 parsed.append((meta, scope, description))
             except (AmbiguousMetadata, ValueError) as exc:
                 self._note(f"parallel batch not run: block {i + 1} is not a valid task ({str(exc)[:120]})")
@@ -6774,7 +6896,7 @@ class Session:
             return None
         seen: set = set()
         for i, (_, scope, _) in enumerate(parsed):
-            task_id = f"t{len(self.history) + 1 + i}"
+            task_id = self._next_task_id(i)
             paths = _literal_paths(scope)
             if paths is None:
                 self._note(f"parallel batch not run: {task_id} has no exact file list")
@@ -6788,7 +6910,7 @@ class Session:
         # routed once there, never twice.
         specs = []
         for i, (meta, scope, description) in enumerate(parsed):
-            task_id = f"t{len(self.history) + 1 + i}"
+            task_id = self._next_task_id(i)
             meta = self._route_with_decider(meta, task_id=task_id)
             specs.append(TaskSpec(task_id=task_id, description=description, kind=meta.kind,
                                   complexity=meta.difficulty, metadata_confidence=meta.confidence,
@@ -6812,32 +6934,36 @@ class Session:
         from .project import Project
         from .run_budget import RunBudgetExceeded
         parsed = []
-        for spec in specs:
-            continues, spec = _read_continues(spec)
-            covers, spec = _read_covers(spec)
-            problem = self._covers_problem(covers)
-            if _read_resolves(spec)[0] is not None:
-                # Findings are resolved by one serial task with its own
-                # verified renders; a forked child has no ledger to close them.
-                problem = "RESOLVES is not supported in a parallel batch; name that task alone."
-            elif self.config.capture_profile is not None and is_design_task(spec):
-                problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
-            else:
-                problem = problem or self._capture_problem(spec, None)
-            if problem:
-                self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} Name the "
-                                      "tasks again with COVERS lines using the listed requirement ids.")
+        for named in specs:
+            # The serial loop's own reading of the directive lines, with the
+            # lines a forked child cannot honour refused (_read_directives).
+            intake = self._read_directives(named, batch=True)
+            spec = intake.spec
+            if intake.refused:
+                # The hand-off arrives under its serial heading; a batch has its own.
+                problem = intake.problem.rpartition("--- TASK NOT DISPATCHED ---\n")[2]
+                again = {"covers": "Name the tasks again with COVERS lines using the listed requirement ids.",
+                         "handoff": "None of the batch ran; name its other tasks again without that one."
+                         }.get(intake.refused, "None of the batch ran; name the tasks again.")
+                self._done_refusal = f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} {again}"
+                self._named_last = ()
                 return False
             chosen, self._dispatch_lead = self._dispatch_lead, None
             lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
-            parsed.append((replace(spec, lead=lead), covers, continues))
-        self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _, _ in parsed))
+            parsed.append((replace(spec, lead=lead), intake.covers))
+        # Dispatched from here. The ids are spent whatever each child returns
+        # (a child that raises or is not merged leaves no history entry), and
+        # these are the texts a repeat next round is measured against.
+        for named in specs:
+            self._issue_task_id(named.task_id)
+        self._named_last = tuple(named.description for named in specs)
+        self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _ in parsed))
         project = Project(self.project, exclude=self.config.project_excludes)
         base = project.contents()
-        record = dict(tasks=[s.task_id for s, _, _ in parsed], leads=[s.lead for s, _, _ in parsed])
+        record = dict(tasks=[s.task_id for s, _ in parsed], leads=[s.lead for s, _ in parsed])
         with contextlib.ExitStack() as stack:
             children, roots = [], []
-            for spec, _, _ in parsed:
+            for spec, _ in parsed:
                 root = stack.enter_context(project.snapshot())
                 invoke, close = self.config.fork(root)
                 stack.callback(close)
@@ -6846,17 +6972,22 @@ class Session:
                     self.config, project=root, integration_gate=None, requirements_ledger=False,
                     max_parallel_tasks=1, fork=None,
                     progress=(lambda message, tag=tag: self._note(f"[{tag}] {message}")))
+                # Standing rules and operator rulings are re-emitted on every
+                # render, a child's included: its lead is bound by them like
+                # any other. Its ledger of completed work stays its own, empty.
                 child = Session(self.memory.goal, self.store, invoke, config=child_config,
+                                invariants=list(self.memory.ledger.invariants),
                                 available=self._available)
+                child.memory.ledger.rulings = list(self.memory.ledger.rulings)
                 children.append(child)
                 roots.append(root)
             started = time.monotonic()
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(children)) as pool:
                 # Record-only: a child's ledger is off, so its COVERS feed its
                 # contract and snapshot without any audit-debt decision.
-                for child, (_, covers, _) in zip(children, parsed, strict=True):
+                for child, (_, covers) in zip(children, parsed, strict=True):
                     child._current_covers = list(covers)
-                futures = [pool.submit(child.run_task, spec) for child, (spec, _, _) in zip(children, parsed, strict=True)]
+                futures = [pool.submit(child.run_task, spec) for child, (spec, _) in zip(children, parsed, strict=True)]
                 outcomes = []
                 for future in futures:
                     try:
@@ -6865,7 +6996,10 @@ class Session:
                         outcomes.append((None, exc))
             record["seconds"] = round(time.monotonic() - started, 1)
             fatal = None
-            for (spec, covers, continues), child, root, (summary, exc) in zip(
+            # Merged children whose renders stand as verified: checked again
+            # after the merge gate, which can change what they show.
+            rendered = []
+            for (spec, covers), child, root, (summary, exc) in zip(
                     parsed, children, roots, outcomes, strict=True):
                 after = Project(root, exclude=self.config.project_excludes).contents()
                 changed = sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p))
@@ -6899,6 +7033,22 @@ class Session:
                                   stage="merge")
                         mine.closed_as = mine.closed_as if exc is not None else "stopped:unmerged"
                     self._partial_tasks.add(spec.task_id)
+                    # Its renders, if any, showed work that is not in the
+                    # project and lived in a copy that is about to be deleted.
+                    # The project's record must not read as verified renders
+                    # of the delivered source; the review stays as history.
+                    for design in child.design_checks:
+                        if design.get("verified"):
+                            design.update(verified=False, problem="not merged: its renders show work "
+                                                                  "that is not in the project")
+                        design.update(merged=False, screenshots=[])
+                        if isinstance(design.get("recapture"), dict):
+                            design["recapture"]["screenshots"] = []
+                    if mine is not None and isinstance(mine.evidence, dict):
+                        # The outcome's own copy of that record: no path into
+                        # the deleted copy stays on it either. The task's stop
+                        # is the merge, so its design verdict is left as found.
+                        mine.evidence.update(merged=False, screenshots=[])
                     self._note(f"{spec.task_id} not merged: {reason[:160]}")
                     if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
                         fatal = fatal or exc
@@ -6912,16 +7062,23 @@ class Session:
                         target.write_bytes(after[path])
                     elif target.exists():
                         target.unlink()
+                # Before the copy is deleted: the renders its records and
+                # approved digests name, into the project they now describe.
+                self._adopt_child_evidence(child, spec, mine)
+                designs = [r for r in child.design_checks if isinstance(r, dict) and r.get("task") == spec.task_id]
+                if any(r.get("verified") for r in designs):
+                    rendered.append((spec, mine, designs))
+                # What a capped or failed child left, so the task that
+                # CONTINUES it is handed the same note a serial one would be.
+                self.turn_limited_records.update(child.turn_limited_records)
+                self.failed_records.update(child.failed_records)
+                self._cap_baselines.update(child._cap_baselines)
                 self.history.append(summary)
                 self.memory.absorb(summary)
                 if getattr(summary, "outcome", "closed") in ("turn_limited", "failed"):
                     (self.turn_limited if summary.outcome == "turn_limited" else self.failed).append(spec.task_id)
-                    self._partial_tasks.discard(continues)
-                    self._recover_continued(continues)
                     self._partial_tasks.add(spec.task_id)
                 else:
-                    self._partial_tasks.discard(continues)
-                    self._recover_continued(continues)
                     for rid in covers:
                         self._mark_covered(rid, spec.task_id)
                 if mine is not None:
@@ -6931,14 +7088,15 @@ class Session:
         gate = self.config.integration_gate
         if gate is not None and not fatal:
             first = parsed[0][0]
-            union = sorted(set().union(*[(_literal_paths(s.scope) or set()) for s, _, _ in parsed]))
+            union = sorted(set().union(*[(_literal_paths(s.scope) or set()) for s, _ in parsed]))
             from .scope import TaskScope
             merge = TaskSpec(task_id=f"{parsed[-1][0].task_id}-merge",
                              description="Make the merged parallel changes pass the project checks.",
                              scope=TaskScope(permitted_paths=union))
             task = TaskMemory(merge.task_id, first.lead, self.store)
             saved = (self._active_spec, self._task_before, self._task_memory)
-            self._active_spec, self._task_before, self._task_memory = merge, self._capture_source(), task
+            merged_source = self._capture_source()
+            self._active_spec, self._task_before, self._task_memory = merge, merged_source, task
             # The merge gate has its own allowance under the same configured
             # max_gate_fixes, not what the last serial task left of its own
             # (map G5): that task's counter is its history, not the merge's.
@@ -6949,9 +7107,126 @@ class Session:
                 self._active_spec, self._task_before, self._task_memory = saved
                 record["merge_gate"] = dict(task=merge.task_id, gate_fixes=self._gate_fixes_used,
                                             passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
+            self._renders_after_merge_gate(rendered, merged_source)
         if fatal is not None:
             raise fatal
         return True
+
+    def _renders_after_merge_gate(self, rendered, before) -> None:
+        """Renders a merged child's design review approved, held against what
+        the merge gate left.
+
+        A serial task's gate and its fix round come before its capture, so
+        its renders show the fixed work. A child renders in its own copy,
+        with no gate; the merge gate's fix round comes after, and nothing
+        captures or reviews what it changed. While a merged child's renders
+        never reached the project such a run could not complete; now that
+        they do (_adopt_child_evidence), an approved render of a page the
+        merge fix then rewrote would stand as evidence of the delivered page.
+        A child whose own files the merge gate left changed has no clean
+        renders of them: the usual open finding and design debt, and the
+        stop is named. Another child's files are another task's work, as a
+        later serial task's would be, and the merge fix is held to the
+        batch's own files (a write outside them fails it on scope).
+        """
+        if not rendered:
+            return
+        after = self._capture_source()
+        moved = (None if before is None or after is None else
+                 {path for path in before.keys() | after.keys() if before.get(path) != after.get(path)})
+        for spec, mine, designs in rendered:
+            if moved is None:
+                if not self._gate_fixes_used:
+                    continue        # no editing call ran; nothing is known to have moved
+                failure = ("the merged source could not be read around the merge fix, so its renders "
+                           "are not shown to be of the delivered source")
+            else:
+                own = _literal_paths(spec.scope) or set()
+                hit = sorted(path for path in moved if path.strip("./") in own)
+                if not hit:
+                    continue
+                # With no fix round spent, a check command itself moved the file.
+                failure = (f"the merge {'fix' if self._gate_fixes_used else 'check'} changed "
+                           f"{', '.join(hit)[:200]} after its renders were approved, "
+                           "and nothing rendered the changed work")
+            self._child_renders_unverified(spec.task_id, mine, designs, failure)
+
+    def _child_renders_unverified(self, task_id, mine, designs, failure) -> None:
+        """A merged child's renders do not stand as evidence of the project's
+        source: the open finding, typed fact and design debt a serial task
+        records, on the child's own record, so the stop is named."""
+        self._note(f"{task_id}: {failure[:200]}")
+        text = f"Task {task_id} is design work without clean rendered evidence: {failure}."
+        self.open_findings.append(text)
+        self._design_unverified.append((task_id, failure))
+        evidence = mine.evidence if mine is not None and isinstance(mine.evidence, dict) else None
+        for record in [*designs[-1:], evidence]:
+            if isinstance(record, dict):
+                record.update(verified=False, problem=failure, screenshots=[])
+        if mine is not None:
+            mine.note("invalid_proof", text, stage="design")
+            mine.edge("evidence", False)
+
+    def _adopt_child_evidence(self, child, spec, mine) -> None:
+        """Bring a merged parallel child's design evidence into the project
+        and point its records at the project's files.
+
+        The child rendered into its own copy, which is deleted when the batch
+        ends, while its design record, its outcome and the digests its design
+        review approved all come back to the parent. Left there, completion
+        was refused for "approved evidence changed after its review" and the
+        audit was shown screenshot paths into a deleted folder (review 1110,
+        session second half, item 3). The evidence set is copied without
+        following a link (quadratus.batch_evidence) and the recorded paths
+        are re-based. Nothing is re-approved here: the approved digests are
+        compared with the project's bytes at completion, as for any task.
+
+        A set that should have come over and could not is design work with
+        no rendered evidence in the project: the same open finding, typed
+        fact and design debt a serial task records, so the stop is named.
+        """
+        from .batch_evidence import adopt, moved_path
+        records = [r for r in child.design_checks if isinstance(r, dict) and r.get("task") == spec.task_id]
+        evidence = mine.evidence if mine is not None and isinstance(mine.evidence, dict) else None
+        holders = [record for holder in [*records, evidence] for record in (holder, (holder or {}).get("recapture"))
+                   if isinstance(record, dict) and isinstance(record.get("screenshots"), list)]
+        result = adopt(child.project, self.project, spec.task_id)
+        problems = list(result["problems"])
+        owed = (any(r.get("verified") for r in records)
+                or bool(mine is not None and (mine.delivery or {}).get("files")))
+        if owed and not result["present"]:
+            problems = problems or ["the task's copy holds no evidence folder"]
+        if not problems:
+            # A render a verified record names came over, or the record would
+            # name a file the project does not hold.
+            root = str(self.project).rstrip(os.sep) + os.sep
+            for record in (r for r in records if r.get("verified")):
+                for shot in record.get("screenshots") or ():
+                    moved = moved_path(shot, child.project, self.project)
+                    if moved and moved[len(root):].replace(os.sep, "/") not in result["copied"]:
+                        problems.append(f"the copy no longer holds {Path(moved).parent.name}/{Path(moved).name}, "
+                                        "which its verified record names")
+        if not problems:
+            for record in holders:
+                record["screenshots"] = [moved_path(shot, child.project, self.project) or shot
+                                         for shot in record["screenshots"]]
+            if result["copied"]:
+                self._note(f"{spec.task_id}: {len(result['copied'])} evidence files brought into the project")
+            return
+        # The set did not come over whole, and the copy is about to be
+        # deleted: no record keeps a path into it.
+        for record in holders:
+            record["screenshots"] = [shot for shot in record["screenshots"]
+                                     if moved_path(shot, child.project, self.project) is None]
+        failure = ("its renders could not be brought into the project from its parallel copy ("
+                   + "; ".join(dict.fromkeys(problems))[:300] + ")")
+        if not owed:
+            # The child verified nothing, so nothing new is owed; a folder it
+            # did leave and that could not be copied is still said.
+            if result["present"]:
+                self._note(f"{spec.task_id}: {failure[:200]}")
+            return
+        self._child_renders_unverified(spec.task_id, mine, records, failure)
 
     def _covers_problem(self, covers) -> str:
         ledger = self.memory.ledger
