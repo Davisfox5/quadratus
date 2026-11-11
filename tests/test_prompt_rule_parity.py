@@ -49,7 +49,10 @@ def test_the_scope_line_form_and_path_rules_are_stated():
     assert "no description after its labels is refused" in text
     for rule in ("backslashes", "leading ~", ".quadratus path", "surrounding whitespace"):
         assert rule in text
-    assert f"no greater than {MAX_TASK_LINES}" in text and '"max_lines": ' + str(MAX_TASK_LINES) in text
+    # The ceiling is stated once, in _SIZE_CEILING; the SCOPE rule points at it
+    # and keeps the number only as its example value (tests/test_review1110_prompts.py).
+    assert "a whole number from 1 to the size ceiling above" in text and '"max_lines": ' + str(MAX_TASK_LINES) in text
+    assert f"at most {MAX_TASK_LINES} lines" in S._SIZE_CEILING
     assert "one correction" in text and "not DONE, ASK or FETCH" in text
     assert "20,000 bytes" in text
 
@@ -218,7 +221,7 @@ def test_the_verifier_is_told_capitalised_markers_count_in_prose(tmp_path):
     session = _session(tmp_path)
     text = session._verifier_prompt(TaskSpec("t1", "do it"), "draft", "claude:opus")
     assert "in capitals are read as findings wherever they appear" in text
-    assert "'BLOCKING: none' is read as no finding" in text
+    assert S._EMPTY_BLOCKING_RULE in text and "end with VERDICT: ACCEPT" in text
     assert S._has_security_finding("This defect is BLOCKING.") and not S._has_security_finding("nothing blocking here")
 
 
@@ -252,7 +255,10 @@ def test_the_blocked_report_rule_states_what_the_harness_does():
 def test_the_capture_command_limits_are_stated_from_the_constants():
     assert f"At most {MAX_STEPS} steps" in S._DESIGN_RENDER_SHOWS
     assert f"at most {MAX_SELECTOR_CHARS} characters" in S._DESIGN_RENDER_SHOWS
-    assert "--file takes SELECTOR=PATH" in S._DESIGN_RENDER_SHOWS
+    # One upload flag is named, the one that takes any selector; --file and
+    # its no-[ rule are no longer offered, so there is no rule to state.
+    assert "--upload SELECTOR project/relative/fixture" in S._DESIGN_RENDER_SHOWS
+    assert "--file" not in S._DESIGN_RENDER_SHOWS
 
 
 def test_the_validator_and_the_capture_command_share_one_selector_bound():

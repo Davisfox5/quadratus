@@ -165,12 +165,15 @@ def test_editing_roles_keep_lead_checklist_without_a_write_grant(packet_session,
     assert 'Role: reviewer' not in seen[-1]
 
 
-def test_worker_gets_scope_without_parent_family_packet(packet_session):
+def test_worker_gets_neither_the_scope_block_nor_the_parent_family_packet(packet_session):
+    """A read-only worker answers one errand: its lead holds the scope, and
+    the scope and operator limits were being appended to every lookup."""
     from quadratus.delegation import invocation
     session, spec, seen = packet_session
     session._active_spec = spec
     with invocation(spec.task_id, 'worker:read-1', 'worker'):
         session._invoke_model('claude:haiku', 'Read this one definition')
-    assert spec.scope.render() in seen[-1]
+    assert seen[-1] == 'Read this one definition'
+    assert '## Scope of this task' not in seen[-1]
     assert '## Role packet' not in seen[-1]
     assert 'Family checklist' not in seen[-1]

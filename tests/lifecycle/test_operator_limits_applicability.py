@@ -22,6 +22,10 @@ from quadratus.session import Session, SessionConfig, TaskSpec
 WIDE = TaskScope(permitted_paths=["app.py", "README.md"], max_lines=200)
 NARROW = TaskScope(permitted_paths=["README.md"], max_lines=200)
 LIMITS = "Operator limits (also binding):"
+# A limit is stated as what it adds to the task's own scope, not as a second
+# whole scope block (tests/test_review1110_prompts.py).
+WIDE_NOTE = LIMITS + "\nEvery change must also fall under: app.py, README.md."
+NARROW_NOTE = LIMITS + "\nEvery change must also fall under: README.md."
 
 
 def _session(tmp_path, limit):
@@ -137,7 +141,7 @@ def test_the_prompt_names_the_dispatch_limit_and_a_tighter_live_one(tmp_path):
     _drift(session, NARROW)
     prompt = _prompt(session)
     assert prompt.count(LIMITS) == 2
-    assert WIDE.render() in prompt and NARROW.render() in prompt
+    assert WIDE_NOTE in prompt and NARROW_NOTE in prompt
 
 
 def test_the_prompt_keeps_the_dispatch_limit_when_the_live_one_is_removed(tmp_path):
@@ -145,7 +149,7 @@ def test_the_prompt_keeps_the_dispatch_limit_when_the_live_one_is_removed(tmp_pa
     spec = _dispatch(session)
     _drift(session, None)
     prompt = _prompt(session)
-    assert prompt.count(LIMITS) == 1 and NARROW.render() in prompt
+    assert prompt.count(LIMITS) == 1 and NARROW_NOTE in prompt
     _edit_app(session)
     assert session._measure_scope(spec, session._task_before).out_of_scope == ["app.py"]
     assert f"operator_limits: contract {_identity(NARROW)!r}, legacy 'none'" in session._outcome.mismatches
@@ -159,7 +163,7 @@ def test_no_drift_applies_the_limit_once_with_no_mismatch(tmp_path):
     _edit_app(session)
     assert session._measure_scope(spec, session._task_before).out_of_scope == ["app.py"]
     prompt = _prompt(session)
-    assert prompt.count(LIMITS) == 1 and NARROW.render() in prompt
+    assert prompt.count(LIMITS) == 1 and NARROW_NOTE in prompt
     assert session._outcome.mismatches == []
     assert session._contract.required.operator_limits == _identity(NARROW)
 
