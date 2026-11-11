@@ -502,8 +502,12 @@ def test_the_batch_is_on_the_development_record_and_claims_nothing_more():
     task = next(task for task in record["tasks"] if task["id"] == "T-review-1110")
     assert task["base"] == BASE and (task["author"], task["reviewer"]) == ("claude", "codex")
     assert "PR #90" in task["purpose"] and "Davis's direct instruction" in task["purpose"]
-    # A claim and a note: delivered, reviewed and integrated are other people's to record.
-    assert task["state"] == "claimed" and task["delivery"] is None and task["reviews"] == []
+    # A claim, a note and the author's own delivery (a commit on origin).
+    # Reviewed and integrated are the reviewer's and the coordinator's to
+    # record, and nothing here claims either.
+    assert task["state"] in ("claimed", "delivered") and task["reviews"] == []
+    delivery = task["delivery"]
+    assert delivery is None or re.fullmatch(r"[0-9a-f]{40}", delivery["sha"])
     assert any("delivery SHA is recorded" in note for note in task["decisions"])
     section = CLAUDE_MD[CLAUDE_MD.index("## How development is coordinated"):
                         CLAUDE_MD.index("## Model routing")]
