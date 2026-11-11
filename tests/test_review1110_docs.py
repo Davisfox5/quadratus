@@ -76,7 +76,7 @@ def test_the_roster_size_a_comment_names_is_the_roster_size():
 
 
 def test_the_orchestrator_comment_names_the_fallback_the_chain_has():
-    assert registry.ORCHESTRATOR_CHAIN == ["claude:fable", "openai:gpt-6-astra"]
+    assert registry.ORCHESTRATOR_CHAIN == ["claude:fable", "openai:astra"]
     source = _source("registry.py")
     assert "Opus 5 backs it up" not in source
     block = source[source.index("#: Ordered preference for the orchestrator seat."):
