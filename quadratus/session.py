@@ -112,6 +112,34 @@ from .taskmeta import (
     split_lead_request,
 )
 from .usage import UsageMeter
+from .verdicts import (
+    HARNESS_BLOCKERS as _HARNESS_BLOCKERS,  # noqa: F401 -- the old private name, kept importable
+)
+from .verdicts import (
+    RENDERS_BLIND as _RENDERS_BLIND,  # noqa: F401 -- the old private name, kept importable
+)
+from .verdicts import REVIEW_COMPLETE as _REVIEW_COMPLETE
+from .verdicts import audit_lines as _audit_lines
+from .verdicts import design_blocking as _design_blocking
+from .verdicts import design_judgement as _design_judgement
+from .verdicts import has_blocking_finding as _has_blocking_finding
+from .verdicts import (
+    has_prefixed_finding as _has_prefixed_finding,  # noqa: F401 -- the old private name, kept importable
+)
+from .verdicts import (
+    has_security_finding as _has_security_finding,  # noqa: F401 -- the old private name, kept importable
+)
+from .verdicts import is_empty_note as _is_empty_note
+from .verdicts import no_findings as _no_findings
+from .verdicts import renders_blind as _renders_blind
+from .verdicts import resolved_verdict as _resolved_verdict
+from .verdicts import review_complete as _review_complete
+from .verdicts import review_reading as _review_reading
+from .verdicts import security_finding_stands as _security_finding_stands
+from .verdicts import (
+    security_verdict_line as _security_verdict_line,  # noqa: F401 -- the old private name, kept importable
+)
+from .verdicts import unstyled as _unstyled
 from .workers import (
     WORKER_TREE,
     ErrandToolMismatch,
@@ -603,7 +631,7 @@ _CAPTURE_SCOPE_REQUEST = (
     'A task that changes or reviews what users see adds "capture": {"path": "/page", '
     '"steps": [...]} to its SCOPE: the page the harness renders and the interaction steps '
     'that reach the state showing the change. The harness treats a task as one that '
-    'changes what users see when its KIND is frontend or any permitted path is under a '
+    'changes what users see when its KIND is frontend or any permitted path is, or is under, a '
     'templates, static, components, pages, views, style or styles directory or ends in '
     '.html, .css, .scss, .sass, .less, .jsx, .tsx, .vue or .svelte; such a task without a '
     'capture is sent back. The capture object has exactly the keys path and steps. path '
@@ -680,7 +708,9 @@ _READ_BEFORE_YOU_EXPLORE = (
 
 _NEEDS_REQUEST = (
     "Any line beginning NEEDS: is read as this declaration, so put that word at the start "
-    "of no other line; two NEEDS lines that disagree are refused with no correction. "
+    "of no other line. The line starts at the left margin and the rest of it is the JSON "
+    "list; a NEEDS line that is not is sent back once for correction, and two NEEDS lines "
+    "that disagree are refused with no correction. "
     'After KIND, optionally include NEEDS: ["execute", "patch", "direct-write"] '
     'with only the operations required for this task (or [] for none). '
     'execute means running commands; patch means producing edits the harness can '
@@ -692,13 +722,29 @@ _NEEDS_REQUEST = (
 _UI_PATH = re.compile(r"(?i)(^|/)(templates|static|components|pages|views|styles?)/|\.(html?|css|scss|sass|less|jsx|tsx|vue|svelte)$")
 
 
+def _renders(path) -> bool:
+    """Whether a permitted path is a rendered file or a UI directory.
+
+    A bare UI directory ("static", "templates") is a rendered scope too: the
+    path rule wants its trailing slash (the direct-tier admission tests
+    declare permitted_paths=["static"])."""
+    text = str(path)
+    return bool(_UI_PATH.search(text) or _UI_PATH.search(text.rstrip("/") + "/"))
+
+
 def is_design_task(spec) -> bool:
     """Work that changes what a user sees: the frontend kind, or a declared
-    scope that reaches UI files."""
+    scope that reaches UI files.
+
+    A scope naming a bare UI directory counts. It used to count only for the
+    frontend send-back, so a backend task scoped to "static" or "templates"
+    shipped CSS and HTML with no render and no design review. A parent
+    directory ("app") still names nothing rendered: only the paths a task
+    actually changed can settle that, after its draft."""
     if getattr(spec, "kind", None) == TaskKind.FRONTEND:
         return True
     paths = getattr(getattr(spec, "scope", None), "permitted_paths", ()) or ()
-    return any(_UI_PATH.search(str(p)) for p in paths)
+    return any(_renders(p) for p in paths)
 
 
 def _frontend_without_rendered_file(spec) -> bool:
@@ -711,11 +757,7 @@ def _frontend_without_rendered_file(spec) -> bool:
     if getattr(spec, "kind", None) != TaskKind.FRONTEND:
         return False
     paths = getattr(getattr(spec, "scope", None), "permitted_paths", ()) or ()
-    # A bare UI directory ("static", "templates") is a rendered scope too:
-    # the path rule wants its trailing slash (the direct-tier admission
-    # tests declare permitted_paths=["static"]).
-    return bool(paths) and not any(_UI_PATH.search(str(p)) or _UI_PATH.search(str(p).rstrip("/") + "/")
-                                   for p in paths)
+    return bool(paths) and not any(_renders(p) for p in paths)
 
 
 #: The one send-back for a frontend label whose scope renders nothing: the
@@ -776,23 +818,9 @@ _HARNESS_CAPTURE = (
     "state show the change, and keep the declared selectors working."
 )
 
-#: The reviewer's exact reply when the renders miss the change (see
-#: ``Session._final_design_review``); read as a capture defect, not a design one.
-_RENDERS_BLIND = "the renders do not show the changed interface"
-
-
-#: Blocking lines the harness writes itself: delivery, capture and verdict
-#: failures. None is a design judgement a source fix could answer.
-_HARNESS_BLOCKERS = (
-    "BLOCKING: the renders could not be handed", "BLOCKING: the renders changed while",
-    "BLOCKING: the final design review gave no verdict", "BLOCKING: the renders do not show",
-    "BLOCKING: the reviewer altered",
-)
-
-
-def _design_judgement(blocking) -> bool:
-    """Whether every blocking line is the reviewer's own design judgement."""
-    return bool(blocking) and not any(line.strip().startswith(_HARNESS_BLOCKERS) for line in blocking)
+# The verdict readers (the blind-render reply, the harness's own blocking
+# lines, findings, the VERDICT line, RESOLVED, NO FINDINGS) live in
+# quadratus.verdicts and are imported above under their old private names.
 
 
 def _check_tally(report, tests) -> str:
@@ -852,14 +880,66 @@ _PUBLIC_RUNNERS = frozenset({
     "rake", "bundle", "mvn", "gradle", "dotnet", "bash", "sh", "uv", "poetry", "hatch"})
 
 
+#: A Python interpreter by its program name: python, python3, python3.12,
+#: pypy3, and the Windows launcher py.
+_PYTHON_PROGRAM = re.compile(r"(?:python|pypy|py)[\d.]*(?:\.exe)?", re.IGNORECASE)
+#: Programs that only start another command: the real one follows them.
+_COMMAND_WRAPPERS = frozenset({"uv", "poetry", "hatch", "pdm", "pipenv", "env", "xvfb-run", "timeout", "nice",
+                               "time"})
+#: What may stand between a wrapper and the command it starts: its "run"
+#: word, an option, an environment assignment, a duration.
+_WRAPPER_WORD = re.compile(r"run|-.*|[A-Za-z_][A-Za-z0-9_]*=.*|\d+(?:\.\d+)?[smhd]?")
+
+
+def _program_name(token: str) -> str:
+    return re.split(r"[\\/]", token)[-1]
+
+
+def _python_starts_at(argv) -> Optional[int]:
+    """Where Python's own options begin: after the interpreter the command
+    starts, or after ``coverage run``, which takes ``-m`` the same way. Only
+    wrappers may come first (``uv run python``, ``env X=1 python``,
+    ``timeout 600 python``). None when the command starts anything else, so
+    a path that merely ends in "python" further along is never taken for the
+    interpreter."""
+    for index, token in enumerate(argv):
+        name = _program_name(token)
+        if _PYTHON_PROGRAM.fullmatch(name):
+            return index + 1
+        if name == "coverage" and argv[index + 1:index + 2] == ["run"]:
+            return index + 2
+        if name not in _COMMAND_WRAPPERS and not _WRAPPER_WORD.fullmatch(token):
+            return None
+    return None
+
+
 def _check_runner(argv) -> str:
-    """A command's runner as a public label: the module after ``-m``, else
-    the program's basename, when it is a known public runner; otherwise "a
-    project command"."""
+    """A command's runner as a public label: the module a Python
+    interpreter runs with ``-m``, else the program's basename, when it is a
+    known public runner; otherwise "a project command".
+
+    ``-m`` names a module only as Python's own option. Read from any
+    program it made ``pytest -m slow tests`` "a project command", because
+    "slow" is no runner. The interpreter may stand behind a wrapper:
+    ``uv run python -m pytest`` and ``coverage run -m pytest`` run pytest,
+    and a goal that requires pytest must find it in the label."""
     argv = [str(a) for a in argv or ()]
     if not argv:
         return "a project command"
-    label = argv[argv.index("-m") + 1] if "-m" in argv[:-1] else os.path.basename(argv[0])
+    label = _program_name(argv[0])
+    if _PYTHON_PROGRAM.fullmatch(label):
+        label = label if label in _PUBLIC_RUNNERS else "python"
+    index = _python_starts_at(argv)
+    while index is not None and index < len(argv) - 1:
+        if argv[index] == "-m":
+            label = argv[index + 1]
+            break
+        if argv[index] in ("-W", "-X"):
+            index += 2      # the option's value is not a script
+            continue
+        if argv[index] in ("-c", "-") or not argv[index].startswith("-"):
+            break           # code or a script: what follows is its own
+        index += 1
     return label if label in _PUBLIC_RUNNERS else "a project command"
 
 
@@ -930,24 +1010,15 @@ def _verified_by_check(check, current) -> str:
     return ""
 
 
-def _renders_blind(verdict: str) -> bool:
-    """Whether the verdict is the blind-render reply and nothing else.
-
-    A reviewer that also names an independent blocker ("BLOCKING: the delete
-    action silently removes saved projects") has judged the work, and a
-    recapture must not clear that judgement (Codex reviews of c3abcf0 and
-    9b8c056 on #52). The reviewer is told to reply with exactly the one line
-    and judge nothing else, so that is what qualifies: the whole response,
-    after harmless formatting is stripped (bold, a list marker, trailing
-    punctuation, case), must equal "BLOCKING: " plus the phrase. A second
-    clause on the same line, a second line of any kind, or any other
-    content means the verdict stands as written.
-    """
-    text = (verdict or "").replace("**", "").replace("`", "").strip()
-    text = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text)
-    text = text.rstrip(" .!").lower()
-    return text == f"blocking: {_RENDERS_BLIND}"
-
+#: What the redeclaring call is told about :func:`_capture_candidates`. Prose
+#: such as "The previous capture: timed out" above a valid line is a second
+#: marker, so nothing is read and the one redeclaration is spent. The reader
+#: stays as strict as three reviews left it; the prompt states the rule.
+_ONE_CAPTURE_MARKER = (
+    "Write the word capture followed by a colon nowhere else in the reply, in any case and not "
+    "even inside a sentence, and start no other line with {: a second marker or object "
+    "conflicts with the declaration and none is read."
+)
 
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
 #: The marker wherever it sits on a line: series rule-3572b72 f5's lead wrote
@@ -1050,8 +1121,18 @@ def _declaration_only(records) -> bool:
     return bool(kinds) and all(k == CAPTURE_DECLARATION for k in kinds)
 
 
-_FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]*\n(.*?)\n?[ \t]*```",
-                            re.MULTILINE | re.DOTALL)
+#: What the supplying call is told about :func:`_fixture_body`.
+_ONE_FIXTURE_FENCE = (
+    "The block ends at the last fence line before the next FIXTURE line or the end of the reply: "
+    "if the content itself holds a line of three backticks, fence the block with four, because a "
+    "block that more than one fence line could close is not written."
+)
+
+#: A well-formed header: the path alone, with or without its colon.
+_FIXTURE_HEAD = re.compile(r"[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*")
+#: A fence line: a run of three or more backticks, then anything (the
+#: opener may name a language). A closing fence is the run alone.
+_FIXTURE_FENCE = re.compile(r"[ \t]*(`{3,})([^\n]*)")
 
 
 #: Any line that starts like a header, well-formed or not (Codex review of
@@ -1061,6 +1142,32 @@ _FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]
 _FIXTURE_HEADER = re.compile(r"^[ \t]*FIXTURE\b[ \t]*(\S*)", re.MULTILINE)
 
 
+def _fixture_body(lines):
+    """``(content, "")`` for the one fenced block opening ``lines`` (what
+    follows a header, up to the next header or the end of the reply), else
+    ``(None, why)``; ``why`` is "unclosed" when a fence opened and never
+    closed.
+
+    The block must end at the last fence in that stretch. A closing fence is
+    a line of backticks alone, at least as long as the opening run, so a
+    sample that itself holds a line of three backticks is fenced with four.
+    When more than one line could close the block the content has two
+    readings; the first used to be taken in silence, cutting such a sample
+    short and writing the stump as if it were whole."""
+    opener = _FIXTURE_FENCE.fullmatch(lines[0]) if lines else None
+    if opener is None:
+        return None, "no fence"
+    run = len(opener.group(1))
+    closers = [index for index, line in enumerate(lines[1:], 1)
+               if (fence := _FIXTURE_FENCE.fullmatch(line)) and len(fence.group(1)) >= run
+               and not fence.group(2).strip()]
+    if not closers:
+        return None, "unclosed"
+    if len(closers) > 1:
+        return None, "ambiguous"
+    return "\n".join(lines[1:closers[0]]), ""
+
+
 def _parse_fixture_blocks(reply: str):
     """``({path: content}, problems)`` for every ``FIXTURE <path>:`` line
     followed by one fenced block. The path is taken as written; the caller
@@ -1068,31 +1175,42 @@ def _parse_fixture_blocks(reply: str):
     ignored, never written. Every header is accounted for, complete or not:
     a path with more than one header, or a header with no complete block
     (an unclosed or missing fence), is a problem for that path and nothing
-    is kept for it; a block whose content holds another header (an unclosed
-    fence swallowed the next block) makes the whole reply malformed (Codex
-    reviews of 351d3ba and 6844b97)."""
-    text = reply or ""
+    is kept for it; so is a block that more than one fence line could close
+    (see :func:`_fixture_body`). A block whose content holds another header
+    (an unclosed fence swallowed the next block) makes the whole reply
+    malformed (Codex reviews of 351d3ba and 6844b97)."""
+    lines = (reply or "").splitlines()
+    starts = [index for index, line in enumerate(lines) if _FIXTURE_HEADER.match(line)]
     headers: Dict[str, int] = {}
-    for match in _FIXTURE_HEADER.finditer(text):
-        path = match.group(1).strip().rstrip(":").strip("`'\"")
+    blocks: Dict[str, List[str]] = {}
+    unclear: set = set()
+    for position, start in enumerate(starts):
+        path = _FIXTURE_HEADER.match(lines[start]).group(1).strip().rstrip(":").strip("`'\"")
         if not path:
             return {}, ["malformed reply: a FIXTURE header names no path"]
         headers[path] = headers.get(path, 0) + 1
-    blocks: Dict[str, List[str]] = {}
-    for match in _FIXTURE_BLOCK.finditer(text):
-        path = match.group(1).strip().strip("`'\"")
-        content = match.group(2)
-        if _FIXTURE_HEADER.search(content):
+        last = position == len(starts) - 1
+        body, why = _fixture_body(lines[start + 1:len(lines) if last else starts[position + 1]])
+        if not _FIXTURE_HEAD.fullmatch(lines[start]):
+            continue    # a header with words after its path opens no block
+        if why == "unclosed" and not last:
             return {}, ["malformed reply: a fenced block holds another FIXTURE header (an unclosed fence)"]
-        blocks.setdefault(path, []).append(content)
+        if why == "ambiguous":
+            unclear.add(path)
+        elif body is not None:
+            blocks.setdefault(path, []).append(body)
     found: Dict[str, str] = {}
     problems: List[str] = []
-    for path in sorted(set(headers) | set(blocks)):
-        count, bodies = headers.get(path, 0), blocks.get(path, [])
-        if count == 1 and len(bodies) == 1:
-            found[path] = bodies[0]
-        elif count > 1 or len(bodies) > 1:
+    for path in sorted(headers):
+        count, bodies = headers[path], blocks.get(path, [])
+        if count > 1:
             problems.append(f"{path}: more than one FIXTURE header for the same path")
+        elif path in unclear:
+            problems.append(f"{path}: more than one fence line could close the block, so its content has two "
+                            "readings and nothing is written (fence a sample that holds a line of backticks "
+                            "with a longer run)")
+        elif len(bodies) == 1:
+            found[path] = bodies[0]
         else:
             problems.append(f"{path}: a FIXTURE header with no complete fenced block")
     return found, problems
@@ -1604,7 +1722,12 @@ def _item_paths(item: str) -> List[str]:
     return paths
 
 
-_AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
+#: What the auditor is told about :func:`quadratus.verdicts.audit_lines`.
+_AUDIT_LINE_RULE = (
+    "MET is followed at once by ' - ' and the citation: 'MET, but only partly' or 'MET by the "
+    "tests' is read as no verdict. Two different lines for one requirement are read as no "
+    "verdict for it, and no verdict is counted as not met."
+)
 
 
 def _read_requirements(reply: str):
@@ -1618,11 +1741,15 @@ def _read_requirements(reply: str):
 
 
 def _read_covers(spec):
-    """Split a ``COVERS: R1, R3`` line off a task."""
-    match = _COVERS.search(spec.description or "")
-    if not match:
+    """Split the ``COVERS: R1, R3`` lines off a task.
+
+    More than one line is one declaration: every id, in the order written,
+    each once. The first line used to be read and all of them deleted, so
+    "COVERS: R1" and a later "COVERS: R4" dropped R4 without a word."""
+    found = _COVERS.findall(spec.description or "")
+    if not found:
         return [], spec
-    ids = re.findall(r"R\d+", match.group(1))
+    ids = list(dict.fromkeys(rid for line in found for rid in re.findall(r"R\d+", line)))
     description = _COVERS.sub("", spec.description).strip()
     return ids, replace(spec, description=description or spec.description)
 
@@ -1640,13 +1767,21 @@ def _snapshot_files(snapshot) -> Dict[str, str]:
     return files
 
 
+def _resolves_tokens(line: str) -> tuple:
+    return tuple(t for t in re.split(r"[\s,]+", line.strip()) if t)
+
+
 def _read_resolves(spec):
     """Split a ``RESOLVES: F1, F2`` line off a task. None when absent; the
-    raw tokens otherwise, so an empty or malformed line can be refused."""
-    match = _RESOLVES.search(spec.description or "")
-    if not match:
+    raw tokens otherwise, so an empty or malformed line can be refused.
+
+    A line repeated word for word is one line. Lines that differ are all
+    returned, never only the first: the dispatch loop refuses a RESOLVES on
+    more than one line, and nothing is dropped unread before it does."""
+    found = _RESOLVES.findall(spec.description or "")
+    if not found:
         return None, spec
-    tokens = [t for t in re.split(r"[\s,]+", match.group(1).strip()) if t]
+    tokens = [t for line in dict.fromkeys(_resolves_tokens(line) for line in found) for t in line]
     description = _RESOLVES.sub("", spec.description).strip()
     return tokens, replace(spec, description=description or spec.description)
 
@@ -1664,23 +1799,37 @@ def _parallel_blocks(reply: str):
     return blocks if len(blocks) >= 2 else ([blocks[0]] if blocks else None)
 
 
+def _scope_path(path) -> str:
+    """A project-relative path in the one form paths are compared in: a
+    leading "./" dropped and separators collapsed, nothing else.
+
+    ``str.strip("./")`` strips characters, not a prefix, so ".env" and "env"
+    compared equal: a parallel task scoped to "env" that changed ".env"
+    passed the merge's own scope test."""
+    return PurePosixPath(str(path)).as_posix()
+
+
 def _literal_paths(scope) -> Optional[set]:
     paths = list(getattr(scope, "permitted_paths", ()) or ())
     if not paths or any(any(ch in p for ch in "*?[]") for p in paths):
         return None
-    return {p.strip("./") for p in paths}
+    return {_scope_path(p) for p in paths}
 
 
 _TIER = re.compile(r"^\s*TIER:\s*(direct|normal)\s*$", re.MULTILINE | re.IGNORECASE)
 
 
 def _read_tier(spec):
-    """Split a ``TIER: direct`` line off a task. Returns (tier, spec)."""
-    match = _TIER.search(spec.description or "")
-    if not match:
+    """Split a ``TIER: direct`` line off a task. Returns (tier, spec).
+
+    Two TIER lines that disagree are sent back before a task is built (see
+    :func:`_read_metadata`). Read here anyway, they ask for the normal tier:
+    the label that drops the review never wins by being written first."""
+    values = list(dict.fromkeys(v.lower() for v in _TIER.findall(spec.description or "")))
+    if not values:
         return "normal", spec
     description = _TIER.sub("", spec.description).strip()
-    return match.group(1).lower(), replace(spec, description=description or spec.description)
+    return (values[0] if len(values) == 1 else "normal"), replace(spec, description=description or spec.description)
 
 
 def _tier_request(max_lines: int) -> str:
@@ -1698,21 +1847,31 @@ def _tier_request(max_lines: int) -> str:
         "users see, all stops unchanged. On the direct tier each permitted path permits only "
         "that one file: a write anywhere else, including under a declared path, is out of "
         "scope. A refused label runs the task normally and records "
-        "why; the label proves nothing about risk on its own."
+        "why; the label proves nothing about risk on its own. A task carries one TIER line: "
+        "two that disagree are sent back once for correction."
     )
 
 
 _CONTINUES = re.compile(r"^\s*CONTINUES:\s*(\S+)\s*$", re.MULTILINE)
+#: What the orchestrator is told where a CONTINUES line is asked for.
+_ONE_CONTINUES_LINE = (
+    "A task continues one task: two CONTINUES lines naming different tasks are sent back once "
+    "for correction."
+)
 
 
 def _read_continues(spec):
     """Split a ``CONTINUES: <task id>`` line off a task, naming the capped
-    task it finishes. Returns (task id or None, spec without the line)."""
-    match = _CONTINUES.search(spec.description or "")
-    if not match:
+    task it finishes. Returns (task id or None, spec without the line).
+
+    Two CONTINUES lines naming different tasks are sent back before a task
+    is built (see :func:`_read_metadata`). Read here anyway, they name no
+    task: neither capped task's debt is discharged by a guess."""
+    values = list(dict.fromkeys(_CONTINUES.findall(spec.description or "")))
+    if not values:
         return None, spec
     description = _CONTINUES.sub("", spec.description).strip()
-    return match.group(1), replace(spec, description=description or spec.description)
+    return (values[0] if len(values) == 1 else None), replace(spec, description=description or spec.description)
 
 
 def _check_ids(receipts, *, passed: bool) -> List[str]:
@@ -1733,11 +1892,12 @@ def _read_hypothesis(spec):
     """Split a ``HYPOTHESIS: <text>`` line off a task (survey runs): what
     the orchestrator inferred from the last failure and what it changes.
     Returns (text or None, spec without the line)."""
-    match = _HYPOTHESIS.search(spec.description or "")
-    if not match:
+    found = list(dict.fromkeys(_HYPOTHESIS.findall(spec.description or "")))
+    if not found:
         return None, spec
     description = _HYPOTHESIS.sub("", spec.description).strip()
-    return match.group(1), replace(spec, description=description or spec.description)
+    # Diagnostic text: more than one line is kept whole, never only the first.
+    return " / ".join(found), replace(spec, description=description or spec.description)
 
 
 _HYPOTHESIS_REQUEST = (
@@ -1828,24 +1988,99 @@ def _read_task_orientation(description: str):
     return parsed[:_MAX_ORIENT_NOTES], "\n".join(lines).strip()
 
 
-def _read_task_needs(description: str):
-    lines, declarations = [], []
-    for line in description.splitlines():
-        match = re.match(r"\s*NEEDS\s*:(.*)$", line, re.IGNORECASE)
+#: The word at the left margin, then the rest of the line.
+_NEEDS_LINE = re.compile(r"NEEDS[ \t]*:(.*)$", re.IGNORECASE)
+#: The word in capitals behind indentation: written as the declaration, but
+#: not where one is read.
+_NEEDS_INDENTED = re.compile(r"[ \t]+NEEDS[ \t]*:")
+
+
+def _needs_lines(description: str):
+    """``(declarations, other lines, problem)`` for a task description.
+
+    A line is a NEEDS declaration when it starts at the left margin and the
+    rest of it parses as a JSON list, in any case. "Needs: a migration for
+    the users table" is prose and stays in the description: it used to be
+    read as a declaration that failed, and ended the run. In capitals the
+    word is the declaration the prompt asks for, so a tail that is not a
+    list is a problem to send back, never prose. So is the word in capitals
+    behind indentation: it was read as a declaration before, and dropping
+    it in silence would run the task without what it declared."""
+    lines, declarations, problem = [], [], ""
+    for line in (description or "").splitlines():
+        match = _NEEDS_LINE.match(line)
         if match is None:
+            if _NEEDS_INDENTED.match(line):
+                problem = problem or (f"the line {line.strip()[:80]!r} is indented: a NEEDS declaration "
+                                      "starts at the left margin")
             lines.append(line)
             continue
         try:
             values = json.loads(match.group(1))
-        except ValueError as exc:
-            raise ValueError("NEEDS must be a JSON list of operation names.") from exc
-        if (not isinstance(values, list) or any(not isinstance(v, str) for v in values)
-                or set(values) - KNOWN_NEEDS):
-            raise ValueError("NEEDS allows only execute, patch, and direct-write.")
+        except ValueError:
+            values = None
+        if not isinstance(values, list):
+            if line.startswith("NEEDS"):
+                problem = problem or (f"the line {line.strip()[:80]!r} is not a NEEDS declaration: NEEDS must "
+                                      "be a JSON list of operation names, for example NEEDS: [\"execute\"]")
+            lines.append(line)
+            continue
+        if any(not isinstance(v, str) for v in values) or set(values) - KNOWN_NEEDS:
+            problem = problem or "NEEDS allows only execute, patch, and direct-write"
+            continue
         declarations.append(normalise_needs(values))
+    return declarations, lines, problem
+
+
+def _read_task_needs(description: str):
+    declarations, lines, problem = _needs_lines(description)
+    if problem:
+        raise ValueError(problem + ".")
     if len(set(declarations)) > 1:
         raise ValueError("Conflicting NEEDS declarations.")
     return (declarations[0] if declarations else frozenset()), "\n".join(lines).strip()
+
+
+def _settle_directives(description: str):
+    """``(description, problem)``: a task's directive lines given one reading
+    before any reader sees them.
+
+    A RESOLVES, CONTINUES or TIER line repeated word for word is one line,
+    and the repeat is dropped. Two TIER lines, or two CONTINUES lines, that
+    disagree have no single reading, and a NEEDS line that cannot be read
+    used to end the run: each is a problem for the caller to send back. A
+    RESOLVES on two lines that differ is left for the dispatch loop, which
+    has always refused it. Two NEEDS lines that disagree are not a problem
+    here: the prompt says they are refused with no correction."""
+    kept, seen, dropped = [], {}, False
+    for line in (description or "").splitlines():
+        repeat = False
+        for name, pattern, key in (("TIER", _TIER, str.lower), ("CONTINUES", _CONTINUES, str),
+                                   ("RESOLVES", _RESOLVES, _resolves_tokens)):
+            match = pattern.match(line)
+            if match is None:
+                continue
+            value = key(match.group(1))
+            values = seen.setdefault(name, [])
+            if value in values:
+                repeat = True
+            else:
+                values.append(value)
+        if repeat:
+            dropped = True
+        else:
+            kept.append(line)
+    if len(seen.get("TIER", ())) > 1:
+        return description, ("the task carries more than one TIER line and they disagree ("
+                             + ", ".join(seen["TIER"]) + "); state one")
+    if len(seen.get("CONTINUES", ())) > 1:
+        return description, ("the task carries more than one CONTINUES line naming different tasks ("
+                             + ", ".join(seen["CONTINUES"]) + "); a task continues one task, so name "
+                             "the other in a task of its own")
+    problem = _needs_lines(description)[2]
+    if problem:
+        return description, f"invalid task requirements: {problem}"
+    return ("\n".join(kept).strip() if dropped else description), ""
 
 
 def _invocation_role(role):
@@ -1889,169 +2124,6 @@ def _check_command_paths(check: dict) -> list:
                 if parent.count("/") >= 2:
                     paths.add(parent)
     return sorted(paths, key=len, reverse=True)
-
-
-#: The marker as a verifier writes it: the uppercase word, not the English one.
-def _review_reading(review) -> str:
-    """The whole decision of a final design review, never its first line.
-
-    APPROVED only when the review approved; otherwise every BLOCKING line
-    (at most five shown, the rest counted). A record without the stored
-    decision is read from its verdict text by the same rule the session
-    applies when it records one."""
-    verdict = str(review.get("verdict") or "")
-    blocking = review.get("blocking")
-    if blocking is None:
-        blocking = [line.strip() for line in verdict.splitlines() if line.strip().startswith("BLOCKING:")]
-        if verdict.strip() != "APPROVED" and not blocking:
-            blocking = [f"BLOCKING: the final design review gave no verdict ({verdict[:120]})"]
-    if not blocking:
-        return "APPROVED"
-    shown = "; ".join(str(line)[:300] for line in blocking[:5])
-    more = f"; and {len(blocking) - 5} more BLOCKING lines" if len(blocking) > 5 else ""
-    return f"not approved: {shown}{more}"
-
-
-_FINDING_MARKER = re.compile(r"\b(?:BLOCKING|UNRESOLVED)\b")
-#: A marker directly after one of these is a note about findings, not one.
-_NEGATION_BEFORE = re.compile(r"(?:\bnon-|\bnon |\bnot |\bneither |\bno |\bnothing )$", re.IGNORECASE)
-#: A line opening with either marker, in any case: before, UNRESOLVED stopped
-#: in any case too (Codex review 5859031079), and must keep doing so.
-_BLOCKING_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:BLOCKING|UNRESOLVED)\s*:\s*(.*)$", re.IGNORECASE)
-#: "BLOCKING: none found." is a note too (series rule-b1ff751 f6, 2026-10-06:
-#: a verifier that accepted the code closed the task with its own report
-#: filed as the open finding).
-_EMPTY_FINDING = re.compile(r"(?:none|n/?a|nothing)(?:\s+(?:found|identified|observed|noted|detected|"
-                            r"remain(?:s|ing)?|to\s+report))?[\s.!]*$", re.IGNORECASE)
-#: The explicit verdict line the verifier is asked to end with.
-_VERDICT_LINE = re.compile(r"^\s*(?:[-*+]\s+)?\**\s*VERDICT\s*\**\s*:\s*\**\s*(ACCEPT|REJECT)\b", re.IGNORECASE)
-
-
-def _has_security_finding(text: str) -> bool:
-    """A finding is a marker as written, not the word in prose.
-
-    The old test upper-cased every line before looking for BLOCKING or
-    UNRESOLVED, so English prose became markers: in the Q9-v2 series
-    (2026-09-24) "## Two minor notes, neither blocking" and "One non-blocking
-    note for the record" each stopped a run whose verifier had accepted,
-    before the terminal question, costing two completions of five.
-
-    Now a line opening with "Blocking:" or "Unresolved:" counts in any case unless what follows
-    is none, n/a or nothing (the verifier is told to write BLOCKING: lines, so
-    "Blocking: none" is the likeliest note it writes). Elsewhere the uppercase
-    marker counts ("This defect is BLOCKING.", "..., but UNRESOLVED: missing
-    evidence.") unless a negation sits directly before it: non-, not, neither,
-    no or nothing, in any case. Negations fail open only for those forms; any
-    other doubt still stops the run, which is the safe side for security.
-    """
-    for raw in text.splitlines():
-        line = raw.replace("**", "")
-        prefixed = _BLOCKING_LINE.match(line)
-        if prefixed:
-            if _EMPTY_FINDING.match(prefixed.group(1).strip()):
-                continue
-            return True
-        for marker in _FINDING_MARKER.finditer(line):
-            if not _NEGATION_BEFORE.search(line[:marker.start()]):
-                return True
-    return False
-
-
-def _security_verdict_line(text: str) -> Optional[bool]:
-    """The verifier's explicit verdict: True for ACCEPT, False for REJECT,
-    None when it wrote no VERDICT line.
-
-    Series b1ff751 f6 and rule-b1ff751 f6 (2026-10-05/06): the cross-family
-    verifier accepted the work ("Verdict: accept the code change") and the
-    task still closed FindingsOpen, because the only signal read from a prose
-    verdict was whether a marker appeared somewhere in it. A report that
-    discusses blocking in capitals, or writes "BLOCKING: none found.", read
-    as a finding. The verifier is now asked to end with one line, VERDICT:
-    ACCEPT or VERDICT: REJECT, and that line decides. The last such line
-    wins, so a verdict restated after the findings is the one taken.
-    """
-    verdict = None
-    for raw in text.splitlines():
-        match = _VERDICT_LINE.match(raw.replace("**", ""))
-        if match:
-            verdict = match.group(1).upper() == "ACCEPT"
-    return verdict
-
-
-def _has_prefixed_finding(text: str) -> bool:
-    """A line opening with BLOCKING: or UNRESOLVED: that names something.
-
-    Narrower than :func:`_has_security_finding`: markers in prose do not
-    count. Used beside an explicit ACCEPT, where a verifier that still wrote
-    a prefixed finding has contradicted itself and the finding stands.
-    """
-    for raw in text.splitlines():
-        prefixed = _BLOCKING_LINE.match(raw.replace("**", ""))
-        if prefixed and not _EMPTY_FINDING.match(prefixed.group(1).strip()):
-            return True
-    return False
-
-
-def _security_finding_stands(verdict: str) -> bool:
-    """Whether a prose verdict opens a security finding.
-
-    An explicit VERDICT line decides: REJECT opens one; ACCEPT opens one
-    only if the verifier also wrote a prefixed finding with content. Without
-    the line, the marker scan applies as before.
-    """
-    explicit = _security_verdict_line(verdict)
-    if explicit is None:
-        return _has_security_finding(verdict)
-    if explicit:
-        return _has_prefixed_finding(verdict)
-    return True
-
-
-#: The line a reviewer ends with once it has read the whole work and
-#: reported everything. A review is complete when it says NO FINDINGS,
-#: names at least one BLOCKING finding, or carries this line; anything else
-#: is a reply that arrived, not a review that finished (Codex review of
-#: cd8c5b0: "UNFINISHED: did not reach a verdict" closed the task with
-#: review=True). A marker as written, never a reading of the prose; the
-#: verifier's VERDICT line is the same device.
-_REVIEW_COMPLETE = "REVIEW: COMPLETE"
-
-
-def _review_complete(text: str) -> bool:
-    """Whether a collaborator's reply carries a verdict in one of the three
-    forms the prompt names."""
-    body = (text or "").strip()
-    if body.upper().rstrip(".") == "NO FINDINGS" or _has_blocking_finding(body):
-        return True
-    for line in body.splitlines():
-        bare = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line.replace("**", "").replace("`", "").strip())
-        if bare.rstrip(" .!").upper() == _REVIEW_COMPLETE:
-            return True
-    return False
-
-
-def _has_blocking_finding(text: str) -> bool:
-    """Only a finding's explicit prefix controls the recheck loop."""
-    return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
-                        line.replace("**", ""), re.IGNORECASE)
-               for line in text.splitlines())
-
-
-def _resolved_verdict(text: str) -> bool:
-    """Accept one standalone boundary verdict, rejecting conflicting markers.
-
-    The requested response remains exactly RESOLVED or UNRESOLVED: <finding>.
-    Explanations around a boundary verdict are tolerated, but a prefix match,
-    duplicate verdict, or explicit unresolved finding cannot clear a review.
-    This parses the declared verdict; it does not validate explanatory prose.
-    """
-    lines = [line.strip().upper() for line in text.splitlines() if line.strip()]
-    if not lines or lines.count("RESOLVED") != 1:
-        return False
-    if lines[0] != "RESOLVED" and lines[-1] != "RESOLVED":
-        return False
-    return not (_has_blocking_finding(text)
-                or re.search(r"\bUNRESOLVED\b|\bNOT\s+RESOLVED\b", text, re.IGNORECASE))
 
 
 class Session:
@@ -2760,17 +2832,8 @@ class Session:
         itself and anyone outside the brain trust do not -- a consult is
         cross-expertise input from a peer, not an arbitrary summons.
         """
-        want = name.strip().lower()
-        for key in self.brain_trust:
-            if key == lead:
-                continue
-            spec = resolve(key)
-            if want == key.lower() or (
-                spec is not None
-                and (want == spec.alias.lower() or want in spec.label.lower())
-            ):
-                return key
-        return None
+        matches = _member_matches(name, [key for key in self.brain_trust if key != lead])
+        return matches[0] if len(matches) == 1 else None
 
     @_invocation_role("lead")
     def _tool_worker(self, arguments, lead: str, spec: TaskSpec, task: TaskMemory, state: dict):
@@ -3136,7 +3199,7 @@ class Session:
                 state["remember_request"](draft)
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
                 continue
-            requests = _parse_consults(body)
+            requests = _parse_consults(body, self.brain_trust)
             if not requests:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
                     raise TaskFailed("channel", "An unresolved request cannot be accepted as a draft.")
@@ -4081,7 +4144,7 @@ class Session:
         # reply, read for findings like any other.
         notes = [
             (p, n) for p, n in notes
-            if n.strip().upper().rstrip(".") != "NO FINDINGS" and p not in capped
+            if not _no_findings(n) and p not in capped
         ]
         # Satisfied only when a peer actually reviewed. Complexity can draw no
         # collaborator (Complexity.collaborator_count), and batch 2 recovery-v2
@@ -4225,7 +4288,8 @@ class Session:
                     "continuation is handed the task's files as they are now")
             + ". This task is not done: name the remaining work as a new, smaller task "
               f"whose description includes the line 'CONTINUES: {spec.task_id}' on its own line "
-              "with nothing else on it, and do not assume any of it is finished. Size max_lines for the remaining "
+              "with nothing else on it, and do not assume any of it is finished. " + _ONE_CONTINUES_LINE
+              + " Size max_lines for the remaining "
               "work only, and count every test not yet written in full, including its "
               "setup (fixtures, stubs, fakes); if that setup is large, give it its own task."
             + (f" The lead's last words, which are narration and not a result: {said[:300]}"
@@ -4309,7 +4373,7 @@ class Session:
             + (f" ({state.get('changed_lines', 0)} lines)" if changed else "")
             + ". This task is not done: name the remaining work as a new, smaller task "
               f"whose description includes the line 'CONTINUES: {spec.task_id}', and do not "
-              "assume any of it is finished. Size max_lines for the remaining work only"
+              "assume any of it is finished. " + _ONE_CONTINUES_LINE + " Size max_lines for the remaining work only"
             + (", and split it if the declared scope was too small for it" if exc.cause == "scope" else "")
             + ". If the failure shows the plan was wrong, name a different task instead."
         )
@@ -5945,9 +6009,7 @@ class Session:
                             self._design_unverified.append((spec.task_id, problem))
                             verdict = ("BLOCKING: the renders do not show the changed interface, and the "
                                        f"recapture did not produce clean evidence ({problem})")
-                blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
-                if (verdict or "").strip() != "APPROVED" and not blocking:
-                    blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+                blocking = _design_blocking(verdict)
                 if blocking and harness and not is_review_only(spec) and _design_judgement(blocking):
                     verdict, blocking = self._fix_reviewed_design(spec, lead, task, record, reviewer,
                                                                   verdict, blocking)
@@ -6015,6 +6077,7 @@ class Session:
             "where it shows. Reply with exactly one line\n"
             'CAPTURE: {"path": "/route", "steps": [...]}\n'
             "naming the page and the interaction steps that reach that state, as a user meets it. "
+            + _ONE_CAPTURE_MARKER + " "
             "The rules are those of a SCOPE capture: " + _CAPTURE_SCOPE_REQUEST + " A final wait "
             "must name something only the changed state shows. If no page and steps on this "
             "preview can reach that state, reply exactly CAPTURE: none and one line saying why. "
@@ -6128,9 +6191,7 @@ class Session:
             return verdict, blocking
         record.update(verified=True, problem="", screenshots=shots)
         verdict = self._final_design_review(spec, reviewer, shots)
-        blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
-        if (verdict or "").strip() != "APPROVED" and not blocking:
-            blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+        blocking = _design_blocking(verdict)
         fix["after"] = "approved" if not blocking else "still blocking"
         return verdict, blocking
 
@@ -6369,7 +6430,7 @@ class Session:
                 after = Project(root, exclude=self.config.project_excludes).contents()
                 changed = sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p))
                 allowed = _literal_paths(spec.scope) or set()
-                outside = [p for p in changed if p.strip("./") not in allowed]
+                outside = [p for p in changed if _scope_path(p) not in allowed]
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
@@ -6707,7 +6768,7 @@ class Session:
             "with rendered evidence above. Reply with exactly one line per requirement and nothing "
             "else: 'R1: MET - <file path or test name that shows it>' or "
             "'R1: NOT MET - <what is missing or contradicts the goal>'. A MET without a cited "
-            "file or test is counted as not met. A citation resolves only as a project-relative "
+            "file or test is counted as not met. " + _AUDIT_LINE_RULE + " A citation resolves only as a project-relative "
             "file path with an extension, or a test function named test_* defined in a file "
             "whose name starts with test and ends in .py; other names do not resolve."
         )
@@ -6728,13 +6789,12 @@ class Session:
             self.requirement_audits.append(dict(auditor=auditor, result="void: the tree changed during the audit"))
             return {r: (False, "the tree changed during the audit") for r in audited}
         found = {}
-        for m in _AUDIT_LINE.finditer(reply or ""):
-            met, why = m.group(2).upper() == "MET", m.group(3).strip()
+        for rid, met, why in _audit_lines(reply):
             if met:
                 resolved = self._resolve_citations(why)
                 if not resolved:
                     met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
-            found[m.group(1).upper()] = (met, why)
+            found[rid] = (met, why)
         lowered = self._lower_unexecuted(found)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
@@ -7435,8 +7495,8 @@ class Session:
             "refuses writes under .quadratus/, so the harness writes it from what you reply. For each "
             "path, reply with the line\nFIXTURE <path>:\nfollowed by one fenced block holding the "
             "complete file content, a valid non-secret sample of what that input accepts (at most "
-            f"{MAX_FIXTURE_BYTES:,} bytes). Reply with nothing else. Do not change files: this call "
-            "supplies content, it does not edit."
+            f"{MAX_FIXTURE_BYTES:,} bytes). " + _ONE_FIXTURE_FENCE + " Reply with nothing else. Do not "
+            "change files: this call supplies content, it does not edit."
         )
         try:
             with invocation(spec.task_id, "fixture-supply"):
@@ -8113,7 +8173,7 @@ class Session:
                 "If one specific question outside your strengths blocks you, "
                 "reply with only 'CONSULT <member>: <question>' -- the member "
                 "answers blind and their answer comes back to you. Members "
-                f"you may consult: {names}. At most "
+                f"you may consult: {names}. " + _CONSULT_NAMES_RULE + " At most "
                 f"{self.config.max_consults} per task; a consult is a "
                 "question, not a conversation."
             )
@@ -9059,7 +9119,9 @@ class Session:
             "case; a line 'BLOCKING: none' is read as no finding. Do not redo the work; "
             "verify it. End your reply with exactly one line, VERDICT: ACCEPT or "
             "VERDICT: REJECT; that line is read as your decision, and a REJECT must "
-            "name at least one BLOCKING: or UNRESOLVED: finding above it."
+            "name at least one BLOCKING: or UNRESOLVED: finding above it. Write nothing "
+            "after the word on that line: an ACCEPT followed by anything else is not "
+            "read as an acceptance."
             + self._review_turn_budget_note(verifier)
         )
 
@@ -9253,10 +9315,15 @@ def _closeout_excerpt(text: str, limit: int) -> str:
         return text
     marker = (f"\n[TRUNCATED: full evidence is {len(data)} bytes; "
               f"SHA-256 {hashlib.sha256(data).hexdigest()}]\n")
-    available = limit - len(marker.encode('utf-8'))
+    if limit < len(marker.encode('utf-8')):
+        # A bound smaller than the marker used to return nearly everything:
+        # the slices went negative. A short marker, then nothing but a cut.
+        marker = "[TRUNCATED]" if limit >= len("[TRUNCATED]") else ""
+    available = max(0, limit - len(marker.encode('utf-8')))
     head = available // 2
+    tail = available - head
     return (data[:head].decode('utf-8', errors='ignore') + marker
-            + data[-(available - head):].decode('utf-8', errors='ignore'))
+            + (data[len(data) - tail:].decode('utf-8', errors='ignore') if tail else ""))
 
 
 def _review_subject_note(spec: TaskSpec) -> str:
@@ -9340,15 +9407,81 @@ def _render_fetches(fetched) -> str:
     return "\n\n".join(blocks)
 
 
-def _parse_consults(reply: str):
+#: What a lead is told about :func:`_parse_consults`.
+_CONSULT_NAMES_RULE = (
+    "Name the member as listed here: a consult naming anyone else is refused and still counts "
+    "against the allowance. A reply that opens with a CONSULT line naming no member and then "
+    "goes on to other text is not read as a request, and it fails this task."
+)
+
+
+def _member_matches(name: str, keys) -> List[str]:
+    """The roster keys among ``keys`` that a consult's member name could mean.
+
+    Leads say 'Sol' or 'GPT-5.6 Sol' or a full key; all resolve. An exact
+    key, alias or label names that member alone. Otherwise the name must
+    stand in a label as whole words and hold a word of two letters or more.
+    The old test was a substring one, so "5" or a single letter resolved to
+    the first peer whose label happened to contain it and the wrong model
+    was consulted. A trailing version ("Grok 4.6", "Opus 5") is not part of
+    the name. More than one key back means the name does not say which.
+    """
+    words = _unstyled(name).casefold().strip("'\"").split()
+    while words and not re.search(r"[a-z]", words[-1]):
+        words.pop()
+    want = " ".join(words)
+    if not want:
+        return []
+    exact, partial = [], []
+    for key in keys:
+        spec = resolve(key)
+        names = {key.casefold()} | ({spec.alias.casefold(), spec.label.casefold()} if spec else set())
+        if want in names:
+            exact.append(key)
+        elif spec is not None and re.search(r"[a-z]{2}", want) and re.search(
+                rf"(?<![a-z0-9]){re.escape(want)}(?![a-z0-9])", spec.label.casefold()):
+            partial.append(key)
+    return exact or partial
+
+
+def _mentions_member(name: str, keys) -> bool:
+    """Whether a name holds a word of some member's label ("Sol (GPT-5.6)",
+    "the Grok seat"). Such a line was meant for the roster even when the
+    name does not resolve, so it is refused in words, as it always was,
+    rather than read as prose."""
+    said = set(re.findall(r"[a-z]{2,}", _unstyled(name).casefold()))
+    return any(said & set(re.findall(r"[a-z]{2,}", spec.label.casefold()))
+               for spec in map(resolve, keys) if spec is not None)
+
+
+#: How far into a CONSULT line a member's name can end.
+_MEMBER_NAME_CHARS = 120
+
+
+def _parse_consults(reply: str, members=None):
     """Consult requests: the reply *begins* with ``CONSULT <member>: <q>``.
 
     Returns [(member, question), ...] or [] when the reply is a real draft.
     Same strictness rationale as :func:`_parse_fetch`.
+
+    With ``members`` (the brain trust's roster keys), a reply that goes on
+    to other text is a request only where the name before the colon names
+    or mentions one of them: "CONSULT the docs: they say X." opening a draft
+    used to parse as a consult to a member called "the docs". There the
+    first line that names nobody ends the requests.
+
+    A reply that is CONSULT lines and nothing else is a request whoever it
+    names. It can be nothing else, and the caller refuses an unknown name in
+    words and asks again, as it always did; reading it as prose would fail
+    the task for a mistyped name.
+
+    A name that resolves ends at its own colon, so a full roster key, which
+    holds a colon itself, is read whole.
     """
     lines = [ln.strip() for ln in (reply or "").strip().splitlines() if ln.strip()]
     if not lines or not lines[0].upper().startswith("CONSULT "):
         return []
+    only_requests = all(ln.upper().startswith("CONSULT ") for ln in lines)
     out = []
     for line in lines:
         if not line.upper().startswith("CONSULT "):
@@ -9356,7 +9489,17 @@ def _parse_consults(reply: str):
         rest = line[len("CONSULT "):]
         if ":" not in rest:
             continue
-        member, question = rest.split(":", 1)
+        cut = rest.index(":")
+        if members is not None:
+            # A member's name is short: only a colon near the start can end
+            # one, so a long line full of colons is not matched colon by colon.
+            resolved = [i for i, ch in enumerate(rest[:_MEMBER_NAME_CHARS])
+                        if ch == ":" and rest[i + 1:].strip() and _member_matches(rest[:i], members)]
+            if resolved:
+                cut = resolved[-1]
+            elif not only_requests and not _mentions_member(rest[:cut], members):
+                break
+        member, question = rest[:cut], rest[cut + 1:]
         if member.strip() and question.strip():
             out.append((member.strip(), question.strip()))
     return out
@@ -9426,6 +9569,18 @@ _DECIDER_LABELS_REQUEST = (
 )
 
 
+def _read_labels(reply: str) -> TaskMetadata:
+    """Kind, difficulty and description as :mod:`quadratus.taskmeta` reads
+    them, with nothing checked beyond the labels."""
+    return parse_metadata(
+        reply,
+        known_kinds=set(ROUTING),
+        known_difficulties=set(Complexity._COLLABORATORS),
+        default_kind=TaskKind.GENERAL,
+        default_difficulty=Complexity.SIMPLE,
+    )
+
+
 def _read_metadata(reply: str) -> TaskMetadata:
     """Recover kind, difficulty and description, tolerating a bounded preface.
 
@@ -9434,18 +9589,22 @@ def _read_metadata(reply: str) -> TaskMetadata:
     ``KIND: test rote`` fall through to general/simple, dropping the testing
     pin without a word in the record; see that module for the full account.
 
+    The task's directive lines are settled here too (:func:`_settle_directives`),
+    so every path that names a task sends the same problems back the same
+    way: TIER or CONTINUES lines that disagree, and a NEEDS line that cannot
+    be read.
+
     Raises:
-        AmbiguousMetadata: on contradictory or unknown labels. The caller
-            re-asks once with a correction rather than defaulting, because the
-            default is precisely the silent misroute being fixed.
+        AmbiguousMetadata: on contradictory or unknown labels, or directive
+            lines with no single reading. The caller re-asks once with a
+            correction rather than defaulting, because the default is
+            precisely the silent misroute being fixed.
     """
-    return parse_metadata(
-        reply,
-        known_kinds=set(ROUTING),
-        known_difficulties=set(Complexity._COLLABORATORS),
-        default_kind=TaskKind.GENERAL,
-        default_difficulty=Complexity.SIMPLE,
-    )
+    meta = _read_labels(reply)
+    description, problem = _settle_directives(meta.description)
+    if problem:
+        raise AmbiguousMetadata(problem)
+    return meta if description == meta.description else replace(meta, description=description)
 
 
 def _parse_kind(reply: str) -> tuple:
@@ -9457,10 +9616,31 @@ def _parse_kind(reply: str) -> tuple:
     Callers that *can* re-ask use :func:`_read_metadata` directly.
     """
     try:
-        meta = _read_metadata(reply)
+        # The labels only: a lead's draft is read through here, and its lines
+        # are not a task's directives.
+        meta = _read_labels(reply)
     except AmbiguousMetadata:
         return TaskKind.GENERAL, Complexity.SIMPLE, (reply or "").strip()
     return meta.kind, meta.difficulty, meta.description
+
+
+#: A close-out section header: the name, then a colon and the first of its
+#: text, or the name alone where markdown marks it as a heading.
+_CLOSEOUT_HEADER = re.compile(r"(SUMMARY|DECISIONS|REASONING|DEAD\s+ENDS|MAP\s+NOTES)\s*(?::(.*))?", re.IGNORECASE)
+#: What markdown puts around such a header: stars, backticks, a heading mark.
+#: A list bullet is not removed: a bulleted line is an entry, as it always was.
+_CLOSEOUT_STYLING = re.compile(r"[*`]+|^#{1,6}\s+")
+#: "No dead ends." and the like: the section's way of saying it is empty.
+_NO_DEAD_ENDS = re.compile(r"no\s+dead\s+ends?(?:\s+(?:were\s+|was\s+)?(?:recorded|found|noted|hit|encountered))?"
+                           r"[\s.!]*", re.IGNORECASE)
+
+
+def _map_entry(line: str) -> Optional[tuple]:
+    """``(topic, text)`` for a 'topic: text' line, bulleted or not; None for
+    anything else."""
+    topic, colon, note = line.lstrip("-\u2022* ").partition(":")
+    topic, note = topic.strip(" *_`"), note.strip()
+    return (topic, note) if colon and topic and note else None
 
 
 def _parse_closeout(reply: str):
@@ -9477,28 +9657,43 @@ def _parse_closeout(reply: str):
         "SUMMARY": [], "DECISIONS": [], "REASONING": [], "DEAD ENDS": [], "MAP NOTES": [],
     }
     current = "SUMMARY"
+    notes_open = True
     for line in (reply or "").splitlines():
         stripped = line.strip()
-        upper = stripped.upper()
-        matched = next((k for k in sections if upper.startswith(k + ":")), None)
-        if matched:
-            current = matched
-            rest = stripped[len(matched) + 1:].strip()
-            if rest:
-                sections[current].append(rest)
+        # A header is read as written, or failing that without its markdown:
+        # "**SUMMARY:**" and "## Dead ends" used to be body text, which put
+        # the whole reply in the summary and the reasoning and dropped its
+        # map notes.
+        plain = _CLOSEOUT_STYLING.sub("", stripped).strip()
+        header = _CLOSEOUT_HEADER.fullmatch(stripped) or _CLOSEOUT_HEADER.fullmatch(plain)
+        if header and header.group(2) is None and plain == stripped:
+            # The bare word with no colon and no markdown is text, as it
+            # always was: a wrapped sentence can leave "summary" or "dead
+            # ends" alone on a line, and the lines after it would be filed
+            # under that section (as dead-end lessons, at worst).
+            header = None
+        if header:
+            current = " ".join(header.group(1).upper().split())
+            notes_open = True
+            stripped = (header.group(2) or "").strip()      # what follows the colon opens the section
+        if not stripped:
             continue
-        if stripped:
-            sections[current].append(stripped)
+        if current == "MAP NOTES":
+            # The section is its entries and nothing after them: it ends at
+            # the first line that is not 'topic: text', so a sentence that
+            # follows the notes (and happens to hold a colon further on) is
+            # never stored as one.
+            notes_open = notes_open and _map_entry(stripped) is not None
+            if not notes_open:
+                continue
+        sections[current].append(stripped)
 
     summary = " ".join(sections["SUMMARY"]).strip() or (reply or "").strip() or "(no summary)"
     # DECISIONS replaced REASONING in the prompt; an older-style reply still parses.
     reasoning = " ".join(sections["DECISIONS"] + sections["REASONING"]).strip() or summary
-    dead_ends = [d.lstrip("-• ").strip() for d in sections["DEAD ENDS"] if d.strip()]
-    map_notes: List[tuple] = []
-    for raw in sections["MAP NOTES"]:
-        raw = raw.lstrip("-• ").strip()
-        if ":" in raw:
-            topic, note = raw.split(":", 1)
-            if topic.strip() and note.strip():
-                map_notes.append((topic.strip(), note.strip()))
+    # The prompt says "or none": that answer is not a lesson. It was stored
+    # as the dead end "none" and rendered in every later orchestrator prompt.
+    dead_ends = [d for d in (d.lstrip("-•* ").strip() for d in sections["DEAD ENDS"])
+                 if d and not _NO_DEAD_ENDS.fullmatch(_unstyled(d)) and not _is_empty_note(d)]
+    map_notes = [entry for entry in map(_map_entry, sections["MAP NOTES"]) if entry is not None]
     return summary, reasoning, dead_ends, map_notes

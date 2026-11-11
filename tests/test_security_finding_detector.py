@@ -54,7 +54,10 @@ ACCEPTING_REPORT = (
     ("**VERDICT:** REJECT", False),
     ("- VERDICT: reject\n", False),
     ("VERDICT: ACCEPT\nsecond thoughts\nVERDICT: REJECT", False),   # the last line wins
-    ("Verdict: accept the code change", True),
+    # Whole-repo review, 2026-11-10: an ACCEPT with words after it is not an
+    # acceptance (the same shape as "VERDICT: ACCEPT once fixed"), so it is no
+    # verdict line and the marker scan decides.
+    ("Verdict: accept the code change", None),
     ("The verdict is positive.", None),
     ("VERDICT: maybe", None),
 ])
