@@ -88,11 +88,13 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     review seat raised, and both are appended to the project's
     ``scoreboard.jsonl`` in the state folder, a record nothing reads back.
 
-    ``accept_watched_paths`` starts a run although the last run on this
+    ``accept_watched_paths`` starts a run although an earlier run on this
     project recorded a change to a watched path (a git hook, an env file, a
     link: quadratus.project_watch) that is still in place (also
     ``QUADRATUS_ACCEPT_WATCHED_PATHS=1``). By default such a project is
-    refused before any model call, with the paths named.
+    refused before any model call, with the paths named. An acceptance
+    lasts: it is written to this run's record (``trust``), and later runs
+    read it there and do not ask about the same paths again.
 
     ``trust_project_policy`` is the operator's approval of the project's own
     ``.quadratus/policy.json``, by that file's sha256 (also
@@ -280,6 +282,14 @@ def _refuse_agent_config(project, allowed=False, progress=None):
 _MAX_OLD_RECORD_BYTES = 32 * 1024 * 1024
 _MAX_RUNS_LISTED = 20_000
 _NEWEST_RUNS_TRIED = 20
+#: The name under which a record that may not name every path its run
+#: changed is asked about and accepted. Not a path: no listing holds it.
+_UNNAMED_PATHS = '(watched paths the record does not name)'
+
+
+class _TooManyRunFolders(Exception):
+    """More folders under ``runs`` than the preflight lists, so the newest
+    records cannot be told from the rest."""
 
 
 def _read_bounded(path, limit):
@@ -325,15 +335,26 @@ def _recent_run_records(state):
     folder that run's calls made can be written later than it, however many
     there are and whatever they are named. A folder with no record takes no
     place in either. An old record is untrusted input: nothing about it
-    raises, and one that cannot be read is a note."""
+    raises, and one that cannot be read is a note.
+
+    Two bounds, and neither is passed in silence (review of the fix set):
+    the listing stopped at ``_MAX_RUNS_LISTED`` folders in whatever order
+    the filesystem gave them, so a call that made more than that could leave
+    its own run's record unread, and that is now ``_TooManyRunFolders``; and
+    a record holds at most ``WATCH_RECORD_LIMIT`` changed paths, so a call
+    that changed more (a hundred decoy run folders are enough) could keep
+    the one that mattered off it. A record that is full, or says its
+    findings could not be kept, is marked ``unnamed``."""
+    from .project_watch import WATCH_RECORD_LIMIT
     runs = Path(state) / 'runs'
     try:
         names = []
         with os.scandir(runs) as listing:
             for entry in listing:
-                if len(names) >= _MAX_RUNS_LISTED:
-                    break
                 if entry.is_dir(follow_symlinks=False):
+                    if len(names) >= _MAX_RUNS_LISTED:
+                        raise _TooManyRunFolders(
+                            f'There are more than {_MAX_RUNS_LISTED:,} folders under {runs}')
                     names.append(entry.name)
     except FileNotFoundError:
         return [], []
@@ -367,6 +388,8 @@ def _recent_run_records(state):
         accepted = trust.get('watched_paths_accepted') if isinstance(trust, dict) else None
         records.append(dict(
             run=name, written=written[name],
+            unnamed=bool(isinstance(watch, dict) and (
+                watch.get('unavailable') or (isinstance(paths, list) and len(paths) >= WATCH_RECORD_LIMIT))),
             paths=[p for p in paths if isinstance(p, dict) and isinstance(p.get('path'), str)]
             if isinstance(paths, list) else [],
             accepted={a['path'] for a in accepted if isinstance(a, dict) and isinstance(a.get('path'), str)}
@@ -384,7 +407,12 @@ def _recorded_watch_paths(records):
     in its window. Later means by name and by when the record was written:
     a record made during the run that planted the path can name itself
     anything, but it was written before that run's own record and so
-    accepts nothing in it."""
+    accepts nothing in it.
+
+    A record marked ``unnamed`` adds one entry under ``_UNNAMED_PATHS``:
+    its run may have changed paths the record does not hold, so no listing
+    can show them gone. It stands until a later run's operator accepts it,
+    like any other."""
     entries = []
     for index, old in enumerate(records):
         accepted = set()
@@ -392,6 +420,9 @@ def _recorded_watch_paths(records):
             if later['written'] > old['written']:
                 accepted |= later['accepted']
         entries += [dict(entry, run=old['run']) for entry in old['paths'] if entry['path'] not in accepted]
+        if old.get('unnamed') and _UNNAMED_PATHS not in accepted:
+            entries.append(dict(path=_UNNAMED_PATHS, what='changed', kind='', record=None,
+                                run=old['run'], unnamed=True))
     return entries
 
 
@@ -406,8 +437,8 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
     run's record and asked about here, from every recent record and not
     only the newest (``_recent_run_records``). The operator removes or
     restores the path, or accepts it, which later runs then read from the
-    accepting run's record and do not ask about again. A record that cannot be read is said and
-    is not a refusal: it proves nothing either way.
+    accepting run's record and do not ask about again. A record that cannot
+    be read is said and is not a refusal: it proves nothing either way.
     """
     from .project_watch import (
         ACCEPT_WATCHED_PATHS_ENV,
@@ -417,7 +448,20 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
         still_in_place,
         watched_paths_accepted,
     )
-    records, notes = _recent_run_records(state)
+    try:
+        records, notes = _recent_run_records(state)
+    except _TooManyRunFolders as exc:
+        # Fail closed: which of them is the last run's record is not known.
+        if watched_paths_accepted(accepted):
+            if progress:
+                progress(f'Watched paths: {exc}, so the records of earlier runs were not read. Accepted '
+                         'by the operator for this run; the next run asks again while they are there.')
+            return []
+        raise ValueError(
+            f'{exc}, more than a preflight reads, so whether an earlier run left a watched path '
+            'changed is not known. Nothing was run and no model was called. Remove the folders there '
+            'that are not run records you need (a run\'s folder holds its result.json), or start '
+            f'anyway with --accept-watched-paths or {ACCEPT_WATCHED_PATHS_ENV}=1.') from exc
     for note in notes[:_NEWEST_RUNS_TRIED] if progress else ():
         progress(f'Watched paths: {note}, so whether that run left a watched path changed is '
                  'not known from it.')
@@ -442,6 +486,11 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
             f'not be listed to see whether they are still there ({exc}). Nothing was run and no model '
             f'was called. {way_out}') from exc
     standing = still_in_place(paths, listing)
+    # A record that may not name every path its run changed: nothing in the
+    # listing can show those gone, so it stands until it is accepted.
+    unnamed = [entry for entry in paths if entry.get('unnamed')][-1:]
+    standing += [dict(path=_UNNAMED_PATHS, what='not checked', kind='', by=entry['run'], since=False)
+                 for entry in unnamed]
     if not standing:
         return []
     # The latest record of a path is the one that was compared.
@@ -451,15 +500,23 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
                       s['what'] + (', and written to since' if s.get('since') else '')) for s in standing)
     if watched_paths_accepted(accepted):
         if progress:
+            # Not for this run alone: an acceptance lasts (the integrator's ruling).
             progress(f"Watched paths run {', '.join(by[-3:])} left changed, accepted by the operator "
-                     f'for this run: {named}')
+                     f"for this run and the ones after it: {named}. The acceptance is written to this "
+                     "run's record, and later runs do not ask about the same paths again.")
         return standing
     last = max(record['run'] for record in records)
     who = (f'The last run on this project ({last})' if by == [last] else
            f"Earlier runs on this project ({', '.join(by[-3:])}{' and more' if len(by) > 3 else ''})")
+    more = ''
+    if unnamed:
+        from .project_watch import WATCH_RECORD_LIMIT
+        more = (f" Run {unnamed[0]['run']} changed more watched paths than its record holds "
+                f'({WATCH_RECORD_LIMIT}), so some are named nowhere: before you accept, look through the '
+                'project for links, git hooks, env files and files in tool caches that you did not put there.')
     raise ValueError(
         f'{who} recorded that an editing call changed paths outside '
-        f'the measured source that no task may change, and the change is still in place: {named}. '
+        f'the measured source that no task may change, and the change is still in place: {named}.{more} '
         'No measured diff or review copy shows them, so a new run would take them as its starting '
         f'point and every check would run on top of them. Nothing was run and no model was called. {way_out}')
 

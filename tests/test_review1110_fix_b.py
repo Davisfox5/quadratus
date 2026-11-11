@@ -115,16 +115,22 @@ def test_code_planted_where_no_listing_reads_is_a_sensitive_change(tmp_path, pla
 def test_a_build_folder_holds_only_what_no_build_writes_to_the_class(tmp_path):
     """A real build writes Python, JavaScript and a package.json into dist,
     build and .next, so those stay observations; a conftest.py, a start-up
-    file, a .pth file or a manual mock there has no build to explain it."""
+    file, a .pth file or a manual mock there has no build to explain it.
+    A .tox or .nox environment holds installed packages with their own
+    conftest.py and .pth files, so only a manual mock counts there: the
+    review of this fix set found jest's default run turned green by
+    .tox/__mocks__/mylib.js, recorded as an observation only."""
     root, watch = _project(tmp_path)
     before = watch.listing()
     sensitive_names = ["build/conftest.py", "build/lib/pkg/tests/Conftest.py", "build/lib/sitecustomize.py",
                        "dist/usercustomize.py", "dist/site/evil.pth", "dist/__mocks__/mylib.js",
                        "build/js/__mocks__/deep/fs.js", "test-results/__mocks__/mylib.js",
-                       "htmlcov/evil.pth", ".next/server/__mocks__/a.js"]
+                       "htmlcov/evil.pth", ".next/server/__mocks__/a.js",
+                       ".nox/s/__mocks__/a.js", ".tox/__mocks__/mylib.js", ".tox/py/lib/__MOCKS__/deep/fs.js"]
     observed = ["build/lib/pkg/app.py", "dist/app.js", "dist/package.json", ".next/package.json",
                 "dist/jest.config.js", "build/setup.cfg", ".tox/py/lib/site-packages/a.pth",
-                ".tox/py/lib/site-packages/pkg/conftest.py", ".nox/s/__mocks__/a.js", "htmlcov/index.html"]
+                ".tox/py/lib/site-packages/pkg/conftest.py", ".nox/s/lib/sitecustomize.py",
+                ".tox/py/package.json", "htmlcov/index.html"]
     _write(root, {name: "x" for name in sensitive_names + observed})
     after = watch.listing()
     sensitive, output = watch.changes(before, after)
@@ -173,6 +179,25 @@ def test_a_file_under_gits_ledgers_that_is_not_gits_own_is_code(tmp_path, name, 
     before = watch.listing()
     _write(root, {name: content})
     assert watch.changes(before, watch.listing())[0] == [(name, "added")]
+
+
+def test_a_reflog_a_gc_emptied_is_gits_own_and_one_filled_with_code_is_not(tmp_path):
+    """Review of this fix set: git leaves an empty file where every entry of
+    a reflog expired, and a gc can do that during a call. For a branch named
+    like code, the empty file read as code a call had added."""
+    root, watch = _project(tmp_path)
+    name = ".git/logs/refs/heads/fix-setup.py"
+    _write(root, {name: f"{'0' * 40} {HEX} A <a@b> 1 +0000\tbranch: Created\n",
+                  ".git/refs/heads/fix-setup.py": HEX + "\n"})
+    before = watch.listing()
+    _write(root, {name: "", ".git/refs/heads/conftest.py": ""})
+    emptied = watch.listing()
+    assert watch.changes(before, emptied) == ([], [])
+    _write(root, {name: "import os\n"})
+    assert watch.changes(emptied, watch.listing())[0] == [(name, "added")]
+    # Only under git's ledgers: an empty file so named elsewhere in .git is still listed.
+    _write(root, {".git/conftest.py": ""})
+    assert (".git/conftest.py", "added") in watch.changes(emptied, watch.listing())[0]
 
 
 def test_a_link_that_can_deliver_code_is_recorded_and_never_followed(tmp_path):
@@ -230,6 +255,9 @@ def test_the_rule_stated_to_an_editing_call_names_the_loaded_class(tmp_path):
                  ".quadratus/runs", "result.json", "a .git folder"]:
         assert name in SENSITIVE_RULE, name
     assert not project_watch._ENVIRONMENTS & set(SENSITIVE_RULE.split("and inside ")[1].split(",")[0].split(" or "))
+    environments = SENSITIVE_RULE.rsplit("as well; in ", 1)[1].split(")")[0]
+    assert set(environments.split(", ")[0].split(" or ")) == project_watch._ENVIRONMENTS
+    assert environments.endswith(MOCKS_DIR + " alone")
     # Every name in the tables is one the listing records, wherever no other listing reads.
     root, watch = _project(tmp_path)
     before = watch.listing()
@@ -293,7 +321,7 @@ def _jest(root):
     return bool(mocked), "stand-in"
 
 
-@pytest.mark.parametrize("folder", [".quadratus", ".pytest_cache", "test-results", "dist"])
+@pytest.mark.parametrize("folder", [".quadratus", ".pytest_cache", "test-results", "dist", ".tox", ".nox/s"])
 def test_a_manual_mock_that_turns_a_failing_jest_check_green_is_a_watched_change(tmp_path, folder):
     """The review's jest repro: default config, a test that fails against
     the installed module and passes against a planted ``__mocks__`` copy."""
@@ -572,6 +600,58 @@ def test_no_number_of_decoys_pushes_a_runs_own_record_out_of_the_window(tmp_path
     assert len(records) <= project_run._NEWEST_RUNS_TRIED * 2, "two bounded windows, never the whole folder"
 
 
+def test_a_record_too_full_to_name_every_path_stands_until_it_is_accepted(tmp_path):
+    """Review of the fix set: a record keeps 200 changed paths, in path
+    order. A call that made a hundred decoy run folders filled it, the link
+    it also planted sorted after them and was not on it, and once the decoys
+    had been cleared away nothing asked about the link."""
+    root, _ = _planted(tmp_path)
+
+    def decoys(count):
+        return [dict(path=f".quadratus/runs/9999{index:04d}T000000Z-ffffffff", kind="run-record", what="added",
+                     record=["dir"], before=None, by="t1 lead") for index in range(count)]
+
+    _record(root, REAL, decoys(project_watch.WATCH_RECORD_LIMIT - 1))
+    assert _preflight(root) == [], "a record with room left names everything, and all of it is gone"
+    _record(root, REAL, decoys(project_watch.WATCH_RECORD_LIMIT))
+    with pytest.raises(ValueError, match="changed more watched paths than its record holds") as refused:
+        _preflight(root)
+    text = str(refused.value)
+    assert project_run._UNNAMED_PATHS in text and REAL in text and "no model was called" in text
+    assert "look through the project" in text and "--accept-watched-paths" in text
+    # Accepted like any other finding, and the acceptance lasts the same way.
+    assert [s["path"] for s in _preflight(root, accepted=True)] == [project_run._UNNAMED_PATHS]
+    _record(root, "20261112T100000Z-0b0b0b0b", accepted=[project_run._UNNAMED_PATHS])
+    assert _preflight(root) == []
+    # A record that says its findings could not be kept names nothing either.
+    _record(root, "20261113T100000Z-0c0c0c0c",
+            raw=json.dumps({"project_watch": {"findings": [], "paths": [], "unavailable": True}}))
+    with pytest.raises(ValueError, match="20261113T100000Z-0c0c0c0c"):
+        _preflight(root)
+
+
+def test_more_run_folders_than_the_preflight_lists_is_a_refusal_and_never_a_guess(tmp_path, monkeypatch):
+    """Review of the fix set: the listing stopped at its bound in whatever
+    order the filesystem gave, so a call that made more folders than that
+    could leave its own run's record unread, and the finding with it."""
+    root, finding = _planted(tmp_path)
+    _record(root, REAL, [finding])
+    monkeypatch.setattr(project_run, "_MAX_RUNS_LISTED", 3)
+    runs = root / ".quadratus" / "runs"
+    for index in range(40):
+        (runs / f"9999{index:04d}T000000Z-ffffffff").mkdir()
+    with pytest.raises(ValueError, match="more than 3 folders under .*no model was called.*accept-watched-paths"):
+        _preflight(root)
+    lines = []
+    assert _preflight(root, accepted=True, progress=lines.append) == []
+    assert len(lines) == 1 and "were not read" in lines[0] and "the next run asks again" in lines[0]
+    # At the bound itself every folder is listed, and the record is read.
+    for folder in sorted(runs.iterdir())[3:]:
+        folder.rmdir()
+    with pytest.raises(ValueError, match="tests/conftest.py"):
+        _preflight(root)
+
+
 def test_a_finding_in_an_older_record_stands_and_is_named_by_its_run(tmp_path):
     root, finding = _planted(tmp_path)
     _record(root, REAL, [finding])
@@ -592,6 +672,34 @@ def test_an_acceptance_is_read_from_the_run_that_gave_it(tmp_path):
     _record(root, "20261113T100000Z-0c0c0c0c", [finding])
     with pytest.raises(ValueError, match="20261113T100000Z-0c0c0c0c"):
         _preflight(root)
+
+
+def test_an_acceptance_given_to_one_run_lasts_for_the_runs_after_it(tmp_path, monkeypatch):
+    """The integrator's ruling, through run_project and the record it really
+    writes: the refusal and the accepting run's own line both say the
+    acceptance lasts, and the run after it starts without being asked."""
+    from quadratus.project_run import run_project
+    from quadratus.session import Session
+    monkeypatch.delenv(project_watch.ACCEPT_WATCHED_PATHS_ENV, raising=False)
+    monkeypatch.setattr(Session, "run", lambda self, **kw: None)
+    root, finding = _planted(tmp_path)
+    _record(root, "20200101T000000Z-0a0a0a0a", [finding])
+    settings = Settings(backend="cli")
+    with pytest.raises(ValueError, match="later runs do not ask about the same paths again"):
+        run_project("g", root, settings, allow_writes=True)
+    lines = []
+    accepting = run_project("g", root, settings, allow_writes=True, accept_watched_paths=True,
+                            progress=lines.append)
+    assert accepting.error == ""
+    said = [line for line in lines if PLANTED_LINK in line and "accepted by the operator" in line]
+    assert len(said) == 1 and "for this run and the ones after it" in said[0]
+    assert "later runs do not ask about the same paths again" in said[0]
+    trust = json.loads((accepting.run_dir / "result.json").read_text())["trust"]
+    assert [entry["path"] for entry in trust["watched_paths_accepted"]] == [PLANTED_LINK]
+    time.sleep(0.05)
+    after = run_project("g", root, settings, allow_writes=True)        # no flag, and not asked
+    assert after.error == "" and (root / PLANTED_LINK).is_symlink(), "accepted, never removed"
+    assert json.loads((after.run_dir / "result.json").read_text())["trust"]["watched_paths_accepted"] == []
 
 
 def test_a_decoy_cannot_accept_what_the_run_that_made_it_recorded(tmp_path):

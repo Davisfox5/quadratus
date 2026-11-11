@@ -48,7 +48,11 @@ editing call fails the task as a scope violation, and nothing is reverted):
   where a real build writes Python and JavaScript, only the part of that
   class no build has a reason to write is held to it
   (``BUILD_LOADED_NAMES``, ``.pth`` files and ``__mocks__``); in a report
-  or cache folder, Python and ``.pth`` files and ``__mocks__``. In the
+  or cache folder, Python and ``.pth`` files and ``__mocks__``; in a
+  ``.tox`` or ``.nox`` environment, which a tool fills with installed
+  packages and their own ``conftest.py`` and ``.pth`` files, ``__mocks__``
+  alone (no installed package brings one, and jest's default configuration
+  loads a manual mock from there as from anywhere). In the
   folders walked by name only, a link counts when it is so named or leads
   to a folder, which pytest collects through; a link to a file under any
   other name loads nothing, and the evidence check has its own rule for a
@@ -71,8 +75,10 @@ next run on the project is refused before any model call while a recorded
 path still holds that content (:func:`still_in_place`,
 ``project_run._refuse_standing_watch_findings``): started again without
 that, the new run took the planted file as its baseline and it worked
-again. The operator removes or restores the path, or accepts it for the
-run (``accept_watched_paths``, ``QUADRATUS_ACCEPT_WATCHED_PATHS=1``). The
+again. The operator removes or restores the path, or accepts it
+(``accept_watched_paths``, ``QUADRATUS_ACCEPT_WATCHED_PATHS=1``). An
+acceptance lasts: it is written to the accepting run's record, and later
+runs read it there and do not ask about the same path again. The
 map and the scoreboard, which the harness itself appends to, stand until
 they are gone or back as they were before the call, whatever was written
 to them since.
@@ -90,8 +96,13 @@ the tool caches every test run rewrites. Those folders are still walked,
 by name only, for the loaded-by-position class above; the harness itself
 writes no file so named, so it never trips its own watch. Not watched at
 all: dependency trees, which :mod:`quadratus.deptree` identifies; a
-``.tox`` or ``.nox`` environment beyond the build-output signature (it is
-a dependency tree nobody identifies yet); compiled ``.pyc`` files;
+``.tox`` or ``.nox`` environment beyond the build-output signature and its
+``__mocks__`` folders (it is a dependency tree nobody identifies yet, so a
+``conftest.py`` or ``.pth`` file written into one is an observation);
+compiled ``.pyc`` files, which no check reads (``integration`` runs every
+check with a fresh ``PYTHONPYCACHEPREFIX``); a test file of another
+language (``x.test.js``) in a folder walked by name only, which adds cases
+to a default jest run and replaces none;
 anything outside the project, which includes the real git directory of a
 linked worktree.
 
@@ -154,8 +165,9 @@ WATCH_RECORD_LIMIT = 200
 #: editing call is in flight: the map is amended from an orchestrator's
 #: reply and from a close-out's, both after their call returned, and a
 #: parallel child's close-out writes the run's map while its siblings edit
-#: copies of the project, whose own ``.quadratus`` is not the run's. Nothing
-#: in the harness writes the scoreboard yet. So an editing call that writes
+#: copies of the project, whose own ``.quadratus`` is not the run's. The
+#: scoreboard is appended once, when a run ends, after its last call
+#: (``project_run``). So an editing call that writes
 #: either wrote what every later prompt would be handed as codebase
 #: knowledge, and fails its task like any other watched path.
 STATE_FILES = ("policy.json", "source-excludes.json", "codebase-map.jsonl", "scoreboard.jsonl")
@@ -228,7 +240,8 @@ SENSITIVE_RULE = (
     + "); and inside " + " or ".join(sorted(_BUILD)) + ", only "
     + ", ".join(sorted(BUILD_LOADED_NAMES) + ["any *" + s for s in BUILD_LOADED_SUFFIXES]
                 + ["anything under a " + MOCKS_DIR + " folder"])
-    + " (in a report or cache folder, *.pth and " + MOCKS_DIR + " as well)"
+    + " (in a report or cache folder, *.pth and " + MOCKS_DIR + " as well; in "
+    + " or ".join(sorted(_ENVIRONMENTS)) + ", " + MOCKS_DIR + " alone)"
     ". A change to one fails the task as out of scope, with the work kept and the path named, "
     "and no later task runs while it is in place."
 )
@@ -259,13 +272,21 @@ def _report_loaded(name: str) -> str:
     return "report-code" if name.endswith(".py") else "loaded-code" if name.endswith(".pth") else ""
 
 
+def _environment_loaded(name: str) -> str:
+    """The same inside a ``.tox`` or ``.nox`` environment: no file is in the
+    class by its name, because installed packages bring their own
+    ``conftest.py`` and ``.pth`` files. A ``__mocks__`` folder still counts
+    (``_tree`` asks any rule about those), since none is ever installed."""
+    return ""
+
+
 def _output_rule(name: str):
     """The loaded-by-position test for one build-output or stray-state folder."""
     if name in _STRAY_STATE:
         return _loaded
     if name in _BUILD:
         return _build_loaded
-    return _report_loaded if name in _PYTHON_FREE else None
+    return _report_loaded if name in _PYTHON_FREE else _environment_loaded
 
 
 #: The operator's standing permission to run in a project that carries
@@ -710,7 +731,10 @@ class ProjectWatch:
         writes there, so that a branch named like code is not taken for it.
         A ref is one object name and nothing else; a reflog starts with two.
         Neither can run: the first is one bare name or number, and two names
-        side by side are a syntax error in any file a runner would load."""
+        side by side are a syntax error in any file a runner would load. Nor
+        can an empty file, which is what git leaves of a reflog whose every
+        entry expired (a gc does that, and can run during a call); one that
+        is filled later is read again then."""
         if not stat.S_ISREG(st.st_mode) or (ledger == "refs" and st.st_size > 65):
             return False
         try:
@@ -718,13 +742,15 @@ class ProjectWatch:
         except OSError:
             return False
         try:
-            head = os.read(handle, 160) if stat.S_ISREG(os.fstat(handle).st_mode) else b""
+            if not stat.S_ISREG(os.fstat(handle).st_mode):
+                return False
+            head = os.read(handle, 160)
         except OSError:
             return False
         finally:
             os.close(handle)
         state["read"] += len(head)
-        return bool(_REF.fullmatch(head) if ledger == "refs" else _REFLOG.match(head))
+        return not head or bool(_REF.fullmatch(head) if ledger == "refs" else _REFLOG.match(head))
 
     def _git(self, parent_fd, name, parts, st, state):
         rel = "/".join(parts)
