@@ -375,11 +375,29 @@ def test_every_option_the_cli_had_is_in_the_readme():
         assert option in named, f"{option} exists and the README does not mention it"
 
 
+#: Vendor CLI flags the README names only in its list of probes nobody has
+#: made yet. They are another program's options, so no parser here has them.
+_VENDOR_FLAGS_IN_PROBES = {
+    "--strict-mcp-config", "--setting-sources", "--output-format", "--skip-git-repo-check",
+    "--sandbox", "--system-prompt-file", "--mcp-config",
+}
+_PROBE_HEADING = "### Not yet probed against the real CLIs"
+
+
 def test_the_readme_names_no_option_the_commands_lack():
     # --cask is brew's and --help is argparse's own.
     foreign = {"--cask", "--help"}
-    named = set(re.findall(r"(?<![\w-])--[a-z][a-z-]+", README))
-    assert named - _defined_options() - foreign == set()
+    # The two record readers have small parsers of their own.
+    for tool in ("compare_runs.py", "scoreboard.py"):
+        source = (ROOT / "tools" / tool).read_text(encoding="utf-8")
+        foreign |= set(re.findall(r"""["'](--[a-z][a-z-]+)["']""", source))
+    start = README.index(_PROBE_HEADING)
+    end = README.index("\n## ", start)
+    probes, rest = README[start:end], README[:start] + README[end:]
+    option = r"(?<![\w-])--[a-z][a-z-]+"
+    assert set(re.findall(option, rest)) - _defined_options() - foreign == set()
+    # A vendor's flag belongs in the probe list and nowhere else.
+    assert set(re.findall(option, probes)) - _defined_options() - foreign <= _VENDOR_FLAGS_IN_PROBES
 
 
 # -- CI ----------------------------------------------------------------------

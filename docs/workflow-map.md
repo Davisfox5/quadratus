@@ -53,6 +53,16 @@ from `6382cf2`.
   - There are no collaborators, no scope measurement and no design check.
 - **Parallel batch** (`_run_batch` 2917) runs children with no gate and no
   ledger, merges in-scope files, then runs one merge gate.
+  - Since 2026-11-10 each block is read by the serial task's own intake
+    (`_read_directives`) and task ids come from one counter, spent at
+    dispatch. A batch holding RESOLVES, CONTINUES or a harness-captured task
+    is sent back whole.
+  - A child renders the parent's invariants and operator rulings and keeps
+    its own empty ledger. A merged child's design evidence is copied into
+    the project (`batch_evidence.py`) and stands only if the merge gate left
+    that child's files unchanged; otherwise the task is `DesignUnverified`.
+  - A batch forms only when the budget covers one reserve per child
+    (`Fleet.reserve_shortfall`); otherwise the same tasks run one at a time.
 - **Turn cap** (`_close_turn_limited` 2048) ends a task after stage 3 or 6 with
   no gate and no close-out, and hands a CONTINUES back to the orchestrator.
 
@@ -88,6 +98,9 @@ from `6382cf2`.
 | Lead channel did not converge (fetch or consult budget, malformed WORKER, request after the channel closed, unresolved request as a draft) | `TaskFailed("channel")` | the task fails, the run continues | `failed` |
 | Task scope invalid twice (orchestrator) | `RunStalled` after one correction | stop; the correction now carries the scope and capture rules in full (a6c9576 rerun stalled on a rule it was never shown). Since the 2026-09-28 parity batch every reply rule the harness enforces is stated in the eliciting prompt, with the bounds quoted from the parser constants (`tests/test_prompt_rule_parity.py`) | operator |
 | Dependency tree changed or unavailable | `DependencyTreeChanged` / `…Unavailable` | stop at the next edge; latched | integrity |
+| Watched path changed by an editing call (git hook or config, env or credential file, agent configuration, policy file, codebase map, a link; 2026-11-10) | `TaskFailed("scope")` naming the path, then `SensitiveChangeInPlace` | the task fails and nothing is deleted; while the change is in place the run stops at the next call that is not the orchestrator's; the next run is refused before any model call unless the operator accepts the path | `failed`, then a run stop (`operator` by the default rule) |
+| Watched paths cannot be listed within bounds | `WatchUnavailable` | stop before the editing call, so none runs unwatched | `operator` by the default rule |
+| Requirements audit did not run (no auditor from another vendor, a failed auditor call, a tree that moved, no verdict for any requirement; 2026-11-10) | `AuditUnavailable` | no status written; DONE sent back once; a second miss in a row, or a miss at the cap or on an explicit list, stops for the operator; never `RequirementsUnmet` | `operator` |
 | CHANGED mismatch | non-terminal `unverified` fact on the task (`runtime.changed_report`) | recorded, run continues; the measured diff is what every check reads. A request line that fails to parse with no CHANGED line fails the task (`TaskFailed("reply")`), reply kept | none: not a stop since 2026-09-28 (phase-4 run on ea464cc) |
 | Timeout after writes, or a lead transport failure on a changed tree | `PartialWorkSuspected` / `ProviderError` becomes `TaskFailed("transport")` | the task fails, tree inspected, run continues; an uninspectable tree is still `PartialWorkStopped` | `failed` |
 | Turn cap | `TurnLimitReached` | lead or revision: capped-task path; gate-fix or design-fix: attempt spent | below denial |

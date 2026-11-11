@@ -243,7 +243,9 @@ quadratus "Add rate limiting to the API, with tests" --project /path/to/repo
   --plan-gate          # review the whole task list before any window is spent
   --check 'pytest -q'  # run the project's own tests after each task's work
   --max-tasks 20       # runaway backstop, not a quality gate
-  --mode solo          # adversarial (default) | collaborative | solo
+  --mode collaborative # adversarial (default, one seat per vendor) |
+                       # collaborative (two vendors) | solo (one peer;
+                       # refused while the requirements ledger is on)
   --allow-writes       # let the agents edit files (off by default)
   --state-dir DIR      # artifacts, codebase map, usage log (default .quadratus)
   --tasks FILE         # run your own JSON list of task texts, in order, with
@@ -275,9 +277,30 @@ The remaining options (`quadratus --help` has the full text):
 | `--test-changes FILE` | your own exact test replacements or retirements, as JSON |
 | `--neutral-preferences` | run without your personal CLI plugins, hooks and rules where each CLI allows it |
 | `--security-verdict-json` | require the strict JSON security verdict |
+| `--max-calls N`, `--max-reported-tokens N`, `--wall-seconds N` | bound a `--project` run: model calls in total, reported tokens in total, seconds. Give all three or none |
+| `--max-concurrent-workers N`, `--reserve-tokens-per-call N`, `--max-tokens-per-call N` | with the three above: worker errands at once (default 2), tokens that must remain before a call starts (default 0), and a stop after one call reports more than N (default none) |
+| `--lead-max-turns N` | round limit for each lead or reviewer call; outranks the cap derived from `--max-tokens-per-call`; also works with `--session` |
+| `--recent-entries N`, `--max-fix-cycles N`, `--max-consults N` | ledger entries shown in each prompt (default all), lead revisions per task (default 2), `CONSULT` questions per task (default 2) |
+| `--max-parallel-tasks N`, `--no-spread-leads`, `--no-design-cross-check` | tasks at once (default 3; needs `--allow-writes`); keep each task on the lead the ladder names; drop the design reviewer from another vendor |
+| `--compete complex` | draft each complex task twice and merge the better draft (default `off`; see Competing drafts) |
+| `--baseline MODEL`, `--fix-rounds N` | run one model alone on the goal (see Measuring against one model alone) |
+| `--trust-project-policy SHA256`, `--allow-project-agent-config`, `--no-declared-checks`, `--accept-watched-paths` | trust choices for one project (see Security model) |
+| `--allow-host NAME`, `--allow-project DIR` | with `--monitor --serve`: a host name the page also answers to, and a folder `?project=` or `?series=` may name; repeatable |
 | `--series DIR`, `--history N` | with `--monitor`: a Stage B series to read, and how many recent runs to list (default 10) |
 | `--claude-model`, `--openai-model`, `--grok-model` | model IDs for the code discussion pipeline only; the session engine refuses them |
 | `-v`, `--verbose` | debug logging |
+
+A flag the chosen run would ignore is an error, not a no-op: the engine flags
+need `--session` or `--project`, `--check`, `--allow-writes`, the run limits
+and the trust flags need `--project`, and `--serve`, `--series` and
+`--history` need `--monitor`. A project run exits 0 only when it completed. An
+interrupted run prints where its record is and exits 130.
+
+With run limits, the allowance is printed before the first call and saved as
+`run-limits.json`. A call still running keeps its reserve set aside, so calls
+that overlap each need their own. A worker errand the reserve cannot cover
+fails only that errand; a refused reserve for a lead, orchestrator or review
+call stops the run.
 
 A run reports each seat and task as it moves, then prints every close-out and
 the API-price counterfactual. Everything it accumulated stays in the state
@@ -300,8 +323,11 @@ quadratus --monitor --project /path/to/repo --serve     # the same status as a w
 `--monitor` only reads the run folder: it starts nothing, writes nothing and
 calls no model. `--serve PORT` picks another port.
 
-Web interface: `quadratus-gui` (or `python chat_gui.py`), then open
-http://127.0.0.1:7860. Choose another port with `quadratus-gui --port 8000` or
+Web interface: `quadratus-gui` (or `python chat_gui.py`) prints an address of
+the form `http://127.0.0.1:7860/?token=<random>` and opens it in your browser;
+`--no-browser` only prints it. The token is new on every launch, and the bare
+address answers 403 until the printed one has been opened once in that
+browser. Choose another port with `quadratus-gui --port 8000` or
 `QUADRATUS_GUI_PORT=8000`; a busy port is reported with the command to use
 instead. The Project tab's "UI capture and further checks" section takes the
 same capture profile, further required checks and readiness probes as the
@@ -313,25 +339,96 @@ fields. The run shows the effective numbers before any call and saves them as
 after each call returns, so they are not a hard ceiling. A one-turn summary
 call reserves less than an ordinary call, and a per-call threshold also sets a
 lead turn cap unless you set one yourself; the summary names both. Left off, a
-run has no shared allowance, as before. The Code discussion tab keeps
+run has no shared allowance, as before. A "Contests" choice stands for
+`--compete`, and a collapsed "Trust" section holds the four trust choices
+under the names of their flags; opening a project clears it. The
+Collaboration list leaves out solo while the requirements ledger is on. The
+Code discussion tab keeps
 conversation memory, takes a file upload and shows what each model
 contributed. Public sharing is refused on every backend.
+
+### Measuring against one model alone
+
+Whether several models beat one is a measurement, not a premise.
+
+```bash
+quadratus "Fix the parser" --project /path/to/repo --baseline claude:opus \
+  --check "pytest -q"
+python -I tools/compare_runs.py RUN_DIR RUN_DIR [--grade FILE ...] [--json]
+```
+
+`--baseline MODEL` runs one unrestricted roster model alone on the same
+project, goal, checks and limits as a project run, under the same lock, run
+folder, trust checks, path bounds, dependency watch and budget. It edits your
+project files with or without `--allow-writes`. The model gets one call with
+the goal; the harness then runs your checks, and a failure the application can
+repair buys one more call (`--fix-rounds N`, default 1). There is no
+orchestrator, reviewer, worker or close-out call. Nothing is judged: the
+record says `mode: "baseline"`, `completed: false` and
+`completion: "not judged"`. The exit status is 0 when it ran to its end and
+its last check passed, 1 when it stopped, and 2 when its last check failed or
+no check ran. Beside the goal it reads `--check`, `--extra-check`,
+`--readiness`, `--path`, `--forbid`, `--state-dir`, `--clone`, `--branch`,
+the run limits, `--lead-max-turns`, `--neutral-preferences`, `-o` and the
+trust flags; any other engine flag is refused by name.
+
+`tools/compare_runs.py` reads two or more run folders without importing the
+engine. Per run it prints the mode, models, calls, reported tokens, seconds,
+stop reason, whether source changed, the final check with its executed, failed
+and skipped counts, the verdict of `tools/truth_check.py`, the requirements
+audited met and, with a grade file (`{"passed": n, "total": m}`), the tokens
+spent per requirement a grader passed. Anything a record does not show prints
+as `unknown`.
+
+### Competing drafts
+
+`--compete complex` has each task routed at complex difficulty drafted twice,
+by two models from different vendors that cannot see each other's work, each
+in a private copy of your project. The harness measures both drafts (did it
+finish, did it stay inside the task's scope, does it pass your checks) and
+merges the better one; on a tie, or when one draft changed nothing, a third
+model is asked once to pick between the two diffs. The task then goes through
+the usual review and checks. A contest costs about one extra draft, needs
+`--project` and `--allow-writes`, and is off by default. The drafts are made
+in copies without installed dependencies (`node_modules`, a virtualenv), so a
+draft cannot run checks that need them; the harness runs your checks on each
+copy itself. The routed lead's own refusal still stops the run.
+
+Every run that draws a review appends to `.quadratus/scoreboard.jsonl` in
+your project: which model won each contest and why, and what each reviewer
+raised. Read it with `python tools/scoreboard.py <project folder>`. It is a
+record for you; Quadratus never chooses a model from it.
 
 ### What is recorded, and what leaves the machine
 
 A run's records stay in its state directory (`.quadratus` inside the project
 by default): each run's report, ledger, raw model replies, vendor
-transcripts, usage and diff under `runs/<run-id>/`, plus the artifact store
-and the codebase map. Those files hold your goal, prompts and source
-excerpts, so treat the folder as private.
+transcripts, usage and diff under `runs/<run-id>/`, plus the artifact store,
+the codebase map and the scoreboard. Those files hold your goal, prompts and
+source excerpts, so they are kept private: `.quadratus`, `runs/` and each run
+folder are owner-only from the moment they are made, and so are the records
+in them. `.quadratus` carries its own `.gitignore` (everything but
+`policy.json`), so `git add -A` does not commit run records; your project's
+own `.gitignore` is never changed. A `--state-dir` folder that already
+exists keeps its mode and gets no ignore file. Records are written whole: an
+interrupted run leaves the old file or the new one, never half of one.
+
+`result.json` also says what you chose: `selected_limits`, `session_settings`
+when a session setting was changed, `declared_checks`, `trust` (policy
+approved, agent configuration allowed, watched paths accepted),
+`child_environment` (the names withheld, never values), `project_watch`,
+`contests` and `reviewers`. `trace.jsonl` is the trace meant for sharing: tool
+names, outcomes, exit codes, hashes and paths. Search patterns, command text
+and reasoning stay in `native-private/`.
 
 What leaves the machine is what you send:
 
 - Each model call sends its prompt, and the source that call is given, to the
   vendor whose CLI (or API key) answers it.
-- `--decider jev` sends up to 8,000 characters of each unlabelled task's
-  description to TypeSafe AI's API, or to the gateway that
-  `TYPESAFE_BASE_URL` or a gateway key names.
+- `--decider jev` sends up to 8,000 characters of each task description it
+  routes to TypeSafe AI's API, or to the gateway that `TYPESAFE_BASE_URL` or
+  a gateway key names. Task text can carry file paths, requirement text and
+  code. The run names the destination in its first progress lines.
 - `--monitor --serve` listens on 127.0.0.1 only and has no flag to change
   that. The page cannot start, stop or change anything; it shows the project
   path, run id, task, seat, token counts, last event, recent runs, stop
@@ -342,13 +439,134 @@ What leaves the machine is what you send:
   plus folders you list in `QUADRATUS_MONITOR_ALLOW_PROJECT`. Everyone you
   admit on another device sees that much.
 
+## Security model
+
+Quadratus runs on your machine as you, and a vendor CLI is an agent with a
+shell. The harness narrows what a run can reach; it is not an
+operating-system sandbox. What it trusts, what it does not, and the setting
+that changes each:
+
+- **The project folder is not trusted configuration.** A clone can ship
+  files and an editing call can write them. The built-in write denials
+  (`.git/**`, `.env`, `.env.*`, `.quadratus/**`) always apply, and a
+  project's own `.quadratus/policy.json` can add denials but never remove
+  one. A policy that grants something (a command check, external effects, an
+  instruction file kept out of model copies) is refused before any model
+  call until you approve that exact file by its sha256, which the refusal
+  prints: `--trust-project-policy SHA256` or
+  `QUADRATUS_TRUST_PROJECT_POLICY`. `--no-declared-checks` runs only your
+  own `--check` and `--extra-check`, and nothing the project declares.
+- **Vendor agent configuration in the project is refused.** A project that
+  carries `.claude/settings.json`, `.claude/settings.local.json`,
+  `.mcp.json`, or anything under `.codex/` or `.grok/` does not start,
+  because a headless CLI started there can run its hooks and MCP servers as
+  you. `--allow-project-agent-config` (or
+  `QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG=1`) allows exactly the files present
+  at the start. Those files, `.env` files and credential files (`.npmrc`,
+  `.pypirc`, `.netrc`, `.git-credentials`, `id_rsa` and its siblings,
+  `.aws/credentials`, `.docker/config.json`) are never copied into a copy a
+  model reads.
+- **What the diff does not read is watched.** Around every editing call the
+  harness lists git hooks and config, env files, credential files, agent
+  configuration, the policy file, the codebase map, the scoreboard and
+  every symlink. A change to one fails the task and names the path; nothing
+  is deleted. While the change is in place the run stops, and the next run
+  on that project is refused before any model call until you remove or
+  restore the path, or accept it for one run with `--accept-watched-paths`
+  (`QUADRATUS_ACCEPT_WATCHED_PATHS=1`). A change in build output (`dist`,
+  `build`, `.tox`, `.nox`) is recorded and shown to reviewers, not failed.
+  The watch brackets editing calls only, and nothing outside the project is
+  watched. Its bounds are `QUADRATUS_WATCH_MAX_ENTRIES`,
+  `QUADRATUS_WATCH_MAX_BYTES` and `QUADRATUS_WATCH_SECONDS`.
+- **Child processes do not inherit credentials.** Vendor CLI calls, checks,
+  preview servers, captures and readiness probes get your environment
+  without names that read as credentials (a `KEY`, `TOKEN`, `SECRET`,
+  `PASSWORD` or `AUTH` part; the `AWS_`, `GITHUB_`, `NPM_`, `DOCKER_` and
+  similar families; `SSH_AUTH_SOCK`, `KUBECONFIG`) and without vendor API
+  keys, base URLs and provider switches. `quadratus --status` and the start
+  of every run name what is withheld. If a check needs one (`DOCKER_HOST`,
+  `NODE_AUTH_TOKEN`, `GITHUB_TOKEN`), list it in
+  `QUADRATUS_ENV_PASS=NAME,NAME`; that hands it to the vendor CLIs too. A
+  vendor CLI is never given a billed API key or another vendor's sign-in,
+  even when named. Only names are read: a secret inside a value
+  (`DATABASE_URL`) is not seen, and files under your home folder stay
+  readable. The harness's own git and Docker commands still inherit
+  everything.
+- **Working copies are private.** Source copies, prompt files and provider
+  scratch live under `~/.cache/quadratus/scratch` (or
+  `QUADRATUS_SCRATCH_DIR`): a real folder only you can read, outside the
+  project. A run removes its own leftovers older than 24 hours when it
+  starts.
+- **The GUI answers only to this machine and to its own page.** It checks
+  the Host header (127.0.0.1, localhost or [::1] on its own port; no setting
+  changes that), refuses requests a browser marks as coming from another
+  site, and needs the per-launch token in the address it prints.
+  `QUADRATUS_GUI_NO_TOKEN=1` turns only the token off. Public sharing is
+  refused on every backend. On a shared machine, a server another user runs
+  on a different loopback port can read the GUI's cookie if you open a page
+  from it, because browsers do not separate cookies by port.
+- **The monitor page is read-only and answers by name.** It listens on
+  loopback, answers only to 127.0.0.1 and localhost plus the host names you
+  admit (`--allow-host NAME` or `QUADRATUS_MONITOR_ALLOW_HOST`), and reads
+  only the project and series it was started with plus the folders you admit
+  (`--allow-project DIR` or `QUADRATUS_MONITOR_ALLOW_PROJECT`). Any other
+  path gets one fixed refusal.
+- **A UI capture is held to the preview it started.** Requests are pinned to
+  the preview's origin, shared workers are off, and a listener on the
+  preview's port that is not the preview's stops the capture. Two optional
+  booleans in the capture profile give that up on purpose:
+  `"shared_workers": true` and `"outside_listener": true` (a preview served
+  by another process, such as a container's port forwarder).
+
+### Not yet probed against the real CLIs
+
+Flag knowledge here is a hypothesis until a signed-in binary confirms it, and
+none of these could be run where the changes were made. Each wants one
+probe in an empty scratch folder:
+
+- **Keeping a project's MCP servers and hooks out of a claude call**
+  (`--strict-mcp-config`, `--setting-sources`; no flag was changed, and the
+  refusal above stands in). Write `.mcp.json` naming a server whose command
+  is `sh -c 'touch MCP_STARTED; cat'`, run
+  `claude -p 'say ok' --output-format json`, then again with
+  `--strict-mcp-config`: the marker should appear only the first time.
+  Write `.claude/settings.json` with a SessionStart hook `touch HOOK_RAN` and
+  run plain, with `--setting-sources user`, and with
+  `--setting-sources project,local`.
+- **The same for codex and grok.** `.codex/config.toml` with
+  `notify = ["sh","-c","touch NOTIFY_RAN"]`, then
+  `codex exec --skip-git-repo-check 'say ok'`; a `.grok/` settings file with
+  a hook, then `grok -p 'say ok' --output-format json`.
+- **Whether a vendor CLI writes its own project configuration during an
+  editing call.** If one does, every editing call by that vendor fails its
+  task. In a scratch git repository run one headless editing call per CLI
+  and compare `ls -la` and `ls .claude .grok .codex` before and after.
+- **Keeping `/tmp` out of codex's writable roots on an editing call.**
+  `codex exec --sandbox workspace-write -c
+  sandbox_workspace_write.exclude_slash_tmp=true -c
+  sandbox_workspace_write.exclude_tmpdir_env_var=true --skip-git-repo-check`
+  with a prompt that runs `touch /tmp/q-probe` and `touch ./q-probe`: the
+  first should be denied and the second written.
+- **Moving prompts and the worker bridge token out of argv.**
+  `claude -p --system-prompt-file <0600 file> --output-format json`, and
+  `claude -p --mcp-config <path to a 0600 JSON file> --strict-mcp-config`.
+- **Resuming the orchestrator's vendor session across re-asks**, which is
+  what would shrink its prompt. Call 1 gives the model a nonce and records
+  the session id; call 2 resumes that id with a prompt that lacks the nonce
+  and asks for it back.
+- **Sign-in under the reduced child environment.** Run `quadratus --probe`
+  once: claude, codex and grok should each still answer.
+- **One real `--compete complex` run and one real `--baseline` run**, to
+  confirm the judge call's arguments and turn cap on each CLI.
+
 ## Project layout
 
 ```
 quadratus/
   config.py           # Settings dataclass, env loading, backend selection
-  providers.py        # API providers (Claude/ChatGPT/Grok) + retries
+  providers.py        # API providers (Claude/ChatGPT/Grok), retries, private scratch
   cli_providers.py    # Subscription CLI providers (claude/codex/grok)
+  child_env.py        # What a child process inherits: no credentials it does not need
   runtime.py          # Fleet: roster keys -> the CLI that answers them
   latest.py           # Floating aliases: addressing a line, not a release
   probe.py            # Asks the installed CLIs what they actually accept
@@ -370,6 +588,16 @@ quadratus/
   browser_pilot.py    # Model-driven page piloting, one action per turn
   structured.py       # Structured-output parsing helpers
   usage.py            # Observational cost metering
+  verdicts.py         # The one reader of review, recheck, verifier and audit verdicts
+  contest.py          # Competing blind drafts and the scoreboard records
+  baseline.py         # One model alone, under a project run's bounds
+  project_watch.py    # What an editing call changed outside the measured source
+  safe_io.py          # Private, whole-file writes for run records
+  local_http.py       # Host, origin and token checks for the GUI and the monitor
+tools/
+  compare_runs.py     # Two or more run records side by side
+  scoreboard.py       # Reads .quadratus/scoreboard.jsonl
+  truth_check.py      # Judges a run's success claim from its record alone
 tests/                # pytest suite — offline, providers mocked
 ```
 
@@ -436,7 +664,10 @@ the lead. Workers cannot commission through either the single or batch entry
 point. A helper cannot receive a write grant.
 
 Worker requests may opt into `steps` (default 1, configured ceiling 3) and
-`token_limit` (configured ceiling 50,000 reported tokens). `CONTINUE:` requests
+`token_limit` (configured ceiling 50,000 reported tokens). A value outside the
+configured ceiling, or an unknown `needs` label, is refused before any call
+and counts as a failed errand; a field of the wrong type fails the task.
+`CONTINUE:` requests
 another step on the same errand, with the prior result as context. Each provider
 attempt, including a retry, consumes the worker step allowance and the task's
 worker allowance, as well as any shared run limits. Unknown token usage stops

@@ -2265,6 +2265,32 @@
         "codex: Exact-head main5487561223e97b9390116aeeb22f4c6dff160c85 CI42749539129 Python3.11 job129609621588 failed only the security-worker canary (3885 passed,63 skipped). The intentional preserved WORKER history reached the existing Sol closeout; the old prompt-substring spy misclassified that summary as another worker and returned a worker answer. Corrected only the canary to route/count actual invocation origin, assert exactly one Haiku dispatch with the requested instruction and writable grant, and assert the distinct closeout summary/reasoning. No runtime edits. The failed case reproduced once; canary plus context-review controls pass52, Ruff and diff check clean. Development39fba6e6d35e27a7bbdf079908527bcdc498d232 already passed both CI42749544843/42749544322 and has mechanical closeout. Owner notified before correction, frozen round22 source/results and next-run pause preserved. Exact corrective commit and CI outcomes will be recorded externally in stage-b/human-coherence-fixes-20261109/pending.json; no milestone advancement or new live acceptance.",
         "codex: Independent current-diff review by audit_interfaces_tools cleared the focused canary correction: actual invocation origin pins one Haiku worker with intended instruction/write grant; lead consumption and verifier assertions remain, and summary/reasoning assertions catch closeout misrouting. Review ran no duplicate tests or provider calls. Runtime source is unchanged."
       ]
+    },
+    {
+      "id": "T-review-1110",
+      "purpose": "Implement the whole-repo review of 2026-11-10 in full (PR #90), on Davis's direct instruction of 2026-11-10: trust in the project folder, child environments, transport, the gate, verdict readers, the engine loop, prompts, records, the web surfaces, the command line, contests, the baseline arm and the documentation.",
+      "base": "3a0e6f3b508ddf0dff9e95a2d4a8c306e3e2c70a",
+      "owns": [
+        "quadratus/",
+        "tests/",
+        "tools/",
+        "README.md",
+        "CLAUDE.md",
+        ".env.example",
+        ".github/workflows/",
+        "docs/workflow-map.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-11-11T08:20:06Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: The delivery SHA is recorded with deliver when the branch's final head is pushed. Until then nothing in this task is delivered, reviewed, integrated or ready. The batch is wider than the no-widening rule in docs/DIRECTION.md, which was not edited, and it awaits Codex's independent review."
+      ]
     }
   ],
   "receipts": [

@@ -35,7 +35,9 @@ Key design decisions already settled:
   install -e .` in a venv, Python 3.11+), since only that puts `quadratus`
   and `quadratus-gui` on PATH; `requirements.txt` is for source work. The
   GUI's Project tab carries the CLI's `--capture-profile`, `--extra-check`
-  and `--readiness` inputs; `quadratus-gui --port N` or
+  and `--readiness` inputs, and since 2026-11-10 a Trust section for the
+  four trust flags (cleared when a project is opened) and a Contests choice;
+  `quadratus-gui --port N` or
   `QUADRATUS_GUI_PORT` chooses the port and a busy port is reported with
   the way out. `Settings.__post_init__` refuses numeric settings no run can
   use (non-finite or non-positive timeouts, a negative delay, token or
@@ -156,7 +158,8 @@ Key design decisions already settled:
   allowlist. Senior seats — orchestrators, leads, brain trust — are never
   restricted, because bounding those is not a saving but a different job;
   every seat in the worker tree is. Two tests pin that split so it cannot
-  drift. **`always_args` and `agentic_args` are deliberately separate**: the
+  drift, and since 2026-11-10 `registry.assert_senior_seats_unrestricted()`
+  holds it at import. **`always_args` and `agentic_args` are deliberately separate**: the
   first survives into a restricted call (codex's `--skip-git-repo-check` is
   mandatory — the scratch directory is not a repository), the second is
   exactly what a restricted seat withholds (grok's `--always-approve`).
@@ -328,7 +331,10 @@ Key design decisions already settled:
   `max_per_task` (12) is the lifetime backstop — sized so a lead can rewrite
   or reroute failed errands without a round trip through the orchestrator.
   Workers run concurrently (`commission_many`); a failed errand returns as a
-  result with `error`, never tearing down siblings.
+  result with `error`, never tearing down siblings. A WORKER field of the
+  wrong type fails the task; `steps` or `token_limit` outside the configured
+  budget, or an unknown `needs` label, is refused before any call and counts
+  as a failed errand (review 2026-11-10, loop_a).
 - **Tool requests flow worker → lead → reissue.** A worker lacking access says
   `NEED TOOL: <what>` in its one answer; the lead reissues the errand with the
   grant (`allow_writes`). The asking worker is wiped as normal. No mid-task
@@ -366,7 +372,8 @@ Key design decisions already settled:
   death spiral; the fix is a changed strategy, not a second pull.
 - **The codebase map is the cross-session memory** (`codebase_map.py`):
   append-only notes about the repository itself, with provenance, rendered
-  into every orchestrator and lead prompt and amended from close-outs. The
+  as a bounded data block into every orchestrator and lead prompt and
+  amended from close-outs. The
   ledger records what a run did; the map records what was learned about the
   code, which is worth as much on the hundredth run as the first.
 - **An exhausted seat re-asks once rather than ending the run** (operator
@@ -378,11 +385,14 @@ Key design decisions already settled:
   recomputed, the question is re-asked, exactly once. Recognised by a
   `window_exhausted` attribute rather than an exception class, because
   `session.py` is handed its `invoke` and must not learn what is behind it.
+  Since 2026-11-10 the attribute is set from the CLI's own report (its
+  envelope or a whole line of its stderr), never from wording in a message.
   Verified live: Fable 429 → seat fell to Astra → the run continued.
 - **The session engine runs from the command line**: `quadratus --session
-  "<goal>"`, with `--plan-gate`, `--check`, `--max-tasks`, `--mode`,
-  `--allow-writes` and a `--state-dir` (default `.quadratus`) holding
-  artifacts, the codebase map and the usage log. The four-phase pipeline is
+  "<goal>"`, with `--plan-gate`, `--max-tasks`, `--mode` and a `--state-dir`
+  (default `.quadratus`) holding artifacts, the codebase map and the usage
+  log. `--check` and `--allow-writes` were listed here too; they need
+  `--project`, and since 2026-11-10 they are refused without it. The four-phase pipeline is
   still what a bare `quadratus "<goal>"` runs; switching that default is an
   operator decision, not a side effect of the engine becoming usable.
 - **The plan gate is opt-in** (`SessionConfig.plan_gate`): the operator can
@@ -430,7 +440,9 @@ Key design decisions already settled:
   orchestrator emits `ASK: <question>`; the answer becomes a standing ruling
   re-emitted on every render (never re-asked). No channel configured means
   `OperatorInputNeeded` is raised, not guessed around. Three asks per
-  decision, then it is interrogating, not deciding (`RunStalled`).
+  decision, then it is interrogating, not deciding (`RunStalled`). Three
+  asks are answered, each answer read by a further orchestrator call; a
+  fourth stalls the run before the operator is asked (review 2026-11-10).
 - **The integration gate is the deterministic half of "does it fit
   together"** (`integration.py`): after a task's work is final, the harness
   runs the project's own check command (tests, build). A failure buys the
@@ -443,7 +455,8 @@ Key design decisions already settled:
   `pytest_runtest_call` or `pytest_pyfunc_call` hook in the call phase, so
   a hook that asserted before the body ran was attributed as a product
   failure and could buy an application repair. The producer
-  (`quadratus-pytest/4`) records `body`: whether the exception's traceback
+  (`quadratus-pytest/4` then; `/5` since 2026-11-10, which also names each
+  passed case) records `body`: whether the exception's traceback
   passes through the unwrapped test function's code object, and
   `assertion` now requires it. Expected-exception failures (`pytest.raises`
   with nothing raised, `builtins.Failed`) stay unattributable: that is a
@@ -481,7 +494,9 @@ Key design decisions already settled:
   (batch 2 recovery-v2 on 5d9f5ff). Three simple tasks drew no collaborator
   (`Complexity.collaborator_count`) yet recorded `review: true`, and each
   clean close carried the stopped-call note "already on disk when the call
-  stopped". The review edge is now `None` when no peer reviewed, and a clean
+  stopped". The review edge is now `None` when no peer reviewed (and since
+  2026-11-10 `True` only when a peer returned a complete review, `False`
+  when every peer drawn was capped or gave no verdict), and a clean
   close says "The task closed with these changes on disk"; a capped or
   failed close keeps the stopped-call wording. Reporting only: who reviews
   and what completes are unchanged.
@@ -616,7 +631,8 @@ Key design decisions already settled:
   optional or skipped receipt, a filtered run, a lower skip total, or a
   model's word never does; a report written after a run is a new report. An
   unnamed file is reconciled by a later complete run that names it or names a
-  file that names it. Parallel children's reports come back to the parent,
+  file that names it; a mention inside a comment does not count
+  (2026-11-10). Parallel children's reports come back to the parent,
   re-based to its checks (F5). Test-only runner configs (`pytest.ini`,
   jest/vitest/playwright/mocha configs) are kept and restored with the tests,
   and one added during the run (or an added `conftest.py`) triggers the
@@ -683,7 +699,10 @@ Key design decisions already settled:
   correction appends it, and the scope and dispatch gates accept a
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
-  gates with three rules was the defect; there is one rule now.
+  gates with three rules was the defect; there is one rule now. Since
+  2026-11-10 a correction that restates the rule carries it once, in place
+  of the standing copy, and a redeclaring lead is sent the step shape alone
+  (`_CAPTURE_SHAPE`, shared with the scope rule).
 - **A task that breaks its own rules fails the task, not the run**
   (operator ruling, 2026-09-28; `session.TaskFailed`). Two live runs each
   ended on the first task-level fault, so every later task's faults stayed
@@ -833,6 +852,8 @@ Key design decisions already settled:
     was filed as the open finding because a marker appeared somewhere in its
     prose. `VERDICT: ACCEPT` or `REJECT` decides; ACCEPT still loses to a
     prefixed `BLOCKING:` with content; no line falls back to the scan.
+    Since 2026-11-10 a VERDICT line that is not a plain ACCEPT is a
+    rejection, not a missing line (see "One reader for every verdict").
 - **An elided call is not a signature** (series rule-2ffa7f6, f6, 2026-10-06).
   `scope.declared_signatures` collects every backticked `name(args)` for a
   `def`-declared name so a mid-description revision is caught before
@@ -1316,9 +1337,179 @@ Key design decisions already settled:
   role and the newest artifact kind, and says so when it cannot tell.
   `--monitor --serve` renders the same dict as a self-reloading page on
   loopback only (`monitor_server.py`, no bind flag); Tailscale Serve is the
-  way onto a phone, and the Gradio GUI is never exposed that way because
+  way onto a phone (since 2026-11-10 the phone's host name must be admitted
+  with `--allow-host`), and the Gradio GUI is never exposed that way because
   its Project tab can run commands. The page has no controls at all, which
   is what makes it the thing that may be reached from another device.
+
+- **The project folder is not a source of trusted configuration** (whole-repo
+  review 2026-11-10, trust 1 to 5; `policy.py`, `project.py`). A clone can
+  ship a file and an editing call can write one. The project's own
+  `.quadratus/policy.json` may narrow and can never remove a built-in write
+  denial, and one that grants (a command gate, external effects, a withheld
+  instruction file) loads only when the operator approved that exact file by
+  sha256 (`--trust-project-policy`); the refusal prints the hash. A project
+  carrying vendor agent configuration (`.claude/settings.json`, `.mcp.json`,
+  `.codex/`, `.grok/`) is refused before any model call unless allowed
+  (`--allow-project-agent-config`). Those files and the credential files are
+  never copied into a copy a model reads. `--no-declared-checks` runs only
+  the operator's own checks.
+- **What the diff cannot see is listed around every editing call, and a
+  finding outlives its run** (review 2026-11-10, trust 2 and the
+  integrator's ruling; `project_watch.py`). The measured source skips
+  `.git`, env files, credential files, agent configuration and every
+  symlink, so a diff could never enforce the denials for them. A change to
+  one fails the task and names the path; the harness never deletes. While
+  it is in place the run stops (`SensitiveChangeInPlace`), because a
+  reproduced run completed over a planted `conftest.py` link, and the next
+  run is refused before any model call unless the operator accepts it
+  (`--accept-watched-paths`). Build output is an observation shown to
+  reviewers, never a failure. The watch brackets editing calls only.
+- **No child inherits credentials it does not need** (review 2026-11-10,
+  transport 2, checks_fs 4, gui_records 6; `child_env.py`). Vendor CLI
+  calls, checks, previews, captures and probes get the environment with
+  credential-shaped names removed. Removed, not allowlisted: an allowlist
+  would break proxies, CA bundles and vendor home folders that cannot be
+  tested here. `QUADRATUS_ENV_PASS` keeps exact names, except that a vendor
+  CLI is never handed a billed API key or another vendor's sign-in. Only
+  names are read, never values. Not covered yet: the harness's own git,
+  docker and `ps` children.
+- **Transport decisions read typed facts, and an edit is replayed only when
+  measured unchanged** (review 2026-11-10, transport; `providers.py`,
+  `cli_providers.py`, `Fleet._generate_editing`). Retry, replay and window
+  exhaustion are decided from `window_exhausted`, `retryable`,
+  `auth_invalid` and `transport_status`, set where a CLI's own envelope or
+  stderr is parsed. A message is for people; it can quote a model, and
+  nothing classifies it. A call that can write is never retried inside the
+  provider: Fleet sends it again once, only for a failure that passes and
+  only when the source and the watch listing both measure unchanged. A
+  stopped call (timeout, signal, output cap) is never sent again. Scratch
+  is private and outside the shared temp tree (`providers.scratch_root`).
+- **One reader for every verdict, and the strict reading wins** (review
+  2026-11-10, parsers and the integrator's rulings; `verdicts.py`). Every
+  verdict reader goes through one normaliser, and a reply accepts only when
+  it says so plainly. A `VERDICT` line that is not a plain `ACCEPT` is a
+  rejection: "VERDICT: ACCEPT once fixed" used to count as no verdict line,
+  which handed the decision to a marker scan that passes a defect named in
+  lower case. `BLOCKING: none` is not a verdict: it buys no revision and is
+  an unfinished review unless `REVIEW: COMPLETE` stands beside it. An audit
+  line is `R1: MET - citation`, and no verdict is not met.
+- **An audit that did not run is not NOT MET** (review 2026-11-10, loop_c 4;
+  `completion_decision.py`, `session.py`). No auditor from another vendor, a
+  failed auditor call, a tree that moved during the audit, or a reply with
+  no verdict for any requirement judges nothing. No status is written, DONE
+  is sent back once, and a second miss (or a miss at the task cap or on an
+  explicit list) is the operator stop `AuditUnavailable`, never
+  `RequirementsUnmet`. Completion still needs a MET verdict per requirement.
+- **Task ids come from one counter, and a parallel batch is read like a
+  serial task** (review 2026-11-10, loop_b; `Session._next_task_id`,
+  `Session._read_directives`, `batch_evidence.py`). An id is spent at
+  dispatch, so a failed or unmerged child's id is never issued again. One
+  intake reads a serial task and each batch block; a batch holding RESOLVES,
+  CONTINUES or a harness-captured task is sent back whole. A merged child's
+  design evidence is copied in without following links, and stands only if
+  the merge gate left that child's files unchanged.
+- **Review seats start from the measured diff** (review 2026-11-10, prompts;
+  `Session._review_diff`). The collaborator, re-check, security verifier and
+  design reviewer are handed the task's measured diff, labelled as measured
+  and as data, bounded at 12,000 bytes with every changed path listed when
+  it is cut. The lead's reply stays, labelled as its account. Reviewers were
+  spending their rounds finding out what the harness already knew.
+- **Every orchestrator call is a fresh vendor session, so each prompt
+  carries its rules whole** (review 2026-11-10, prompts and design 5). A
+  correction that restates a rule replaces the standing copy in the same
+  prompt, and `tests/test_review1110_prompts.py` holds a byte ceiling on the
+  fixed rules that a new rule raises on purpose. A lead is offered workers
+  only when it can use one. Shrinking the decision prompt needs a resumed
+  vendor session, which is a flag nobody has probed.
+- **Run records are private and written whole, and the map is bounded
+  data** (review 2026-11-10, gui_records; `safe_io.py`, `codebase_map.py`).
+  The state folder and each run folder are owner-only from creation and
+  ignored by git, and `safe_io` is the one way a record is written: a
+  temporary file, then a rename, never through a link. The map trusts
+  neither its writers nor its file: `amend` bounds every note, a bad line
+  costs that line, and the rendered block is capped at 8,000 characters,
+  scan notes first, labelled as data. `result.json` says what the operator
+  declined and allowed, and an interrupt after the record is written
+  carries the result (`project_run.RunInterrupted`, exit 130).
+- **Loopback is not the lock** (review 2026-11-10, gui_records 1;
+  `local_http.py`). A request with another Host header created a folder and
+  ran `git init` through the GUI. Both web surfaces now check the Host
+  header. The GUI sits behind `LocalGuard`: a Host allowlist with no
+  opt-out, a refusal of cross-origin requests, and a per-launch token
+  (`QUADRATUS_GUI_NO_TOKEN=1` turns only the token off). It is served with
+  uvicorn, because `Blocks.launch()` has no place for a check in front of
+  every route. The monitor page admits extra hosts and folders only by
+  operator setting.
+- **A command-line run can be bounded, and a flag a run would ignore is an
+  error** (review 2026-11-10, cli; `cli.py`,
+  `run_budget.limits_from_fields`, `session_knobs.py`). The limit flags
+  build the same `RunLimits` as the GUI form, all three core limits or none,
+  and the session settings that had no flag share one table. Every flag
+  says what it needs where it is declared (`needs=`), so `--check` without
+  `--project` is refused instead of testing nothing. Solo mode is refused
+  while the ledger is on, because the audit needs a peer from another
+  vendor.
+- **Reserves are held for calls in flight, and what a refusal means depends
+  on who asked** (review 2026-11-10, gui_records 8 and the integrator's
+  ruling; `run_budget.py`, `Fleet.reserve_shortfall`). Each running call
+  holds the reserve it was admitted with, so a second call at the same time
+  needs its own. A worker errand the budget cannot hold fails only that
+  errand (`ReserveRefused`). A parallel batch forms only when the budget
+  covers one reserve per child; otherwise the same tasks run one at a time.
+  A refused reserve for a lead, orchestrator or review call still stops the
+  run.
+- **Two models may attempt the same task, and measured facts pick the
+  draft** (review 2026-11-10: the engine had collaboration and no
+  competition; `contest.py`, `--compete complex`). Opt-in, and off is the
+  old run call for call. A complex task is drafted twice, blind, by the
+  routed lead and a challenger from another vendor, each in a private copy.
+  The winner is the first rule to separate them: completed, scope, the
+  task's gate run on each copy, one judge from the third vendor shown two
+  unnamed diffs, the smaller diff, the routed lead. Only the winner's
+  changes are merged, and review and checks follow as usual. The routed
+  lead's refusal still stops the run (`session._never_replaced`), and a
+  contest result is never evidence that the work is verified.
+- **The scoreboard is a record and nothing reads it back** (same review;
+  `.quadratus/scoreboard.jsonl`, `tools/scoreboard.py`). One line per
+  contest and per review call: who won and by which rule, what each
+  reviewer raised and what its re-check said. Nothing routes, decides or
+  prompts from it: a table that fed routing would be a model roster by
+  another name, and those are seeds, not truth.
+- **Whether several models beat one is measured, not assumed** (review
+  2026-11-10: no single-model arm existed; `baseline.py`,
+  `quadratus --baseline MODEL`, `tools/compare_runs.py`). One unrestricted
+  roster model runs alone under a project run's own lock, trust checks,
+  path bounds, gate and limits: one editing call, then one more per
+  attributable check failure up to `fix_rounds`. Its prompt states every
+  bound it is held to, because a silent turn cap measures the cap and not
+  the model. A baseline never reports complete, met or verified, and
+  `compare_runs` prints `unknown` for what a record does not show, never
+  zero.
+- **The gate counts only what a runner printed as its summary, and it never
+  raises** (review 2026-11-10, checks; `integration.py`). A count is read
+  from a runner's own summary line, so a lint command passes on exit 0 with
+  its count unknown while a summary of zero executed cases still fails.
+  Output is bounded while the command runs, and a command that cannot start
+  is a receipt, not an exception. A pinned capture runs without shared
+  workers; the operator's escapes are `"shared_workers"` and
+  `"outside_listener"` in the capture profile.
+- **Undeclared design work is decided from the changed file's own type**
+  (final review of the batch, 2026-11-11, engine 1;
+  `Session._undeclared_design_work`). A task that asked for no renders and
+  changed an `.html`, `.css`, `.jsx`, `.tsx`, `.vue` or similar file that is
+  not a test file is left with the design debt a declared design task with
+  no renders has, and is never closed as design-verified. A folder named
+  `views` or `static` does not count by itself for this after-the-fact
+  rule; the declared-scope rule is unchanged.
+- **The repo's statements about itself are tested** (review 2026-11-10,
+  design 4 and 7; `tests/test_review1110_docs.py`,
+  `tests/test_review1110_docs_final.py`). Every drifted statement the review
+  found was a comment, a README line or an example setting nobody ran. Each
+  test reads the code fact first and the text second: every parser option
+  is in the README, every `QUADRATUS_` variable the package reads is in
+  `.env.example`, and the README lists the vendor-flag probes nobody has
+  made yet. CI has read-only permissions and actions pinned to commit SHAs.
 
 ## How development is coordinated
 
@@ -1330,6 +1521,12 @@ through `tools/dev_record.py` (`claim`, `deliver`, `review`, `receipt`,
 `ready`, `render`, `candidate`, `note`, `extend`). Claude coordinates and integrates; Codex is the root
 reviewer and owns local execution and live runs. The acceptance manifest and
 the workflow scorecard keep their own evidence.
+
+The whole-repo review batch (PR #90, the entries above dated 2026-11-10) was
+done on Davis's direct instruction of 2026-11-10 to implement the review in
+full. That is wider than the "no widening" rule in `docs/DIRECTION.md`.
+`DIRECTION.md` was not edited, and the batch awaits Codex's independent
+review; it is on the development record as `T-review-1110`.
 
 ## Model routing: this repo is build-time tooling
 
