@@ -22,7 +22,11 @@ What the single model gets, and what it does not:
   the project's gate, run-start test files included in their run-start form.
   A failure that is an attributable assertion failure buys one more editing
   call with the gate's output, up to ``fix_rounds`` times (default 1, the one
-  fix round the integration gate gives a lead).
+  fix round the integration gate gives a lead). The command checks of a
+  project policy the operator approved are bound into that gate by the
+  session's own function (``policy.task_gate``) and named to the model by id.
+  Where the policy binds further checks by path rule, the baseline needs
+  declared paths to bind them by, and is refused before any call without.
 * None of the model review: no orchestrator, no decomposition, no reviewers,
   no workers, no consults and no close-out call.
 
@@ -160,14 +164,28 @@ def round_budget(model, limit) -> str:
             "keep the last rounds for running the checks.")
 
 
-def baseline_prompt(goal, checks, scope, fix_rounds, rounds="") -> str:
+#: How a check the project's approved policy binds is named to the model: by
+#: id only, as a lead's role packet names it (policy.role_packet). A command
+#: line can name a file a seat must not open.
+POLICY_CHECK = "{id}: a check the project's policy adds. The harness runs it; its command is not shown to you."
+
+
+def baseline_prompt(goal, checks, scope, fix_rounds, rounds="", policy_checks=()) -> str:
     """The single model's whole brief: the goal verbatim, the checks the
     harness will run, the path bounds, the round cap when there is one
-    (``rounds``, from :func:`round_budget`), and nothing about orchestration."""
-    listed = "\n".join(f"- {c}" for c in checks) or "- none configured"
+    (``rounds``, from :func:`round_budget`), and nothing about orchestration.
+
+    ``policy_checks`` are the ids of the checks an approved project policy
+    adds to the gate (:func:`_policy_checks`). They are run and can buy a fix
+    call like any other, so the list would be untrue without them: with a
+    policy check and no operator check the prompt said "none configured" and
+    "you get this one call"."""
+    listed = "\n".join([f"- {c}" for c in checks]
+                       + ["- " + POLICY_CHECK.format(id=name) for name in policy_checks]) or "- none configured"
     after = (f"If a check fails on something your change can repair, you are shown its output and get "
              f"{fix_rounds} more call{'s' if fix_rounds != 1 else ''} to fix it."
-             if fix_rounds and checks else "You get this one call: a failing check is recorded, not sent back.")
+             if fix_rounds and (checks or policy_checks)
+             else "You get this one call: a failing check is recorded, not sent back.")
     parts = ["Make the change described below in the files of your working directory. Do all of it "
              "in this call.",
              f"Goal (verbatim):\n{goal}",
@@ -260,6 +278,45 @@ def _stop_cause(exc) -> str:
     return type(exc).__name__
 
 
+def _command_ids(plan) -> set:
+    return {g['id'] for g in plan['gates'] if g.get('runner') == 'command'}
+
+
+def _checks_bound_by_path(policy, preview, scope) -> str:
+    """The command checks an approved project policy binds by path rule that
+    this baseline's plan does not hold, named for the refusal; "" when there
+    are none.
+
+    A project run binds a policy's checks task by task, from each task's
+    declared paths (``Session._prepare_dispatch``). A baseline is one call
+    with no task scope. With no declared paths its plan is the policy's
+    default, so a rule that binds a further command check to the very files
+    the call goes on to change would never run, and the gate would pass on
+    less than a project run's (review of 41e72f2: a rule on ``add.py`` bound
+    ``lint``, the call changed ``add.py``, and ``lint`` did not run). Declared
+    paths settle it: the call may change nothing else, and the plan is the
+    one a project task declaring those paths gets."""
+    if not policy.explicit or scope.permitted_paths:
+        return ''
+    bound = _command_ids(preview)
+    missing = []
+    for rule in policy.document.get('path_rules', []):
+        ids = sorted(_command_ids(policy.resolve(rule['paths'])) - bound)
+        if ids:
+            missing.append(f"{', '.join(rule['paths'])}: {', '.join(ids)}")
+    return '; '.join(missing)[:600]
+
+
+def _policy_checks(gate, shown) -> tuple:
+    """Ids of the checks the bound gate runs whose command the model was not
+    shown: the ones the policy added. The operator's own stay as commands."""
+    import shlex
+
+    from .integration import model_facing
+    return tuple(c.id for c in getattr(gate, 'commands', ()) or ()
+                 if shlex.join(model_facing(c.argv)) not in shown)
+
+
 def _ready(probes, project, watch, store, receipts):
     """The operator's readiness probes, once, before any model call, as the
     session runs them: a failure is an operator handoff with no call made,
@@ -322,6 +379,11 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
     watch = DependencyWatch(DependencyGuard(project.root))
     originals, selection = original_tests(before), selection_sections(before)
     calls, attempts, checks, scope_reports, original_runs, not_run, ready = [], [], [], [], [], [], []
+    # Names the editing calls changed in folders the measured diff does not
+    # read (Fleet._watch_after). A project run's record carries them; the
+    # baseline's did not, so a gate that passed on top of a build file read
+    # the same as one that passed on the measured source.
+    unmeasured = []
     state_ = SimpleNamespace(fixes=0, in_call=False, turn_limited=False)
 
     def edit(role, prompt):
@@ -341,7 +403,11 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
         state_.in_call = True
         try:
             with capture_invocations(), invocation(TASK, role, prompt_artifact=entry['prompt_artifact']):
-                reply = fleet.invoke(model, prompt, allow_writes=True)
+                try:
+                    reply = fleet.invoke(model, prompt, allow_writes=True)
+                finally:
+                    # Also after a call that failed: what it left is there either way.
+                    _keep_unmeasured(unmeasured, (invocation_context.get() or {}).get('unmeasured_changes'))
                 context = invocation_context.get() or {}
                 entry['changed_report'] = context.get('changed_report')
                 report = scope.assess(project.diff(before))
@@ -412,13 +478,27 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
         # gate result would mean less than the policy plan it writes says
         # (final review of the 1110 batch, run_and_surfaces 4). Inside the
         # try: a policy that cannot be bound is a recorded stop, no call made.
-        from .policy import task_gate
+        from .policy import PolicyError, task_gate
         gate = task_gate(policy, preview, gate, exclude=project.exclude)
+        by_path = _checks_bound_by_path(policy, preview, scope)
+        if by_path:
+            # Refused, not run on the lesser gate: the result would read as a
+            # project run's gate and mean less.
+            raise PolicyError(
+                "The project's approved policy binds command checks by path that a baseline with no "
+                f"declared paths would not run ({by_path}). A project run binds them task by task from "
+                "each task's declared paths; a baseline is one call with no task scope, so its gate "
+                "would not be a project run's. Nothing was run and no model was called. Name the paths "
+                "this baseline may change (--path, declared_paths=...): the checks the policy binds to "
+                "them are then run.")
+        # The checks the policy added, by id: the model is told every check
+        # the harness runs, and never a policy check's command.
+        added = _policy_checks(gate, checks_shown) if policy.explicit else ()
         # Before any model call: over the bounds is a stop with no call made.
         watch.start()
         if probes:
             _ready(probes, project, watch, store, ready)
-        edit('lead', baseline_prompt(goal, checks_shown, scope, fix_rounds, rounds))
+        edit('lead', baseline_prompt(goal, checks_shown, scope, fix_rounds, rounds, added))
         result = run_gate() if gate is not None else None
         while result is not None and not result.passed and state_.fixes < fix_rounds:
             verdict = attempts[-1]['attribution']
@@ -508,6 +588,8 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
         'selected_limits': selected,
         'original_test_runs': original_runs,
         'unexecuted_acceptance': not_run,
+        # In a project run's shape, by task: tools/truth_check.py reads it.
+        'unmeasured_changes': {TASK: unmeasured} if unmeasured else {},
         'watch_findings': list(getattr(fleet, 'watch_findings', []) or []),
         # In a project run's own shape: the next run's preflight, of either
         # kind, reads this to refuse a watched path this call left changed.
@@ -530,6 +612,19 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
         # as a project run's does, so a loop over baselines stops here.
         raise RunInterrupted(result)
     return result
+
+
+def _keep_unmeasured(kept, names) -> None:
+    """Add one call's unmeasured names to the run's list: once each, bounded
+    as the session bounds a task's. An observation; never raises."""
+    try:
+        from .session import _UNMEASURED_NAMES
+        for name in names or ():
+            name = str(name)[:300]
+            if name not in kept and len(kept) < _UNMEASURED_NAMES:
+                kept.append(name)
+    except Exception:  # noqa: BLE001 -- an observation never fails a call
+        pass
 
 
 def _not_run_lines(reply):
@@ -668,6 +763,16 @@ def _report(record, run_dir, diff, meter, delegation, traces):
              f"Fix calls after a failing check: {info['fix_rounds_used']} of {info['fix_rounds']} allowed.", '',
              f"The model was given {FEEDBACK}.", '']
     lines += _watch_report_lines(record['project_watch'])
+    accepted = record['trust']['watched_paths_accepted']
+    if accepted:
+        # The acceptance was a progress line and a field of result.json; a
+        # reader of the report could not tell the run started this way.
+        lines += [f'Watched paths accepted: this run started over {len(accepted)} path(s) an earlier run '
+                  'changed outside the measured source, which the operator accepted: '
+                  + ', '.join(a['path'] for a in accepted[:8])
+                  + (f' and {len(accepted) - 8} more' if len(accepted) > 8 else '')
+                  + '. No diff or check of this run covers what they hold. result.json lists each '
+                  'under trust.', '']
     lines += _declared_checks_lines(record['declared_checks'])
     if record['error']:
         lines += [f"Stopped ({info['stop_cause']}): {record['error']}", '']

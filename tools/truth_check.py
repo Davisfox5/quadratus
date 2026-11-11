@@ -11,7 +11,9 @@ Three verdicts, and missing evidence is never success:
   last audit asked for actually ran, the final
   passing check ran test cases against the final source, nothing required was
   skipped, nothing reported NOT RUN still stands, no finding is open, no
-  authorized test repair is left unreviewed, and every
+  authorized test repair is left unreviewed, no editing call left a file in
+  a folder the measured diff does not read, the run did not start over a
+  watched path the operator accepted, and every
   UI change carries approved capture evidence bound by digest to the bytes
   the reviewer was handed.
 - ``unverified``: the run says it succeeded but some of that is not shown.
@@ -45,12 +47,6 @@ EXIT = {VERIFIED: 0, UNVERIFIED: 1, NOT_MET: 2}
 #: is an unshown UI claim.
 UI_SUFFIXES = (".html", ".htm", ".css", ".scss", ".sass", ".less", ".jsx", ".tsx", ".vue", ".svelte")
 VIEWS = ("desktop", "mobile")
-#: File types a check can load. A changed file of one of these in a folder
-#: the measured diff does not read means the check did not run on the
-#: measured source alone.
-_CODE_SUFFIXES = (".py", ".pyc", ".pth", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json",
-                  ".so", ".dylib", ".wasm", ".rb", ".go", ".rs", ".java", ".class", ".sh")
-
 _DIFF_FILE = re.compile(r"^(?:\+\+\+|---) (.+)$")
 _PATH = re.compile(r"[\w./-]+\.\w+")
 
@@ -554,22 +550,39 @@ def _judge(run_dir, project, failed, unshown):
         named = ", ".join(str(w.get("path")) for w in watched[:5] if isinstance(w, dict))
         unshown.append(f"an editing call changed {len(watched)} watched path(s) outside the measured "
                        f"source, which no diff or check covers: {named[:160]}")
-    # Code an editing call changed in folders the measured diff does not read
-    # (build output, tool caches). The last check ran with it present, so it
-    # did not run on the measured source alone.
+    # Files an editing call changed in folders the measured diff does not read
+    # (build output, report folders, tool environments). The checks ran with
+    # them present and nothing on the record says what they hold, so the last
+    # check did not run on the measured source alone. Any name counts. The
+    # first rule went by file type, and a run whose tests passed only because
+    # of build/helper.txt read verified: a check reads a text file, an archive
+    # or a native module as readily as a .py file. The engine also keeps a
+    # bounded list, so the names here are not always all of them.
     unmeasured = record.get("unmeasured_changes")
-    if isinstance(unmeasured, dict):
-        code = sorted({str(name) for names in unmeasured.values() if isinstance(names, list)
-                       for name in names if str(name).lower().endswith(_CODE_SUFFIXES)})
-        if code:
-            unshown.append(f"an editing call changed {len(code)} code file(s) in folders the measured diff "
-                           f"does not read, and the checks ran with them present: {', '.join(code[:5])[:160]}")
+    if unmeasured is not None:
+        names, readable = set(), isinstance(unmeasured, dict)
+        for listed in unmeasured.values() if readable else ():
+            if isinstance(listed, list):
+                names.update(str(name) for name in listed)
+            else:
+                readable = False
+        if not readable:
+            unshown.append("the record's unmeasured_changes is not a list of names for each task, so what "
+                           "the editing calls left outside the measured diff is not known")
+        if names:
+            unshown.append("editing calls changed files in folders the measured diff does not read "
+                           f"({len(names)} listed), and the checks ran with them present: "
+                           f"{', '.join(sorted(names)[:5])[:160]}")
     # A watched path an earlier run left changed, which the operator accepted
     # at this run's start. Their call to make; no diff or check of this run
     # covers what that path holds.
     trust = record.get("trust")
     accepted = trust.get("watched_paths_accepted") if isinstance(trust, dict) else None
-    if isinstance(accepted, list) and accepted:
+    if (trust is not None and not isinstance(trust, dict)) or (
+            accepted is not None and not isinstance(accepted, list)):
+        unshown.append("the record's trust section is not readable, so whether the run started over an "
+                       "accepted watched path is not known")
+    elif accepted:
         named = ", ".join(str(a.get("path")) for a in accepted[:5] if isinstance(a, dict))
         unshown.append(f"the run started over {len(accepted)} watched path(s) an earlier run left changed, "
                        f"accepted by the operator and covered by no diff or check: {named[:160]}")
