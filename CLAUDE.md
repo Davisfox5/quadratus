@@ -1314,9 +1314,11 @@ Key design decisions already settled:
   `tests/lifecycle/test_truth_canaries.py` drive the real run with scripted
   replies through the known bad cases. Review priority and batching rules are
   in `docs/DEVELOPMENT_PROCESS.md` ("Spending less per fix"). Since
-  2026-11-11 it also answers unverified when an editing call changed code
-  in a folder the measured diff does not read, or when the run started
-  over a watched path the operator accepted.
+  2026-11-11 it also answers unverified when an editing call changed any
+  file in a folder the measured diff does not read, whatever its type (a
+  check rested on `build/helper.txt` and the source alone failed), or when
+  the run started over a watched path an operator accepted, in that run or
+  an earlier one; a record of either that it cannot read is unverified too.
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
@@ -1517,7 +1519,7 @@ Key design decisions already settled:
   held origins, because a worker's WebSocket reached another loopback
   service while the render read clean; each browser is asked before its
   first page whether it holds, and refused by name if not. A baseline runs
-  an approved policy's command checks as a project run does.
+  an approved policy's command checks and names them to its model.
 - **The repo's statements about itself are tested** (review 2026-11-10,
   design 4 and 7; `tests/test_review1110_docs.py`,
   `tests/test_review1110_docs_final.py`). Every drifted statement the review

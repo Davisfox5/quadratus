@@ -57,6 +57,7 @@ from .project import Project
 from .project_run import (
     ProjectResult,
     RunInterrupted,
+    _accepted_report_lines,
     _calls_by_task,
     _child_environment_record,
     _collect_traces,
@@ -763,16 +764,7 @@ def _report(record, run_dir, diff, meter, delegation, traces):
              f"Fix calls after a failing check: {info['fix_rounds_used']} of {info['fix_rounds']} allowed.", '',
              f"The model was given {FEEDBACK}.", '']
     lines += _watch_report_lines(record['project_watch'])
-    accepted = record['trust']['watched_paths_accepted']
-    if accepted:
-        # The acceptance was a progress line and a field of result.json; a
-        # reader of the report could not tell the run started this way.
-        lines += [f'Watched paths accepted: this run started over {len(accepted)} path(s) an earlier run '
-                  'changed outside the measured source, which the operator accepted: '
-                  + ', '.join(a['path'] for a in accepted[:8])
-                  + (f' and {len(accepted) - 8} more' if len(accepted) > 8 else '')
-                  + '. No diff or check of this run covers what they hold. result.json lists each '
-                  'under trust.', '']
+    lines += _accepted_report_lines(record['trust']['watched_paths_accepted'])
     lines += _declared_checks_lines(record['declared_checks'])
     if record['error']:
         lines += [f"Stopped ({info['stop_cause']}): {record['error']}", '']

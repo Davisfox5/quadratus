@@ -667,7 +667,9 @@ def test_an_acceptance_is_read_from_the_run_that_gave_it(tmp_path):
     root, finding = _planted(tmp_path)
     _record(root, REAL, [finding])
     _record(root, "20261112T100000Z-0b0b0b0b", accepted=[PLANTED_LINK])
-    assert _preflight(root) == []
+    # Not asked again, and not forgotten: the run starts, and what it started
+    # over comes back for its own record (review of the run-lifecycle fixes).
+    assert [entry["path"] for entry in _preflight(root)] == [PLANTED_LINK]
     # A later run that records the same path again is a new finding.
     _record(root, "20261113T100000Z-0c0c0c0c", [finding])
     with pytest.raises(ValueError, match="20261113T100000Z-0c0c0c0c"):
@@ -697,9 +699,21 @@ def test_an_acceptance_given_to_one_run_lasts_for_the_runs_after_it(tmp_path, mo
     trust = json.loads((accepting.run_dir / "result.json").read_text())["trust"]
     assert [entry["path"] for entry in trust["watched_paths_accepted"]] == [PLANTED_LINK]
     time.sleep(0.05)
-    after = run_project("g", root, settings, allow_writes=True)        # no flag, and not asked
+    later = []
+    after = run_project("g", root, settings, allow_writes=True, progress=later.append)  # no flag, not asked
     assert after.error == "" and (root / PLANTED_LINK).is_symlink(), "accepted, never removed"
-    assert json.loads((after.run_dir / "result.json").read_text())["trust"]["watched_paths_accepted"] == []
+    # The later run is not asked, and its own record still says what it
+    # started over: it recorded nothing, and the truth check called it
+    # verified over the same planted path.
+    carried = json.loads((after.run_dir / "result.json").read_text())["trust"]["watched_paths_accepted"]
+    assert [entry["path"] for entry in carried] == [PLANTED_LINK]
+    assert any("still in place" in line and PLANTED_LINK in line for line in later)
+    assert "Watched paths accepted" in (after.run_dir / "report.md").read_text()
+    # Once the path is gone, a run records nothing about it.
+    (root / PLANTED_LINK).unlink()
+    time.sleep(0.05)
+    clean = run_project("g", root, settings, allow_writes=True)
+    assert json.loads((clean.run_dir / "result.json").read_text())["trust"]["watched_paths_accepted"] == []
 
 
 def test_a_decoy_cannot_accept_what_the_run_that_made_it_recorded(tmp_path):

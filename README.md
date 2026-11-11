@@ -474,15 +474,16 @@ that changes each:
   on that project is refused before any model call until you remove or
   restore the path, or accept it with `--accept-watched-paths`
   (`QUADRATUS_ACCEPT_WATCHED_PATHS=1`). An acceptance is written to that
-  run's record, later runs do not ask about the same path again, and
-  `tools/truth_check.py` reports a run started that way as unverified. The
+  run's record and later runs do not ask about the same path again. Every
+  run that starts while the path is still in place says so in its own
+  record, and `tools/truth_check.py` reports each of them unverified. The
   watch also walks the folders no listing reads (tool caches, the state
   folder, the top of `.git`): a file a test runner loads by position there
   (a `conftest.py`, any `.py` file, anything under `__mocks__`, a `.pth`
   file, a runner config) is a watched change too. A change in build output
   (`dist`, `build`, `.tox`, `.nox`) is recorded and shown to reviewers, not
-  failed, and the truth check reports a run unverified when that change
-  was to code. The exceptions fail the task like any watched path: in
+  failed, and the truth check reports such a run unverified, whatever
+  kind of file changed. The exceptions fail the task like any watched path: in
   `dist` and `build`, a `conftest.py`, `sitecustomize.py`,
   `usercustomize.py`, a `.pth` file or anything under `__mocks__`; in
   `.tox` and `.nox`, anything under `__mocks__`. A build that really emits

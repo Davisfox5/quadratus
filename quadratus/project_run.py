@@ -426,6 +426,48 @@ def _recorded_watch_paths(records):
     return entries
 
 
+def _say_carried(carried, progress):
+    """``carried`` again, said once: watched paths an earlier run's operator
+    accepted that are still in place. Not a refusal and not a question."""
+    if carried and progress:
+        from .project_watch import describe
+        named = describe((c['path'] + (f" [{c['kind']}]" if c['kind'] else ''), c['what']) for c in carried)
+        progress(f'Watched paths an earlier run left changed and its operator accepted are still in '
+                 f"place: {named}. This run starts over them and its record says so.")
+    return carried
+
+
+def _carried_acceptances(project, earlier, progress):
+    """The accepted paths in ``earlier`` that are still in place, when no
+    other finding stands. A project that cannot be listed carries none: the
+    acceptance already stands, and this is a record, never a refusal."""
+    if not earlier:
+        return []
+    from .project_watch import ProjectWatch, WatchUnavailable, still_in_place
+    try:
+        listing = ProjectWatch(project.root, exclude=project.exclude).listing()
+    except WatchUnavailable:
+        return []
+    return _say_carried(still_in_place(earlier, listing), progress)
+
+
+def _accepted_watch_paths(records):
+    """The watched paths the records name as changed that a later run's
+    operator accepted: what ``_recorded_watch_paths`` leaves out. They are
+    not asked about again, but a run that starts while one is still in
+    place says so in its own record (review of the run-lifecycle fixes,
+    2026-11-11: such a run recorded nothing and the truth check called it
+    verified over the same planted path)."""
+    entries = []
+    for index, old in enumerate(records):
+        accepted = set()
+        for later in records[index + 1:]:
+            if later['written'] > old['written']:
+                accepted |= later['accepted']
+        entries += [dict(entry, run=old['run']) for entry in old['paths'] if entry['path'] in accepted]
+    return entries
+
+
 def _refuse_standing_watch_findings(project, state, accepted=False, progress=None):
     """Refuse, before any model call, a project in which a watched path an
     earlier run recorded as changed still holds what that run recorded.
@@ -466,8 +508,9 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
         progress(f'Watched paths: {note}, so whether that run left a watched path changed is '
                  'not known from it.')
     paths = _recorded_watch_paths(records)
+    earlier = _accepted_watch_paths(records)
     if not paths:
-        return []
+        return _carried_acceptances(project, earlier, progress)
     # Said as it works: an acceptance is written to the accepting run's
     # record and later runs read it there, so they do not ask again about the
     # same paths (final review of the 1110 batch, run_and_surfaces 3).
@@ -491,8 +534,10 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
     unnamed = [entry for entry in paths if entry.get('unnamed')][-1:]
     standing += [dict(path=_UNNAMED_PATHS, what='not checked', kind='', by=entry['run'], since=False)
                  for entry in unnamed]
+    carried = [entry for entry in still_in_place(earlier, listing)
+               if entry['path'] not in {s['path'] for s in standing}]
     if not standing:
-        return []
+        return _say_carried(carried, progress)
     # The latest record of a path is the one that was compared.
     recorded_by = {entry['path']: entry['run'] for entry in paths}
     by = sorted({recorded_by[s['path']] for s in standing})
@@ -504,7 +549,7 @@ def _refuse_standing_watch_findings(project, state, accepted=False, progress=Non
             progress(f"Watched paths run {', '.join(by[-3:])} left changed, accepted by the operator "
                      f"for this run and the ones after it: {named}. The acceptance is written to this "
                      "run's record, and later runs do not ask about the same paths again.")
-        return standing
+        return standing + _say_carried(carried, progress)
     last = max(record['run'] for record in records)
     who = (f'The last run on this project ({last})' if by == [last] else
            f"Earlier runs on this project ({', '.join(by[-3:])}{' and more' if len(by) > 3 else ''})")
@@ -558,6 +603,21 @@ def _watch_report_lines(watch):
                 'deleted and none of those paths was merged. result.json lists each under '
                 'project_watch.', '']
     return []
+
+
+def _accepted_report_lines(accepted):
+    """The report's lines for watched paths the run started over (accepted by
+    its operator now or in an earlier run), or []. One wording for a project
+    run and a baseline."""
+    accepted = [a for a in accepted or () if isinstance(a, dict)]
+    if not accepted:
+        return []
+    from .project_watch import describe
+    named = describe((str(a.get('path')) + (f" [{a.get('kind')}]" if a.get('kind') else ''),
+                      str(a.get('what') or '')) for a in accepted)
+    return [f'Watched paths accepted: this run started over {len(accepted)} path(s) an earlier run '
+            'changed outside the measured source, which the operator accepted: '
+            f'{named}. No diff or check of this run covers what they hold.', '']
 
 
 def _test_changes(root, raw, *, goal, forbid=(), originals=None):
@@ -1112,6 +1172,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
              f'Run files: {run_dir}', '']
     watch = _watch_record(fleet)
     lines += _watch_report_lines(watch)
+    lines += _accepted_report_lines(watched_accepted)
     declared = _declared_checks_record(declined)
     lines += _declared_checks_lines(declared)
     if preview:
