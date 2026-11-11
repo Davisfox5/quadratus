@@ -832,6 +832,7 @@ class Fleet:
                 turn_limited=outcome == "TurnLimitReached",
                 prompt_artifact=prompt_artifact,
                 session_id=getattr(provider, "last_session_id", None),
+                cwd=InvocationEvent.directory_of(provider),
                 post_return_failure=post_return_failure,
                 detail=detail,
                 stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),

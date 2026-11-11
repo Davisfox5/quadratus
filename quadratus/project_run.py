@@ -23,6 +23,7 @@ from .project import Project
 from .providers import ProviderError
 from .repo_scan import scan_repo, seed_map
 from .run_budget import RunBudget
+from .safe_io import make_private_dir, prepare_state_dir, tighten_files, write_private
 from .session import SessionConfig
 from .usage import UsageMeter
 from .workers import WorkerBudget
@@ -40,7 +41,9 @@ class ProjectResult:
 @contextmanager
 def _project_lock(project):
     folder = project.root / '.quadratus'
-    folder.mkdir(exist_ok=True)
+    # Owner-only, and ignored by git, from the moment it exists: it holds run
+    # records, transcripts and samples, never source.
+    prepare_state_dir(folder)
     with (folder / 'run.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -344,7 +347,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          decider=None, decider_labels="unstated", repair_tests=(), test_changes=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
-    run_dir.mkdir(parents=True)
+    # Closed to other users before the first record is written, not when the
+    # run ends: the goal, the diff and check output were readable by anyone
+    # on the machine for the whole run, and for good if it died early.
+    prepare_state_dir(state)
+    make_private_dir(state / 'runs')
+    os.mkdir(run_dir, 0o700)
     from .run_activity import RunActivity
     activity = RunActivity(run_dir, progress)
     progress = activity
@@ -352,7 +360,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     stale_fixtures = _retire_stale_fixtures(project.root, run_dir, progress)
     before = project.contents()
     scan = scan_repo(project.root)
+    # A damaged map costs the damaged lines, never the run: this load is
+    # outside the run's own error handling.
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
+    map_notices = _report_map(code_map, progress, 0)
     seed_map(scan, code_map)
     command = shlex.split(check) if check else scan.check_command
     gates = _merge_extras(list(gates), extras) if gates is not None else _gate_plan(command, extras, scan)
@@ -362,7 +373,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
               minimum_tests=1 if _is_test_suite(command) else None)] if command else [])
     # Shown to the operator before any task, and kept with the run. Never put
     # into a model prompt: a gate command can name an examiner path.
-    (run_dir / 'gate-plan.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
+    write_private(run_dir / 'gate-plan.json', json.dumps(plan, indent=2))
     if progress:
         progress('Checks: ' + ('; '.join(f"{g['id']}: {' '.join(g['argv'])}" for g in plan) or 'none'))
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
@@ -379,6 +390,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # A decider object handed in directly (tests, embedding callers) is
         # bound to this run's budget too: no billed call escapes the limits.
         decider.budget = budget
+    if decider is not None and progress:
+        # Said before any task text is sent, and kept in the activity record.
+        from .decisions import disclosure
+        progress(disclosure(decider))
     # A per-call ceiling with no turn cap stops a lead only after the
     # oversized call returns (both Stage B series on b1ff751); the cap
     # derived here acts before it, and the operator's own value wins.
@@ -393,7 +408,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # interrupted run still says what it was allowed (Codex GUI plan, #35),
     # with the lead turn cap the session is about to be built with.
     selected = _selected_limits(max_tasks, run_limits, survey, lead_turns, lead_source)
-    (run_dir / 'run-limits.json').write_text(json.dumps(selected, indent=2) + '\n', encoding='utf-8')
+    write_private(run_dir / 'run-limits.json', json.dumps(selected, indent=2) + '\n')
     if progress:
         progress('Run limits: ' + selected['described'])
     config = SessionConfig(
@@ -419,7 +434,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         progress('Session settings: ' + ', '.join(f'{k}={v}' for k, v in sorted(session_options.items())))
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
-    (run_dir / 'policy-plan.json').write_text(json.dumps(preview, indent=2), encoding='utf-8')
+    write_private(run_dir / 'policy-plan.json', json.dumps(preview, indent=2))
     session, error = None, ''
     if run_limits:
         config.worker_budget = WorkerBudget(
@@ -463,7 +478,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         partial = getattr(exc, 'partial', None)
         in_flight = dict(getattr(session, 'in_flight', {}) or partial or {})
         if in_flight:
-            (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
+            write_private(run_dir / 'in-flight.json', json.dumps(in_flight, indent=2))
     finally:
         fleet.close()
     if not error and session is not None and getattr(session, 'stop_reason', ''):
@@ -480,13 +495,20 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                 note='Stopped by the unfinished-task breaker; every capped or failed task\'s edits are preserved.',
                 changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records + failed),
                 turn_limited=records, failed=failed)
-            (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
+            write_private(run_dir / 'in-flight.json', json.dumps(in_flight, indent=2))
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
-    traces = []
+    traces, trace_interrupted = [], False
     try:
         from .trace import build_traces
         traces = build_traces(run_dir, run_dir / 'invocations.jsonl', project.root)
+    except KeyboardInterrupt:
+        # A second Ctrl-C lands here, in the slow copy, more often than
+        # anywhere else. It ends the copy and nothing more: the run's own
+        # record below is quick, and without it the run left no result.
+        traces, trace_interrupted = [], True
+        if progress:
+            progress('Interrupted while copying call transcripts; writing the run record without them.')
     except Exception:  # noqa: BLE001 -- tracing never fails a run
         traces = []
     _observe_transcript_children(traces, delegation)
@@ -552,12 +574,23 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     if traces:
         from .trace import render_timeline
         lines += [render_timeline(traces), '']
+    # What the map could not load, save or keep in this run, for the
+    # operator. Never shown to a model.
+    _report_map(code_map, progress, map_notices)
+    map_record = code_map.record()
+    if map_record['notices'] or map_record['not_kept']:
+        lines += ['## Codebase map', '', *[f'- {notice}' for notice in map_record['notices']],
+                  *([f"- {map_record['not_kept']} note(s) a model wrote were not kept; "
+                     'result.json lists each with the reason.'] if map_record['not_kept'] else []), '']
     lines += [delegation.render_report(), '', '## Task ledger', '', ledger]
     report = '\n'.join(lines)
-    (run_dir / 'changes.diff').write_text(diff, encoding='utf-8')
-    (run_dir / 'ledger.md').write_text(ledger, encoding='utf-8')
-    (run_dir / 'report.md').write_text(report, encoding='utf-8')
-    (run_dir / 'result.json').write_text(json.dumps({
+    # Each file is written whole under a temporary name and renamed in, so a
+    # reader (the monitor refreshes every few seconds) never sees half of
+    # one and an interrupt leaves the old file or the new, never a fragment.
+    write_private(run_dir / 'changes.diff', diff)
+    write_private(run_dir / 'ledger.md', ledger)
+    write_private(run_dir / 'report.md', report)
+    write_private(run_dir / 'result.json', json.dumps({
         'project': str(project.root), 'goal': goal, 'completed': completed,
         'allow_writes': allow_writes, 'error': error, 'checks': checks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
@@ -575,6 +608,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'explicit_tasks': _explicit_record(session, completed),
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
         'trace': {'calls': len(traces),
+                  **({'interrupted': True} if trace_interrupted else {}),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
                   'calls_outside_project': sum(1 for t in traces if t.get('outside_project')),
                   'unserved_requests': sum(len(t.get('protocol_attempts') or []) for t in traces),
@@ -595,6 +629,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,
+        'codebase_map': map_record,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
@@ -602,11 +637,24 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
              'code_lines': r.code_lines, 'test_lines': r.test_lines, 'oversized': r.oversized}
             for r in (session.scope_reports if session else [])
         ],
-    }, indent=2), encoding='utf-8')
-    (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
-    (run_dir / 'findings.json').write_text(
-        json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
+    }, indent=2))
+    write_private(run_dir / 'delegation.md', delegation.render_report())
+    write_private(run_dir / 'findings.json',
+                  json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2))
+    # A record another module appended under the usual mode is closed here.
+    # The folder has been owner-only since it was made, so this is the file's
+    # own mode catching up, not the first protection.
+    tighten_files(run_dir)
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _report_map(code_map, progress, shown):
+    """Tell the operator each map notice once; returns how many are told."""
+    notices = list(getattr(code_map, 'notices', ()) or ())
+    for notice in notices[shown:]:
+        if progress:
+            progress('Codebase map: ' + notice)
+    return len(notices)
 
 
 #: Tool names that start a vendor-native child agent inside one call.
@@ -919,6 +967,10 @@ def standing_rulings(path, fallback=None):
     like any other; anything else goes to ``fallback`` (an interactive
     prompt), or stops the run with OperatorInputNeeded. A blind run can then
     carry answers the operator already gave without anyone at the keyboard.
+
+    Every pattern is compiled here, when the file is loaded. A bad one is a
+    ValueError naming the entry before any model call; it used to surface as
+    a regex error when the first question arrived, after calls were spent.
     """
     import json as _json
     import re as _re
@@ -927,11 +979,20 @@ def standing_rulings(path, fallback=None):
             isinstance(e, dict) and isinstance(e.get("about"), str) and isinstance(e.get("answer"), str)
             for e in entries):
         raise ValueError(f"{path}: expected a list of {{'about': regex, 'answer': text}}")
+    rulings = []
+    for index, entry in enumerate(entries, 1):
+        try:
+            rulings.append((_re.compile(entry["about"], _re.IGNORECASE), entry["answer"]))
+        except (_re.error, OverflowError, RecursionError) as exc:
+            # The compiler has two more ways to refuse a pattern: a repeat
+            # count too large for it, and nesting too deep for it.
+            raise ValueError(f"{path}: ruling {index} has a pattern that is not a valid regular "
+                             f"expression ({entry['about'][:200]!r}: {type(exc).__name__}: {exc})") from exc
 
     def ask(question: str) -> str:
-        for entry in entries:
-            if _re.search(entry["about"], question, _re.IGNORECASE):
-                return entry["answer"]
+        for about, answer in rulings:
+            if about.search(question):
+                return answer
         if fallback is not None:
             return fallback(question)
         from .session import OperatorInputNeeded

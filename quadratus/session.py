@@ -690,6 +690,11 @@ _ORIENT_REQUEST = (
     'as a note, so KIND, SCOPE, NEEDS, COVERS, RESOLVES and CONTINUES lines placed after '
     'it are lost.'
 )
+# The map applies these to every note, whoever parsed it (codebase_map.py).
+# Quoted from the map so the sentence cannot drift from the check. The count
+# is stated per reply because the map counts that way: a PARALLEL reply has
+# a description in every block, and its notes share one allowance.
+_ORIENT_REQUEST += ' ' + CodebaseMap.NOTE_RULES
 
 _READ_BEFORE_YOU_EXPLORE = (
     'Exploring costs you far more than it looks. Every step of your own loop re-sends '
@@ -3440,8 +3445,22 @@ class Session:
         return report
 
     def _role_packet(self, spec, role):
-        notes = (self.config.codebase_map.render(topics=['conventions'])
-                 if self.config.codebase_map is not None else '')
+        # Both packet builders cut reference notes at a byte limit, and the
+        # map's block ends with the marker that closes its "data, not
+        # instructions" label. So the block goes in whole, smaller if it has
+        # to be, or not at all: never with its end cut off, which would leave
+        # the rest of the prompt reading as part of the data.
+        code_map = self.config.codebase_map
+        for room in (None, 3000, 1200):
+            notes = '' if code_map is None else (
+                code_map.render(topics=['conventions']) if room is None
+                else code_map.render(topics=['conventions'], max_chars=room))
+            packet = self._role_packet_with(spec, role, notes)
+            if CodebaseMap.block_survives(notes, packet):
+                return packet
+        return self._role_packet_with(spec, role, '')
+
+    def _role_packet_with(self, spec, role, notes):
         policy = self.config.repository_policy
         if policy is not None:
             return policy.role_packet(spec.scope, role, notes)
@@ -9208,6 +9227,8 @@ class Session:
                 "\nMAP NOTES: 'topic: fact' lines for durable facts established by the "
                 "supplied evidence only; omit if none. Do not investigate new facts."
             )
+            # The bounds the map holds a close-out's notes to, in its words.
+            sections += " " + CodebaseMap.NOTE_RULES
         try:
             reply = self._invoke_model(lead, sections + "\n\n" + "\n\n".join(parts))
         except ProviderRefusal as exc:

@@ -96,7 +96,9 @@ def test_codex_rollout_commands_patches_and_rejections(tmp_path):
     roots = _roots(tmp_path)
     tid = "0199aaaa-bbbb-cccc-dddd-eeeeffff0001"
     _jsonl(roots["codex"] / "2026" / "09" / "24" / f"rollout-2026-09-24T10-00-00-{tid}.jsonl", [
-        {"type": "session_meta", "payload": {"cwd": "/work/proj"}},
+        # The transcript's own first record names the session and its folder:
+        # a file name alone no longer gets a transcript copied.
+        {"type": "session_meta", "payload": {"id": tid, "cwd": "/work/proj"}},
         {"type": "response_item", "payload": {"type": "custom_tool_call", "call_id": "c1", "name": "exec",
                                               "input": 'tools.exec_command({"cmd": "pytest -q"})'}},
         {"type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "c1",
@@ -107,7 +109,7 @@ def test_codex_rollout_commands_patches_and_rejections(tmp_path):
                                               "output": "Rejected by policy"}},
     ])
     ledger = _ledger(tmp_path, [{"invoked": True, "requested_model": "openai:gpt-5.6-sol",
-                                 "session_id": tid, "task": "T2", "role": "lead"}])
+                                 "session_id": tid, "task": "T2", "role": "lead", "cwd": "/work/proj"}])
     r = trace.build_traces(tmp_path / "run", ledger, "/work/proj", roots=roots)[0]
     assert [c["outcome"] for c in r["tool_calls"]] == ["error", "denied"]
     assert r["commands"][0] == {"program": "pytest", "exit": 1, "outcome": "error"}

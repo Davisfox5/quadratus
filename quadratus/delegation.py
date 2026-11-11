@@ -52,8 +52,10 @@ import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Dict, Iterable, List, Optional
+
+from .safe_io import append_private
 
 log = logging.getLogger(__name__)
 
@@ -233,6 +235,23 @@ class InvocationEvent:
     #: anyone reading the record. Older records lack these and read as empty.
     stderr_tail: str = ""
     tool_failures: list = field(default_factory=list)
+    #: The directory the call ran in, when the transport has one: the project
+    #: for a granted editing call, a disposable copy otherwise. The trace
+    #: copies a vendor transcript only when the transcript's own working
+    #: directory is this one (quadratus.trace). Older records lack it.
+    cwd: Optional[str] = None
+
+    @staticmethod
+    def directory_of(provider) -> Optional[str]:
+        """The directory a provider view runs its call in, or None. Read
+        from the view's own fields rather than its ``workdir`` property,
+        which makes a scratch folder when there is none yet."""
+        for name in ("_workdir", "_owned_workdir"):
+            value = getattr(provider, name, None)
+            # A real path only: a stand-in object would not survive JSON.
+            if isinstance(value, (str, PurePath)) and str(value):
+                return str(value)[:4096]
+        return None
 
     @property
     def tokens_known(self) -> bool:
@@ -352,8 +371,14 @@ def bounded_stderr(value) -> str:
 
 
 def bounded_tool_failures(value) -> list:
-    """Failed tool calls as plain bounded dicts: command, exit code, output
-    tail, or an error message. Anything else in the entry is dropped."""
+    """Failed tool calls as plain bounded dicts: the tool and the path it was
+    refused on, or the command, exit code and output tail, or an error
+    message. Anything else in the entry is dropped.
+
+    ``tool`` and ``path`` are kept because a denied write arrives as
+    ``{kind, tool, status, path}``: without them the record said only that
+    something was denied, not which write (whole-repo review, 2026-11-10).
+    """
     if not isinstance(value, list):
         return []
     kept = []
@@ -363,7 +388,7 @@ def bounded_tool_failures(value) -> list:
         if not isinstance(entry, dict):
             continue
         clean = {}
-        for key in ("kind", "command", "status", "message", "output_tail"):
+        for key in ("kind", "tool", "command", "path", "status", "message", "output_tail"):
             text = entry.get(key)
             if isinstance(text, str) and text:
                 clean[key] = text[-TOOL_FAILURE_TEXT:] if key == "output_tail" else text[:TOOL_FAILURE_TEXT]
@@ -416,8 +441,9 @@ class DelegationLedger:
             if self.path is not None:
                 try:
                     self.path.parent.mkdir(parents=True, exist_ok=True)
-                    with self.path.open("a", encoding="utf-8") as fh:
-                        fh.write(json.dumps(asdict(event)) + "\n")
+                    # Owner-only from creation: a row carries the stderr tail
+                    # and failed commands with their output.
+                    append_private(self.path, json.dumps(asdict(event)) + "\n")
                 except OSError:  # noqa: BLE001 -- accounting never fails a run
                     log.debug("could not persist invocation event", exc_info=True)
         return event
@@ -433,8 +459,7 @@ class DelegationLedger:
         if self.path is not None:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.with_name("native-children.jsonl").open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(asdict(child)) + "\n")
+                append_private(self.path.with_name("native-children.jsonl"), json.dumps(asdict(child)) + "\n")
             except OSError:
                 log.debug("could not persist native observation", exc_info=True)
         existing = self.native_children.get(child.session_id)
