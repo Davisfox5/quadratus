@@ -17,6 +17,7 @@ from quadratus.memory import TaskMemory
 from quadratus.outcome import TaskOutcome
 from quadratus.providers import ProviderError
 from quadratus.session import RunStalled, Session, SessionConfig
+from tests.lifecycle.test_lifecycle_matrix import covered_met
 
 pytestmark = pytest.mark.requirements_ledger
 
@@ -48,7 +49,7 @@ class Script:
         if "The task is finished" in prompt:
             return "SUMMARY: done\nREASONING: done"
         if "contributing an independent read" in prompt:
-            return "NO FINDINGS"
+            return "NO FINDINGS\n" + covered_met(prompt)
         return "work"
 
     def asked(self, marker):
@@ -151,8 +152,12 @@ def test_item4_a_tree_that_moved_under_the_audit_is_void_and_writes_no_status(tm
     assert session._audit_unavailable == "void: the tree changed during the audit"
     assert session.memory.ledger.requirement_status == {"R1": "covered by t1", "R5": "covered by t3"}
     assert "audit did not run" in session._done_refusal
-    assert session.requirement_audits[-1] == dict(auditor="openai:gpt-5.6-sol", ran=False,
-                                                  result="void: the tree changed during the audit")
+    # The merged record also keeps the development line's fields (the reply
+    # artifact, the ids asked for, the omitted ids, the completion).
+    void = session.requirement_audits[-1]
+    assert {k: void[k] for k in ("auditor", "ran", "result")} == dict(
+        auditor="openai:gpt-5.6-sol", ran=False, result="void: the tree changed during the audit")
+    assert "verdicts" not in void and void["omitted"] == [] and void["completion"] is None
 
 
 def test_item4_a_reply_with_no_verdict_at_all_judged_nothing_but_one_missing_line_is_that_ones(tmp_path):
@@ -364,8 +369,14 @@ def test_item12_a_skip_record_names_its_check_and_no_report_changes_nothing(tmp_
            "skipped." in session._done_refusal
     plain, _, _ = _project_session(tmp_path / "plain", "R1: NOT MET - no filter\nR5: MET - app.py")
     assert plain._requirements_satisfied() is False
-    assert plain._done_refusal == ("\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements "
-                                   "not met:\n- R1: no filter\nName a task that fixes them (with COVERS).")
+    # The plain refusal is the development line's now (a basis label, a route
+    # line and the RESOLVES rule after the sentence); a run with no report
+    # still adds nothing about reports to it.
+    assert plain._done_refusal.startswith("\n\n--- DONE SENT BACK ---\nAn independent audit found these "
+                                          "requirements not met:\n- R1: no filter")
+    assert "\nName a task that fixes them (with COVERS)." in plain._done_refusal
+    assert plain._not_run_remedy(["R1"]) == ("", [])
+    assert "NOT RUN report" not in plain._done_refusal and "No task lifts" not in plain._done_refusal
 
 
 def test_item12_the_editing_call_is_told_the_rule_the_discharge_holds_it_to(tmp_path, monkeypatch):
@@ -388,7 +399,8 @@ def test_item12_the_editing_call_is_told_the_rule_the_discharge_holds_it_to(tmp_
     finally:
         fleet.close()
     told = " ".join(seen[0].split())
-    assert "'NOT RUN: <command or file> - <why>'" in told, "the line format is still told"
+    # The development line's NOT_RUN_RULE names the item forms (cycle22).
+    assert "'NOT RUN: <item> - <why>'" in told, "the line format is still told"
     assert ("A NOT RUN or BLOCKED line must name the test file it is about, alone or as the file a command "
             "runs (tests/ui/search.test.js, or node tests/browser/run.js)") in told
     assert ("a line that names no file path, such as 'the browser scenario', can never be matched to a later "

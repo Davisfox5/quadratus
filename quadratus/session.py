@@ -14591,10 +14591,13 @@ class Session:
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
                 + "\n".join(f"- {r}: {shown[r][0]}" + self._basis_label(r) + f"\n  route: {routes[r]['route']}"
                              for r in unmet)
+                # The review batch's sentence first, word for word, then the
+                # development line's routes: which id goes on which line and
+                # what kind of task each route is.
                 + ("" if stuck and not fixable else
                    "\nName a task that fixes " + ("them" if not stuck else ", ".join(fixable))
-                   + " with these requirement ids in COVERS (RESOLVES names only "
-                   "finding ids, F<n> or RFT<task>-<n>, never a requirement): a repair for a finding on the "
+                   + " (with COVERS). COVERS takes these requirement ids; RESOLVES names only "
+                   "finding ids, F<n> or RFT<task>-<n>, never a requirement. Name a repair for a finding on the "
                    "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
                    "independent audit judges the repaired source. " + _REPAIR_OUTCOME_RULE)
                 + remedy)
@@ -22813,7 +22816,7 @@ class Session:
         # every one served whole by FETCH. And the question says what it is:
         # the goal decision, which the independent audit follows.
         audit = ("\n\nYour answer is the goal decision, not the requirement audit: if you reply DONE, "
-                 "an independent auditor then checks every numbered requirement against the current "
+                 "an independent audit then checks every numbered requirement against the current "
                  "source, and your DONE does not stand in for that check."
                  if self.memory.ledger.requirements and self.config.requirements_ledger else "")
         prompt = self.memory.render(
