@@ -277,6 +277,7 @@ The remaining options (`quadratus --help` has the full text):
 | `--rulings FILE` | answers you give in advance to questions the planner may ask |
 | `--repair-test PATH` | an existing test file this run may repair; repeatable |
 | `--test-changes FILE` | your own exact test replacements or retirements, as JSON |
+| `--resume RUN` | resume an interrupted run of the same job (a folder under the state directory's `runs`) as its next episode; refused before any call when the run is sealed, already resumed, or the source, goal, policy, limits, settings, gates or dependency trees differ |
 | `--neutral-preferences` | run without your personal CLI plugins, hooks and rules where each CLI allows it |
 | `--security-verdict-json` | require the strict JSON security verdict |
 | `--max-calls N`, `--max-reported-tokens N`, `--wall-seconds N` | bound a `--project` run: model calls in total, reported tokens in total, seconds. Give all three or none |
@@ -289,6 +290,7 @@ The remaining options (`quadratus --help` has the full text):
 | `--trust-project-policy SHA256`, `--allow-project-agent-config`, `--no-declared-checks`, `--accept-watched-paths` | trust choices for one project (see Security model) |
 | `--allow-host NAME`, `--allow-project DIR` | with `--monitor --serve`: a host name the page also answers to, and a folder `?project=` or `?series=` may name; repeatable |
 | `--series DIR`, `--history N` | with `--monitor`: a Stage B series to read, and how many recent runs to list (default 10) |
+| `--calls` | with `--monitor`: also print every call of the run under the by-role summary; refused with `--serve`, whose page lists every call already |
 | `--claude-model`, `--openai-model`, `--grok-model` | model IDs for the code discussion pipeline only; the session engine refuses them |
 | `-v`, `--verbose` | debug logging |
 
