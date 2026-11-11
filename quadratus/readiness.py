@@ -7,9 +7,11 @@ an owned HOME passing, are prospective evidence, not proof of what happened.
 Whatever the cause, nothing asked the environment first. A readiness probe is the operator's own declaration of what must work before
 any model is asked to do anything: "node can launch Chromium", "python can
 import the frozen test deps". It runs once at run start, under the real
-execution identity and environment (the same ``os.environ`` the checks run
-with), before the first model call. A failing probe is an operator handoff:
-the run stops with the probe's own bounded output and no model call is made.
+execution identity and environment (the same environment the checks run
+with: the harness's own, less credential-shaped names, see
+``child_env.check_env``), before the first model call. A failing probe is an
+operator handoff: the run stops with the probe's own bounded output and no
+model call is made.
 
 What a probe is not:
 
@@ -153,9 +155,14 @@ def probes_from(data, root) -> Tuple[Probe, ...]:
 
 
 def run_probe(probe: Probe, root) -> ProbeReceipt:
+    from .child_env import check_env
     from .preview import _group_alive, _stop
     owned = tempfile.mkdtemp(prefix=f"quadratus-probe-{probe.id}-")
-    env = dict(os.environ, QUADRATUS_PROBE_DIR=owned, PYTHONPYCACHEPREFIX=os.path.join(owned, "pycache"),
+    # The check profile, as for the checks themselves: a probe runs an
+    # operator command over project files and needs none of the harness's
+    # credentials.
+    env, _ = check_env()
+    env.update(QUADRATUS_PROBE_DIR=owned, PYTHONPYCACHEPREFIX=os.path.join(owned, "pycache"),
                PYTHONDONTWRITEBYTECODE="1")
     started = time.monotonic()
     try:

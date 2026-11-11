@@ -3195,7 +3195,14 @@ class CLIProvider(LLMProvider):
         if self.spec.session_id_flag:
             self.last_session_id = str(uuid.uuid4())
             argv += [self.spec.session_id_flag, self.last_session_id]
-        env = {**os.environ, **self.spec.env}
+        # An inherited ANTHROPIC_API_KEY would silently divert a subscription
+        # run onto billed API credits, and so would an auth token, a base URL
+        # or a provider switch. Every other credential in the harness's
+        # environment is readable by a model with a shell. The vendor profile
+        # leaves all of them out and keeps this vendor's own sign-in variable.
+        from .child_env import vendor_env
+        env, _ = vendor_env(self.spec.vendor)
+        env.update(self.spec.env)
         if getattr(self, "_disposable", False):
             # Python's tempfile tries TMPDIR first: pointed inside the copy,
             # a sandbox that allows writes under the working directory lets a
@@ -3209,11 +3216,6 @@ class CLIProvider(LLMProvider):
         if self.worker_tool_attached and self.spec.worker_tool_style == "claude":
             # claude's MCP tool-call timeout, in milliseconds.
             env["MCP_TOOL_TIMEOUT"] = str(int(self.worker_tool["timeout"]) * 1000)
-        # An inherited ANTHROPIC_API_KEY would silently divert a subscription
-        # run onto billed API credits, so clear key vars for the child.
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-                    "GOOGLE_API_KEY", "XAI_API_KEY", "GROK_API_KEY"):
-            env.pop(var, None)
 
         # The binary and a count only: the arguments carry the system prompt,
         # and on a restricted call the task prompt, which a debug log must

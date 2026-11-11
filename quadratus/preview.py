@@ -37,6 +37,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import List, Optional, Tuple
 
+from .child_env import CREDENTIAL_WORDS, PASS_VARIABLE, withheld
+
 __all__ = ["CaptureFailure", "CaptureProfile", "ENVIRONMENT", "PreviewFailed", "load_profile",
            "profile_from_dict", "running", "capture_task", "capture_argv", "validate_capture"]
 
@@ -50,9 +52,14 @@ SHUTDOWN_STEP_SECONDS = 4
 SHUTDOWN_SECONDS = 3 * SHUTDOWN_STEP_SECONDS
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 #: Names an operator profile may not set: what changes how programs load or
-#: where they look, and anything that reads as a credential.
-_ENV_RESERVED = re.compile(r"PATH|HOME|SHELL|USER|TMPDIR|.*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH"
-                           r"|COOKIE|SESSION).*|(?:LD|DYLD|PYTHON|NODE|NPM|UV|PIP|GIT|SSH|AWS|GCP|AZURE)_.*"
+#: where they look, and anything that reads as a credential. The credential
+#: words are child_env's one list. They are matched anywhere in the name
+#: here, as they always were; a child's inherited environment matches them
+#: part by part, because dropping ``KEYBOARD_LAYOUT`` from a child would be a
+#: fault. ``_env`` also refuses every name a child would not inherit, so a
+#: profile cannot put one back.
+_ENV_RESERVED = re.compile(r"PATH|HOME|SHELL|USER|TMPDIR|.*(?:" + "|".join(CREDENTIAL_WORDS)
+                           + r"|COOKIE|SESSION).*|(?:LD|DYLD|PYTHON|NODE|NPM|UV|PIP|GIT|SSH|AWS|GCP|AZURE)_.*"
                            r"|PYTHON.*|NODE.*")
 #: How much preview output a failure carries back.
 _LOG_TAIL = 2_000
@@ -406,6 +413,12 @@ def _env(values, root: Path) -> Tuple[Tuple[str, str], ...]:
         raise ValueError("capture profile env must be an object of at most 16 names")
     out = []
     for name, value in values.items():
+        if isinstance(name, str) and _ENV_NAME.fullmatch(name) and withheld(name):
+            # The rule that keeps a name out of a child's inherited
+            # environment also keeps a profile from setting it.
+            raise ValueError(f"capture profile env name {name[:40]!r} may not be set: it reads as a credential "
+                             f"or can re-route a vendor call. To give the preview an inherited value, export "
+                             f"it and name it in {PASS_VARIABLE}")
         if not isinstance(name, str) or not _ENV_NAME.fullmatch(name) or _ENV_RESERVED.fullmatch(name):
             raise ValueError(f"capture profile env name {str(name)[:40]!r} may not be set")
         if (not isinstance(value, str) or len(value) > 512 or _SHELL.search(value)
@@ -441,7 +454,9 @@ def _listening(host: str, port: int) -> bool:
 
 
 def _environment() -> dict:
-    """The gate's environment rule: no stale bytecode, nothing else added."""
+    """The gate's environment rule: the check profile (no inherited
+    credentials), no stale bytecode, nothing else added. The preview server
+    and the capture both start from this."""
     from .integration import _fresh_bytecode_env
     with _fresh_bytecode_env() as env:
         return {k: v for k, v in env.items() if k != "PYTHONPYCACHEPREFIX"}

@@ -779,10 +779,16 @@ def _fresh_bytecode_env():
     cache lookup to an empty, owner-private directory that is removed
     afterwards; only that directory is ever deleted, never a project's or a
     dependency's own caches. An inherited prefix is overridden, not reused.
+
+    The environment is the check profile (``child_env.check_env``): a check
+    runs project code, so it inherits no credential-shaped name from the
+    harness. ``QUADRATUS_ENV_PASS`` keeps one a check really needs.
     """
+    from .child_env import check_env
     prefix = tempfile.mkdtemp(prefix="quadratus-gate-pyc-")
     try:
-        env = dict(os.environ, PYTHONPYCACHEPREFIX=prefix, PYTHONDONTWRITEBYTECODE="1")
+        env, _ = check_env()
+        env.update(PYTHONPYCACHEPREFIX=prefix, PYTHONDONTWRITEBYTECODE="1")
         yield env
     finally:
         shutil.rmtree(prefix, ignore_errors=True)
