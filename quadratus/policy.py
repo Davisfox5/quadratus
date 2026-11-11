@@ -1,21 +1,46 @@
 """Offline repository policy loading and deterministic task-family resolution.
 
-Cards and schemas are pinned package data. A repository may narrow capability,
-never grant it through a fact or a model tier. Resolution does not run checks.
+Cards and schemas are pinned package data. Resolution does not run checks.
+
+A project's own ``.quadratus/policy.json`` is a project file: a clone can
+ship it and an editing call can write it, so it is untrusted input. What the
+code enforces for it:
+
+* It may narrow without approval: more write denials, sensitive paths, a
+  smaller scope, a family choice.
+* It can never remove a built-in write denial. ``BUILTIN_DENY_WRITE`` is
+  unioned into whatever it declares.
+* Anything that grants capability (a command gate the harness would run, an
+  external-effects grant, an instruction file that is kept out of model
+  copies) loads only when the operator approved that exact file by its
+  sha256 (``trust_project_policy`` or ``QUADRATUS_TRUST_PROJECT_POLICY``).
+  Otherwise :class:`PolicyUntrusted` is raised before any model call, naming
+  the file, its hash and what it asked for.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shlex
+import stat
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 
 from jsonschema import Draft202012Validator
 
+from .project import source_path
 from .repo_scan import detect_adapters, scan_repo
 from .scope import TaskScope, _matches
+
+POLICY_FILE = '.quadratus/policy.json'
+#: The operator's approval of one exact policy file, by sha256.
+TRUST_ENV = 'QUADRATUS_TRUST_PROJECT_POLICY'
+#: Never editable, whatever a project's policy says.
+BUILTIN_DENY_WRITE = ('.git/**', '.env', '.env.*', '.quadratus/**')
+_MAX_POLICY_BYTES = 1_000_000
 
 #: Checklist items that forbid I/O, and the I/O kinds a task scope can ask
 #: for by name.
@@ -43,6 +68,75 @@ def _io_requested(text: str) -> list:
 
 class PolicyError(ValueError):
     pass
+
+
+class PolicyUntrusted(PolicyError):
+    """The project's own policy asks for capability the operator has not
+    approved for that exact file. Raised at load, before any model call."""
+
+
+def _read_policy(path) -> bytes:
+    """The policy file's bytes, read once, so the bytes hashed are the bytes
+    parsed. A regular file only, and bounded."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as exc:
+        raise PolicyError(f"Cannot read repository policy: {exc}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise PolicyError("Cannot read repository policy: it is not a regular file")
+        data = b''
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return data
+            data += chunk
+            if len(data) > _MAX_POLICY_BYTES:
+                raise PolicyError(f"Repository policy exceeds {_MAX_POLICY_BYTES} bytes")
+    except OSError as exc:
+        raise PolicyError(f"Cannot read repository policy: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
+def policy_grants(document) -> list:
+    """What a validated policy asks for beyond narrowing, one line each.
+
+    These are what the operator approves when approving the file. A command
+    gate is first: the harness would execute its argv in the project.
+    """
+    grants = []
+    for gate in document['gates']:
+        if gate['runner'] == 'command':
+            where = gate.get('cwd', '.')
+            grants.append(f"run a command as check {gate['id']}"
+                          + (f" in {where}" if where not in ('.', './') else '')
+                          + ': ' + shlex.join(gate['argv'])[:400])
+    effects = document['capability_policy']['external_effects']
+    if effects != 'deny':
+        grants.append(f"set external_effects to {effects}")
+    for name in document.get('instructions', []):
+        if not source_path(PurePosixPath(name.removeprefix('./')).parts):
+            grants.append(f"put {name} into every role packet, a file that is kept out of "
+                          "the copies models read")
+    return grants
+
+
+def _approval(value) -> str:
+    """The operator's sha256 in canonical form, or '' when none was given.
+
+    ``value`` is ``trust_project_policy``; None, an empty string or blanks
+    mean it was not given (an empty form field is not an approval of
+    nothing), and the environment variable is read instead.
+    """
+    named = 'trust_project_policy'
+    if not str(value or '').strip():
+        value, named = os.environ.get(TRUST_ENV, ''), TRUST_ENV
+    text = str(value or '').strip().lower().removeprefix('sha256:')
+    if text and not re.fullmatch(r'[0-9a-f]{64}', text):
+        raise PolicyError(f"{named} must be the policy file's sha256: "
+                          f"64 hexadecimal characters, not {str(value)[:80]!r}")
+    return text
 
 
 def _json(text):
@@ -224,6 +318,11 @@ class RepositoryPolicy:
     adapters: dict
     explicit: bool
     forbid: tuple = ()
+    #: The operator approved this exact in-project policy file by its sha256.
+    #: Only an approved policy's capability grants are honoured.
+    approved: bool = False
+    #: sha256 of the in-project policy file as read, '' for the built-in.
+    source_sha256: str = ''
 
     def role_packet(self, scope, role, conventions=''):
         """A bounded shared contract, without another reviewer's conversation.
@@ -285,11 +384,30 @@ class RepositoryPolicy:
         if room < 0:
             raise PolicyError(f'Required role packet exceeds {limit} bytes; narrow the task')
         notes = conventions.encode()[:room + 1]
+        listed = 'instructions' in self.document
         for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
             if len(notes) > room:
                 break
-            path = self.root / _path(name, self.root)
-            if not path.is_file():
+            try:
+                path = self.root / _path(name, self.root)
+            except PolicyError:
+                if listed:
+                    raise
+                # A default name the project happens to carry as a link out of
+                # the project is skipped, not a reason to stop every packet.
+                continue
+            try:
+                if not path.is_file():
+                    continue
+                inside = path.resolve().relative_to(self.root).parts
+            except (OSError, RuntimeError, ValueError):
+                continue
+            named = tuple(PurePosixPath(name.removeprefix('./')).parts)
+            if not source_path(inside) and not (self.approved and listed and inside == named):
+                # A file kept out of model copies is put into a prompt only
+                # when the approved policy lists that very path, which is
+                # what the approval named (policy_grants). One reached through
+                # a link or a default name never is.
                 continue
             with path.open('rb') as source:
                 notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
@@ -358,7 +476,10 @@ class RepositoryPolicy:
                 for field in self.cards[family]['adapter_fields']
             }
         result = dict(schema_version=1, repository_id=doc['repository_id'],
-                      policy_source='.quadratus/policy.json' if self.explicit else 'built-in',
+                      policy_source=POLICY_FILE if self.explicit else 'built-in',
+                      # The file as the operator would hash it, and whether
+                      # they approved exactly those bytes.
+                      policy_sha256=self.source_sha256 or None, policy_approved=self.approved,
                       policy_hash=_hash(doc), library_version=self.library['version'],
                       library_digest=self.library['digest'], declared_paths=paths,
                       primary_family=families[0], families=families, family_source=family_source,
@@ -383,25 +504,46 @@ class RepositoryPolicy:
                        forbidden_paths=tuple(dict.fromkeys([*scope.forbidden_paths, *deny])))
 
 
-def load_policy(root, *, forbid=(), scan=None):
+def load_policy(root, *, forbid=(), scan=None, trust_project_policy=None):
+    """The project's policy, or the built-in one when it carries none.
+
+    ``trust_project_policy`` is the operator's approval of one exact
+    in-project policy file: its sha256. ``None`` or an empty string reads the
+    ``QUADRATUS_TRUST_PROJECT_POLICY`` environment variable instead. A policy
+    that only narrows needs no approval; one that grants anything
+    (:func:`policy_grants`) without it raises :class:`PolicyUntrusted`.
+    """
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
         raise PolicyError(f"Project folder does not exist: {root}")
     origin, schemas, cards = load_library()
-    path = root / '.quadratus/policy.json'
+    path = root / POLICY_FILE
     explicit = path.exists() or path.is_symlink()
     scan = scan or scan_repo(root)
+    approved, digest = False, ''
     if explicit:
-        _path('.quadratus/policy.json', root)
+        _path(POLICY_FILE, root)
+        raw = _read_policy(path)
+        digest = hashlib.sha256(raw).hexdigest()
         try:
-            document = _json(path.read_text(encoding='utf-8'))
-        except OSError as exc:
+            document = _json(raw.decode('utf-8'))
+        except UnicodeDecodeError as exc:
             raise PolicyError(f"Cannot read repository policy: {exc}") from exc
         validate_policy(document, schemas['policy'], cards, root)
         if document['library']['version'] != origin['version']:
             raise PolicyError('Repository policy library version does not match the installed library')
         if document['library'].get('digest', origin['digest']) != origin['digest']:
             raise PolicyError('Repository policy library digest does not match the installed library')
+        given = _approval(trust_project_policy)
+        approved = given == digest
+        grants = policy_grants(document)
+        if grants and not approved:
+            raise PolicyUntrusted(_untrusted_message(path, digest, grants, given))
+        # A project's policy may add write denials and can never remove the
+        # built-in ones. Written into the document so every reader of it
+        # (resolve, scope, the session's own checks) sees one list.
+        capability = document['capability_policy']
+        capability['deny_write'] = list(dict.fromkeys([*capability['deny_write'], *BUILTIN_DENY_WRITE]))
     else:
         gates = [{'id': 'scope', 'runner': 'builtin:scope', 'required': True}]
         bindings = {'unit-tests': {'absent': True, 'because': 'No test command detected'}}
@@ -413,15 +555,32 @@ def load_policy(root, *, forbid=(), scan=None):
                         library={'version': origin['version']},
                         defaults=dict(family='pure-logic', required_gates=['scope'],
                                       scope_max_lines=100, overrun_ratio=1.5, worker_depth=1),
-                        capability_policy=dict(deny_write=['.git/**', '.env', '.env.*', '.quadratus/**'],
+                        capability_policy=dict(deny_write=list(BUILTIN_DENY_WRITE),
                                                external_effects='deny', native_delegation='deny', sensitive=[]),
                         path_rules=[], gates=gates, gate_bindings=bindings, decisions=[])
     return RepositoryPolicy(root, document, cards, origin, detect_adapters(root, scan),
-                            explicit, tuple(_path(p, root) for p in forbid))
+                            explicit, tuple(_path(p, root) for p in forbid),
+                            approved=approved, source_sha256=digest)
 
 
-def preview_policy(root, paths=(), *, forbid=(), writing=False):
-    return load_policy(root, forbid=forbid).resolve(paths, writing=writing)
+def _untrusted_message(path, digest, grants, given) -> str:
+    """Everything the operator needs to decide: the file, its hash, what it
+    asks for, and how to approve exactly these bytes."""
+    shown = grants[:10] + ([f"and {len(grants) - 10} more"] if len(grants) > 10 else [])
+    return (
+        f"The project's own policy file {path} (sha256 {digest}) asks for more than a project "
+        "file is trusted to grant: " + "; ".join(shown) + ". "
+        + (f"The approval given ({given[:12]}...) is for different bytes: the file is not the one "
+           "that was approved. " if given else "")
+        + "Nothing was run and no model was called. A policy that only narrows loads without "
+        "approval. Read the file; to approve exactly these bytes pass "
+        f"--trust-project-policy {digest} (run_project(trust_project_policy=...)) or set "
+        f"{TRUST_ENV}={digest}.")
+
+
+def preview_policy(root, paths=(), *, forbid=(), writing=False, trust_project_policy=None):
+    return load_policy(root, forbid=forbid,
+                       trust_project_policy=trust_project_policy).resolve(paths, writing=writing)
 
 
 def render_preview(plan):
@@ -458,6 +617,12 @@ def task_gate(policy, plan, existing, *, exclude=()):
             continue
         if gate.get('side_effects') == 'external':
             raise PolicyError(f"Gate {gate['id']} needs a separate external-effect ruling")
+        if not policy.approved:
+            # Checked again where the command would be built: load_policy
+            # already refuses this, and a policy object made any other way
+            # must not reach execution by skipping it.
+            raise PolicyUntrusted(f"Gate {gate['id']} is a command from the project's own "
+                                  f"{POLICY_FILE}, which the operator has not approved")
         commands.append(integration.GateCommand(
             id=gate['id'], argv=tuple(gate['argv']), cwd=gate.get('cwd', '.'),
             timeout=gate.get('timeout_seconds', 600), required=required,

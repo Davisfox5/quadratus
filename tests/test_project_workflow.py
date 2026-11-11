@@ -293,7 +293,14 @@ def test_autodetected_python_check_uses_project_environment(tmp_path):
     python = tmp_path / '.venv' / 'bin' / 'python'
     python.parent.mkdir(parents=True)
     python.symlink_to(sys.executable)
-    assert scan_repo(tmp_path).check_command[0] == str(python)
+    # A bin/python alone is a file any repository can carry: it is used only
+    # inside a real virtual environment (pyvenv.cfg) that resolves to an
+    # interpreter outside the project.
+    scan = scan_repo(tmp_path)
+    assert scan.check_command[0] == sys.executable and 'pyvenv.cfg' in scan.interpreter_note
+    (tmp_path / '.venv' / 'pyvenv.cfg').write_text('home = /usr/bin\n')
+    scan = scan_repo(tmp_path)
+    assert scan.check_command[0] == str(python) and scan.interpreter_note == ''
 
 
 def test_a_real_run_records_who_actually_ran_and_what_it_could_not_observe(project_env):

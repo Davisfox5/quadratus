@@ -14,11 +14,77 @@ from pathlib import Path
 
 from .providers import ProviderError, scratch_root
 
+#: Folders and files a build or a test run writes. Never source, so a passing
+#: check that writes one has not changed the source it checked. The project
+#: watch records a change under one as an observation (quadratus.project_watch).
+OUTPUT_NAMES = frozenset({
+    'dist', 'build', '.next', 'htmlcov', '.hypothesis', '.mypy_cache', '.tox', '.nox',
+    '.eslintcache', '.nyc_output', 'coverage.xml', 'junit.xml', 'test-results',
+    'playwright-report'})
+#: The output folders a build or an environment tool fills with Python. Every
+#: other name above holds reports or caches and never Python, and pytest
+#: collects from the ones without a leading dot: a conftest.py planted in
+#: test-results/ turned a failing check green with the measured source
+#: unchanged (second review of 6ea9794). The project watch holds a Python file
+#: under those to the sensitive class.
+PYTHON_OUTPUT_NAMES = frozenset({'dist', 'build', '.tox', '.nox'})
 _SKIP = {'.git', '.quadratus', '.multi_llm', '.venv', 'venv', 'env',
          'node_modules', '__pycache__', '.pytest_cache', '.ruff_cache',
-         '.next', 'dist', 'build', '.DS_Store', '.coverage', 'htmlcov'}
+         '.DS_Store', '.coverage'} | OUTPUT_NAMES
+#: Credential files by name, never copied to a model. Short and unambiguous on
+#: purpose: *.pem and *.key are left alone because test fixtures use them.
+CREDENTIAL_NAMES = frozenset({'.npmrc', '.pypirc', '.netrc', '.git-credentials',
+                              'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'})
+CREDENTIAL_TAILS = (('.aws', 'credentials'), ('.docker', 'config.json'))
+#: Configuration a vendor's agent CLI reads from its working directory. A
+#: headless CLI can run hooks and start MCP servers from these without asking,
+#: so no copy handed to a model carries them.
+AGENT_CONFIG_NAMES = frozenset({'.mcp.json'})
+AGENT_CONFIG_TAILS = (('.claude', 'settings.json'), ('.claude', 'settings.local.json'))
+AGENT_CONFIG_DIRS = frozenset({'.codex', '.grok'})
+#: Folders a file in AGENT_CONFIG_TAILS is read through. A link so named can
+#: lead to settings kept under any other name, so the link itself counts.
+AGENT_CONFIG_PARENTS = frozenset(tail[0] for tail in AGENT_CONFIG_TAILS)
 _GITHUB = re.compile(r'(?:https://github\.com/|git@github\.com:)[\w.-]+/[\w.-]+/?$')
 _MAX_SOURCE_BYTES = 100 * 1024 * 1024
+#: git, for commands run inside an existing project. The project's own
+#: .git/config must not choose a program for the harness to run:
+#: core.fsmonitor names one, and commands that read the index ask it
+#: (probed on git 2.43: the hook ran on a plain status and on ls-files, and
+#: on neither with this override).
+GIT = ('git', '-c', 'core.fsmonitor=false')
+
+
+def withheld(parts) -> str:
+    """Why a project-relative path is never copied to a model, or ''.
+
+    ``'secret'`` for a ``.env*`` file, ``'credential'`` for a credential file,
+    ``'agent-config'`` for vendor agent configuration. The one place the rule
+    is written: source listing, patches, review copies and the project watch
+    all ask here.
+    """
+    # Names are compared without case: on a case-insensitive filesystem (the
+    # macOS default) a CLI that opens .mcp.json is handed .MCP.json.
+    parts = tuple(str(part).lower() for part in parts)
+    if not parts:
+        return ''
+    name, tail = parts[-1], parts[-2:]
+    if any(part in AGENT_CONFIG_DIRS for part in parts) or name in AGENT_CONFIG_NAMES \
+            or tail in AGENT_CONFIG_TAILS:
+        return 'agent-config'
+    if name in CREDENTIAL_NAMES or tail in CREDENTIAL_TAILS:
+        return 'credential'
+    if name.startswith('.env') and name != '.env.example':
+        return 'secret'
+    return ''
+
+
+def source_path(parts) -> bool:
+    """Whether a project-relative path can be measured source by its name:
+    no skipped component and nothing withheld. Symlinks and operator
+    exclusions are facts about the tree and are checked where it is walked."""
+    parts = tuple(parts)
+    return bool(parts) and not any(part in _SKIP for part in parts) and not withheld(parts)
 
 
 class Project:
@@ -47,8 +113,8 @@ class Project:
             cls._command(['git', 'init', '--quiet'], cwd=root)
         project = cls(root)
         if branch:
-            cls._command(['git', 'check-ref-format', '--branch', branch], cwd=root)
-            cls._command(['git', 'switch', '-c', branch], cwd=root)
+            cls._command([*GIT, 'check-ref-format', '--branch', branch], cwd=root)
+            cls._command([*GIT, 'switch', '-c', branch], cwd=root)
         return project
 
     @staticmethod
@@ -63,17 +129,23 @@ class Project:
         return result.stdout
 
     def files(self):
-        """Source only; never follow a symlink into another tree."""
+        """Source only; never follow a symlink into another tree.
+
+        This is the measured source set and the set every model copy is
+        built from. Secrets, credential files and vendor agent configuration
+        are in neither (:func:`withheld`); what an editing call does to them,
+        to symlinks and to the skipped folders is the project watch's to see.
+        """
         for directory, dirs, names in os.walk(self.root, followlinks=False):
             parent = Path(directory)
-            dirs[:] = sorted(d for d in dirs if d not in _SKIP
+            dirs[:] = sorted(d for d in dirs if d not in _SKIP and d.lower() not in AGENT_CONFIG_DIRS
                              and not (parent / d).is_symlink()
                              and (parent / d).resolve() not in self.exclude)
             for name in sorted(names):
                 path = parent / name
                 if (name in _SKIP or path.is_symlink() or not path.is_file()
                         or path.resolve() in self.exclude
-                        or (name.startswith('.env') and name != '.env.example')):
+                        or withheld(path.relative_to(self.root).parts)):
                     continue
                 yield path
 
@@ -148,17 +220,18 @@ class Project:
             relative = Path(raw[2:])
             target = self.root / relative
             if (relative.is_absolute() or '..' in relative.parts
-                    or any(part in _SKIP or (part.startswith('.env') and part != '.env.example')
+                    or not source_path(relative.parts)
+                    or any(part.startswith('.env') and part != '.env.example'
                            for part in relative.parts)
                     or not target.resolve().is_relative_to(self.root)
                     or any(p.is_symlink() for p in [target, *target.parents] if p != self.root)
                     or any(target.resolve().is_relative_to(p) for p in self.exclude)):
                 raise ProviderError(f'PATCH path is outside editable project source: {raw}')
-        self._command(['git', 'apply', '--check', '-'], cwd=self.root, input=patch)
-        self._command(['git', 'apply', '-'], cwd=self.root, input=patch)
+        self._command([*GIT, 'apply', '--check', '-'], cwd=self.root, input=patch)
+        self._command([*GIT, 'apply', '-'], cwd=self.root, input=patch)
 
     def git_status(self):
         try:
-            return self._command(['git', 'status', '--short'], cwd=self.root).strip()
+            return self._command([*GIT, 'status', '--short'], cwd=self.root).strip()
         except ProviderError:
             return 'This folder is not a Git repository.'

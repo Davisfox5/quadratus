@@ -241,6 +241,11 @@ class InvocationEvent:
     #: directory is this one (quadratus.trace). Older records lack it.
     cwd: Optional[str] = None
 
+    #: Build-output paths an editing call changed outside the measured source
+    #: (quadratus.project_watch): names only, bounded. An observation, never a
+    #: failure. Older records lack it and read as empty.
+    unmeasured_changes: list = field(default_factory=list)
+
     @staticmethod
     def directory_of(provider) -> Optional[str]:
         """The directory a provider view runs its call in, or None. Read

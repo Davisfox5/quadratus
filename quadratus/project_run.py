@@ -20,6 +20,7 @@ from .delegation import DelegationLedger, reconcile
 from .integration import GateCommand, GateSuite, IntegrationGate
 from .policy import load_policy
 from .project import Project
+from .project_watch import ALLOW_AGENT_CONFIG_ENV
 from .providers import ProviderError
 from .repo_scan import scan_repo, seed_map
 from .run_budget import RunBudget
@@ -62,8 +63,24 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
-                decider_labels="unstated", repair_tests=(), test_changes=None):
+                decider_labels="unstated", repair_tests=(), test_changes=None,
+                trust_project_policy=None, allow_project_agent_config=False, declared_checks=True):
     """Keep both successful and interrupted runs next to their source tree.
+
+    ``trust_project_policy`` is the operator's approval of the project's own
+    ``.quadratus/policy.json``, by that file's sha256 (also
+    ``QUADRATUS_TRUST_PROJECT_POLICY``). Without it a policy that grants
+    anything, such as a command gate, is refused before any model call; one
+    that only narrows loads as before (quadratus.policy).
+
+    ``allow_project_agent_config`` lets a run start in a project that carries
+    vendor agent configuration (``.claude/settings.json``, ``.mcp.json``,
+    ``.codex/``, ``.grok/``; also ``QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG=1``).
+    By default such a project is refused before any model call.
+
+    ``declared_checks`` False runs only the operator's own checks (``check``,
+    ``extra_checks``, ``gates``): nothing the project declares is added or
+    used in their place. True is the run as it always was.
 
     ``tasks`` is an operator-written task list (explicit-task entry): each
     text is read as an orchestrator reply would be and run in order under the
@@ -128,7 +145,14 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
 
     repair_tests = _repair_tests(project.root, repair_tests, forbid)
     test_changes = _test_changes(project.root, test_changes, goal=goal, forbid=forbid)
-    policy = load_policy(project.root, forbid=forbid)
+    agent_config = _refuse_agent_config(project, allow_project_agent_config, progress)
+    scan = None
+    if not declared_checks:
+        # The built-in policy names the scanned check as a gate; with the
+        # project's declarations declined it is built from a scan without them.
+        scan = dataclasses.replace(scan_repo(project.root), check_command=None, declared_checks=[])
+    policy = load_policy(project.root, forbid=forbid, scan=scan,
+                         trust_project_policy=trust_project_policy)
     if declared_paths:
         from .scope import TaskScope
         if default_scope is not None:
@@ -155,7 +179,45 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
-                    decider_labels=decider_labels, repair_tests=repair_tests, test_changes=test_changes)
+                    decider_labels=decider_labels, repair_tests=repair_tests, test_changes=test_changes,
+                    declared_checks=declared_checks, agent_config=agent_config)
+
+
+def _refuse_agent_config(project, allowed=False, progress=None):
+    """Refuse, before any model call, a project that carries configuration a
+    vendor's agent CLI reads from its working directory.
+
+    A headless CLI skips the trust prompt an interactive one shows, so hooks
+    and MCP servers named in ``.claude/settings.json``, ``.mcp.json``,
+    ``.codex/`` or ``.grok/`` can run as the operator on the first call. No
+    review copy ever carries these files, but an editing call runs in the
+    project itself, so the operator decides. Returns what was found and
+    allowed, path to the record taken of it: the exact files the operator
+    saw, which Fleet holds every later editing call to.
+    """
+    from .project_watch import ProjectWatch, WatchUnavailable, agent_config, agent_config_permitted
+    try:
+        # The state folder holds no agent configuration and has its own
+        # preflight (the stale-fixture retirement), so it is left unopened.
+        found = agent_config(ProjectWatch(project.root, exclude=project.exclude,
+                                          state_files=False).listing())
+    except WatchUnavailable as exc:
+        raise ValueError('The project could not be checked for vendor agent configuration, so the '
+                         f'run stops before any model call: {exc}') from exc
+    if not found:
+        return {}
+    names = list(found)
+    named = ', '.join(names[:20]) + (f' and {len(names) - 20} more' if len(names) > 20 else '')
+    if agent_config_permitted(allowed):
+        if progress:
+            progress(f'Vendor agent configuration in the project, allowed by the operator: {named}')
+        return found
+    raise ValueError(
+        f'The project carries vendor agent configuration: {named}. A headless vendor CLI started '
+        'in this folder can run hooks and start MCP servers from these files without asking, as '
+        'you, on the first call. Nothing was run and no model was called. Read them, then remove '
+        'them or allow them with --allow-project-agent-config '
+        f'(run_project(allow_project_agent_config=True)) or {ALLOW_AGENT_CONFIG_ENV}=1.')
 
 
 def _test_changes(root, raw, *, goal, forbid=(), originals=None):
@@ -344,7 +406,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
-         decider=None, decider_labels="unstated", repair_tests=(), test_changes=None):
+         decider=None, decider_labels="unstated", repair_tests=(), test_changes=None,
+         declared_checks=True, agent_config=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     # Closed to other users before the first record is written, not when the
@@ -365,17 +428,30 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
     map_notices = _report_map(code_map, progress, 0)
     seed_map(scan, code_map)
+    if not declared_checks:
+        # The operator's own checks only: nothing the project declares is
+        # added beside them or run in their place. The map above still says
+        # what the project declares; that is a fact about it, not a gate.
+        scan = dataclasses.replace(scan, check_command=None, declared_checks=[], interpreter_note='')
     command = shlex.split(check) if check else scan.check_command
     gates = _merge_extras(list(gates), extras) if gates is not None else _gate_plan(command, extras, scan)
     plan = [dict(id=g.id, argv=list(g.argv), cwd=g.cwd, required=g.required, minimum_tests=g.minimum_tests)
             for g in gates or ()] or (
         [dict(id='check', argv=list(command), cwd='.', required=True,
               minimum_tests=1 if _is_test_suite(command) else None)] if command else [])
+    # The declared Python check says so when the project's own interpreter
+    # was passed over for the harness's (repo_scan._project_interpreter).
+    fallback = [g for g in plan if scan.interpreter_note and g['argv'] in scan.declared_checks
+                and g['argv'][1:3] == ['-m', 'pytest']]
+    for g in fallback:
+        g['note'] = scan.interpreter_note
     # Shown to the operator before any task, and kept with the run. Never put
     # into a model prompt: a gate command can name an examiner path.
     write_private(run_dir / 'gate-plan.json', json.dumps(plan, indent=2))
     if progress:
         progress('Checks: ' + ('; '.join(f"{g['id']}: {' '.join(g['argv'])}" for g in plan) or 'none'))
+        if fallback:
+            progress(scan.interpreter_note)
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
             else IntegrationGate(command, cwd=project.root,
                                  minimum_tests=1 if _is_test_suite(command) else None) if command else None)
@@ -454,6 +530,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # What a seat is told to run: the harness's report declaration is
         # its own and never reaches a model's argv (series rule-58a4625 f3).
         fleet.check_commands = tuple(shlex.join(model_facing(g['argv'])) for g in plan if g.get('argv'))
+        # The vendor agent configuration the operator saw and allowed at the
+        # preflight, if any. An editing call refuses anything else.
+        fleet.agent_config_allowed = dict(agent_config or {})
     except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
         pass
     in_flight = {}

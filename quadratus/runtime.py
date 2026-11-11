@@ -55,6 +55,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -73,7 +74,19 @@ from .delegation import (
     safe_diagnostics,
 )
 from .latest import alias_for, resolution_source
-from .project import Project
+from .project import Project, withheld
+from .project_watch import (
+    ALLOW_AGENT_CONFIG_ENV,
+    SENSITIVE_RULE,
+    UNMEASURED_LIMIT,
+    WATCH_FINDING_LIMIT,
+    AgentConfigRefused,
+    ProjectWatch,
+    SensitiveChangeInPlace,
+    agent_config,
+    agent_config_permitted,
+    describe,
+)
 from .providers import (
     LLMProvider,
     PartialWorkSuspected,
@@ -95,6 +108,12 @@ class UnknownModel(ProviderError):
     """A roster key names a vendor this fleet has no provider for."""
 
 
+#: The invocation record of the attempt that just ended in this context, still
+#: pending its acceptance boundary, so what the harness measures after the
+#: call returns can be written onto the call's own record.
+_recorded_event: ContextVar = ContextVar("quadratus_recorded_event", default=None)
+
+
 @contextmanager
 def _review_directory(project, source=None):
     """A disposable current copy, or exactly the task-start source bytes.
@@ -114,6 +133,10 @@ def _review_directory(project, source=None):
     with tempfile.TemporaryDirectory(prefix="quadratus-review-", dir=scratch_root()) as directory:
         root = Path(directory)
         for name, data in source.items():
+            if withheld(name.split("/")):
+                # Secrets, credentials and vendor agent configuration never
+                # enter a copy a model reads, whoever captured the source.
+                continue
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
@@ -211,6 +234,19 @@ class Fleet:
         self._providers: Dict[str, Optional[LLMProvider]] = {}
         self._exhausted: Dict[str, str] = {}
         self._lock = threading.Lock()
+        #: Every sensitive change the project watch found, in order: task,
+        #: role, model and the (path, what) pairs. For the run's records.
+        self.watch_findings: List[dict] = []
+        #: The same, as the failure text, by task: held until the task ends so
+        #: a finding whose failure never reached the task still fails it.
+        self._watch_open: Dict[str, str] = {}
+        #: Sensitive changes this run's editing calls made and that are still
+        #: in place: path to what it was before, what happened and who. While
+        #: one stands, only the orchestrator is called for this project.
+        self._watch_in_place: Dict[str, dict] = {}
+        #: The Fleet this one was forked from, whose project it must also
+        #: find clean before it calls anyone.
+        self._watch_parent: Optional["Fleet"] = None
 
     # -- providers -----------------------------------------------------------
     def _vendor_provider(self, vendor: str) -> Optional[LLMProvider]:
@@ -312,6 +348,12 @@ class Fleet:
                 setattr(child, name, getattr(self, name, None if name == "progress" else ()))
             except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
                 pass
+        try:
+            # One record of what the project watch found, for the whole run.
+            child.watch_findings = self.watch_findings
+            child._watch_parent = self
+        except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+            pass
         return child
 
     # -- liveness ------------------------------------------------------------
@@ -391,6 +433,8 @@ class Fleet:
             raise ProviderError("A captured audit source is only for a read-only project counterpart.")
         if allow_writes and (not self.allow_writes or self.project is None):
             raise ProviderError("Writing requires a selected project and an operator write grant.")
+        if self.project is not None:
+            self._refuse_change_in_place(model_key, context)
         provider = self.provider_for(model_key)
         role = system or self.system
         if self.settings.supplied_context_only:
@@ -486,17 +530,26 @@ class Fleet:
                     "matched to a later check and keeps its requirement open for the rest of the run. "
                     "Do not change permissions."
                 )
+            # The second listing, beside the source diff: what the measured
+            # source cannot show (quadratus.project_watch). Taken first and
+            # fail closed, so no editing call runs with those paths unlisted.
+            watch = ProjectWatch(self.project.root, exclude=getattr(self.project, "exclude", ()))
+            watched = watch.listing()
+            self._refuse_unseen_agent_config(model_key, watched)
+            _recorded_event.set(None)
             before = self.project.contents()
             try:
                 reply = self._generate_editing(model_key, view, prompt, before, role +
                                   "\nYour working directory is the persistent project. "
                                   "Implement the requested changes in files. Do not commit, push, "
-                                  "or change branches. Return a concise account and exactly one "
+                                  "or change branches. " + SENSITIVE_RULE + " "
+                                  "Return a concise account and exactly one "
                                   'closing line CHANGED: ["relative/path"] listing every file this '
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
                                   'any files you changed before it are kept.' + check_instructions)
             except TurnLimitReached as exc:
+                violation = self._watch_after(model_key, watch, watched, failed=exc)
                 _raise_if_infrastructure(model_key, view, exc)
                 # A capped call may have spent its rounds on exactly the
                 # denied command; that is the capability stop, not an
@@ -511,7 +564,18 @@ class Fleet:
                         "itself requires or a write it was granted: " + "; ".join(c[:160] for c in denied[:3])
                         + ". Declare the command as a check or a capture profile; a denied write is the "
                         "transport's permission mode. Work preserved.") from exc
+                if violation is not None:
+                    # The stricter outcome: a capped call that also wrote a
+                    # watched path fails the task. Its edits are kept either way.
+                    raise violation from exc
                 raise
+            except Exception as exc:
+                # Listed and recorded, never raised over the call's own
+                # outcome. A finding is held against the task: if the run goes
+                # on with it, its next editing call fails on it.
+                self._watch_after(model_key, watch, watched, failed=exc)
+                raise
+            violation = self._watch_after(model_key, watch, watched)
             _raise_if_infrastructure(model_key, view)
             context = invocation_context.get()
             if context is not None:
@@ -527,6 +591,10 @@ class Fleet:
                     f"{model_key} was denied a command the harness itself requires: "
                     + "; ".join(c[:160] for c in denied[:3])
                     + ". Declare it as a check or a capture profile. Work preserved.")
+            if violation is not None:
+                # The path an out-of-scope source change takes: the task
+                # fails, the work is kept, the orchestrator is told the paths.
+                raise violation
             after = self.project.contents()
             changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
             from .taskmeta import lead_request
@@ -663,6 +731,176 @@ class Fleet:
                     and lead_request(reply) is None):
                 raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
         return reply
+
+    #: Vendor agent configuration the operator allowed in the project, as the
+    #: watch recorded it (path to record). ``run_project`` sets it from its
+    #: preflight; None means nobody has, and the first editing call decides.
+    agent_config_allowed = None
+
+    def _refuse_unseen_agent_config(self, key, watched) -> None:
+        """No editing call starts a vendor CLI in a project that carries agent
+        configuration the operator has not allowed for this run.
+
+        The preflight looks once, before the first model call. Configuration
+        can appear afterwards: a check, a preview or anything else outside
+        an editing call can write ``.mcp.json`` or ``.claude/settings.json``,
+        and the next editing call would start a CLI that loads it. So every
+        editing call is held to the exact files the operator saw. A file
+        that is new, or whose bytes changed, stops the run before the call.
+        (One an editing call wrote is a watch finding, and stops the run
+        sooner: ``_refuse_change_in_place``.)
+        """
+        present = agent_config(watched)
+        allowed = self.agent_config_allowed
+        if allowed is None:
+            # No preflight ran (a Fleet used on its own): what is here now is
+            # allowed only by the operator's standing permission.
+            allowed = self.agent_config_allowed = dict(present) if agent_config_permitted() else {}
+        unseen = [path for path, record in present.items() if allowed.get(path) != record]
+        if unseen:
+            named = ", ".join(unseen[:8]) + (f" and {len(unseen) - 8} more" if len(unseen) > 8 else "")
+            raise AgentConfigRefused(
+                f"{key} was not called: the project carries vendor agent configuration the operator "
+                f"has not allowed for this run ({named}). A headless vendor CLI started in this "
+                "folder can run hooks and start MCP servers from these files without asking. Read "
+                "them, then remove them or start a run that allows them with "
+                f"--allow-project-agent-config or {ALLOW_AGENT_CONFIG_ENV}=1. Work preserved.")
+
+    def _watch_after(self, key, watch, before, *, failed=None):
+        """Compare the watched paths after an editing call (quadratus.project_watch).
+
+        Build output that changed is written onto the call's record as
+        ``unmeasured_changes``: names only, bounded, an observation and never
+        a failure, because a lead may legitimately run a build. A change in
+        the sensitive class is noted for the run and returned as the task
+        failure the caller raises; nothing is deleted or restored. After a
+        call that already failed (``failed``) the listing is best effort and
+        is never raised over the call's own outcome.
+
+        The failure does not always reach the task: a call that failed for
+        another reason keeps its own outcome, and a worker errand's failure
+        can be reported back to its lead as a result. Such a finding is held
+        against its task, and the task's next editing call returns it, so
+        the run cannot carry on as if nothing was written.
+
+        Every finding is also kept as in place, with what the path was
+        before. Until it is back that way nobody but the orchestrator is
+        called (``_refuse_change_in_place``), so the hold above is what
+        applies once the change has been undone.
+        """
+        context = invocation_context.get() or {}
+        task = str(context.get("task", "run"))
+        role = str(context.get("role", "editing"))
+        where = f"{task} {role} {key}"
+        # Whether what is returned here becomes the task's failure: the
+        # caller raises it unless the call failed for another reason, and a
+        # worker's failure may stop at its lead.
+        reaches_task = (context.get("origin") != "worker"
+                        and (failed is None or isinstance(failed, TurnLimitReached)))
+        try:
+            sensitive, output = watch.changes(before, watch.listing())
+        except Exception as exc:  # noqa: BLE001 -- masked only after the call itself failed
+            if failed is None:
+                raise
+            self._watch_note(f"{where}: the watched paths could not be listed after the call "
+                             f"failed, so what it left there is unknown ({exc})")
+            return self._held_watch_failure(task, release=reaches_task)
+        if output:
+            names = output[:UNMEASURED_LIMIT] + (
+                [f"and {len(output) - UNMEASURED_LIMIT} more"] if len(output) > UNMEASURED_LIMIT else [])
+            if invocation_context.get() is not None:
+                invocation_context.get()["unmeasured_changes"] = list(names)
+            event = _recorded_event.get()
+            if event is not None:
+                event.unmeasured_changes = list(names)
+        if not sensitive:
+            return self._held_watch_failure(task, release=reaches_task)
+        text = (f"{where} changed paths outside the measured source that no task may change: "
+                f"{describe(sensitive)}. Nothing was reverted: inspect each one and remove or "
+                "restore it yourself.")
+        self._watch_note(text)
+        with self._lock:
+            self.__dict__.setdefault("watch_findings", []).append(dict(
+                task=task, role=role, model=key, after_failed_call=failed is not None,
+                changes=[list(change) for change in sensitive[:WATCH_FINDING_LIMIT]],
+                count=len(sensitive)))
+            in_place = self.__dict__.setdefault("_watch_in_place", {})
+            for path, what in sensitive:
+                # The first record stands: what the path was before any call
+                # of this run touched it is what "back as it was" means.
+                in_place.setdefault(path, dict(before=before.sensitive.get(path), what=what, where=where))
+            held = self.__dict__.setdefault("_watch_open", {})
+            earlier = held.pop(task, "")
+            if not reaches_task:
+                held[task] = (earlier + " " + text).strip()[:4000]
+        from .session import TaskFailed
+        return TaskFailed("scope", text if not earlier else
+                          f"{text} An earlier editing call of this task also left one: {earlier}")
+
+    def _refuse_change_in_place(self, key, context) -> None:
+        """No call but the orchestrator's while a sensitive change an earlier
+        editing call made is still in place.
+
+        The task that made it fails and the orchestrator is told the paths,
+        but the file stays where the call put it, and the measured diff, the
+        review copies and the audit never see it. Second review of 6ea9794:
+        a conftest.py link planted by one task made every later check pass,
+        the continuation closed clean, took over the failed task's debt, and
+        the run reported the goal complete over source that was still wrong.
+        A check or a review on top of such a path proves nothing, and no
+        model can undo it without changing a watched path again, so the run
+        stops until the path is back as it was. The orchestrator is still
+        called: it is how the operator is asked (ASK) and how the failure is
+        named. A forked Fleet answers for its parent's project as well.
+        """
+        if (context or {}).get("role") == "orchestrator":
+            return
+        fleet = self
+        while fleet is not None:
+            held = fleet.__dict__.get("_watch_in_place")
+            if held:
+                # Fail closed: a listing that cannot be taken stops the call.
+                now = ProjectWatch(fleet.project.root,
+                                   exclude=getattr(fleet.project, "exclude", ())).listing().sensitive
+                with fleet._lock:
+                    for path in [p for p, record in held.items() if now.get(p) == record["before"]]:
+                        del held[path]
+                    still = sorted(held.items())
+                if still:
+                    who = ", ".join(dict.fromkeys(record["where"] for _, record in still))
+                    raise SensitiveChangeInPlace(
+                        f"{key} was not called: an earlier editing call of this run ({who}) changed "
+                        "paths outside the measured source that no task may change, and they are "
+                        f"still that way: {describe((path, r['what']) for path, r in still)}. "
+                        "No measured diff or review copy shows them, so a check or a review on top "
+                        "of them proves nothing about the source. Nothing was reverted. Inspect "
+                        "each one, remove or restore it, and start the run again. Work preserved.")
+            fleet = fleet.__dict__.get("_watch_parent")
+
+    def _held_watch_failure(self, task, *, release):
+        """The failure for a sensitive change an earlier editing call of
+        ``task`` left without the task failing for it, or None. ``release``
+        when the caller raises it as the task's failure, which settles it;
+        otherwise it stays held for the task's next editing call."""
+        with self._lock:
+            held = self.__dict__.setdefault("_watch_open", {})
+            text = held.pop(task, None) if release else held.get(task)
+        if text is None:
+            return None
+        from .session import TaskFailed
+        return TaskFailed("scope", "An earlier editing call of this task left a change the task "
+                                   "was not failed for. " + text)
+
+    def _watch_note(self, text) -> None:
+        """Keep a watch finding where the operator will read it. Never raises."""
+        try:
+            report = getattr(self, "progress", None)
+            if report is not None:
+                report("watch: " + text)
+            if self.delegation_ledger is not None:
+                self.delegation_ledger.note_blind_spot(text)
+        except Exception:  # noqa: BLE001 -- reporting never fails a run
+            log.debug("could not record a watch finding", exc_info=True)
 
     def _supplied_context(self, key, provider, prompt, role):
         """Bound analysis without changing the selected model or its effort.
@@ -950,6 +1188,7 @@ class Fleet:
                 tool_failures=bounded_tool_failures(getattr(provider, "last_tool_failures", None)),
             )
             record_invocation(self.delegation_ledger, event)
+            _recorded_event.set(event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
             log.debug("could not record invocation for %s", key, exc_info=True)
 

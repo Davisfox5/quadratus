@@ -1,5 +1,6 @@
 """Codex review of 1995d02 (#41), P1: check debt must not settle on a gate that
 did not rerun the failed check. Reproducer kept verbatim in substance."""
+import hashlib
 import json
 import sys
 
@@ -37,6 +38,10 @@ def test_a_repair_without_the_failed_gate_cannot_settle_check_debt(tmp_path, mon
     files = {**{k.replace('tests/', 'checks/'): v for k, v in FILES.items()},
              'checks/test_smoke.py': 'def test_smoke():\n    assert True\n',
              '.quadratus/policy.json': json.dumps(policy)}
+    # The project's own policy runs a command gate only once the operator has
+    # approved that exact file by its sha256.
+    monkeypatch.setenv('QUADRATUS_TRUST_PROJECT_POLICY',
+                       hashlib.sha256(json.dumps(policy).encode()).hexdigest())
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(REQS + IMPLEMENT, repair), lead=_looked,
                                                  **{'requirements-review': lambda c, r: 'COMPLETE',
                                                     'auditor': lambda c, r: MET}),

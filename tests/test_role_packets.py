@@ -66,13 +66,18 @@ def test_packet_caps_reference_bytes_and_never_cuts_required_scope(packet_sessio
         policy.role_packet(spec.scope, 'lead')
 
 
-def test_instruction_symlink_escape_is_refused(packet_session, tmp_path):
+def test_a_default_instruction_symlink_escape_is_skipped_and_a_listed_one_refused(packet_session, tmp_path):
     session, spec, _ = packet_session
     path = session.project / 'CLAUDE.md'
     path.unlink()
     external = tmp_path / 'external'
-    external.write_text('outside')
+    external.write_text('EXTERNAL-NOTES-MARKER')
     path.symlink_to(external)
+    # A default name nobody listed is skipped: it used to stop every packet
+    # of the run (whole-repo review, 2026-11-10). Its target is never read.
+    assert 'EXTERNAL-NOTES-MARKER' not in session._lead_prompt(spec)
+    # A name the policy itself lists is still refused.
+    session.config.repository_policy.document['instructions'] = ['CLAUDE.md']
     with pytest.raises(PolicyError, match='leaves the project'):
         session._lead_prompt(spec)
 

@@ -928,7 +928,7 @@ def test_an_ordinary_command_check_keeps_exit_code_semantics(tmp_path, monkeypat
 # -- 13. Run 16: review-only design tasks, fixtures, freshness, reviewer evidence --------
 
 def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None, fix=None, review=None,
-                edits=None):
+                edits=None, collaborator=None):
     scope = dict(DESIGN, max_lines=max_lines, **({"edits": edits} if edits else {}))
     if edits == "none" and revision is None:
         # The default script's revision edits style.css, which a declared
@@ -938,7 +938,7 @@ def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None
     script = _design_script("Renders refreshed.\nCHANGED: []")
     script.overrides["orchestrator"] = lambda call, replay: decl if len(replay.of("orchestrator")) == 1 else DECL_T2
     for role, handler in (("lead", lead), ("revision", revision), ("design-fix", fix),
-                          ("design-review", review)):
+                          ("design-review", review), ("collaborator", collaborator)):
         if handler is not None:
             script.overrides[role] = handler
     return H.run(tmp_path, monkeypatch, script, files=_design_files())
@@ -1199,8 +1199,30 @@ def test_a_copy_that_fails_after_preflight_stops_the_review_before_the_model(tmp
 
 def test_a_rewritten_exclusions_file_cannot_hide_a_source_change(tmp_path, monkeypatch):
     """Codex review of 40ba65b, through the whole controller: after the
-    capture the lead changes a permitted file and rewrites the exclusions
-    file to hide it; the session's own source still decides."""
+    capture a permitted file changes and the exclusions file is rewritten to
+    hide it; the session's own source still decides. The rewrite arrives
+    from outside an editing call here (as project code run by a check could
+    do it), since an editing call that rewrites the file now fails its task
+    first: see the next case."""
+    from quadratus.design_evidence import EXCLUDES_FILE
+
+    def collaborator(call, replay):
+        (replay.project / "static/style.css").write_text("#import { color: red; }\n")
+        (replay.project / EXCLUDES_FILE).write_text(json.dumps(["static/style.css"]))
+        return "No blocking findings.\nREVIEW: COMPLETE"
+
+    replay = _design_run(tmp_path, monkeypatch, lead=_edits_and_captures, collaborator=collaborator,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert "captured on a different source tree" in record["first_problem"]
+    assert len(replay.of("design-fix")) == 1
+
+
+def test_an_editing_call_that_rewrites_the_exclusions_file_fails_its_task(tmp_path, monkeypatch):
+    """Whole-repo review, 2026-11-10: the exclusions file is one of the paths
+    the project watch lists around every editing call, so the lead that
+    rewrote it to hide a change is stopped at that call, with the path named
+    and nothing reviewed on top of it."""
     from quadratus.design_evidence import EXCLUDES_FILE
 
     def lead(call, replay):
@@ -1212,6 +1234,6 @@ def test_a_rewritten_exclusions_file_cannot_hide_a_source_change(tmp_path, monke
 
     replay = _design_run(tmp_path, monkeypatch, lead=lead,
                          revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
-    record = json.loads(replay.artifact_texts("design-evidence")[0])
-    assert "captured on a different source tree" in record["first_problem"]
-    assert len(replay.of("design-fix")) == 1
+    assert H.result_json(replay)["failed_tasks"] == ["t1"] and not replay.result.completed
+    assert ".quadratus/source-excludes.json (changed)" in replay.result.report
+    assert not replay.of("collaborator") and not replay.of("design-review")
