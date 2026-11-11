@@ -183,6 +183,7 @@ def carried_snapshot(session) -> dict:
         "task_outcomes": [dataclasses.asdict(o) for o in session.task_outcomes],
         "breaker_counted": [o.task_id for o in getattr(session, "_breaker_counted", [])],
         "slots_used": int(getattr(session, "_slots_used", 0)),
+        "ids_issued": int(getattr(session, "_ids_issued", 0)),
     }
     for name in _CARRIED:
         state[name] = getattr(session, name, None)
@@ -206,6 +207,7 @@ def capture_state(session) -> dict:
         "task_outcomes": [dataclasses.asdict(o) for o in session.task_outcomes],
         "breaker_counted": [o.task_id for o in getattr(session, "_breaker_counted", [])],
         "slots_used": int(getattr(session, "_slots_used", 0)),
+        "ids_issued": int(getattr(session, "_ids_issued", 0)),
     }
     for name in _CARRIED:
         state[name] = getattr(session, name, None)
@@ -269,6 +271,15 @@ def restore_state(session, state: dict) -> None:
     by_id = {o.task_id: o for o in outcomes}
     session._breaker_counted = [by_id[t] for t in state["breaker_counted"] if t in by_id]
     session._slots_used = int(state["slots_used"])
+    # The run's one task-id counter (Session._next_task_id): a resumed
+    # episode goes on from the ids the job already spent, a child that left
+    # no history entry included. A checkpoint written before the counter was
+    # carried gives the highest id its own records name.
+    issued = state.get("ids_issued")
+    if isinstance(issued, bool) or not isinstance(issued, int):
+        named = [s.task_id for s in session.history] + [o.task_id for o in outcomes]
+        issued = max((int(t[1:]) for t in named if re.fullmatch(r"t\d+", str(t or ""))), default=0)
+    session._ids_issued = int(issued)
     for name in _CARRIED:
         if name in _ADDED_LATER and name not in state:
             # A checkpoint written before these records existed carries
