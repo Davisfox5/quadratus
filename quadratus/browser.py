@@ -29,12 +29,40 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .config import env_with_legacy
+from .integration import _bound_folder, write_bound
 
-__all__ = ["PageEvidence", "render_page", "PlaywrightMissing"]
+__all__ = ["PageEvidence", "render_page", "PlaywrightMissing", "hold_to_origin", "pinned_launch_args"]
+
+#: What a page can make the harness keep: entries per list and characters
+#: per entry, bounded where the events arrive (review 2026-11-10, checks
+#: 19: a page logging in a loop grew capture memory, evidence.json and
+#: summary.json without limit).
+MAX_PAGE_EVENTS = 50
+MAX_EVENT_CHARS = 500
+MAX_TITLE_CHARS = 300
 
 
 class PlaywrightMissing(RuntimeError):
     """Playwright is not installed, so no browser evidence can be produced."""
+
+
+class _Events(list):
+    """A list a page can fill only so far: ``MAX_PAGE_EVENTS`` entries of
+    ``MAX_EVENT_CHARS`` each. ``seen`` counts every entry offered, kept or
+    not, so "did something new arrive" still works past the bound."""
+
+    def __init__(self):
+        super().__init__()
+        self.seen = 0
+
+    def append(self, text) -> None:
+        self.seen += 1
+        if len(self) < MAX_PAGE_EVENTS:
+            super().append(str(text)[:MAX_EVENT_CHARS])
+
+
+def _seen(events) -> int:
+    return getattr(events, "seen", len(events))
 
 
 @dataclass(frozen=True)
@@ -44,9 +72,11 @@ class PageEvidence:
     url: str
     title: str
     screenshot_path: str
-    #: Uncaught exceptions and console.error output, verbatim.
+    #: Uncaught exceptions and console.error output, verbatim up to
+    #: ``MAX_EVENT_CHARS`` each and ``MAX_PAGE_EVENTS`` in all.
     console_errors: List[str] = field(default_factory=list)
-    #: Requests that failed or returned >=400, as "STATUS url".
+    #: Requests that failed or returned >=400, as "STATUS url"; bounded the
+    #: same way.
     failed_requests: List[str] = field(default_factory=list)
     #: True when the page produced no errors and no failed requests. A
     #: convenience for gates; the lists are the actual evidence.
@@ -61,6 +91,10 @@ class PageEvidence:
     #: ``{"element", "right", "width"}``. Measured by the harness, not a step.
     document_width: Optional[int] = None
     overflow: List[dict] = field(default_factory=list)
+    #: What the harness noticed about its own capture that is not a fault
+    #: of the page: a feature it switched off, or one the operator allowed
+    #: that runs outside request pinning.
+    observations: List[str] = field(default_factory=list)
 
     def render(self) -> str:
         """One block for a prompt or a close-out."""
@@ -80,6 +114,157 @@ class PageEvidence:
         return "\n".join(lines)
 
 
+#: Chromium switches for a pinned capture. Request pinning lives on the
+#: page's own session, which pauses the requests of the page, its in-process
+#: frames, its dedicated workers and its worklets (probed on Chromium 153).
+#: A frame given its own process is a separate target that session does not
+#: pause, so a pinned capture keeps frames in the page's process.
+_PIN_ARGS = ("--disable-site-isolation-trials",)
+#: A shared worker is its own target too, and nothing a Playwright session
+#: can reach pauses its requests before it starts: an on-origin page reached
+#: another loopback port through one while the capture read clean (review
+#: 2026-11-10, checks 20, confirmed with a browser). A pinned capture runs
+#: without the constructor unless the operator's profile allows it.
+_NO_SHARED_WORKERS = "--disable-blink-features=SharedWorker"
+#: Target types whose requests the page's session does not pause. One that
+#: appears anyway leaves the render unclean: fail closed, by observation.
+_UNPINNED_TARGETS = {"shared_worker": "a shared worker", "service_worker": "a service worker",
+                     "iframe": "a frame in its own process"}
+_SHARED_WORKERS_OFF = ("shared workers are off in a pinned capture, because their requests cannot be held to "
+                       "the preview origin; the operator's capture profile can allow them with "
+                       '"shared_workers": true')
+
+
+def pinned_launch_args(shared_workers: bool = False) -> List[str]:
+    """The extra Chromium switches a pinned browser starts with."""
+    return [*_PIN_ARGS, *(() if shared_workers else (_NO_SHARED_WORKERS,))]
+
+
+def _watch_targets(browser, strangers: list) -> Callable[[], None]:
+    """Note every target the browser creates whose requests the page's own
+    session does not pause (``_UNPINNED_TARGETS``), as ``(type, url)``.
+    Returns a last look, to call before the screenshot: it adds what the
+    browser holds then. Raises RuntimeError when the browser cannot be
+    watched: fail closed, named."""
+    def created(event):
+        info = event.get("targetInfo") or {}
+        entry = (str(info.get("type")), str(info.get("url") or "")[:200])
+        if entry[0] in _UNPINNED_TARGETS and entry not in strangers and len(strangers) < MAX_PAGE_EVENTS:
+            strangers.append(entry)
+    try:
+        session = browser.new_browser_cdp_session()
+        session.on("Target.targetCreated", created)
+        session.send("Target.setDiscoverTargets", {"discover": True})
+    except Exception as exc:  # noqa: BLE001 -- fail closed, named
+        raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
+
+    def last_look() -> None:
+        try:
+            for info in session.send("Target.getTargets").get("targetInfos") or []:
+                created({"targetInfo": info})
+        except Exception as exc:  # noqa: BLE001 -- fail closed, named
+            raise RuntimeError(f"request pinning could not be confirmed in this browser: {exc}") from exc
+    return last_look
+
+
+def unpinned_note(kind: str, where: str) -> str:
+    """How a target outside request pinning is named in the evidence."""
+    return f"outside request pinning: {_UNPINNED_TARGETS.get(kind, kind)} started ({where})"
+
+
+def hold_to_origin(context, page, allow: Optional[Callable[[str], bool]], *, pin_requests: bool,
+                   blocked: list, failed_requests: list) -> None:
+    """Hold ``page``, and every window of its context, to the URLs ``allow``
+    admits. Shared by the capture and the pilot (``browser_pilot.drive``).
+
+    Unpinned, only navigations are guarded: one that ``allow`` refuses is
+    aborted and noted in ``blocked``. With ``pin_requests`` every request is
+    paused before it is sent and one off the origin is failed, so nothing
+    reaches another service; WebSockets are held the same way. Any new
+    window or tab is refused and closed, and where the main frame lands is
+    checked as well."""
+    def guard(route):
+        request = route.request
+        if (request.is_navigation_request() and allow is not None
+                and not allow(request.url)):
+            blocked.append(request.url)
+            route.abort()
+        else:
+            route.continue_()
+    if pin_requests and allow is not None:
+        # The harness's own capture (Codex reviews of 7a8c432,
+        # d731499 and 06ad58c). Chromium's own request
+        # interception pauses every request before it is sent,
+        # including each hop of a redirect chain (which a
+        # Playwright route never sees), and the browser still
+        # does its own networking, so a single-threaded preview
+        # keeps working. A request off the origin is failed
+        # before it leaves: nothing reaches another service.
+        try:
+            cdp = context.new_cdp_session(page)
+        except Exception as exc:  # noqa: BLE001 -- fail closed, named
+            raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
+
+        def paused(event):
+            request_id, url = event["requestId"], event["request"]["url"]
+            if url.startswith(("data:", "blob:", "about:")) or allow(url):
+                cdp.send("Fetch.continueRequest", {"requestId": request_id})
+                return
+            navigation = event.get("resourceType") == "Document"
+            if event.get("redirectedRequestId"):
+                note = "redirect to " + url + " refused"
+            else:
+                note = url if navigation else "blocked outside the preview: " + url
+            (blocked if navigation else failed_requests).append(note)
+            cdp.send("Fetch.failRequest", {"requestId": request_id, "errorReason": "BlockedByClient"})
+        cdp.on("Fetch.requestPaused", paused)
+        try:
+            cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+        except Exception as exc:  # noqa: BLE001 -- fail closed, named
+            raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
+
+        def socket_guard(socket):
+            # WebSockets are outside that interception (Codex
+            # review of c1fbab0): an off-origin socket is closed
+            # before any handshake is sent; an on-origin one is
+            # connected through to the app unchanged.
+            target = socket.url.replace("ws://", "http://", 1).replace("wss://", "https://", 1)
+            if allow(target):
+                socket.connect_to_server()
+                return
+            # Never connected: nothing is sent to any server, and
+            # the page's socket stays unanswered.
+            failed_requests.append("blocked outside the preview: " + socket.url[:200])
+        try:
+            context.route_web_socket("**", socket_guard)
+        except Exception as exc:  # noqa: BLE001 -- fail closed, named
+            raise RuntimeError(f"WebSocket pinning is unavailable in this browser: {exc}") from exc
+    else:
+        # Guarded at the context, so a popup's own navigation is
+        # caught too; and any new window is refused outright (Codex
+        # review of c222d62: a target=_blank link reached another
+        # loopback port and the capture still passed).
+        context.route("**/*", guard)
+
+    def refuse_popup(new_page):
+        blocked.append("a new window or tab: " + (new_page.url or "about:blank"))
+        try:
+            new_page.close()
+        except Exception:  # noqa: BLE001 -- it may already be gone
+            pass
+    context.on("page", refuse_popup)
+
+    def check_landing(frame):
+        # A server redirect is followed below the route guard,
+        # so where the main frame actually landed is checked too
+        # (Codex review of 3a55d82: a 302 to another loopback
+        # service was captured as the target).
+        if (frame == page.main_frame and allow is not None
+                and not allow(frame.url)):
+            blocked.append("landed on " + frame.url)
+    page.on("framenavigated", check_landing)
+
+
 def render_page(
     target: str,
     *,
@@ -92,6 +277,8 @@ def render_page(
     step_timeout_ms: int = 5000,
     deadline: Optional[float] = None,
     pin_requests: bool = False,
+    bound_to=None,
+    shared_workers: bool = False,
 ) -> PageEvidence:
     """Load ``target`` in headless Chromium and capture the evidence.
 
@@ -116,6 +303,15 @@ def render_page(
         deadline: With ``steps``, launch, load, waits, steps and screenshot
             are all clamped to the time left; none can outlast it.
         step_timeout_ms: Per-step bound.
+        bound_to: A folder ``out_dir`` is under. With it, every folder from
+            there down to the written files is opened without following a
+            link, so a symlink on the way is refused before anything is
+            written (``integration.UnsafeWritePath``). Without it only the
+            two files themselves are protected from being written through
+            a link.
+        shared_workers: With ``pin_requests``, let the page use shared
+            workers. Their requests cannot be held to the origin, so a
+            pinned capture runs without them unless the operator allows it.
 
     Raises:
         PlaywrightMissing: when the optional dependency is not installed.
@@ -134,15 +330,23 @@ def render_page(
         executable_path = env_with_legacy("QUADRATUS_CHROMIUM", "MULTI_LLM_CHROMIUM") or None
 
     out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    if bound_to is None:
+        out.mkdir(parents=True, exist_ok=True)
+        anchor, inside = out, ()
+    else:
+        anchor, inside = Path(bound_to), out.relative_to(bound_to).parts
+        # Made, and refused if linked, before the browser starts.
+        with _bound_folder(anchor, inside):
+            pass
 
     path = Path(target)
     url = target if "://" in target else path.resolve().as_uri()
 
-    console_errors: List[str] = []
-    failed_requests: List[str] = []
+    console_errors, failed_requests = _Events(), _Events()
+    observations: List[str] = []
 
     interactive = bool(steps) or allow_navigation is not None
+    pinned = pin_requests and allow_navigation is not None
     budget = _Budget(deadline if bool(steps) else None)
     budget.require("before the browser started")
 
@@ -152,8 +356,12 @@ def render_page(
             launch_kwargs["executable_path"] = executable_path
         if budget.active:
             launch_kwargs["timeout"] = budget.ms(30_000)
+        if pinned:
+            launch_kwargs["args"] = pinned_launch_args(shared_workers)
         browser = pw.chromium.launch(**launch_kwargs)
         try:
+            strangers: list = []
+            watch = _watch_targets(browser, strangers) if pinned else None
             # A service worker is its own target, outside the page's request
             # interception below, so a pinned capture allows none.
             context = browser.new_context(viewport=viewport, **(
@@ -176,88 +384,10 @@ def render_page(
                 lambda res: failed_requests.append(f"{res.status} {res.url}")
                 if res.status >= 400 else None,
             )
-            blocked: List[str] = []
+            blocked = _Events()
             if interactive:
-                # Guarded at the context, so a popup's own navigation is
-                # caught too; and any new window is refused outright (Codex
-                # review of c222d62: a target=_blank link reached another
-                # loopback port and the capture still passed).
-                def guard(route):
-                    request = route.request
-                    if (request.is_navigation_request() and allow_navigation is not None
-                            and not allow_navigation(request.url)):
-                        blocked.append(request.url)
-                        route.abort()
-                    else:
-                        route.continue_()
-                if pin_requests and allow_navigation is not None:
-                    # The harness's own capture (Codex reviews of 7a8c432,
-                    # d731499 and 06ad58c). Chromium's own request
-                    # interception pauses every request before it is sent,
-                    # including each hop of a redirect chain (which a
-                    # Playwright route never sees), and the browser still
-                    # does its own networking, so a single-threaded preview
-                    # keeps working. A request off the origin is failed
-                    # before it leaves: nothing reaches another service.
-                    try:
-                        cdp = context.new_cdp_session(page)
-                    except Exception as exc:  # noqa: BLE001 -- fail closed, named
-                        raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
-
-                    def paused(event):
-                        request_id, url = event["requestId"], event["request"]["url"]
-                        if url.startswith(("data:", "blob:", "about:")) or allow_navigation(url):
-                            cdp.send("Fetch.continueRequest", {"requestId": request_id})
-                            return
-                        navigation = event.get("resourceType") == "Document"
-                        if event.get("redirectedRequestId"):
-                            note = "redirect to " + url + " refused"
-                        else:
-                            note = url if navigation else "blocked outside the preview: " + url
-                        (blocked if navigation else failed_requests).append(note)
-                        cdp.send("Fetch.failRequest", {"requestId": request_id, "errorReason": "BlockedByClient"})
-                    cdp.on("Fetch.requestPaused", paused)
-                    try:
-                        cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
-                    except Exception as exc:  # noqa: BLE001 -- fail closed, named
-                        raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
-
-                    def socket_guard(socket):
-                        # WebSockets are outside that interception (Codex
-                        # review of c1fbab0): an off-origin socket is closed
-                        # before any handshake is sent; an on-origin one is
-                        # connected through to the app unchanged.
-                        target = socket.url.replace("ws://", "http://", 1).replace("wss://", "https://", 1)
-                        if allow_navigation(target):
-                            socket.connect_to_server()
-                            return
-                        # Never connected: nothing is sent to any server, and
-                        # the page's socket stays unanswered.
-                        failed_requests.append("blocked outside the preview: " + socket.url[:200])
-                    try:
-                        context.route_web_socket("**", socket_guard)
-                    except Exception as exc:  # noqa: BLE001 -- fail closed, named
-                        raise RuntimeError(f"WebSocket pinning is unavailable in this browser: {exc}") from exc
-                else:
-                    context.route("**/*", guard)
-
-                def refuse_popup(new_page):
-                    blocked.append("a new window or tab: " + (new_page.url or "about:blank"))
-                    try:
-                        new_page.close()
-                    except Exception:  # noqa: BLE001 -- it may already be gone
-                        pass
-                context.on("page", refuse_popup)
-
-                def check_landing(frame):
-                    # A server redirect is followed below the route guard,
-                    # so where the main frame actually landed is checked too
-                    # (Codex review of 3a55d82: a 302 to another loopback
-                    # service was captured as the target).
-                    if (frame == page.main_frame and allow_navigation is not None
-                            and not allow_navigation(frame.url)):
-                        blocked.append("landed on " + frame.url)
-                page.on("framenavigated", check_landing)
+                hold_to_origin(context, page, allow_navigation, pin_requests=pin_requests,
+                               blocked=blocked, failed_requests=failed_requests)
                 page.set_default_timeout(budget.ms(30_000))
                 page.set_default_navigation_timeout(budget.ms(30_000))
             try:
@@ -276,26 +406,41 @@ def render_page(
                 # the render unclean rather than silently showing its start.
                 failed_requests.append("navigation outside the preview was blocked: " + blocked[-1][:200])
             if records:
-                seen = len(blocked)
+                seen = _seen(blocked)
                 page.wait_for_timeout(budget.ms(min(wait_ms, 500)))
-                if len(blocked) > seen and records[-1].get("ok"):
+                if _seen(blocked) > seen and records[-1].get("ok"):
                     # A navigation or window that fired after the last step
                     # still leaves the evidence invalid.
                     records[-1]["ok"] = False
                     records[-1]["error"] = ("navigation outside the preview was blocked after this step: "
                                             + blocked[-1][:200])
-            if pin_requests and allow_navigation is not None:
+            if pinned:
                 # Every rendered frame, not only the main one, must stand on
                 # the origin (Codex review of d731499: an iframe hopped away).
                 for frame in page.frames:
                     where = frame.url or ""
                     if where and not where.startswith(("about:", "data:", "blob:")) and not allow_navigation(where):
                         failed_requests.append("frame outside the preview: " + where[:200])
-            title = page.title()
+                # And nothing may have run whose requests the page's session
+                # does not pause.
+                watch()
+                for kind, where in strangers:
+                    if kind == "shared_worker" and shared_workers:
+                        observations.append(f"a shared worker ran ({where}); its requests are not held to the "
+                                            "preview origin (the capture profile allows shared workers)")
+                    else:
+                        failed_requests.append(unpinned_note(kind, where))
+                if not shared_workers and any("SharedWorker" in error for error in console_errors):
+                    observations.append(_SHARED_WORKERS_OFF)
+            title = page.title()[:MAX_TITLE_CHARS]
             document_width, overflow = _measure_overflow(page, (viewport or {}).get("width"))
             shot = out / "page.png"
-            page.screenshot(path=str(shot), full_page=True,
-                            **({"timeout": budget.ms(30_000)} if budget.active else {}))
+            # Taken as bytes and written through the bound folder, never by
+            # a pathname the browser resolves (review 2026-11-10, checks 5:
+            # a linked view folder took the screenshot outside the project).
+            image = page.screenshot(full_page=True,
+                                    **({"timeout": budget.ms(30_000)} if budget.active else {}))
+            write_bound(anchor, (*inside, "page.png"), image)
         finally:
             browser.close()
 
@@ -303,16 +448,15 @@ def render_page(
         url=url,
         title=title,
         screenshot_path=str(shot),
-        console_errors=console_errors,
-        failed_requests=failed_requests,
+        console_errors=list(console_errors),
+        failed_requests=list(failed_requests),
         clean=not console_errors and not failed_requests,
         steps=records,
         document_width=document_width,
         overflow=overflow,
+        observations=observations,
     )
-    (out / "evidence.json").write_text(
-        json.dumps(asdict(evidence), indent=2), encoding="utf-8"
-    )
+    write_bound(anchor, (*inside, "evidence.json"), json.dumps(asdict(evidence), indent=2).encode("utf-8"))
     return evidence
 
 
@@ -467,7 +611,7 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
             record["error"] = "capture time limit reached before this step"
             break
         limit = budget.ms(timeout_ms)
-        before = len(blocked)
+        before = _seen(blocked)
         try:
             if action == "click":
                 page.click(selector, timeout=limit)
@@ -559,7 +703,7 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
         except Exception as exc:  # noqa: BLE001 -- a failed step is evidence, not a crash
             record["error"] = str(exc).strip().splitlines()[0][:300] if str(exc).strip() else type(exc).__name__
             break
-        if len(blocked) > before:
+        if _seen(blocked) > before:
             record["error"] = "navigation outside the preview was blocked: " + blocked[-1][:200]
             break
         record["ok"] = True

@@ -11,17 +11,24 @@ nothing from quadratus, so it runs under whatever interpreter the project
 uses.
 
 It records facts pytest already has and never interprets prose: the session
-exit status, collection errors, per-phase counts, and for each failed phase
-the exception's module-qualified type. The report carries the nonce the
-harness set for this one invocation, so a stale or foreign file is refused.
+exit status, collection errors, per-phase counts, for each failed phase the
+exception's module-qualified type, and the node id of each case that passed
+(a quiet run prints no case lines, so the report is what names them). The
+report carries the nonce the harness set for this one invocation, so a stale
+or foreign file is refused.
 """
 
 import hashlib
 import json
 import os
 
-PRODUCER = "quadratus-pytest/4"
+PRODUCER = "quadratus-pytest/5"
 MAX_FAILURES = 200
+#: Passed node ids are bounded in number and in the bytes they add to the
+#: report, which the harness reads only up to a fixed size; past either the
+#: list stops and ``passed_truncated`` says so.
+MAX_PASSED = 20000
+MAX_PASSED_BYTES = 600000
 
 import pytest  # noqa: E402 -- after the constants a reader of this file wants first
 
@@ -67,6 +74,15 @@ def _from_body(item, excinfo):
     return False
 
 
+def _case_key(name):
+    """A case's identity as the harness keys it (``integration.case_key``):
+    the node id, or for one over 300 characters a readable prefix plus the
+    SHA256 of the whole, so two long ids never share a key."""
+    if len(name) <= 300:
+        return name
+    return name[:200] + "\u2026sha256:" + hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def _type_name(excinfo):
     if excinfo is None:
         return None
@@ -79,6 +95,10 @@ class _Recorder:
         self.path = path
         self.counts = dict(passed=0, failed=0, errors=0, skipped=0)
         self.failures, self.truncated = [], False
+        self.passed, self.passed_bytes, self.passed_truncated = [], 0, False
+        #: Expected failures, which pytest reports as skips: counted apart so
+        #: the harness reads the same executed total as the runner's summary.
+        self.xfailed = 0
         self.collected, self.collect_errors = 0, 0
 
     def pytest_collectreport(self, report):
@@ -105,16 +125,29 @@ class _Recorder:
         if report.when == "call":
             if report.passed:
                 self.counts["passed"] += 1
+                self._pass(report.nodeid)
             elif report.failed:
                 self.counts["failed"] += 1
                 self._fail(report)
             elif report.skipped:
                 self.counts["skipped"] += 1
+                self.xfailed += hasattr(report, "wasxfail")
         elif report.failed:
             self.counts["errors"] += 1
             self._fail(report)
         elif report.skipped and report.when == "setup":
             self.counts["skipped"] += 1
+            self.xfailed += hasattr(report, "wasxfail")
+
+    def _pass(self, nodeid):
+        key = _case_key(nodeid)
+        size = len(json.dumps(key)) + 2
+        if (self.passed_truncated or len(self.passed) >= MAX_PASSED
+                or self.passed_bytes + size > MAX_PASSED_BYTES):
+            self.passed_truncated = True
+            return
+        self.passed.append(key)
+        self.passed_bytes += size
 
     def _fail(self, report):
         if len(self.failures) >= MAX_FAILURES:
@@ -132,6 +165,8 @@ class _Recorder:
                     module_file=os.path.realpath(__file__), module_sha256=digest,
                     exitstatus=int(exitstatus), collected=self.collected,
                     collect_errors=self.collect_errors, counts=self.counts,
-                    failures=self.failures, truncated=self.truncated)
+                    failures=self.failures, truncated=self.truncated,
+                    passed_cases=self.passed, passed_truncated=self.passed_truncated,
+                    xfailed=self.xfailed)
         with open(self.path, "w", encoding="utf-8") as out:
             json.dump(data, out)

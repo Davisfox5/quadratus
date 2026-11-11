@@ -29,7 +29,8 @@ from pathlib import Path, PurePosixPath
 from typing import List, Literal, Optional, Sequence
 
 __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateSuite", "REPORT_TOKEN",
-           "CheckUnattributable", "attribute", "read_report", "model_facing"]
+           "CheckUnattributable", "attribute", "read_report", "model_facing",
+           "UnsafeWritePath", "write_bound", "remove_bound", "sha256_capped"]
 
 #: The argv token a check uses to declare the harness's structured report.
 #: The only supported producer is the harness-owned pytest plugin
@@ -39,7 +40,10 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: (phase 3, #25). Other runners have no producer: their failures are never
 #: attributable, so never repaired.
 REPORT_TOKEN = "{report}"
-PRODUCER = "quadratus-pytest/4"
+PRODUCER = "quadratus-pytest/5"
+#: The pytest producer before it named its passed cases (review 2026-11-10,
+#: checks 13). Its reports stay readable; they carry no passed cases.
+_LEGACY_PRODUCERS = ("quadratus-pytest/4",)
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
 #: passing, because a node check had no producer and so no fix call). A
@@ -48,12 +52,15 @@ PRODUCER = "quadratus-pytest/4"
 #: reporter beside TAP on stdout, so the text output the count reader needs
 #: is unchanged.
 PRODUCER_NODE = "quadratus-node/1"
-PRODUCERS = (PRODUCER, PRODUCER_NODE)
+PRODUCERS = (PRODUCER, PRODUCER_NODE) + _LEGACY_PRODUCERS
 _PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
 _NODE_PRODUCER_FILE = _PRODUCER_FILE.with_suffix(".mjs")
 #: Kept for the install-layout proof: where the shipped producer lives.
 _PRODUCER_DIR = str(_PRODUCER_FILE.parent)
 _REPORT_FAILURES = 200
+#: Bounds on the passed cases a report may name; the producer holds the same.
+_REPORT_PASSED = 20_000
+_REPORT_CASE_CHARS = 400
 _WHEN = ("setup", "call", "teardown")
 _COUNTS = ("passed", "failed", "errors", "skipped")
 _REPORT_MAX_BYTES = 1024 * 1024
@@ -144,11 +151,11 @@ def model_facing(argv):
     return [a for a in argv if REPORT_TOKEN not in a]
 
 
-def _read_capped(path):
-    """The report's bytes, read without following a link, without blocking
-    on a FIFO or device, and never more than the cap plus one byte: from a
-    descriptor whose regular-file identity matches what was stat'ed.
-    Returns (bytes, None) or (None, (state, detail))."""
+def _open_regular(path):
+    """A read descriptor for ``path`` when it is a regular file: opened
+    without following a link and without blocking on a FIFO or device, and
+    confirmed to be the file that was stat'ed. Returns (fd, None) or
+    (None, (state, detail)); the caller closes the descriptor."""
     import stat as st
     try:
         before = os.lstat(path)
@@ -162,22 +169,178 @@ def _read_capped(path):
         return None, ("unparsable", f"{type(exc).__name__}: {str(exc)[:120]}")
     try:
         opened = os.fstat(fd)
-        if (not st.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
-            return None, ("unparsable", "replaced while being opened")
+    except OSError as exc:
+        os.close(fd)
+        return None, ("unparsable", f"{type(exc).__name__}: {str(exc)[:120]}")
+    if not st.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        os.close(fd)
+        return None, ("unparsable", "replaced while being opened")
+    return fd, None
+
+
+def _read_capped(path, limit: int = _REPORT_MAX_BYTES):
+    """A file's bytes, read without following a link, without blocking on a
+    FIFO or device, and never more than ``limit`` plus one byte: from a
+    descriptor whose regular-file identity matches what was stat'ed.
+    Returns (bytes, None) or (None, (state, detail)). The one reader for
+    files a project could have planted: gate reports and capture evidence
+    (review 2026-11-10, checks 11)."""
+    fd, problem = _open_regular(path)
+    if problem:
+        return None, problem
+    try:
         chunks, total = [], 0
-        while total <= _REPORT_MAX_BYTES:
-            chunk = os.read(fd, min(65536, _REPORT_MAX_BYTES + 1 - total))
+        while total <= limit:
+            chunk = os.read(fd, min(65536, limit + 1 - total))
             if not chunk:
                 break
             chunks.append(chunk)
             total += len(chunk)
-        if total > _REPORT_MAX_BYTES:
-            return None, ("unparsable", f"more than {_REPORT_MAX_BYTES} bytes")
+        if total > limit:
+            return None, ("unparsable", f"more than {limit} bytes")
         return b"".join(chunks), None
     except OSError as exc:
         return None, ("unparsable", f"{type(exc).__name__}: {str(exc)[:120]}")
     finally:
         os.close(fd)
+
+
+def sha256_capped(path, limit: int) -> Optional[str]:
+    """The SHA256 of a regular file of at most ``limit`` bytes, read as
+    :func:`_read_capped` reads but hashed as it goes, so a large render is
+    never held in memory. None for anything else (a link, a FIFO, a device,
+    a missing, oversized or unreadable file)."""
+    fd, problem = _open_regular(path)
+    if problem:
+        return None
+    try:
+        digest, total = hashlib.sha256(), 0
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return digest.hexdigest()
+            total += len(chunk)
+            if total > limit:
+                return None
+            digest.update(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+class UnsafeWritePath(OSError):
+    """A harness write was refused at its path: a component is a symlink or
+    not a folder, or a name would leave the folder the write is bound to.
+    Nothing was written through it."""
+
+
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _plain_parts(relative) -> tuple:
+    parts = (tuple(PurePosixPath(os.fspath(relative)).parts) if isinstance(relative, (str, os.PathLike))
+             else tuple(relative))
+    if not parts or any(not isinstance(p, str) or p in ("", ".", "..") or "/" in p or "\0" in p for p in parts):
+        raise UnsafeWritePath(f"not a plain path inside its folder: {str(relative)[:120]!r}")
+    return parts
+
+
+@contextmanager
+def _bound_folder(root, parts, *, create: bool = True):
+    """A descriptor for the folder ``root/parts...``, reached one component
+    at a time, each opened without following a link relative to the handle
+    before it (as ``session._write_fixture_bound`` does). A link at any
+    component, checked earlier or swapped in since, is refused at the
+    operation itself, so a write can never land outside ``root``. ``root``
+    is the operator's own folder and is opened as named. Missing folders
+    are made when ``create``; without it a missing one yields None."""
+    fds: List[int] = []
+    try:
+        try:
+            fds.append(os.open(os.fspath(root), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)))
+        except OSError as exc:
+            raise UnsafeWritePath(f"{root} is not a folder that can be opened ({type(exc).__name__})") from exc
+        missing = False
+        for index, part in enumerate(parts):
+            try:
+                try:
+                    fd = os.open(part, _DIR_FLAGS, dir_fd=fds[-1])
+                except FileNotFoundError:
+                    if not create:
+                        missing = True
+                        break
+                    try:
+                        os.mkdir(part, 0o755, dir_fd=fds[-1])
+                    except FileExistsError:
+                        pass    # made meanwhile; the open below decides what it is
+                    fd = os.open(part, _DIR_FLAGS, dir_fd=fds[-1])
+            except OSError as exc:
+                raise UnsafeWritePath(f"{'/'.join(parts[:index + 1])} is a symlink or not a folder; nothing "
+                                      f"was written ({type(exc).__name__})") from exc
+            fds.append(fd)
+        yield None if missing else fds[-1]
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def write_bound(root, relative, data: bytes) -> None:
+    """Write ``data`` at ``root/relative`` through folder handles
+    (:func:`_bound_folder`), replacing what is there.
+
+    Every harness write under a project's ``.quadratus`` goes through this
+    (review 2026-11-10, checks 5: a committed link at
+    ``.quadratus/source-excludes.json`` or a linked evidence folder took the
+    write outside the project). The bytes go to a private name made
+    exclusively in the bound folder and are then renamed over the target, so
+    a link standing at the target is replaced, never written through, and a
+    reader never sees a partial file. Raises :class:`UnsafeWritePath` when
+    the path is refused, ``OSError`` when the write itself fails."""
+    import secrets
+    parts = _plain_parts(relative)
+    with _bound_folder(root, parts[:-1]) as folder:
+        temp = f".{parts[-1][:80]}.{os.getpid()}.{secrets.token_hex(6)}.tmp"
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644,
+                     dir_fd=folder)
+        try:
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+            finally:
+                os.close(fd)
+            try:
+                os.replace(temp, parts[-1], src_dir_fd=folder, dst_dir_fd=folder)
+            except OSError as exc:
+                raise UnsafeWritePath(f"{'/'.join(parts)} could not be replaced; nothing was written there "
+                                      f"({type(exc).__name__})") from exc
+        except BaseException:
+            try:
+                os.unlink(temp, dir_fd=folder)    # this call's own name, inside the bound folder
+            except OSError:
+                pass
+            raise
+
+
+def remove_bound(root, relative) -> None:
+    """Remove the file at ``root/relative`` through folder handles, if it is
+    there. A link at the name is removed itself, never followed; a folder
+    there is refused."""
+    parts = _plain_parts(relative)
+    with _bound_folder(root, parts[:-1], create=False) as folder:
+        if folder is None:
+            return
+        try:
+            os.unlink(parts[-1], dir_fd=folder)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise UnsafeWritePath(f"{'/'.join(parts)} is not a file that can be replaced "
+                                  f"({type(exc).__name__})") from exc
 
 
 def _is_count(value) -> bool:
@@ -212,6 +375,19 @@ def _malformed(data) -> str:
         return "failure records do not match the counts"
     if data["truncated"] and len(failures) != _REPORT_FAILURES:
         return "truncation flag without a full record"
+    # The cases the producer names as passed (quadratus-pytest/5). An older
+    # or node report names none; the current pytest producer always does.
+    passed = data.get("passed_cases")
+    if passed is None and "passed_truncated" not in data and data.get("producer") != PRODUCER:
+        return ""
+    if (not isinstance(passed, list) or len(passed) > _REPORT_PASSED
+            or any(not isinstance(p, str) or not p or len(p) > _REPORT_CASE_CHARS for p in passed)
+            or type(data.get("passed_truncated")) is not bool):
+        return "passed cases"
+    if len(passed) > counts["passed"] or (not data["passed_truncated"] and len(passed) != counts["passed"]):
+        return "passed cases do not match the counts"
+    if "xfailed" in data and not (_is_count(data["xfailed"]) and data["xfailed"] <= counts["skipped"]):
+        return "xfailed"
     return ""
 
 
@@ -239,12 +415,21 @@ def read_report(path, expected) -> dict:
     problem = _malformed(data)
     if problem:
         return dict(state="unparsable", detail=f"malformed or impossible: {problem}")
-    return dict(state="parsed", exitstatus=data["exitstatus"], collected=data["collected"],
-                collect_errors=data["collect_errors"], counts={k: data["counts"][k] for k in _COUNTS},
-                failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
-                               assertion=f["assertion"], body=f.get("body"))
-                          for f in data["failures"]],
-                truncated=data["truncated"])
+    report = dict(state="parsed", exitstatus=data["exitstatus"], collected=data["collected"],
+                  collect_errors=data["collect_errors"], counts={k: data["counts"][k] for k in _COUNTS},
+                  failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
+                                 assertion=f["assertion"], body=f.get("body"))
+                            for f in data["failures"]],
+                  truncated=data["truncated"])
+    if isinstance(data.get("passed_cases"), list):
+        # Named passes, so a quiet run (-q prints no case lines) still shows
+        # which cases executed; ``passed_truncated`` says the list is short.
+        report.update(passed_cases=list(data["passed_cases"]), passed_truncated=data["passed_truncated"])
+    if "xfailed" in data:
+        # Expected failures, counted among the skips: the runner's own
+        # summary counts them as executed, and so does the gate.
+        report["xfailed"] = data["xfailed"]
+    return report
 
 
 def _report_reasons(gid, status, reason, returncode, report) -> list:
@@ -394,13 +579,134 @@ def _stop_owned(pgid: int) -> dict:
     return record
 
 
+#: What one stream of a gate command may leave in memory: its first bytes
+#: (where a runner prints its first failures) and its last (its summary).
+#: What falls between is counted and dropped as it arrives, so a command
+#: that prints for its whole timeout cannot grow the harness (review
+#: 2026-11-10, checks 9).
+_KEEP_HEAD_BYTES = 64 * 1024
+_KEEP_TAIL_BYTES = 256 * 1024
+#: A line longer than this is never a case line or a summary line and is
+#: not scanned as one.
+_MAX_SCAN_LINE = 4096
+#: Of a receipt's kept output, what stderr may take from stdout when both
+#: do not fit.
+_STDERR_SHARE = 600
+
+
+class _Stream:
+    """One output stream of a gate command, bounded as it arrives. Each
+    whole line is offered to ``scan`` first, so case lines are read from
+    everything the command printed and not only from what is kept."""
+
+    def __init__(self, scan=None):
+        self.head, self.tail, self.dropped = bytearray(), bytearray(), 0
+        self._scan = scan
+        self._line, self._skipping = bytearray(), False
+
+    def feed(self, block: bytes) -> None:
+        if self._scan is not None:
+            self._lines(block)
+        room = _KEEP_HEAD_BYTES - len(self.head)
+        if room > 0:
+            self.head += block[:room]
+            block = block[room:]
+        if block:
+            self.tail += block
+            over = len(self.tail) - _KEEP_TAIL_BYTES
+            if over > 0:
+                del self.tail[:over]
+                self.dropped += over
+
+    def _lines(self, block: bytes) -> None:
+        # Four bytes a character at most; the scanner holds the character bound.
+        limit, start = 4 * _MAX_SCAN_LINE, 0
+        while True:
+            end = block.find(b'\n', start)
+            if end < 0:
+                break
+            if not self._skipping and len(self._line) + end - start <= limit:
+                self._offer(bytes(self._line) + block[start:end])
+            self._line.clear()
+            self._skipping = False
+            start = end + 1
+        if not self._skipping:
+            if len(self._line) + len(block) - start > limit:
+                self._line.clear()
+                self._skipping = True       # over-long: dropped up to its newline
+            else:
+                self._line += block[start:]
+
+    def _offer(self, raw: bytes) -> None:
+        for line in raw.decode('utf-8', errors='replace').splitlines():
+            self._scan(line)
+
+    def finish(self) -> None:
+        """The last line, when the stream ended without a newline."""
+        if self._scan is not None and self._line and not self._skipping:
+            self._offer(bytes(self._line))
+        self._line.clear()
+
+    def text(self) -> str:
+        if not self.dropped:
+            return bytes(self.head + self.tail).decode('utf-8', errors='replace')
+        return (bytes(self.head).decode('utf-8', errors='replace')
+                + f'\n[... {self.dropped} bytes of output not kept ...]\n'
+                + bytes(self.tail).decode('utf-8', errors='replace'))
+
+
+class _Output(str):
+    """A gate command's retained output: stderr's text, then stdout's, so a
+    reader that scans from the end meets the runner's own summary before
+    anything written to stderr. ``stdout`` and ``stderr`` are the two
+    streams apart; ``cases`` holds the case lines stdout printed, read as
+    they streamed (:class:`_CaseScan`)."""
+
+    stdout: str = ''
+    stderr: str = ''
+    cases = None
+
+    def __new__(cls, stdout: str, stderr: str, cases=None):
+        value = super().__new__(cls, '\n'.join(x for x in (stderr.strip(), stdout.strip()) if x))
+        value.stdout, value.stderr, value.cases = stdout, stderr, cases
+        return value
+
+
+def _streams(output) -> tuple:
+    """``(stdout, stderr)`` of a command's output. A plain string (a
+    replaced runner) is all stdout."""
+    return getattr(output, 'stdout', output) or '', getattr(output, 'stderr', '') or ''
+
+
+def _kept(output, *, lead: str = '', trail: str = '') -> str:
+    """What a receipt keeps of a command's output, at most ``_TAIL_CHARS``:
+    ``lead`` (a note the harness adds), the end of stderr, the end of
+    stdout, then ``trail``. Stdout is last because the readers of a kept
+    tail (``skipped_count``, ``deselected_count``, ``_test_count``) take
+    the last summary they meet, and that must be the runner's own on
+    stdout, not something a subprocess or an exit handler wrote to stderr
+    (review 2026-11-10, checks 15). Stderr still keeps a share, so a crash
+    it reported is not pushed out by a long stdout."""
+    stdout, stderr = (s.strip() for s in _streams(output))
+    notes = [n.strip() for n in (lead, trail)]
+    budget = max(0, _TAIL_CHARS - sum(len(n) + 1 for n in notes if n))
+    if len(stdout) + len(stderr) + 1 > budget:
+        share = min(len(stderr), max(_STDERR_SHARE, budget - len(stdout) - 1), budget)
+        stderr = stderr[-share:] if share else ''
+        room = budget - (len(stderr) + 1 if stderr else 0)
+        stdout = stdout[-room:] if room > 0 else ''
+    return '\n'.join(x for x in (notes[0], stderr, stdout, notes[1]) if x)[-_TAIL_CHARS:]
+
+
 def _run_owned(argv, *, cwd, timeout, env):
     """Run one gate command and return ``(returncode, output, cleanup)``;
     ``returncode`` is None when it timed out.
 
     The command runs in a new session, so the group holds it and every
     descendant that did not leave on its own. Output is read as it arrives,
-    so a timeout keeps what was printed before it. When the command times
+    so a timeout keeps what was printed before it; only a bounded head and
+    tail of each stream are kept (:class:`_Stream`), and stdout's case
+    lines are read as they pass (:class:`_Output`). When the command times
     out, or exits leaving its own processes behind (a preview server holding
     its pipes open), those processes are stopped by :func:`_stop_owned` and
     ``cleanup`` says which. Nothing outside the group is signalled."""
@@ -408,11 +714,14 @@ def _run_owned(argv, *, cwd, timeout, env):
     import time
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True)
-    chunks = {'out': [], 'err': []}
+    scan = _CaseScan()
+    streams = {'out': _Stream(scan.line), 'err': _Stream()}
 
     def drain(stream, key):
+        sink = streams[key]
         for block in iter(lambda: stream.read1(65536) if hasattr(stream, 'read1') else stream.read(65536), b''):
-            chunks[key].append(block)
+            sink.feed(block)
+        sink.finish()
     readers = [threading.Thread(target=drain, args=(proc.stdout, 'out'), daemon=True),
                threading.Thread(target=drain, args=(proc.stderr, 'err'), daemon=True)]
     for reader in readers:
@@ -436,8 +745,7 @@ def _run_owned(argv, *, cwd, timeout, env):
             proc.wait()
         for reader in readers:
             reader.join(_DRAIN_GRACE)
-    text = lambda key: b''.join(chunks[key]).decode('utf-8', errors='replace')  # noqa: E731
-    output = (text('out') + '\n' + text('err')).strip()
+    output = _Output(streams['out'].text(), streams['err'].text(), scan)
     if cleanup is not None and any(r.is_alive() for r in readers):
         cleanup['pipes_still_held'] = True
     return returncode, output, cleanup
@@ -600,7 +908,7 @@ class IntegrationGate:
 
     def run(self) -> GateResult:
         # Quoted, so a path with spaces survives command_paths (redaction).
-        shown = shlex.join(self.command)
+        shown = shlex.join(str(a) for a in self.command)
         try:
             with _fresh_bytecode_env() as fresh, _report_slot(self.command, fresh) as (argv, env, path, expected):
                 returncode, combined, cleanup = _run_owned(argv, cwd=self.cwd, timeout=self.timeout, env=env)
@@ -610,29 +918,35 @@ class IntegrationGate:
                 passed=False, command=shown, returncode=None,
                 output=f"(command not found: {exc})",
             )
+        except (OSError, ValueError) as exc:
+            # A command that cannot be started is a failed result like any
+            # other, never an exception out of the gate (review 2026-11-10,
+            # checks 8: a file that is not executable, a cwd that is gone).
+            return GateResult(
+                passed=False, command=shown, returncode=None,
+                output=f"(command could not start: {type(exc).__name__}: {str(exc)[:300]})",
+            )
         if returncode is None:
             # The partial output is kept: a hang must name what it was doing.
             return GateResult(
                 passed=False, command=shown, returncode=None,
-                output=(f"(timed out after {self.timeout}s) {_cleanup_note(cleanup)}\n"
-                        + combined[-_TAIL_CHARS:]).strip(),
+                output=_kept(combined, lead=f"(timed out after {self.timeout}s) {_cleanup_note(cleanup)}"),
             )
-        if cleanup:
-            combined = (combined + "\n" + _cleanup_note(cleanup)).strip()
-        passed = returncode == 0
+        runner = runner_of(self.command)
+        passed, lead = returncode == 0, ""
         if passed and self.minimum_tests is not None:
-            count = _test_count(combined)
+            count = _executed(combined, runner, report)
             if count is None:
-                passed, combined = False, "(test count unavailable)\n" + combined
+                passed, lead = False, "(test count unavailable)"
             elif count < self.minimum_tests:
-                passed, combined = False, f"(zero tests executed: {count} ran)\n" + combined
+                passed, lead = False, f"(zero tests executed: {count} ran)"
         return GateResult(
             passed=passed,
             command=shown,
             returncode=returncode,
-            output=combined[-_TAIL_CHARS:],
+            output=_kept(combined, lead=lead, trail=_cleanup_note(cleanup)),
             report=report,
-            cases=case_record(combined, runner_of(self.command)),
+            cases=case_record(combined, runner),
         )
 
 
@@ -754,9 +1068,171 @@ class GateReceipt:
     cases: Optional[dict] = None
 
 
+_ANSI = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]')
+_OUTCOMES = 'passed|failed|xfailed|xpassed|skipped|deselected|errors?'
+#: "todo" is read as an item (in a runner's named row only) so that a row
+#: of nothing but todo cases ("Tests:  2 todo, 2 total") is a summary of
+#: zero executed tests; it is never counted as executed or as a skip.
+_SUMMARY_ITEM = re.compile(rf'\b(\d+) ({_OUTCOMES}|todo)\b')
+#: A runner's summary line starts with its first count: pytest's "3 failed,
+#: 6 passed in 0.11s" (bare under -q, inside a rule of "=" otherwise),
+#: jest's "Tests:  1 failed, 2 passed, 3 total", vitest's "Tests  2 passed
+#: (2)", deno's "ok | 3 passed | 0 failed", nextest's "Summary [0.1s] 3
+#: tests run: 3 passed". A count somewhere inside another sentence is not a
+#: summary: tsc's "Found 0 errors." and eslint's "5 problems (0 errors, 5
+#: warnings)" read as zero executed tests and failed a passing lint command
+#: (review 2026-11-10, checks 6).
+#: Jest puts its todo count before its passes ("Tests:  1 todo, 2 passed, 3
+#: total"), so "todo" may open a summary too.
+_SUMMARY_HEAD = re.compile(
+    r'[ \t=]*(?P<row>(?:Tests?:?|ok \||FAILED \||Summary[ \t]+\[[^\]\n]{0,40}\][ \t]+\d+ tests? run:)[ \t]+)?'
+    rf'\d+ (?:{_OUTCOMES}|warnings?|rerun|todo)\b')
+_PYTEST_TIMED = re.compile(r'\bin \d[\d.]*s\b')
+#: "no tests ran in 0.01s" (pytest), "No tests found, exiting with code 1"
+#: (jest), "NO TESTS RAN" (unittest): the line itself, not the words inside
+#: a test's name.
+_NO_TESTS = re.compile(r'(?im)^[ \t=*]*no tests (?:ran|collected|found)\b')
+_UNITTEST_RAN = re.compile(r'(?m)^Ran (\d+) tests?\b')
+_UNITTEST_SKIPPED = re.compile(r'(?m)^(?:OK|FAILED) \([^)\n]*\bskipped=(\d+)')
+#: Something often stands in front of a runner's line: the label of a tool
+#: that runs several packages (turbo's "web:test: ", compose's "svc-1  | ",
+#: yarn's "➤ YN0000: [pkg]: "), a build step's number and clock ("#12 0.532
+#: "), a timestamp, an indent. Where the runner's own summary may begin
+#: behind it: after whitespace or a rule, at a count, a row's name or the
+#: "no tests" words.
+_SUMMARY_START = re.compile(
+    rf'(?<![^\s=*|])(?:\d+ (?:{_OUTCOMES}|warnings?|rerun|todo)\b|Tests?:?[ \t]+\d|ok \||FAILED \|'
+    r'|Summary[ \t]+\[|Ran \d+ tests?\b|(?:OK|FAILED) \(|test result: (?:ok|FAILED)\.'
+    r'|(?i:no tests (?:ran|collected|found)\b))')
+#: How many such places one line is tried at.
+_SUMMARY_STARTS = 4
+#: What marks the text in front as a case's own line, whose name can hold
+#: any words: a pytest node id, TAP's "ok N", a reporter's mark.
+_CASE_PREFIX = re.compile('::|(?<!\\S)(?:not ok|ok)[ \t]+\\d'
+                          '|[✓✔✕✖✗✘×√↓○✎﹣]')
+#: What is read from behind a prefix: a runner's own line in its full form,
+#: running to the end of the line. Bare words can be anything, a test's
+#: description included ("List: no tests found ... ok" is how unittest -v
+#: prints a docstring), and jest's "Snapshots: 3 passed, 3 total" counts no
+#: cases.
+_NO_TESTS_FULL = re.compile(r'(?i)no tests (?:ran|collected) in \d|no tests found, exiting with code \d'
+                            r'|no tests (?:ran|collected|found)[.!]?[ \t=*]*$')
+_UNITTEST_ROW = re.compile(r'Ran \d+ tests?\b|(?:OK|FAILED) \([^)\n]*\bskipped=\d')
+_CARGO_ROW = re.compile(r'test result: (?:ok|FAILED)\. \d+ passed; \d+ failed;')
+_TIMED_END = re.compile(r'\bin \d[\d.]*s(?: \([\d:]+\))?[ \t=]*$|\(\d[\d.]*m?s\)[ \t=]*$')
+#: A wrapper's label: one to three words, the first starting like a name,
+#: the last ending in ":", "|" or "]" (turbo's "web:test: ", pnpm's
+#: "packages/a test: ", concurrently's "[0] "); up to three in a row.
+_LABEL = r'(?=[A-Za-z0-9_@\[])(?:\S{1,80}[ \t]+){0,2}?\S{0,79}[:|\]][ \t]+'
+_LABELS = re.compile(rf'(?:{_LABEL}){{1,3}}')
+#: A bare count of cases that did not run, the whole of what a label
+#: fronts: Playwright prints "  3 skipped" with no time when nothing ran.
+#: Only this stricter reading is taken from a bare count; "Test Suites: 1
+#: passed, 1 total" has the same shape and counts no cases.
+_ONLY_UNEXECUTED = re.compile(r'\d+ (?:skipped|deselected)(?:,? \d+ (?:skipped|deselected))*[ \t=]*')
+
+
+def _own_summary(rest: str) -> bool:
+    """Whether ``rest`` is a runner's own summary in full form: a row with
+    its name ("Tests: ..."), a count line that ends with its time ("3
+    skipped in 0.01s", "3 passed (2.1s)"), unittest's and cargo's rows, or a
+    runner's whole "no tests" line."""
+    head = _SUMMARY_HEAD.match(rest)
+    if head:
+        return bool(head.group('row') or _TIMED_END.search(rest))
+    return bool(_NO_TESTS_FULL.match(rest) or _UNITTEST_ROW.match(rest) or _CARGO_ROW.match(rest))
+
+
+def _prefixed_summary(line: str) -> Optional[str]:
+    """The runner's own summary inside ``line`` when something stands in
+    front of it, or None."""
+    for count, found in enumerate(_SUMMARY_START.finditer(line)):
+        start = found.start()
+        if not start or count >= _SUMMARY_STARTS or _CASE_PREFIX.search(line, 0, start):
+            return None     # the line's own start, or text inside a case's name
+        rest = line[start:]
+        if _own_summary(rest) or (_ONLY_UNEXECUTED.fullmatch(rest) and _LABELS.fullmatch(line, 0, start)):
+            return rest
+    return None
+
+
+def _summary_text(output) -> str:
+    """What the summary readers read of a command's output: colour codes
+    removed, and a runner's own summary that something stood in front of
+    repeated without it.
+
+    The summary patterns are anchored to the start of a line, so a count
+    inside a sentence or a test's own name is not a summary (checks 6).
+    Anything in front hid the runner's own summary from them as well:
+    "web:test: Tests: 3 skipped, 3 total" (turbo) and "#12 0.532 no tests
+    ran in 0.01s" (a build step) read as no summary at all, so a wrapped
+    run of zero tests passed and its skips and deselections went unseen,
+    where the same lines unwrapped fail the command. Only a full-form
+    runner line is read from behind a prefix (:func:`_own_summary`), and
+    never from inside a case's own line, whose name can hold any text."""
+    lines = []
+    for line in _ANSI.sub('', output or '').splitlines():
+        lines.append(line)
+        if len(line) > _MAX_SCAN_LINE or _SUMMARY_HEAD.match(line) or _NO_TESTS.match(line):
+            continue    # too long to be one, or read where it stands
+        behind = _prefixed_summary(line)
+        if behind is not None:
+            lines.append(behind)
+    return '\n'.join(lines)
+
+
+def _summary_outcomes(text) -> Optional[list]:
+    """The ``(count, outcome)`` pairs of the last line a runner printed as
+    its own summary, or None when no line is one. ``text`` is what
+    :func:`_summary_text` made of the output. One reading for executed,
+    skipped and deselected counts, which each used to scan on their own and
+    had drifted. A line with only an error count is a summary when it ends
+    the way pytest's does ("1 error in 0.05s")."""
+    for line in reversed((text or '').splitlines()):
+        head = _SUMMARY_HEAD.match(line) if len(line) <= _MAX_SCAN_LINE else None
+        if not head:
+            continue
+        found = _SUMMARY_ITEM.findall(line)
+        if not head.group('row'):
+            # A todo count is a runner's only in its named row; "3 todo
+            # comments left" is some other tool's line.
+            found = [(count, kind) for count, kind in found if kind != 'todo']
+        if any(not kind.startswith('error') for _, kind in found) or (found and _PYTEST_TIMED.search(line)):
+            return found
+    return None
+
+
+#: Runners that print their summary and case lines on stdout; for any
+#: other, stderr is read when stdout says nothing (unittest writes there).
+_STDOUT_RUNNERS = ('pytest', 'node')
+
+
+def _executed(output, runner, report=None) -> Optional[int]:
+    """How many cases a command executed, or None when nothing says.
+
+    The structured report's count when it parsed and saw cases: its
+    producer watched every one, where the text is scraped. Otherwise the
+    runner's summary in stdout, and stderr's only for a runner not known to
+    print its summary on stdout and only when stdout carries none: "3
+    skipped" on stdout followed by "5 passed" from an exit handler on
+    stderr counted five executed (review 2026-11-10, checks 15)."""
+    if isinstance(report, dict) and report.get('state') == 'parsed' and report.get('collected'):
+        # The same total the summary line gives: passes, failures and
+        # expected failures (which the report counts among its skips).
+        return report['counts']['passed'] + report['counts']['failed'] + (report.get('xfailed') or 0)
+    stdout, stderr = _streams(output)
+    count = _test_count(stdout)
+    if count is None and runner not in _STDOUT_RUNNERS:
+        count = _test_count(stderr)
+    return count
+
+
 def _test_count(output):
     """Recognize runner summaries only; absent evidence is not zero or success."""
-    if re.search(r'\bno tests (?:ran|collected|found)\b', output, re.I):
+    # Colour codes and a wrapper's line labels aside: the summary is still
+    # the runner's.
+    output = _summary_text(output)
+    if _NO_TESTS.search(output):
         return 0
     # Node's test runner, in TAP ("# pass 1") or its spec reporter
     # ("ℹ pass 1"). Executed cases are pass + fail when both are reported;
@@ -773,9 +1249,9 @@ def _test_count(output):
     if tap:
         skipped = re.findall(r'(?m)^(?:#|\u2139)\s*(?:skipped|skip|todo|cancelled) (\d+)\s*$', output)
         return max(0, int(tap[-1]) - sum(map(int, skipped)))
-    unittest = re.findall(r'Ran (\d+) tests?\b', output)
+    unittest = _UNITTEST_RAN.findall(output)
     if unittest:
-        skipped = re.findall(r'skipped=(\d+)', output)
+        skipped = _UNITTEST_SKIPPED.findall(output)
         return max(0, int(unittest[-1]) - (int(skipped[-1]) if skipped else 0))
     # Cargo emits one summary per test binary, then often an empty doc-test
     # suite. The last summary alone would erase the cases already executed.
@@ -784,12 +1260,10 @@ def _test_count(output):
         return sum(int(passed) + int(failed) for passed, failed in rust)
     # Pytest (and compact JS summaries) can report failed executions alongside
     # passes. Use one final summary line, excluding cases whose body did not run.
-    for line in reversed(output.splitlines()):
-        outcomes = re.findall(
-            r'\b(\d+) (passed|failed|xfailed|xpassed|skipped|deselected|errors?)\b', line)
-        if outcomes:
-            return sum(int(count) for count, outcome in outcomes
-                       if outcome in {'passed', 'failed', 'xfailed', 'xpassed'})
+    outcomes = _summary_outcomes(output)
+    if outcomes:
+        return sum(int(count) for count, outcome in outcomes
+                   if outcome in {'passed', 'failed', 'xfailed', 'xpassed'})
     return None
 
 
@@ -836,28 +1310,60 @@ class GateSuite:
             digest.update(str(file.resolve()).encode() + b'\0' + file.read_bytes())
         return digest.hexdigest()
 
+    def _digests(self) -> dict:
+        """The selected source by file, name to SHA256: the listing and the
+        hash ``Project.fingerprint`` is built from, kept apart so a change
+        can be named file by file."""
+        return {name: hashlib.sha256(data).digest() for name, data in self.project.contents().items()}
+
+    @staticmethod
+    def _fingerprint(digests: dict) -> str:
+        """``Project.fingerprint`` of the tree ``digests`` describes (a test
+        holds the two equal)."""
+        digest = hashlib.sha256()
+        for name in sorted(digests):
+            digest.update(name.encode() + b'\0' + digests[name])
+        return digest.hexdigest()
+
+    def _unreadable(self, exc) -> GateResult:
+        """The whole gate as error receipts, when the source cannot be read
+        before any command runs: nothing a command did could be told apart
+        from what was already there, so none is run."""
+        why = f'source could not be read before the gate: {type(exc).__name__}: {str(exc)[:160]}'
+        receipts = tuple(GateReceipt(id=c.id, required=c.required, command=shlex.join(c.argv), cwd=c.cwd,
+                                     status='skipped' if c.skip_reason else 'error',
+                                     reason=c.skip_reason or why) for c in self.commands)
+        output = '\n'.join(f'{r.id}: {r.status}: {r.reason}\n{r.output}' for r in receipts)
+        return GateResult(False, 'gate suite', 1, output, receipts)
+
     def run(self) -> GateResult:
         receipts = []
-        source = self.project.fingerprint()
-        changed = False
+        # Every failure mode is a receipt, never an exception (the module's
+        # contract; review 2026-11-10, checks 8: a test that left a 101 MiB
+        # file, or a file removed mid-walk, raised out of the gate).
+        try:
+            before = self._digests()
+            source = self._fingerprint(before)
+        except Exception as exc:  # noqa: BLE001 -- unreadable source is an error receipt
+            return self._unreadable(exc)
+        stopped = ''
         for command in self.commands:
             config = hashlib.sha256(json.dumps(asdict(command), sort_keys=True).encode()).hexdigest()
             base = dict(id=command.id, required=command.required, command=shlex.join(command.argv),
                         source_hash=source, config_hash=config, cwd=command.cwd,
-                        selection=config_selection(command.argv, self.cwd / command.cwd, self.cwd))
-            if changed or command.skip_reason:
-                receipts.append(GateReceipt(**base, status='skipped',
-                                            reason='source changed during a prior gate' if changed
-                                            else command.skip_reason))
+                        selection=_selection(command.argv, self.cwd / command.cwd, self.cwd))
+            if stopped or command.skip_reason:
+                receipts.append(GateReceipt(**base, status='skipped', reason=stopped or command.skip_reason))
                 continue
             if not command.argv:
                 receipts.append(GateReceipt(**base, status='blocked', reason='command not configured'))
                 continue
-            cwd = (self.cwd / command.cwd).resolve()
-            if not cwd.is_relative_to(self.cwd) or not cwd.is_dir():
-                receipts.append(GateReceipt(**base, status='blocked', reason='cwd unavailable or outside project'))
-                continue
             try:
+                cwd = (self.cwd / command.cwd).resolve()
+                if not cwd.is_relative_to(self.cwd) or not cwd.is_dir():
+                    receipts.append(GateReceipt(**base, status='blocked',
+                                                reason='cwd unavailable or outside project'))
+                    continue
                 runner = self._runner_hash(command, cwd)
                 base['runner_hash'] = runner
                 key = (source, config, runner)
@@ -869,10 +1375,14 @@ class GateSuite:
                     report = read_report(path, expected) if returncode is not None else None
                 if returncode is None:
                     raise _GateTimeout(output, cleanup)
-                if cleanup:
-                    output = (output + '\n' + _cleanup_note(cleanup)).strip()
-                count = _test_count(output)
+                named = runner_of(command.argv)
+                count = _executed(output, named, report)
                 status, reason = ('passed', 'exit 0') if returncode == 0 else ('failed', 'nonzero exit')
+                # A runner's own summary of zero executed cases fails the
+                # command whatever it exited with. The count is read only
+                # from lines a runner prints as its summary (checks 6), so a
+                # lint or type check has none: it passes on exit 0 with its
+                # count unknown, where "Found 0 errors." used to fail it.
                 if count == 0:
                     status, reason = 'failed', 'zero tests executed'
                 elif returncode == 0 and command.minimum_tests is not None:
@@ -880,26 +1390,73 @@ class GateSuite:
                         status, reason = 'blocked', 'test count unavailable'
                     elif count < command.minimum_tests:
                         status, reason = 'failed', 'fewer tests than required'
-                receipt = GateReceipt(**base, status=status, reason=reason,
-                                      returncode=returncode, output=output[-_TAIL_CHARS:], tests=count,
-                                      report=report, cases=case_record(output, runner_of(command.argv)))
+                receipt = GateReceipt(**base, status=status, reason=reason, returncode=returncode,
+                                      output=_kept(output, trail=_cleanup_note(cleanup)), tests=count,
+                                      report=report, cases=case_record(output, named))
             except _GateTimeout as exc:
                 # Still an error, never a product failure: what was printed
                 # before the deadline is kept so the hang can be diagnosed.
                 receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s',
-                                      output=((_cleanup_note(exc.cleanup) + '\n' + exc.output).strip())[-_TAIL_CHARS:])
-            except OSError as exc:
+                                      output=_kept(exc.output, lead=_cleanup_note(exc.cleanup)))
+            except (OSError, ValueError) as exc:
                 receipt = GateReceipt(**base, status='blocked', reason=f'runner unavailable: {exc}')
-            if self.project.fingerprint() != source:
-                changed = True
-                receipt = replace(receipt, status='error', reason='source changed during gate')
+            try:
+                after = self._digests()
+            except Exception as exc:  # noqa: BLE001 -- unreadable source is an error receipt
+                stopped = 'source could not be read after a prior gate'
+                receipt = replace(receipt, status='error', reason='source could not be read after the command: '
+                                                                  f'{type(exc).__name__}: {str(exc)[:160]}')
                 self._cache.clear()
+            else:
+                if after != before:
+                    stopped = 'source changed during a prior gate'
+                    # The paths, so the operator can see which file the check
+                    # wrote (checks 7: "source changed during gate" alone).
+                    receipt = replace(receipt, status='error',
+                                      reason='source changed during gate: ' + _changed_paths(before, after))
+                    self._cache.clear()
             if command.cacheable and receipt.status == 'passed' and receipt.runner_hash:
                 self._cache[key] = receipt
             receipts.append(receipt)
-        passed = not changed and all(r.status == 'passed' for r in receipts if r.required)
+        passed = not stopped and all(r.status == 'passed' for r in receipts if r.required)
         output = '\n'.join(f'{r.id}: {r.status}: {r.reason}\n{r.output}' for r in receipts)
         return GateResult(passed, 'gate suite', 0 if passed else 1, output, tuple(receipts))
+
+
+#: How many changed paths a receipt names, and how much of each.
+_CHANGED_PATHS, _CHANGED_PATH_CHARS = 6, 120
+
+
+def _changed_paths(before: dict, after: dict) -> str:
+    """The files that differ between two source listings, by what happened
+    to each, bounded: "added .hypothesis/db; changed app.py (+3 more)"."""
+    groups = (('added', sorted(after.keys() - before.keys())),
+              ('changed', sorted(n for n in before.keys() & after.keys() if before[n] != after[n])),
+              ('removed', sorted(before.keys() - after.keys())))
+    total = sum(len(names) for _, names in groups)
+    shown, left = [], _CHANGED_PATHS
+
+    def plain(name: str) -> str:
+        # The name is whatever the check wrote: a line break or a control
+        # character in it must not put a second line into a receipt's
+        # reason, which is shown to seats as the harness's own record.
+        return ''.join(c if c.isprintable() else '?' for c in name[:_CHANGED_PATH_CHARS])
+    for label, names in groups:
+        take = names[:left]
+        left -= len(take)
+        if take:
+            shown.append(label + ' ' + ', '.join(plain(n) for n in take))
+    listed = _CHANGED_PATHS - left
+    return '; '.join(shown) + (f' (+{total - listed} more)' if total > listed else '')
+
+
+def _selection(argv, cwd, root) -> str:
+    """:func:`config_selection`, total: a selection that cannot be read is
+    not established, which only ever withholds a "whole file ran" reading."""
+    try:
+        return config_selection(argv, cwd, root)
+    except Exception:  # noqa: BLE001 -- unknown selection is a filter, never a crash
+        return 'test selection could not be read'
 
 
 #: Folders whose files are test support (helpers, fixtures, harness stubs)
@@ -1208,16 +1765,125 @@ def _filters(options: str) -> bool:
 def deselected_count(output: str) -> int:
     """Cases the runner's final summary line reports deselected (pytest
     prints ``N deselected`` only when there are some)."""
-    for line in reversed((output or '').splitlines()):
-        found = re.findall(r'\b(\d+) (passed|failed|xfailed|xpassed|skipped|deselected|errors?)\b', line)
+    found = _summary_outcomes(_summary_text(output))
+    return sum(int(n) for n, kind in found if kind == 'deselected') if found else 0
+
+
+# Case lines are read by three small left-to-right parsers. The patterns
+# they replace matched the name lazily before optional trailing parts, and
+# one output line of 20,000 spaces took over a second to reject: quadratic,
+# and run after the command's own timeout had ended (review 2026-11-10,
+# checks 9). Each parser reads a line once; a line over _MAX_SCAN_LINE is
+# never a case line.
+_WS = re.compile(r'\s*')
+_NONWS = re.compile(r'\S+')
+_SPEC_MARKS = ('\u2714', '\u2716', '\ufe63')
+_SPEC_DURATION = re.compile(r'\([\d.]+m?s\)')
+_TAP_HEAD = re.compile(r'\s*(?:not ok|ok)\s+\d+\s+-\s+', re.I)
+_TAP_DIRECTIVE = re.compile(r'(SKIP|TODO)\b', re.I)
+_PYTEST_OUTCOME = re.compile(r'(PASSED|FAILED|SKIPPED|XFAIL|XPASS|ERROR)\b')
+
+
+def _spec_case(line: str):
+    """Node's spec reporter: ``<mark> name (1.2ms)``, then nothing or
+    ``# directive``. The name ends at the first duration, after some
+    whitespace, that is followed by one of those; a duration standing where
+    the name would start (an empty name) is read only when no later one
+    fits. ``(name, kind)`` or None."""
+    body = line.lstrip()
+    if not body or body[0] not in _SPEC_MARKS:
+        return None
+    after_mark = len(line) - len(body) + 1
+    start = _WS.match(line, after_mark).end()
+    if start == after_mark:
+        return None
+
+    def ends_at(at):
+        """The directive after the duration at ``at``, or None when what
+        follows is neither nothing nor a directive."""
+        duration = _SPEC_DURATION.match(line, at)
+        if not duration:
+            return None
+        rest = _WS.match(line, duration.end()).end()
+        if rest == len(line):
+            return ''
+        return line[rest + 1:].strip() if rest > duration.end() and line[rest] == '#' else None
+
+    found = None
+    at = line.find('(', start + 1)
+    while at >= 0 and found is None:
+        if line[at - 1].isspace():
+            directive = ends_at(at)
+            if directive is not None:
+                found = line[start:at].rstrip(), directive
+        at = line.find('(', at + 1)
+    if found is None and start - after_mark >= 2 and line.startswith('(', start):
+        directive = ends_at(start)
+        if directive is not None:
+            found = '', directive
+    if found is None:
+        return None
+    kind = ('other' if found[1].upper().startswith('TODO')
+            else 'skipped' if body[0] == '\ufe63' else 'executed')
+    return found[0], kind
+
+
+def _tap_case(line: str):
+    """TAP: ``ok N - name``, then nothing or ``# SKIP`` / ``# TODO``. The
+    name ends at the first such directive. ``(name, kind)`` or None."""
+    head = _TAP_HEAD.match(line)
+    if not head:
+        return None
+    start = head.end()
+    at = line.find('#', start + 1)
+    while at >= 0:
+        # "\s+#": whitespace of the name's own before it, so never a "#"
+        # standing where the name starts.
+        if line[at - 1].isspace():
+            # Matched as the pattern this replaces matched it, case rules
+            # included: a directive that is not exactly SKIP once upper-cased
+            # (TODO, or a spelling only case folding equates) is "other".
+            directive = _TAP_DIRECTIVE.match(line, _WS.match(line, at + 1).end())
+            if directive:
+                return line[start:at].rstrip(), ('skipped' if directive.group(1).upper() == 'SKIP' else 'other')
+        at = line.find('#', at + 1)
+    return line[start:].rstrip(), 'executed'
+
+
+def _pytest_case(line: str):
+    """Pytest's verbose line: ``path::name OUTCOME`` from the first column.
+    ``(node id, kind)`` or None."""
+    token = _NONWS.match(line)
+    if not token:
+        return None
+    nodeid = token.group()
+    sep = nodeid.find('::', 1)
+    if sep < 0 or sep + 2 >= len(nodeid):
+        return None
+    rest = _WS.match(line, token.end()).end()
+    outcome = _PYTEST_OUTCOME.match(line, rest) if rest > token.end() else None
+    if not outcome:
+        return None
+    return nodeid, {'SKIPPED': 'skipped', 'XFAIL': 'other'}.get(outcome.group(1), 'executed')
+
+
+_CASE_PARSERS = (('spec', _spec_case), ('tap', _tap_case), ('pytest', _pytest_case))
+#: Which line families a command's runner prints.
+_RUNNER_FAMILIES = {'pytest': ('pytest',), 'node': ('spec', 'tap'), None: ('spec', 'tap', 'pytest')}
+
+
+def _parse_case(line: str):
+    """``(family, name, kind)`` when ``line`` is a case line of some runner,
+    else None. The three forms cannot overlap (a mark, ``ok N -`` or a
+    ``path::name`` token starts the line), so the family is the line's own
+    and the runner only decides which families count."""
+    if len(line) > _MAX_SCAN_LINE:
+        return None
+    for family, parse in _CASE_PARSERS:
+        found = parse(line)
         if found:
-            return sum(int(n) for n, kind in found if kind == 'deselected')
-    return 0
-
-
-_SPEC_CASE = re.compile(r'^\s*(\u2714|\u2716|\ufe63)\s+(.*?)\s+\([\d.]+m?s\)(?:\s+#\s*(.*?))?\s*$')
-_TAP_CASE = re.compile(r'^\s*(not ok|ok)\s+\d+\s+-\s+(.*?)(?:\s+#\s*(SKIP|TODO)\b.*?)?\s*$', re.I)
-_PYTEST_CASE = re.compile(r'^(\S+::\S+)\s+(PASSED|FAILED|SKIPPED|XFAIL|XPASS|ERROR)\b')
+            return family, found[0], found[1]
+    return None
 
 
 def case_key(name: str) -> str:
@@ -1253,23 +1919,11 @@ def _case_lines(output: str, runner: Optional[str] = None):
     todo case and a pytest XFAIL are other: XFAIL does not say whether the
     body ran, and ``xfail(run=False)`` never runs it (Codex review of
     67c9fad, S5)."""
-    node_lines, pytest_lines = runner in (None, 'node'), runner in (None, 'pytest')
+    families = _RUNNER_FAMILIES.get(runner, _RUNNER_FAMILIES[None])
     for line in (output or '').splitlines():
-        spec = _SPEC_CASE.match(line) if node_lines else None
-        if spec:
-            mark, name, directive = spec.group(1), spec.group(2), (spec.group(3) or '')
-            yield name, ('other' if directive.upper().startswith('TODO')
-                         else 'skipped' if mark == '\ufe63' else 'executed'), False
-            continue
-        tap = _TAP_CASE.match(line) if node_lines else None
-        if tap:
-            directive = (tap.group(3) or '').upper()
-            yield tap.group(2), {'SKIP': 'skipped', '': 'executed'}.get(directive, 'other'), False
-            continue
-        case = _PYTEST_CASE.match(line) if pytest_lines else None
-        if case:
-            yield case.group(1), {'SKIPPED': 'skipped', 'XFAIL': 'other'}.get(case.group(2), 'executed'), \
-                runner == 'pytest'
+        parsed = _parse_case(line)
+        if parsed and parsed[0] in families:
+            yield parsed[1], parsed[2], runner == 'pytest' and parsed[0] == 'pytest'
 
 
 def case_outcomes(output: str, runner: Optional[str] = None):
@@ -1289,23 +1943,61 @@ def case_outcomes(output: str, runner: Optional[str] = None):
 _MAX_CASES = 20_000
 
 
+class _CaseScan:
+    """Case lines read one at a time, whatever runner printed them, so the
+    record for the command's own runner can be built afterwards without the
+    output being kept. Bounded: a family past ``_MAX_CASES`` lines stores
+    nothing more and its record is None."""
+
+    def __init__(self):
+        self.seen = {family: 0 for family, _ in _CASE_PARSERS}
+        self.counts = {family: dict(skipped={}, executed={}, other={}) for family, _ in _CASE_PARSERS}
+        self.broken = False
+
+    def line(self, text: str) -> None:
+        try:
+            parsed = _parse_case(text)
+        except Exception:  # noqa: BLE001 -- never stop the thread draining the command's pipe
+            self.broken = True      # a line that could not be read: the record is unknown
+            return
+        if parsed is None:
+            return
+        family, name, kind = parsed
+        self.seen[family] += 1
+        if self.seen[family] > _MAX_CASES:
+            return
+        key = case_key(name)
+        kinds = self.counts[family][kind]
+        kinds[key] = kinds.get(key, 0) + 1
+
+    def record(self, runner: Optional[str] = None) -> Optional[dict]:
+        families = _RUNNER_FAMILIES.get(runner, _RUNNER_FAMILIES[None])
+        if self.broken or sum(self.seen[family] for family in families) > _MAX_CASES:
+            return None
+        record = dict(skipped={}, executed={}, other={})
+        for family in families:
+            for kind, counts in self.counts[family].items():
+                for key, count in counts.items():
+                    record[kind][key] = record[kind].get(key, 0) + count
+        # Keys a pytest verbose line printed: only these carry their file (V1).
+        record['qualified'] = sorted({key for counts in self.counts['pytest'].values() for key in counts}
+                                     if runner == 'pytest' else ())
+        return record
+
+
 def case_record(output: str, runner: Optional[str] = None) -> Optional[dict]:
     """Every case the whole output prints, by kind (skipped, executed,
     other), as ``case_key``-to-count maps; None past ``_MAX_CASES`` lines.
     None is unknown identity, which callers never rebuild from the output
-    tail (Codex review of d157378, T2)."""
-    record = dict(skipped={}, executed={}, other={})
-    qualified = set()
-    for i, (name, kind, from_pytest) in enumerate(_case_lines(output, runner)):
-        if i >= _MAX_CASES:
-            return None
-        key = case_key(name)
-        record[kind][key] = record[kind].get(key, 0) + 1
-        if from_pytest:
-            qualified.add(key)
-    # Keys a pytest verbose line printed: only these carry their file (V1).
-    record['qualified'] = sorted(qualified)
-    return record
+    tail (Codex review of d157378, T2). A gate command's output carries the
+    lines its stdout printed, read as they streamed, so the record covers
+    the whole output even though only a head and a tail of it are kept."""
+    scan = getattr(output, 'cases', None)
+    if scan is None:
+        scan = _CaseScan()
+        for line in (output or '').splitlines():
+            scan.line(line)
+    return scan.record(runner)
 
 
 def skipped_cases(receipt):
@@ -1474,6 +2166,29 @@ def test_change_authorizations(raw, *, goal, root, forbid=(), originals=None):
     return tuple(records)
 
 
+def _named_passes(report) -> set:
+    """The cases a harness-validated report names as passed, when it names
+    every one; empty otherwise.
+
+    Quiet pytest output (``-q``) has no verbose case lines; the report the
+    producer writes still names every pass exactly. An incomplete, failed or
+    skipped report cannot establish the full execution of a case (all its
+    parameter instances included), so it names nothing here."""
+    if not isinstance(report, dict):
+        return set()
+    counts, passed = report.get('counts'), report.get('passed_cases')
+    if (report.get('state') == 'parsed' and type(report.get('exitstatus')) is int
+            and report['exitstatus'] == 0 and report.get('passed_truncated') is False
+            and report.get('truncated') is False and report.get('collect_errors') == 0
+            and isinstance(counts, dict) and all(type(counts.get(k)) is int and counts[k] == 0
+                                               for k in ('failed', 'errors', 'skipped'))
+            and isinstance(passed, list) and all(isinstance(k, str) and k for k in passed)
+            and type(counts.get('passed')) is int and counts['passed'] == len(passed)
+            and len(set(passed)) == len(passed)):
+        return set(passed)
+    return set()
+
+
 def _python_test_bodies(data):
     import ast
     try:
@@ -1533,22 +2248,8 @@ def test_change_problems(record, original, current, receipts):
             if isinstance(counts, dict):
                 pool.update(k for k, count in counts.items()
                             if isinstance(k, str) and type(count) is int and count > 0)
-        report = get('report')
-        if get('status') == 'passed' and get('required') is not False and isinstance(report, dict):
-            counts, passed = report.get('counts'), report.get('passed_cases')
-            # Quiet pytest/unittest output has no verbose case lines. Its
-            # harness-validated report still names every pass exactly. An
-            # incomplete, failed or skipped report cannot establish the full
-            # execution of a replacement (including all parameter instances).
-            if (report.get('state') == 'parsed' and type(report.get('exitstatus')) is int
-                    and report['exitstatus'] == 0 and report.get('passed_truncated') is False
-                    and report.get('truncated') is False and report.get('collect_errors') == 0
-                    and isinstance(counts, dict) and all(type(counts.get(k)) is int and counts[k] == 0
-                                                       for k in ('failed', 'errors', 'skipped'))
-                    and isinstance(passed, list) and all(isinstance(k, str) and k for k in passed)
-                    and type(counts.get('passed')) is int and counts['passed'] == len(passed)
-                    and len(set(passed)) == len(passed)):
-                executed.update(passed)
+        if get('status') == 'passed' and get('required') is not False:
+            executed.update(_named_passes(get('report')))
     for path, case in sorted(wanted):
         declared = declared_cases(path, current.get(path, b'')) or []
         if declared.count(case) != 1:
@@ -1614,9 +2315,15 @@ def repair_problems(name: str, original: bytes, current: dict, receipts) -> List
         skipped |= set(cases.get('skipped') or {})
         if get('status') == 'passed' and get('required') is not False:
             executed |= set(cases.get('executed') or {})
+            # A quiet run prints no case lines; its report names the passes.
+            executed |= _named_passes(get('report'))
 
     def seen(case, pool):
-        return any(k == case or (py and k.endswith('::' + case) and k.split('::')[0] == name) for k in pool)
+        # A parametrized case prints one id per instance, ``name[param]``:
+        # the case is the part before the bracket, as test_change_problems
+        # reads it (review 2026-11-10, checks 14).
+        return any(k == case or (py and k.split('::')[0] == name
+                                 and k.split('::')[-1].split('[', 1)[0] == case) for k in pool)
     for case in wanted:
         if seen(case, skipped):
             problems.append(f'{name}: case "{case}" was skipped')
@@ -1714,13 +2421,14 @@ def skipped_count(receipt) -> Optional[int]:
     report = getattr(receipt, 'report', None) or {}
     if report.get('state') == 'parsed':
         return int(report['counts']['skipped'])
-    output = getattr(receipt, 'output', '') or ''
+    output = _summary_text(getattr(receipt, 'output', '') or '')
     node = re.findall(r'(?m)^(?:#|\u2139)\s*(?:skipped|skip) (\d+)\s*$', output)
     if node:
         return int(node[-1])
-    for line in reversed(output.splitlines()):
-        found = re.findall(r'\b(\d+) (passed|failed|skipped|deselected|errors?)\b', line)
-        if found:
-            return sum(int(n) for n, kind in found if kind == 'skipped')
-    unittest = re.findall(r'skipped=(\d+)', output)
+    found = _summary_outcomes(output)
+    # A summary of expected failures alone ("1 xfailed") says nothing of
+    # skips either way, as before: unknown, never zero.
+    if found and any(kind not in ('xfailed', 'xpassed') for _, kind in found):
+        return sum(int(n) for n, kind in found if kind == 'skipped')
+    unittest = _UNITTEST_SKIPPED.findall(output)
     return int(unittest[-1]) if unittest else None

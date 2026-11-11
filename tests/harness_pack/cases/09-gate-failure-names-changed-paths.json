@@ -3,7 +3,7 @@
  "shape": "noisy-tool",
  "family": "test-author",
  "grader": false,
- "source": "Report, Quadratus, GameTape finding 6: gate failures omitted changed paths; the test suite wrote into data/recordings and the message said only that something changed. Phase 3 (#25): a failure that is not an attributable test-body assertion is an operator handoff with no repair call and no close-out.",
+ "source": "Report, Quadratus, GameTape finding 6: gate failures omitted changed paths; the test suite wrote into data/recordings and the message said only that something changed. Phase 3 (#25): a failure that is not an attributable test-body assertion is an operator handoff with no repair call and no close-out. Review 2026-11-10 (checks 7): the receipt's own reason now names the changed paths too, a contract change made on purpose, so last_receipt.reason carries the path.",
  "session": {
   "project": true,
   "allow_writes": false,
@@ -44,7 +44,7 @@
    ],
    "last_receipt": {
     "status": "error",
-    "reason": "source changed during gate"
+    "reason": "source changed during gate: added data/clip1.webm"
    }
   },
   "store_contains": [

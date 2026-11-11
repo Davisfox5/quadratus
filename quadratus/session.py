@@ -662,6 +662,7 @@ _CAPTURE_SHAPE = (
     '{"action": "confirm", "selector": "<css selector>", "message": "<text the dialog shows>"} or '
     '{"action": "file", "selector": "<file input selector>", "path": "<sample file>"}; no '
     'other keys or shapes, and a selector is at most ' + str(MAX_SELECTOR_CHARS) + ' characters. '
+    'A selector, a confirm message and a file path never begin with "--". '
     'A confirm step clicks a control that opens a browser confirm dialog (a delete, a reset) '
     'and accepts that one dialog only when it is a confirm whose whole message equals the '
     'declared text (whitespace aside); any other dialog is dismissed and the step fails, and '
