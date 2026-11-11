@@ -344,6 +344,16 @@ from .workers import (  # noqa: F401
     worker_menu,
 )
 
+# Since 2026-11-11 much of the engine lives beside this file: session_types,
+# reply_parsers, session_prompts and check_facts hold what was module level
+# here, and Session inherits its check, design, audit, seat-prompt and
+# security methods from the mixins in session_checks, session_design,
+# session_audit, session_seat_prompts and session_security. Every name that
+# moved is imported above, read here or not, so it is still importable from
+# quadratus.session; that is what "noqa: F401" marks. Code that reads a name
+# a test replaces on this module (_member_matches, _measured_diff_block,
+# _FETCH_CHAR_CAP, escalate_from) stays in this file, or it would not see
+# the replacement. tests/test_review1110_split.py holds both rules.
 log = logging.getLogger(__name__)
 
 __all__ = [
