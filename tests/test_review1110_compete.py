@@ -276,7 +276,20 @@ def test_the_scoreboard_tool_imports_nothing_from_the_engine(tmp_path):
 
 # -- a contest inside a session, offline ---------------------------------------------------
 
-OPUS, SOL, GROK = "claude:opus", "openai:gpt-5.6-sol", "grok:default"
+OPUS, SOL, GROK = "claude:opus", "openai:sol", "grok:default"
+
+
+@pytest.fixture(autouse=True)
+def _three_seat_trust(monkeypatch):
+    """grok:default left the brain trust on the development line (owner,
+    2026-11-01), which leaves a contest no third vendor to judge it and a
+    complex task one reviewer. These tests are about a contest that has
+    three seats, so they put the seat back by name, as that line's own
+    tests do (tests/lifecycle/harness.py, grok_lead_routing)."""
+    from quadratus import registry
+    monkeypatch.setitem(registry.MODE_ROSTERS["adversarial"], "peers", [OPUS, SOL, GROK])
+
+
 START = "def add(a, b):\n    return a + b\n"
 #: The project's own check: fails while calc.py holds the word BROKEN.
 CHECK = "import pathlib\nimport sys\nsys.exit(1 if 'BROKEN' in pathlib.Path('calc.py').read_text() else 0)\n"
@@ -423,11 +436,14 @@ def test_the_winner_by_gate_is_merged_and_the_task_carries_on_as_its_draft(tmp_p
     assert session.scope_reports and all(r.changed == ["calc.py"] for r in session.scope_reports)
     assert session.scope_reports[-1].changed_lines == drafts["challenger"]["changed_lines"]
     assert session.checks[-1]["passed"] and session.checks[-1]["cwd"] == str(project)
-    closeout = script.prompt("closeout")
-    assert "+def sub(a, b):" in closeout and "BROKEN" not in closeout
+    # The harness writes the close-out and no model is asked (owner ruling,
+    # 2026-10-21): the diff it keeps as the task's evidence is the merged project's.
+    kept = [session.store.get(found) for found in session.store.ids()
+            if any(ref.kind == "closeout-evidence" for ref in session.store.refs(found))]
+    assert any("+def sub(a, b):" in text for text in kept) and not any("BROKEN" in text for text in kept)
+    assert not script.of("closeout") and "Recorded by the harness" in session.history[-1].summary
     # The winner's reviewers are the other two seats, reading the merged project.
     assert sorted(script.of("review")) == [(OPUS, "review", "project", False), (GROK, "review", "project", False)]
-    assert script.of("closeout") == [(SOL, "closeout", "project", False)]
     # The ledger entry names the contest, as the harness's record.
     assert "contest: two blind drafts" in session.memory.render(current="")
     assert f"{SOL}'s was merged, decided by gate" in session.memory.render(current="")
@@ -628,12 +644,13 @@ def test_off_is_the_old_run_call_for_call_and_prompt_for_prompt(tmp_path):
     assert SessionConfig().compete == "off"
     assert unset_script.calls == off_script.calls and unset_prompts == off_prompts
     # The single-lead journey: one draft in the project, two reviews, one revision
-    # answering the blocking one, its re-check, the close-out, and DONE.
+    # answering the blocking one, its re-check, and DONE. The harness writes the
+    # close-out, so no model call is made for it (owner ruling, 2026-10-21).
     seat = off_script.calls[0][0]
     assert [(model, kind, where) for model, kind, where, _ in off_script.calls] == [
         (seat, "orchestrator", "project"), (OPUS, "lead", "project"),
         (SOL, "review", "project"), (GROK, "review", "project"), (OPUS, "revision", "project"),
-        (SOL, "recheck", "project"), (OPUS, "closeout", "project"), (seat, "orchestrator", "project")]
+        (SOL, "recheck", "project"), (seat, "orchestrator", "project")]
     for session, script in ((unset, unset_script), (off, off_script)):
         assert session.contests == [] and not script.roots and not script.of("judge")
         assert all("Another attempt" not in prompt and "contest" not in prompt for _, _, prompt in script.prompts)
@@ -963,7 +980,9 @@ def test_each_review_is_recorded_with_what_it_raised_and_what_the_recheck_said(t
                                  recheck="unresolved", recheck_rounds=1)
     assert by_model[GROK]["complete"] is False and by_model[GROK]["blocking_raised"] == 0
     assert by_model[GROK]["recheck"] is None
-    assert len(script.of("review")) == 2 and len(script.of("recheck")) == 1, "read from the task's own calls"
+    # Sol's review, Grok's, and Grok's one same-seat completion of a reply that gave
+    # no verdict (development line, 2026-10-16). The record itself asks nobody.
+    assert len(script.of("review")) == 3 and len(script.of("recheck")) == 1, "read from the task's own calls"
     resolved = Script([_task(), "DONE"], {OPUS: _sub(), SOL: _sub(), GROK: _sub()},
                       reviews={SOL: "BLOCKING: name the operands\nREVIEW: COMPLETE"})
     session, project = _session(tmp_path / "second", resolved)
