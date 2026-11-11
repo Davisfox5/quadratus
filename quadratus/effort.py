@@ -57,7 +57,9 @@ VENDOR_LADDERS: Mapping[str, Tuple[str, ...]] = {
 _HARD_KINDS = frozenset({"security", "concurrency", "perf", "architect", "iac"})
 _IMMEDIATE = frozenset({"data-loss", "integrity", "security", "irreversible"})
 _PLANNING_ROLES = frozenset({"orchestrator", "decide"})
-_JUDGING_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor"})
+#: "judge" is a contest's one judge call (quadratus.contest): it picks between
+#: two drafts of a complex task, so it is a judging seat, never unclassified.
+_JUDGING_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor", "judge"})
 _EDITING_ROLES = frozenset({"lead", "revision", "gate-fix", "security-fix", "design-fix"})
 _DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply", "proof-binding",
                                 "packet-justification"})

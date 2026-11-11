@@ -595,12 +595,17 @@ class RunBudget:
         calls are admitted one by one by :meth:`reserve` as always. A contest
         forms only when this covers both drafts and the judge."""
         with self._lock:
-            if self._reason or self._remaining() <= 0:
+            # What the run holds for its finish (the goal question, the
+            # audit) is not there for a contest to spend: each held stage
+            # keeps one call, one full reserve and its wall time, as
+            # admission itself counts them (``_admit``).
+            held = len(self._finish_held(None))
+            if self._reason or self._remaining() - self._held_wall(None) <= 0:
                 return False
-            if self._calls + attempts > self.limits.max_calls:
+            if self._calls + attempts + held > self.limits.max_calls:
                 return False
             remaining = self.limits.max_reported_tokens - (self._input + self._output) - self._held()
-            return remaining > 0 and remaining >= attempts * self.limits.reserve_tokens_per_call
+            return remaining > 0 and remaining >= (attempts + held) * self.limits.reserve_tokens_per_call
 
     def protect_finish(self, stages):
         """Hold ``stages`` (a subset of ``FINISH_STAGES``) from ordinary work.

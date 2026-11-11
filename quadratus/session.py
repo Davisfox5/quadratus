@@ -5357,6 +5357,11 @@ class Session:
         the call the scope check stops, so neither loses them. The PROVES,
         RUNS and OUTSIDE SCOPE lines are read here too, so they keep their
         order around the NOT RUN lines on both paths."""
+        kept = getattr(self, "_entrant_replies", None)
+        if kept is not None:
+            # A contest entrant: the session that takes this draft as the
+            # task's own reads the reply again there (``_adopt_entrant``).
+            kept.append((key, role, reply))
         report = self._last_changed_report
         if report and report.get("status") != "match":
             self._record_changed_report(key, role, reply, report)
@@ -7945,8 +7950,11 @@ class Session:
             else:
                 lead, draft, task = self._contest_draft(contest, spec, task)
                 if lead != contest["routed"]:
-                    # The winner leads from here; its reviewers are drawn for it.
+                    # The winner leads from here; its reviewers are drawn for it,
+                    # and they are the task's route from here, as after a lead
+                    # recovery: the routed lead's reviewers included the winner.
                     collaborators = self.collaborators_for(spec, lead)
+                    self._route_peers = list(collaborators)
                     for peer in collaborators:
                         self._record_selection(spec, peer, "collaborator")
         except TurnLimitReached as exc:
@@ -8496,6 +8504,7 @@ class Session:
         # Its calls run under this session's approval authority, as a batch
         # child's do: an entrant never commits an authority record of its own.
         child._authority_parent = self
+        child._entrant_replies = []
         return child
 
     def _contest_entry(self, spec: TaskSpec, lead: str, task: TaskMemory, contract, outer) -> dict:
@@ -8627,6 +8636,11 @@ class Session:
                 reply = self._invoke_model(judge, prompt)
         except TurnLimitReached as exc:
             note = f"no verdict: the judge stopped at its turn cap ({exc.turns or '?'} rounds)"
+        except FinishReserved as exc:
+            # Refused before it started, to keep the finish: nothing was sent
+            # and nothing is latched. The single-lead run never made this call.
+            note = "no verdict: the judge's call was not started, to keep the run's finish"
+            self._finish_refused(spec, "contest judge", exc)
         except Exception as exc:
             if _stops_the_run(exc):
                 raise
@@ -8751,10 +8765,16 @@ class Session:
                                              ended=f"stopped: {type(exc).__name__}", seconds=0.0)
             for role in roles:
                 self._measure_entry(entries[role], children[role], base, spec)
+                # Each entrant's calls are this run's effects: their operation
+                # rows join the record, as a parallel child's do.
+                self.operations.extend(children[role].operations)
                 exc = entries[role].get("error")
                 # The run's stop whoever met it, by the rule a parallel child's
-                # is read with; any other stop is one draft losing.
-                if exc is not None and _stops_the_run(exc):
+                # is read with; any other stop is one draft losing. A call
+                # refused to keep the finish (FinishReserved) spent and latched
+                # nothing, so here it is one draft losing too: a challenger's
+                # refusal must not end a run the routed lead alone carries on.
+                if exc is not None and _stops_the_run(exc) and not isinstance(exc, FinishReserved):
                     fatal = fatal or exc
             # The routed lead's refusal or denied capability stops the run as
             # it does with one lead: no re-plan repairs either and a refusal
@@ -8797,7 +8817,12 @@ class Session:
             chosen = entries[winner or "routed"]
             edit_started = time.time()
             if chosen.get("changed") and (winner is not None or chosen.get("in_paths")):
-                self._merge_files(chosen["after"], chosen["changed"], modes=children[winner or "routed"].project)
+                # A project write by the harness: on the operation record
+                # before it starts, as a parallel child's merge is.
+                with self._operation("merge", inputs=dict(task=spec.task_id, paths=list(chosen["changed"])),
+                                     effects=("project-write",)) as op:
+                    self._merge_files(chosen["after"], chosen["changed"], modes=children[winner or "routed"].project)
+                    op["result"] = dict(paths=list(chosen["changed"]))
                 merged = list(chosen["changed"])
                 self._last_edit_started = edit_started
             elif chosen.get("changed"):
@@ -8843,9 +8868,14 @@ class Session:
                 failed = entries["routed"].get("error")
                 # Recovered only when the run goes on: a stop raised below is
                 # the run's own, and is recorded where it lands.
-                if failed is not None and failed is not fatal and not rules.usable(entries["routed"]):
+                if (failed is not None and failed is not fatal and not rules.usable(entries["routed"])
+                        and not isinstance(failed, FinishReserved)):
                     self._outcome.note(classify(failed), f"routed lead {models['routed']} in its contest copy: "
                                        f"{type(failed).__name__}: {str(failed)[:200]}", stage="draft").recovered = True
+        for role in roles:
+            refused = entries[role].get("error")
+            if role != winner and isinstance(refused, FinishReserved):
+                self._finish_refused(spec, f"contest draft by {models[role]}", refused)
         if fatal is not None:
             raise fatal
         return lead, entries[winner]["draft"], task
@@ -8862,8 +8892,20 @@ class Session:
         those records describe files the project does not hold."""
         if not stands:
             return
-        for entry in child.unexecuted_acceptance:
-            self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks), discharged_at=None))
+        # Its editing replies are read here, as a single lead's are where it
+        # edits: this session holds the task's proof scenarios, its gate and
+        # its checks, so a PROVES line binds the scenario it names and a NOT
+        # RUN line gets its row and id here. The entrant's own session held
+        # none of that, and under the requirements ledger a winning draft's
+        # bindings were lost with it and the task could not be audited met.
+        # The CHANGED report is the entrant's own fact, carried below.
+        self._last_changed_report = None
+        for key, role, reply in getattr(child, "_entrant_replies", None) or ():
+            self._record_edit_reply(key, role, reply)
+        # A packet allowance the orchestrator granted this draft's lead is
+        # the task's for its later calls.
+        known = {id(r) for r in self.packet_requests}
+        self.packet_requests.extend(r for r in child.packet_requests if id(r) not in known)
         self._last_changed_report = child._last_changed_report
         self._last_tool_failures = list(child._last_tool_failures or [])
         self._last_environment_failure = child._last_environment_failure
@@ -28534,7 +28576,7 @@ def _never_replaced(exc) -> bool:
 
 def _delivers(reply: str, trust) -> bool:
     """Whether a lead's reply is a delivery by the drafting loop's own
-    reading: not a FETCH, WORKER, CONSULT or ASK request."""
+    reading: not a FETCH, WORKER, CONSULT, ASK or PACKET EXTENSION request."""
     if _parse_fetch(reply) is not None:
         return False
     body = _parse_kind(reply)[2].strip()
@@ -28542,6 +28584,9 @@ def _delivers(reply: str, trust) -> bool:
     if split is not None:
         body = split[1]
     if body.startswith("WORKER ") or _parse_consults(body, trust):
+        return False
+    if _PACKET_REQUEST_LINE.match((body.splitlines() or [""])[0]):
+        # The lead's request for a larger role packet, as the loop reads it.
         return False
     return not body.startswith(("ASK:", "CONSULT", "WORKER", "FETCH:"))
 
