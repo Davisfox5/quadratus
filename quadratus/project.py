@@ -87,6 +87,48 @@ def source_path(parts) -> bool:
     return bool(parts) and not any(part in _SKIP for part in parts) and not withheld(parts)
 
 
+#: The most of one withheld file, and of all of them, a harness copy takes.
+_MAX_WITHHELD_FILE = 8 * 1024 * 1024
+_MAX_WITHHELD_TOTAL = 64 * 1024 * 1024
+
+
+def withheld_files(root, exclude=()):
+    """``{relative path: bytes}`` for the regular files :func:`withheld`
+    keeps out of every model copy, for a copy only the harness's own checks
+    run in (``integration.run_original_tests``).
+
+    No model is given these. The project's own suite reads them where it
+    runs in the project (a ``.npmrc`` fixture, a ``.env.test``), so a copy
+    the same suite is run in must hold them too, or the suite fails there
+    for a reason that says nothing about the source. Links are never
+    followed, skipped folders and operator exclusions stay skipped, and a
+    file over the bound or unreadable is left out, as it was before.
+    """
+    root = Path(root)
+    excluded = {Path(p).resolve() for p in exclude}
+    found, total = {}, 0
+    for directory, dirs, names in os.walk(root, followlinks=False):
+        parent = Path(directory)
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP and not (parent / d).is_symlink()
+                         and (parent / d).resolve() not in excluded)
+        for name in sorted(names):
+            path = parent / name
+            relative = path.relative_to(root)
+            if name in _SKIP or path.is_symlink() or not withheld(relative.parts):
+                continue
+            try:
+                if not path.is_file() or path.resolve() in excluded:
+                    continue
+                size = path.stat().st_size
+                if size > _MAX_WITHHELD_FILE or total + size > _MAX_WITHHELD_TOTAL:
+                    continue
+                found[relative.as_posix()] = path.read_bytes()
+                total += size
+            except OSError:
+                continue
+    return found
+
+
 class Project:
     def __init__(self, path, *, exclude=()):
         self.root = Path(path).expanduser().resolve()

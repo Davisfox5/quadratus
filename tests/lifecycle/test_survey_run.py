@@ -64,7 +64,10 @@ def test_distinct_failures_keep_the_run_going_and_are_all_recorded(tmp_path, mon
     assert replay.artifacts("hypothesis")
     prompt = replay.of("orchestrator")[1].prompt
     assert "HYPOTHESIS:" in prompt and "4 continuation or repair task(s) remain" in prompt
-    assert "HYPOTHESIS" not in replay.of("orchestrator")[0].prompt, "only after a failure"
+    # The instruction, by the form the line above finds it in: the bare word
+    # is also one of the control words the map-note rule lists in every
+    # orchestrator prompt (codebase_map.NOTE_MARKERS, review 1110 ruling 17).
+    assert "HYPOTHESIS:" not in replay.of("orchestrator")[0].prompt, "only after a failure"
 
 
 def test_a_missing_hypothesis_after_a_failure_is_recorded_not_refused(tmp_path, monkeypatch):
@@ -126,4 +129,6 @@ def test_the_allowance_stops_the_run_before_one_repair_too_many(tmp_path, monkey
 def test_an_ordinary_run_has_no_survey_section_and_keeps_its_breaker(tmp_path, monkeypatch):
     replay = H.run(tmp_path, monkeypatch, Script(), files=FILES, max_tasks=1)
     assert H.result_json(replay)["survey"] is None
-    assert "HYPOTHESIS" not in replay.of("orchestrator")[0].prompt
+    # "HYPOTHESIS:" is the instruction; the bare word is in the map-note rule.
+    assert "HYPOTHESIS:" not in replay.of("orchestrator")[0].prompt
+    assert "This is a survey run" not in replay.of("orchestrator")[0].prompt

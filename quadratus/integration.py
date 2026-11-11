@@ -2338,7 +2338,7 @@ def repair_problems(name: str, original: bytes, current: dict, receipts) -> List
     return problems
 
 
-def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
+def run_original_tests(gate, root, originals: dict, current: dict, keep=(), *, exclude=()):
     """Run the gate's own commands against the current source with every
     run-start test and support file restored to its run-start bytes.
 
@@ -2352,6 +2352,15 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
     ``keep`` names run-start test files the operator authorized this run to
     repair: their current bytes stand in the copy instead of the run-start
     ones, which stay recorded as evidence. Every other original is restored.
+
+    ``current`` is the measured source, which holds no ``.env*`` file, no
+    credential file and no vendor agent configuration: those are withheld
+    from every copy a model reads. This copy is read by no model, only by
+    the gate's own commands, and the same commands see those files where
+    they run in the project. So they are copied in from the project as they
+    are (``project.withheld_files``; ``exclude`` is the operator's excluded
+    paths): a suite that reads a fixture named ``.npmrc`` failed here and
+    passed in the project, a failure that said nothing about the source.
 
     Returns ``(result, problem)``: a :class:`GateResult` whose receipts are
     named ``original-tests:<id>``, or ``None`` and why nothing was checked.
@@ -2379,6 +2388,23 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
             target = copy / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+        from .project import withheld_files
+        for name, data in withheld_files(root, exclude).items():
+            target = copy / name
+            try:
+                if target.exists() or target.is_symlink():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # Owner-only from the first byte; the project's own mode after.
+                descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, 'wb') as stream:
+                    stream.write(data)
+                shutil.copymode(root / name, target)
+            except OSError:
+                # One that cannot be placed is left out, as all of them were
+                # before: the check then says what it says without it. This
+                # copy never raised for a file the measured source lacks.
+                continue
         for name in _DEPENDENCY_DIRS:
             source = root / name
             if source.is_dir() and not source.is_symlink():

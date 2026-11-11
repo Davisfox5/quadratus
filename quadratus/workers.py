@@ -572,8 +572,13 @@ class WorkerPool:
                 with self._lock:
                     self.store.put(raw, kind=f'worker-step:{label}', author=model_key)
         except Exception as exc:
+            from .run_budget import ReserveRefused
             with self._lock:
-                self._failed.add(fingerprint)
+                # A call the budget did not start says nothing about this
+                # prompt on this worker: the lead may send it again once
+                # there is room, and is not told it "already failed".
+                if not isinstance(exc, ReserveRefused):
+                    self._failed.add(fingerprint)
                 if getattr(exc, 'provider_response', ''):
                     self.store.put(exc.provider_response, kind=f'worker-stopped:{label}', author=model_key)
             raise

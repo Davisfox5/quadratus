@@ -22,6 +22,22 @@ class RunBudgetExceeded(RuntimeError):
     """Terminal run control, deliberately not a recoverable ProviderError."""
 
 
+class ReserveRefused(RunBudgetExceeded):
+    """One call was not started because the budget left could not hold its
+    reserve, and the caller asked for that to cost the call alone.
+
+    The reserve each running call was admitted with stays held, so a worker
+    commissioned while its lead is still running needs its own reserve on
+    top. Refusing that used to latch the whole run: one errand near the end
+    of the budget stopped a lead that was about to finish. A failed errand
+    never tears down its siblings or the run, so this refusal latches
+    nothing; the lead is told, as for any errand that failed. A subclass, so
+    nothing retries it and every handler that names the budget still does.
+    A refused reserve for a lead, orchestrator or review call is still the
+    run stop (``RunBudgetExceeded``, ``reported_token_reserve``).
+    """
+
+
 @dataclass(frozen=True)
 class APICostRate:
     """Operator-supplied upper rates for an exact vendor:model API identifier.
@@ -378,8 +394,12 @@ class RunBudget:
             remaining = self.limits.max_reported_tokens - (self._input + self._output) - self._held()
             return remaining > 0 and remaining >= attempts * self.limits.reserve_tokens_per_call
 
-    def reserve(self, *, transport="cli", price_key="", expected_tokens=None):
+    def reserve(self, *, transport="cli", price_key="", expected_tokens=None, terminal=True):
         """Atomically authorize one attempt and return its ID and time remaining.
+
+        ``terminal=False`` is a worker errand's call: when the budget left
+        cannot hold its reserve it raises :class:`ReserveRefused` and the run
+        is not stopped. Every other stop here is terminal whoever asked.
 
         ``expected_tokens`` names a measured allowance for a call the transport
         holds to one model turn (a summary-only close-out on a CLI whose argv
@@ -412,6 +432,11 @@ class RunBudget:
                 # Refused before the call: the budget left, after what the
                 # calls in flight were admitted on, could not hold a call of
                 # the size the operator said to expect.
+                if not terminal:
+                    raise ReserveRefused(
+                        f'This call was not started: {max(0, remaining):,} reported tokens remain after '
+                        f'what the calls still running were admitted on, and one more call needs '
+                        f'{reserve:,}. Only this call is refused; the run goes on.')
                 self._reason = 'reported_token_reserve'
                 self._check()
             self._calls += 1

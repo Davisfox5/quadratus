@@ -143,6 +143,90 @@ def carry_transport_facts(target: BaseException, source: Optional[BaseException]
 
 _scratch_noted = False
 
+#: How old a leftover under the scratch root must be before a run removes it.
+SCRATCH_MAX_AGE_SECONDS = 24 * 60 * 60
+#: The names the harness gives what it makes there: source copies, summary
+#: folders, prompt files and the worker bridge's socket folders. Nothing else
+#: is ever removed, so a root the operator shares with other files is safe.
+SCRATCH_PREFIXES = ("quadratus-", "qw-")
+
+
+def scratch_root_path() -> Path:
+    """Where :func:`scratch_root` is, without creating or checking it:
+    ``QUADRATUS_SCRATCH_DIR`` when set, else ``~/.cache/quadratus/scratch``."""
+    raw = os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip()
+    return Path(os.path.abspath(Path(raw).expanduser() if raw else Path.home() / ".cache" / "quadratus" / "scratch"))
+
+
+def scratch_inside(folder) -> str:
+    """Why the scratch root may not be used with a project at ``folder``,
+    or "" when it may.
+
+    A scratch root inside the project puts every source copy the harness
+    makes into the tree it measures: the copies are diffed, reviewed and
+    copied again as project source. Asked before the root is created, so a
+    refusal leaves nothing behind in the project.
+    """
+    try:
+        root, project = scratch_root_path(), Path(folder)
+        resolved, inside = Path(os.path.realpath(root)), Path(os.path.realpath(project))
+    except (OSError, RuntimeError, ValueError):
+        return ""  # scratch_root itself reports a root it cannot place
+    if resolved != inside and inside not in resolved.parents:
+        return ""
+    # The default itself is inside a project that is the home folder or
+    # ~/.cache: "unset it" would then lead straight back here.
+    chosen = bool(os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip())
+    return (f"The scratch folder {root} is inside the project {project}. The harness makes its "
+            "source copies there, and inside the project they would be measured, diffed and "
+            "reviewed as project source. Set QUADRATUS_SCRATCH_DIR to a folder outside the "
+            "project that only you can read and write"
+            + (", or unset it to use ~/.cache/quadratus/scratch." if chosen else
+               " (the default, ~/.cache/quadratus/scratch, is inside this project)."))
+
+
+def sweep_scratch(max_age: float = SCRATCH_MAX_AGE_SECONDS, *, now: Optional[float] = None) -> List[str]:
+    """Remove what earlier runs left under the scratch root; return the names.
+
+    A hard kill leaves source copies behind, and nothing clears a folder
+    under the home directory the way the system clears its temp folder. Only
+    a direct child of the root that the harness named (``SCRATCH_PREFIXES``),
+    that this user owns and that is older than ``max_age`` goes: a run still
+    using a copy made it minutes ago, not a day ago. A link is never
+    followed (one so named is unlinked, its target untouched), nothing above
+    or beside the root is opened, and a failure costs that one entry. Never
+    raises: this is housekeeping before a run, not a condition of it.
+    """
+    import shutil
+    removed: List[str] = []
+    try:
+        root = scratch_root()
+        cutoff = (time.time() if now is None else now) - float(max_age)
+        with os.scandir(root) as listing:
+            entries = [entry.name for entry in listing]
+    except Exception:  # noqa: BLE001 -- the first call that needs the root reports it
+        log.debug("the scratch folder was not swept", exc_info=True)
+        return removed
+    for name in sorted(entries):
+        if not name.startswith(SCRATCH_PREFIXES):
+            continue
+        path = os.path.join(root, name)
+        try:
+            info = os.lstat(path)
+            if (os.name == "posix" and info.st_uid != os.getuid()) or info.st_mtime > cutoff:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                shutil.rmtree(path)  # unlinks a link inside, never follows it
+            else:
+                os.unlink(path)      # a file, or a link: the link itself
+            removed.append(name)
+        except OSError:
+            log.debug("could not remove the scratch leftover %s", name, exc_info=True)
+    if removed:
+        log.info("Removed %d leftover(s) older than %d hours from the scratch folder %s.",
+                 len(removed), int(max_age // 3600), root)
+    return removed
+
 
 def scratch_root() -> str:
     """The private folder harness scratch lives under: source copies handed
@@ -161,13 +245,11 @@ def scratch_root() -> str:
     folder in silence, and the refusal names the variable that picks another.
     """
     global _scratch_noted
-    raw = os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip()
     way_out = "Set QUADRATUS_SCRATCH_DIR to a folder only you can read and write."
     try:
-        root = Path(raw).expanduser() if raw else Path.home() / ".cache" / "quadratus" / "scratch"
+        root = scratch_root_path()
     except RuntimeError as exc:  # no home folder to resolve
         raise ProviderError(f"Cannot place the private scratch folder: {exc}. {way_out}") from exc
-    root = Path(os.path.abspath(root))
     try:
         missing, probe = [], root
         while not os.path.lexists(probe) and probe.parent != probe:
@@ -402,6 +484,13 @@ class LLMProvider:
                 and getattr(spec, 'summary_turn_capped', lambda: False)()):
             from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
             shape = dict(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
+        if control is not None:
+            from .delegation import invocation_context
+            if (invocation_context.get() or {}).get('origin') == 'worker':
+                # A worker errand: a reserve the budget cannot hold fails this
+                # errand and nothing else (run_budget.ReserveRefused). Passed
+                # only here, so every other call reserves as it always did.
+                shape['terminal'] = False
         if control is not None and control.limits.max_cost_usd is not None:
             ticket, remaining = control.reserve(transport=self.transport,
                                                 price_key=f'{self.name}:{self.model}', **shape)

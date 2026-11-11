@@ -22,7 +22,10 @@ editing call fails the task as a scope violation, and nothing is reverted):
 * every ``.env*`` file but ``.env.example``, the credential files and the
   vendor agent configuration (``project.withheld``, names compared without
   case), and a link named ``.claude``, which can lead to settings anywhere;
-* ``.quadratus/policy.json`` and ``.quadratus/source-excludes.json``;
+* ``.quadratus/policy.json`` and ``.quadratus/source-excludes.json``, and
+  the two records the harness keeps across runs and writes only between
+  calls, ``.quadratus/codebase-map.jsonl`` (rendered into every later
+  orchestrator and lead prompt) and ``.quadratus/scoreboard.jsonl``;
 * every symlink in a walked directory, recorded by its target;
 * a Python file under a report or cache folder (the build-output names
   below other than ``project.PYTHON_OUTPUT_NAMES``): no tool writes one
@@ -33,6 +36,18 @@ further call for the project but the orchestrator's until the path is back
 as it was (:class:`SensitiveChangeInPlace`). The file is invisible to the
 measured diff and to every review copy, so a check that passes on top of it
 proves nothing about the source.
+
+The finding outlives the run. Fleet keeps what each changed path held after
+the call (``watch_records``), the run's ``result.json`` records it, and the
+next run on the project is refused before any model call while a recorded
+path still holds that content (:func:`still_in_place`,
+``project_run._refuse_standing_watch_findings``): started again without
+that, the new run took the planted file as its baseline and it worked
+again. The operator removes or restores the path, or accepts it for the
+run (``accept_watched_paths``, ``QUADRATUS_ACCEPT_WATCHED_PATHS=1``). The
+map and the scoreboard, which the harness itself appends to, stand until
+they are gone or back as they were before the call, whatever was written
+to them since.
 
 Build-output class (lstat signature only; a change is an observation on the
 call's record, never a failure, because a lead may legitimately run a
@@ -81,6 +96,7 @@ from .project import (
 )
 
 __all__ = ["ProjectWatch", "WatchListing", "WatchUnavailable", "AgentConfigRefused",
+           "ACCEPT_WATCHED_PATHS_ENV", "WATCH_RECORD_LIMIT", "still_in_place", "watched_paths_accepted",
            "SensitiveChangeInPlace", "SENSITIVE_RULE", "ALLOW_AGENT_CONFIG_ENV", "agent_config", "agent_config_permitted",
            "describe"]
 
@@ -95,9 +111,22 @@ WATCH_FINDING_LIMIT = 50
 _CHUNK = 1 << 20
 _NAMED = 8
 
+#: Changed paths whose content is kept for the next run's preflight.
+WATCH_RECORD_LIMIT = 200
+
 #: The harness's own files under the project's ``.quadratus`` that decide
-#: what a later run trusts or measures.
-STATE_FILES = ("policy.json", "source-excludes.json")
+#: what a later run trusts, measures or is told. The codebase map and the
+#: scoreboard are written by the harness between calls and never while an
+#: editing call is in flight: the map is amended from an orchestrator's
+#: reply and from a close-out's, both after their call returned, and a
+#: parallel child's close-out writes the run's map while its siblings edit
+#: copies of the project, whose own ``.quadratus`` is not the run's. Nothing
+#: in the harness writes the scoreboard yet. So an editing call that writes
+#: either wrote what every later prompt would be handed as codebase
+#: knowledge, and fails its task like any other watched path.
+STATE_FILES = ("policy.json", "source-excludes.json", "codebase-map.jsonl", "scoreboard.jsonl")
+#: Why each is watched, for the listing's ``kinds``.
+_STATE_KINDS = {"codebase-map.jsonl": "memory", "scoreboard.jsonl": "memory"}
 #: Caches every test run rewrites. Not source and not watched.
 _CACHES = frozenset({"__pycache__", ".pytest_cache", ".ruff_cache", ".coverage", ".DS_Store"})
 #: Report and cache folders: output no tool fills with Python.
@@ -120,7 +149,7 @@ SENSITIVE_RULE = (
     + "); agent configuration ("
     + ", ".join(["/".join(t) for t in AGENT_CONFIG_TAILS] + sorted(AGENT_CONFIG_NAMES)
                 + [d + "/" for d in sorted(AGENT_CONFIG_DIRS)])
-    + "); " + " and ".join(".quadratus/" + name for name in STATE_FILES)
+    + "); " + ", ".join(".quadratus/" + name for name in STATE_FILES)
     + "; Python files inside a report or cache folder ("
     + ", ".join(sorted(_PYTHON_FREE))
     + "). A change to one fails the task as out of scope, with the work kept and the path named, "
@@ -145,6 +174,16 @@ def agent_config_permitted(flag: bool = False) -> bool:
     return bool(flag) or os.environ.get(ALLOW_AGENT_CONFIG_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
+#: The operator's acceptance of watched paths an earlier run left changed.
+ACCEPT_WATCHED_PATHS_ENV = "QUADRATUS_ACCEPT_WATCHED_PATHS"
+
+
+def watched_paths_accepted(flag: bool = False) -> bool:
+    """Whether the operator accepted the watched paths an earlier run left
+    changed: the run's own flag, or the environment permission."""
+    return bool(flag) or os.environ.get(ACCEPT_WATCHED_PATHS_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
 class SensitiveChangeInPlace(RuntimeError):
     """A change an earlier editing call of this run made to a watched path is
     still there. Raised before any further call for the project other than
@@ -166,7 +205,7 @@ class WatchListing:
     #: path -> lstat signature, for the build-output class.
     output: Dict[str, tuple] = field(default_factory=dict)
     #: path -> why a sensitive path is watched: git, secret, credential,
-    #: agent-config, policy, symlink or report-code.
+    #: agent-config, policy, memory, symlink or report-code.
     kinds: Dict[str, str] = field(default_factory=dict)
     seen: int = 0
     read_bytes: int = 0
@@ -440,7 +479,7 @@ class ProjectWatch:
                     continue
                 except OSError as exc:
                     raise WatchUnavailable(f"could not stat {rel}: {exc}") from exc
-                self._sensitive(fd, leaf, rel, found, state, "policy")
+                self._sensitive(fd, leaf, rel, found, state, _STATE_KINDS.get(leaf, "policy"))
 
     def _git(self, parent_fd, name, parts, st, state):
         rel = "/".join(parts)
@@ -488,6 +527,57 @@ def agent_config(listing: WatchListing) -> Dict[str, tuple]:
     the listing took of it, in path order."""
     return {path: listing.sensitive[path] for path, kind in sorted(listing.kinds.items())
             if kind == "agent-config"}
+
+
+def _as_record(value):
+    """A listing record as it comes back from JSON: a list again a tuple."""
+    return tuple(value) if isinstance(value, (list, tuple)) else None
+
+
+def still_in_place(recorded: Iterable, listing: WatchListing) -> List[dict]:
+    """The recorded paths that still hold what an earlier run's finding
+    recorded, as ``dict(path, what, kind, by, since)``.
+
+    ``recorded`` is ``project_watch.paths`` from that run's ``result.json``:
+    read back from a file, so anything that is not a path with a record is
+    skipped, never raised on. A path the call added, changed or retargeted is
+    in place while its record is the listing's; one it deleted, while it is
+    still absent. A later record for the same path replaces an earlier one.
+
+    The codebase map and the scoreboard (kind ``memory``) are held to a
+    different test, because the harness appends to them itself between
+    calls: one note the orchestrator wrote after the finding made the file
+    differ from its record, the finding stopped standing, and the next run
+    loaded the line the editing call had planted. Such a file is in place
+    until it is gone or back as it was before the call (``before``);
+    ``since`` then says it has been written to after the record. A file
+    that only differs proves nothing about the planted lines, and the
+    operator's acceptance is the way past it.
+    """
+    latest: Dict[str, dict] = {}
+    for entry in recorded if isinstance(recorded, (list, tuple)) else ():
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]:
+            latest[entry["path"]] = entry
+    found = []
+    for path in sorted(latest):
+        entry = latest[path]
+        what = str(entry.get("what") or "")
+        kind = str(entry.get("kind") or "")
+        record = _as_record(entry.get("record"))
+        now = listing.sensitive.get(path)
+        if what == "deleted":
+            standing = now is None
+        elif record is None:
+            continue    # no record of what the call left: nothing to compare
+        elif kind == "memory":
+            standing = now is not None and now != _as_record(entry.get("before"))
+        else:
+            standing = now == record
+        if standing:
+            found.append(dict(path=path, what=what or "changed", kind=kind,
+                              by=str(entry.get("by") or "")[:200],
+                              since=bool(now is not None and record is not None and now != record)))
+    return found
 
 
 def describe(changes: Iterable[Tuple[str, str]], limit: int = _NAMED) -> str:

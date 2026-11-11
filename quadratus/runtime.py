@@ -80,6 +80,7 @@ from .project_watch import (
     SENSITIVE_RULE,
     UNMEASURED_LIMIT,
     WATCH_FINDING_LIMIT,
+    WATCH_RECORD_LIMIT,
     AgentConfigRefused,
     ProjectWatch,
     SensitiveChangeInPlace,
@@ -362,6 +363,35 @@ class Fleet:
         return child
 
     # -- liveness ------------------------------------------------------------
+    def reserve_shortfall(self, calls: int) -> str:
+        """Why the run budget cannot admit ``calls`` calls at once, or "".
+
+        Each running call holds the reserve it was admitted with, so a batch
+        of three needs three reserves of headroom before its first call. Read
+        from the budget's own snapshot. No budget, or no reserve set, is no
+        limit; a snapshot that cannot be read says nothing either, since the
+        reserve still guards every call when it is made.
+        """
+        budget = self.run_budget
+        if budget is None:
+            return ""
+        try:
+            snapshot = budget.snapshot()
+            limits = snapshot["limits"]
+            reserve = int(limits.get("reserve_tokens_per_call") or 0)
+            if reserve <= 0:
+                return ""
+            left = (int(limits["max_reported_tokens"]) - int(snapshot.get("reported_tokens") or 0)
+                    - int(snapshot.get("in_flight_reserved_tokens") or 0))
+        except Exception:  # noqa: BLE001 -- advisory only
+            log.debug("could not read the run budget's headroom", exc_info=True)
+            return ""
+        need = reserve * int(calls)
+        if left >= need:
+            return ""
+        return (f"{max(0, left):,} reported tokens remain and {int(calls)} calls at once need "
+                f"{need:,} ({reserve:,} each)")
+
     def lead_can_run(self, key: str, command: str) -> bool:
         """Whether an editing call on ``key`` could run ``command`` unaided:
         always for a transport whose sandbox runs commands, and for a
@@ -543,6 +573,15 @@ class Fleet:
             self._refuse_unseen_agent_config(model_key, watched)
             _recorded_event.set(None)
             before = self.project.contents()
+
+            def watch_unchanged() -> bool:
+                # The replay's second measurement: the watched paths, both
+                # classes, are exactly what they were before the call. A
+                # failed call that wrote only a git hook, an env file, a link
+                # or build output left the measured source untouched, and was
+                # sent again on the strength of that alone.
+                return watch.changes(watched, watch.listing()) == ([], [])
+
             try:
                 reply = self._generate_editing(model_key, view, prompt, before, role +
                                   "\nYour working directory is the persistent project. "
@@ -552,7 +591,8 @@ class Fleet:
                                   'closing line CHANGED: ["relative/path"] listing every file this '
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
-                                  'any files you changed before it are kept.' + check_instructions)
+                                  'any files you changed before it are kept.' + check_instructions,
+                                  unchanged=watch_unchanged)
             except TurnLimitReached as exc:
                 violation = self._watch_after(model_key, watch, watched, failed=exc)
                 _raise_if_infrastructure(model_key, view, exc)
@@ -803,7 +843,8 @@ class Fleet:
         reaches_task = (context.get("origin") != "worker"
                         and (failed is None or isinstance(failed, TurnLimitReached)))
         try:
-            sensitive, output = watch.changes(before, watch.listing())
+            after = watch.listing()
+            sensitive, output = watch.changes(before, after)
         except Exception as exc:  # noqa: BLE001 -- masked only after the call itself failed
             if failed is None:
                 raise
@@ -834,6 +875,19 @@ class Fleet:
                 # The first record stands: what the path was before any call
                 # of this run touched it is what "back as it was" means.
                 in_place.setdefault(path, dict(before=before.sensitive.get(path), what=what, where=where))
+            # What each path holds now, for the run's record: the next run
+            # on this project is held to it (project_watch.still_in_place).
+            # The latest record for a path stands. Kept on this Fleet alone:
+            # a forked child's paths are in a copy that is deleted. ``before``
+            # is what the path was before any call of this run touched it: a
+            # file the harness also appends to (the map) is held to that,
+            # since it will never again equal what this call left.
+            records = self.__dict__.setdefault("watch_records", {})
+            for path, what in sensitive:
+                if path in records or len(records) < WATCH_RECORD_LIMIT:
+                    records[path] = dict(what=what, record=after.sensitive.get(path), by=where,
+                                         kind=after.kinds.get(path) or before.kinds.get(path) or "",
+                                         before=in_place[path]["before"])
             held = self.__dict__.setdefault("_watch_open", {})
             earlier = held.pop(task, "")
             if not reaches_task:
@@ -1324,6 +1378,9 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
             child = active.fork(root)
             return child.invoke, child.close
         conf = replace(conf, fork=fork)
+        if conf.reserve_shortfall is None:
+            # With the fork: a batch asks before it forms (Fleet.reserve_shortfall).
+            conf = replace(conf, reserve_shortfall=active.reserve_shortfall)
     budget = getattr(active, "run_budget", None)
     if conf.budget_covers is None and callable(getattr(budget, "covers", None)):
         # Read by the session before a contest forms (SessionConfig.compete).

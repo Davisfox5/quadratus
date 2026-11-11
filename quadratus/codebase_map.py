@@ -21,9 +21,10 @@ The rules are inherited from the ledger, for the same reasons:
   can weigh a claim from a verified close-out differently from an operator
   assertion.
 * **Rendered as one bounded block of data.** The map rides into prompts as
-  one block, newest notes first in line for the room there is; what does not
-  fit stays in the file. Topic filtering narrows the view further. Neither
-  ever rewrites the store.
+  one block: the harness's own scan notes first, then model-written notes,
+  newest first in line for the room that is left; what does not fit stays in
+  the file. Topic filtering narrows the view further. Neither ever rewrites
+  the store.
 
 And one rule is this module's own (whole-repo review, 2026-11-10). The map is
 the one long-lived store a model writes and every later prompt reads, so a
@@ -79,18 +80,27 @@ MAX_NOTES_PER_CALL = 4
 SCAN_AUTHOR = "scan"
 MAX_SCAN_NOTE_CHARS = 600
 
-#: The most the rendered block may hold. Newest notes win.
+#: The most the rendered block may hold. The scan's notes go in first; the
+#: newest model-written notes win what is left.
 MAX_RENDER_CHARS = 8_000
 
 #: The most of the file a load reads, from its end. About 8,000 notes.
 MAX_LOAD_BYTES = 2 * 1024 * 1024
 
-#: Words the reply parsers read as control lines. A note whose topic or fact
-#: begins with one is not kept: "KIND: backend" under MAP NOTES is a misplaced
-#: control line, and "BLOCKING: ..." as stored text is a verdict waiting to be
-#: copied into a reply.
+#: Words the reply parsers read as control lines. A note that reads as one is
+#: not kept: "BLOCKING: ..." as stored text is a verdict waiting to be copied
+#: into a reply, and "KIND: backend" under MAP NOTES is a misplaced control
+#: line. Only that shape, the word and then its colon (integrator's ruling
+#: 17, review 1110). The first list refused any note or topic that began with
+#: the word, so "Needs Python 3.11", "Scope checks live in scope.py" and a
+#: topic named scope, worker or tier were lost, and no parser reads those as
+#: anything. A note is written "topic: fact", so the shape is a fact that
+#: opens with the word and a colon, or a topic that is exactly the word in
+#: capitals, which is the control line itself. No other topic is checked.
 NOTE_MARKERS = ("BLOCKING", "VERDICT", "CAPTURE", "WORKER", "FETCH", "CONSULT", "ASK", "DONE",
-                "KIND", "SCOPE", "COVERS", "RESOLVES", "CONTINUES", "TIER", "NEEDS")
+                "KIND", "SCOPE", "COVERS", "RESOLVES", "CONTINUES", "TIER", "NEEDS",
+                "NOT RUN", "BLOCKED", "APPROVED", "NO FINDINGS", "REVIEW", "CHANGED", "FIXTURE",
+                "HYPOTHESIS", "REQUIREMENTS", "RESOLVED", "UNRESOLVED", "WINNER")
 
 #: The same rules as sentences, for the prompts that ask a seat for notes.
 #: Built from the constants so the stated bound cannot drift from the
@@ -101,8 +111,9 @@ NOTE_LIMITS = (
     f"most {MAX_TOPIC_CHARS} characters and a fact of at most {MAX_NOTE_CHARS}; a longer one is cut."
 )
 NOTE_REFUSALS = (
-    "A note is not kept when it repeats one already in the map, or when its topic or its fact "
-    "begins with a word the harness reads as a control line (" + ", ".join(NOTE_MARKERS) + ")."
+    "A note is not kept when it repeats one already in the map, or when it reads as a control "
+    "line: its fact begins with one of these words and a colon, or its topic is exactly one of "
+    "them in capitals (" + ", ".join(NOTE_MARKERS) + ")."
 )
 NOTE_RULES = NOTE_LIMITS + " " + NOTE_REFUSALS
 
@@ -118,11 +129,12 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 # Any spelling of the block's own markers, the opening one, the closing one
 # and the self-closing one, with or without spaces inside.
 _FENCE = re.compile(r"<\s*/?\s*map-notes\s*/?\s*>", re.IGNORECASE)
-# The marker has to be the note's first word. "scope.py", "fetch.js" and
-# "worker-pool" are other words that only begin the same way, and a file
-# name is the most natural topic a note about code can have.
-_MARKER = re.compile(r"[^A-Za-z0-9]*(" + "|".join(NOTE_MARKERS) + r")(?![A-Za-z0-9_]|[.\-/][A-Za-z0-9_])",
-                     re.IGNORECASE)
+# The marker has to open the note and be followed by its colon, which is how
+# every line reader finds one. Decoration does not hide the shape: a bullet
+# or emphasis before the word, emphasis or a space between it and the colon
+# ("- **Blocking**: x", "BLOCKING : x"), since the readers strip those first.
+_MARKER = re.compile(r"[^A-Za-z0-9]*(" + "|".join(m.replace(" ", r"\s+") for m in NOTE_MARKERS)
+                     + r")[\s*_`]*:", re.IGNORECASE)
 _KEYS = {"topic", "note", "author", "session"}
 #: How many refused notes are remembered for the run record.
 _NOT_KEPT_SHOWN = 40
@@ -141,7 +153,7 @@ def _one_line(text, limit: int) -> str:
 
 def _marker(text: str) -> str:
     match = _MARKER.match(text)
-    return match.group(1).upper() if match else ""
+    return " ".join(match.group(1).upper().split()) if match else ""
 
 
 @dataclass(frozen=True)
@@ -274,7 +286,8 @@ class CodebaseMap:
         if held:
             self.notices.append(
                 f"{self.path.name}: {held} stored note(s) are not shown to models because they are empty "
-                "or begin with a word the harness reads as a control line. They stay in the file.")
+                "or begin with a word the harness reads as a control line and a colon. They stay in "
+                "the file.")
 
     def _unusable(self, why: str) -> None:
         self._writable = False
@@ -287,13 +300,16 @@ class CodebaseMap:
         """``(MapNote, "")`` for a note the map accepts, else ``(None, why)``."""
         author = _one_line(author, _PROVENANCE_CHARS)
         session = _one_line(session, _PROVENANCE_CHARS)
+        # The topic as written, before it is lowered: "KIND" is the control
+        # line's own word, "kind" is a topic somebody chose.
+        written = _one_line(topic, MAX_TOPIC_CHARS).strip(" *_`-")
         topic = _one_line(topic, MAX_TOPIC_CHARS).lower()
         note = _one_line(note, MAX_SCAN_NOTE_CHARS if author == SCAN_AUTHOR else MAX_NOTE_CHARS)
         if not topic or not note:
             return None, "nothing was left of it once control characters were removed"
-        word = _marker(topic) or _marker(note)
+        word = _marker(note) or (written if written in NOTE_MARKERS else "")
         if word:
-            return None, f"it begins with {word}, a word the harness reads as a control line"
+            return None, f"it begins with {word}:, which the harness reads as a control line"
         return MapNote(topic=topic, note=note, author=author, session=session), ""
 
     def __len__(self) -> int:
@@ -307,7 +323,8 @@ class CodebaseMap:
         """Add one note. The only write operation there is.
 
         Returns the stored note, or None when the map did not keep it: it
-        repeats a note already held, it begins with a control word, or its
+        repeats a note already held, it begins with a control word and a
+        colon, or its
         source has already added ``MAX_NOTES_PER_CALL`` notes since the map
         was last rendered into a prompt. A reply's notes arrive as one run of
         calls from one author and session, and a prompt is built before the
@@ -388,9 +405,17 @@ class CodebaseMap:
         """The map as one prompt block, grouped by topic and labelled as data.
 
         ``topics`` narrows the view without touching the store. ``max_chars``
-        (default ``MAX_RENDER_CHARS``) bounds the whole block: the newest
-        notes are kept, and the block says how many older ones were left out
-        and that they are still in the file.
+        (default ``MAX_RENDER_CHARS``) bounds the whole block, and the block
+        says how many notes were left out and that they are still in the file.
+
+        The harness's own scan notes take their room first and are shown
+        first. They are measured facts written once (top-level directories,
+        where the tests live, the project's check command), so in a
+        long-lived map they are the oldest lines in the file, and under
+        "newest wins" they were the first left out of every prompt while
+        model-written notes stayed. Model-written notes then fill what is
+        left, newest first. A scan note is left out only when the scan's own
+        notes do not fit the block, never to make room for a model's.
         """
         limit = MAX_RENDER_CHARS if max_chars is None else int(max_chars)
         with self._lock:
@@ -408,15 +433,27 @@ class CodebaseMap:
         # Room for the notes: the limit less the frame and the sentence that
         # says what was left out.
         room = limit - len(head) - len(_CLOSE) - 170
-        kept, groups = [], set()
-        for n in reversed(shown):
-            cost = len(n.render()) + 1 + (0 if n.topic in groups else len(n.topic) + 8)
-            if cost > room:
-                break
-            room -= cost
-            groups.add(n.topic)
-            kept.append(n)
-        kept.reverse()
+        groups: set = set()
+
+        def fit(candidates, *, stop_at_first_miss):
+            nonlocal room
+            taken = []
+            for n in reversed(candidates):
+                cost = len(n.render()) + 1 + (0 if n.topic in groups else len(n.topic) + 8)
+                if cost > room:
+                    if stop_at_first_miss:
+                        break
+                    continue
+                room -= cost
+                groups.add(n.topic)
+                taken.append(n)
+            taken.reverse()
+            return taken
+
+        # A long scan note that does not fit must not hide the short ones
+        # behind it; among model notes the newest run that fits is kept.
+        kept = fit([n for n in shown if n.author == SCAN_AUTHOR], stop_at_first_miss=False)
+        kept += fit([n for n in shown if n.author != SCAN_AUTHOR], stop_at_first_miss=True)
         blocks = [head]
         order: List[str] = []
         for n in kept:

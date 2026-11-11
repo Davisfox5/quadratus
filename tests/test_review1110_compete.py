@@ -215,7 +215,9 @@ def test_nothing_in_the_engine_reads_the_scoreboard():
     root = Path(contest.__file__).parent
     named = sorted(path.name for path in root.rglob("*.py")
                    if "scoreboard.jsonl" in path.read_text() or "scoreboard_rows" in path.read_text())
-    assert named == ["contest.py", "project_run.py"]
+    # project_watch.py names the file only to watch it: an editing call that
+    # writes the scoreboard fails its task. It never opens it.
+    assert named == ["contest.py", "project_run.py", "project_watch.py"]
     assert sorted(name for name in contest.__all__ if "scoreboard" in name) == ["append_scoreboard",
                                                                                "scoreboard_rows"]
     source = (root / "project_run.py").read_text()

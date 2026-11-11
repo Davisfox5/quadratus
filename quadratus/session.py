@@ -383,9 +383,11 @@ class TaskSpec:
     complexity: str = Complexity.STANDARD
     work_class: str = WorkClass.GENERAL
     #: What kind of work this is, which may pin the lead. See
-    #: :mod:`quadratus.task_kinds`; most kinds express no preference and rotate.
+    #: :mod:`quadratus.task_kinds`; most kinds express no preference, and the
+    #: task then rides the difficulty ladder (``DIFFICULTY_LADDER``).
     kind: str = TaskKind.GENERAL
-    #: Force a particular lead. Normally left to rotation.
+    #: Force a particular lead. Normally left to the kind pin, then the
+    #: difficulty ladder; the rotation is only the last resort.
     lead: Optional[str] = None
     #: How the kind/difficulty above were arrived at: ``"labelled"`` when the
     #: orchestrator said so, ``"defaulted"`` when nothing was found. Carried
@@ -549,6 +551,11 @@ class SessionConfig:
     #: close)`` pair bound to a Fleet for that directory, sharing the run's
     #: budget, meter and ledger. Without it batches run one at a time.
     fork: Optional[Callable] = None
+    #: Supplied with ``fork``: given how many calls are about to run at once,
+    #: why the run budget cannot hold one reserve for each, or "" when it can
+    #: (``runtime.Fleet.reserve_shortfall``). None, or no run budget, is no
+    #: limit, which is the old run. The session never learns what a budget is.
+    reserve_shortfall: Optional[Callable] = None
     #: Design and UI work is verified by the model that did it: the lead is
     #: told to look at the rendered result at desktop and mobile widths and
     #: report what it saw. Davis's ruling, 2026-09-25.
@@ -2402,6 +2409,12 @@ class Session:
         self._auditing = False
         #: Name sets of changed test selection already on ``original_test_runs``.
         self._selection_recorded: set = set()
+        #: task id -> names its editing calls changed in folders the measured
+        #: diff does not read (see _absorb_unmeasured).
+        self.unmeasured_changes: Dict[str, List[str]] = {}
+        #: The rest of a batch that could not run in parallel for want of
+        #: budget: run one at a time, in order, with no orchestrator call.
+        self._serial_queue: List[TaskSpec] = []
         self._leads_by_vendor: dict = {}
         self._batch: List[TaskSpec] = []
         self.parallel_batches: List[dict] = []
@@ -2617,12 +2630,19 @@ class Session:
         self._activity('call-started', **activity_context)
         try:
             with capture_invocations(), invocation(**context):
-                if self.project:
-                    reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self._writes()))
-                elif allow_writes:
-                    reply = self.invoke(key, prompt, allow_writes=True)
-                else:
-                    reply = self.invoke(key, prompt)
+                try:
+                    if self.project:
+                        reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self._writes()))
+                    elif allow_writes:
+                        reply = self.invoke(key, prompt, allow_writes=True)
+                    else:
+                        reply = self.invoke(key, prompt)
+                finally:
+                    # Also after a call that failed: what it left in build
+                    # output is there either way, and this inner context
+                    # resets on exit.
+                    self._absorb_unmeasured(context.get("task"),
+                                            (invocation_context.get() or {}).get("unmeasured_changes"))
                 # Fleet leaves its CHANGED classification on this inner
                 # context, which resets on exit; carry it out for _edit.
                 self._last_changed_report = (invocation_context.get() or {}).get("changed_report")
@@ -2667,6 +2687,45 @@ class Session:
         self._keep_reply(key, reply, activity_context)
         self._active_call = {}
         return reply
+
+    def _absorb_unmeasured(self, task_id, names) -> None:
+        """Keep the names an editing call changed in folders the measured
+        diff does not read (build output; ``Fleet._watch_after``), by task.
+
+        The watch wrote them on the call's ledger row and nobody was told: a
+        lead could change ``dist/`` or ``build/`` files a test imports and
+        every seat judged a diff that did not show it. Names only, bounded,
+        once each. An observation for the review seats and the audit; it
+        opens no finding and decides nothing. Never raises."""
+        try:
+            if not names:
+                return
+            kept = self.unmeasured_changes.setdefault(str(task_id or "run"), [])
+            for name in names:
+                name = str(name)[:300]
+                if name not in kept and len(kept) < _UNMEASURED_NAMES:
+                    kept.append(name)
+        except Exception:  # noqa: BLE001 -- an observation never fails a call
+            log.debug("could not keep the unmeasured changes", exc_info=True)
+
+    def _unmeasured_note(self, task_id=None) -> str:
+        """The sentence a review seat is shown beside the measured diff, or
+        "" when this task's editing calls changed nothing outside it."""
+        if task_id is None:
+            task_id = getattr(self._active_spec, "task_id", None)
+        names = self.unmeasured_changes.get(str(task_id)) if task_id is not None else None
+        if not names:
+            return ""
+        return ("\n\n" + _UNMEASURED_HEADING + " (names only, as the harness listed them around this "
+                "task's editing calls): " + ", ".join(names) + ". " + _UNMEASURED_MEANING)
+
+    def _unmeasured_block(self) -> str:
+        """The same observation for the requirements audit, by task."""
+        rows = [f"- {task}: {', '.join(names)}" for task, names in self.unmeasured_changes.items() if names]
+        if not rows:
+            return ""
+        return ("\n\n## " + _UNMEASURED_HEADING + "\n" + "\n".join(rows) + "\n" + _UNMEASURED_MEANING
+                + " Your working copy does not hold these folders.")
 
     def _keep_reply(self, key, reply, activity_context) -> None:
         """Keep a returned call's reply for the operator's monitor."""
@@ -2926,14 +2985,14 @@ class Session:
         return peers_for(self.config.mode, "")
 
     def _pick_lead(self, spec: TaskSpec) -> str:
-        """Rotate the lead across the brain trust, then let the task kind speak.
+        """The lead for a task: its kind's pin, else its rung of the difficulty
+        ladder, else the brain-trust member whose turn it is.
 
-        Rotation spreads load across separate subscription windows and, as a
-        side effect, produces the comparison data that tells you which model
-        actually leads best on your work -- exploration at no extra cost. That
-        exploration is worth keeping, so a task kind only overrides it where
-        there is measured reason to; most kinds express no preference and the
-        rotation stands. See :mod:`quadratus.task_kinds`.
+        Difficulty is the primary routing axis and a kind pin is the exception
+        (``task_kinds.DIFFICULTY_LADDER``): most kinds express no preference,
+        and the task then rides the ladder. The rotated member is only the
+        default ``route_kind`` falls back to when neither names anyone. See
+        :mod:`quadratus.task_kinds`.
 
         The rotation counter advances either way. If a pinned kind consumed a
         turn without advancing it, one model would be pinned for its own kind
@@ -3060,7 +3119,7 @@ class Session:
 
     # -- request channels ----------------------------------------------------
     def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None, editing=False,
-                             remember_request=None) -> str:
+                             remember_request=None, after_call=None) -> str:
         """Invoke, serving artifact requests until a real answer arrives.
 
         ``build_prompt`` takes the fetched (id, content) pairs gathered so far
@@ -3068,9 +3127,20 @@ class Session:
         at its own right position. Bounded by ``max_fetches``; an unknown id
         comes back as a correction rather than an error, because the model can
         fix a typo and the harness cannot.
+
+        ``after_call`` runs each time a call here returns, a FETCH re-ask
+        included: this loop makes several calls of its own, and whatever must
+        happen between two lead calls must happen between these too.
         """
         fetched: List[tuple] = []
-        call = (lambda key, prompt: self._edit(key, prompt, role="lead")) if editing else self._invoke_model
+        invoke = (lambda key, prompt: self._edit(key, prompt, role="lead")) if editing else self._invoke_model
+
+        def call(key, prompt):
+            reply = invoke(key, prompt)
+            if after_call is not None:
+                after_call()
+            return reply
+
         reply = call(model_key, build_prompt(fetched))
         for _ in range(self.config.max_fetches):
             artifact_id = _parse_fetch(reply)
@@ -3141,7 +3211,11 @@ class Session:
         request = {k: arguments[k] for k in ("errand", "instruction", "demanding") if k in arguments}
         # A malformed reply is a stall, because nothing else can be done with
         # it; a malformed tool call is answered, and the lead can fix it.
-        if (request.get("errand") not in WORKER_TREE or not isinstance(request.get("instruction"), str)
+        # The type first: a list or an object for errand is unhashable, and
+        # the membership test raised TypeError, which the bridge answered
+        # without this refusal's count (review 1110, loop_a concern).
+        if (not isinstance(request.get("errand"), str) or request["errand"] not in WORKER_TREE
+                or not isinstance(request.get("instruction"), str)
                 or not request["instruction"].strip()
                 or type(request.get("demanding", False)) is not bool):
             return refuse(f"Invalid call: errand must be one of {sorted(WORKER_TREE)}, instruction a "
@@ -3498,21 +3572,60 @@ class Session:
                                      workers_closed=bool(state.get("workers_closed")))
 
         bridge = None
-        if self.config.in_session_workers:
+        # No tool for a lead whose prompt says no worker is offered (a rote
+        # or direct-tier task, an errand budget already spent): the prompt
+        # and the tool list said opposite things (review 1110, prompts).
+        # Decided once, at the start of the draft, as the prompt's menu is.
+        if self.config.in_session_workers and not self._no_worker_reason(spec):
             from .worker_bridge import WorkerBridge
             bridge = WorkerBridge(lambda arguments: self._tool_worker(arguments, lead, spec, task, state))
-        with (bridge if bridge is not None else contextlib.nullcontext()):
-            self._worker_tool = bridge.spec() if bridge is not None else None
-            try:
-                return self._drafting_loop(lead, spec, task, build, answers, state, consults)
-            finally:
-                self._worker_tool = None
+        state["bridge"] = bridge
+        try:
+            with (bridge if bridge is not None else contextlib.nullcontext()):
+                self._worker_tool = bridge.spec() if bridge is not None else None
+                try:
+                    return self._drafting_loop(lead, spec, task, build, answers, state, consults)
+                finally:
+                    self._worker_tool = None
+        finally:
+            # After the channel closed and its last wait ended.
+            if bridge is not None and getattr(bridge, "abandoned", 0):
+                self._record_abandoned_workers(spec, task, bridge.abandoned)
+
+    def _record_abandoned_workers(self, spec, task, count) -> None:
+        """Worker calls that were still running when their lead's channel
+        closed and its wait ran out. A thread cannot be stopped from outside,
+        so the call goes on spending after the lead's record is written and
+        may report after the task has moved on. Said on the task and in
+        progress, as a fact that proves nothing and blocks nothing by
+        itself. Never raises: it runs while another outcome is on its way."""
+        try:
+            text = (f"Task {spec.task_id}: {int(count)} worker call(s) commissioned through the in-session "
+                    "tool were still running when the lead's worker channel closed; their result was "
+                    "not used and their spend lands after this task's lead call.")
+            if self._outcome is not None:
+                self._outcome.note("unverified", text, terminal=False)
+            else:
+                self.run_outcome.note("unverified", text, terminal=False)
+            if not task.closed:
+                task.record("user", f"[worker channel] {text}")
+            self._note(text)
+        except Exception:  # noqa: BLE001 -- a note never replaces the outcome in flight
+            log.debug("could not record abandoned worker calls", exc_info=True)
 
     def _drafting_loop(self, lead, spec, task, build, answers, state, consults):
         consults_used = 0
         while True:
+            # A worker call the tool was still answering when the lead's
+            # call came back (its CLI gave up on the tool call, or was
+            # stopped): waited for after every lead call, a FETCH re-ask
+            # included, so it cannot spend unwatched through the next lead
+            # call or write its saved state over it. Without this the bridge
+            # waited only when the whole loop ended (review 1110, transport).
+            # Asked for by name: no bridge, or a stand-in with no wait, has none.
             draft = self._invoke_with_fetches(lead, build, task=task, editing=True,
-                                              remember_request=state["remember_request"])
+                                              remember_request=state["remember_request"],
+                                              after_call=getattr(state.get("bridge"), "drain", None))
             if state.get("closed") is not None:
                 raise state["closed"]
             body = _parse_kind(draft)[2].strip()
@@ -3525,7 +3638,7 @@ class Session:
                 continue
             requests = _parse_consults(body, self.brain_trust)
             if not requests:
-                if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
+                if body.startswith(('ASK:', 'WORKER', 'FETCH:')) or _unserved_consult(body):
                     raise TaskFailed("channel", "An unresolved request cannot be accepted as a draft.")
                 return draft
             state["remember_request"](draft)
@@ -6226,7 +6339,20 @@ class Session:
             used += 1
             if self._explicit_tasks is not None:
                 spec = self._next_explicit_task()
+            elif self._serial_queue and self._queue_stands():
+                # The orchestrator already named this task, in a batch the
+                # budget could not run at once. No call is spent asking again.
+                spec = self._serial_queue.pop(0)
+                if spec.task_id != self._next_task_id():
+                    spec = replace(spec, task_id=self._next_task_id())
+                self._note(f"running {spec.task_id} next, from the batch that is running one task at a time")
             else:
+                if self._serial_queue:
+                    # Something happened the orchestrator has to answer (a
+                    # send-back, an unfinished task): it names what is left.
+                    self._note(f"{len(self._serial_queue)} task(s) of that batch were not run; the "
+                               "orchestrator is asked what comes next")
+                    self._serial_queue = []
                 self._note(f"asking {self.seat().key} for the next task")
                 spec = self.next_task()
             self._done_refusal = ""
@@ -6235,6 +6361,15 @@ class Session:
                 self._note(f"parallel batch of {len(batch)} exceeds the {max_tasks - used + 1} task "
                            "slots left; running its first task alone")
                 batch = None
+            short = self._batch_shortfall(batch) if batch else ""
+            if short:
+                # Every child's first call holds its own reserve while the
+                # others run (run_budget). A batch the budget cannot admit
+                # whole would end the run on its second or third lead; the
+                # same tasks one at a time each need one reserve.
+                self._note(f"parallel batch of {len(batch)} not run in parallel: {short}. "
+                           "Running the same tasks one at a time.")
+                self._serial_queue, batch = list(batch[1:]), None
             if batch:
                 used += len(batch) - 1
                 if not self._run_batch(batch):
@@ -6852,6 +6987,78 @@ class Session:
             return None
         return ok, problem, shots, records
 
+    def _undeclared_design_work(self, spec, task) -> None:
+        """A task whose contract asked for no design evidence, measured after
+        its last edit: did it change a rendered file all the same?
+
+        Design work is decided at dispatch from the kind and the declared
+        paths, and a parent folder ("app") names nothing rendered, so a
+        backend task scoped that way could ship a template or a stylesheet
+        with no capture and no design review (review 1110, session first
+        half 5). Only the paths a task changed can settle it. The contract
+        is fixed at dispatch and carries no capture declaration to render
+        from, so nothing is captured after the fact: the task is left with
+        the design debt a declared design task with no renders is left with
+        (the same open finding, the same record, the same named stop), whose
+        problem names the rendered files and says no render was reviewed. It
+        is never closed as design-verified. The orchestrator's prompt says
+        what avoids this (``_KIND_REQUEST``).
+
+        Recorded the one way design debt is recorded, in the typed record
+        and the legacy list alike: written any other way the two disagree,
+        and the run's record says its own readings do not match.
+
+        A continuation answers for the unfinished task it continues as well,
+        when that task was not itself held to design evidence: a capped or
+        failed task runs no design check at all and a clean continuation
+        recovers it, so a template the capped task wrote under a parent
+        scope was settled by a task that never touched it. A predecessor
+        whose own contract asked for renders keeps its own unmet edges, and
+        those already hold the run.
+        """
+        if not (self.project and self._writes()) or self._task_before is None:
+            return
+        state = self._inspect_partial_edits(self._task_before, stopped=False)
+        inherited = self._undeclared_predecessor_changes()
+        rendered = sorted({path for path in [*(state.get("changed") or []), *inherited] if _renders(path)})
+        if not rendered:
+            return
+        named = ", ".join(rendered[:8]) + (f" and {len(rendered) - 8} more" if len(rendered) > 8 else "")
+        if any(path in inherited for path in rendered):
+            named += f"; counting what {self._continues}, the unfinished task it continues, changed"
+        record = dict(task=spec.task_id, undeclared=True, rendered=rendered[:40])
+        if not self.config.design_self_verify:
+            # The operator turned design verification off for every task.
+            record.update(verified=None, problem="design self-verification disabled by the operator")
+            self.design_checks.append(record)
+            return
+        problem = (f"it changed rendered files ({named}) that its declared scope did not name as UI work, "
+                   "so it was dispatched with no capture and no render of them was captured or reviewed; "
+                   "name the rendered files in a task's scope, or label it frontend, so they are captured")
+        record.update(verified=False, problem=problem)
+        self.design_checks.append(record)
+        task.keep(json.dumps(record), kind="design-evidence")
+        self._stage("design")
+        self._open_finding("invalid_proof",
+                           f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
+        self._design_unverified.append((spec.task_id, problem))
+        self._edge("evidence", False)
+        self._note(f"task {spec.task_id}: changed rendered files with no render reviewed ({named[:120]})")
+
+    def _undeclared_predecessor_changes(self) -> List[str]:
+        """The files changed by the capped or failed task this one continues,
+        when that task's contract asked for no design evidence; else none."""
+        prior = (self.turn_limited_records.get(self._continues or "")
+                 or self.failed_records.get(self._continues or ""))
+        if not prior:
+            return []
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == self._continues), None)
+        contract = getattr(outcome, "contract", None)
+        required = (contract.get("required") if isinstance(contract, dict) else None) or {}
+        if isinstance(required, dict) and required.get("design_evidence") in ("harness", "self"):
+            return []
+        return [path for path in prior.get("changed") or [] if isinstance(path, str)]
+
     def _check_design(self, spec, lead, collaborators, task) -> None:
         """The enforced design check, after the last edit and the gate.
 
@@ -6871,6 +7078,7 @@ class Session:
                   else "harness" if self._harness_captures(spec) else "self")
         evidence = self._required("design_evidence", legacy)
         if evidence == "none":
+            self._undeclared_design_work(spec, task)
             return
         self._stage("design")
         from .design_evidence import check_records
@@ -7463,6 +7671,49 @@ class Session:
             return replace(intake, refused="capture", problem=problem)
         return intake
 
+    def _batch_shortfall(self, batch) -> str:
+        """Why the run budget cannot hold one reserve per task of ``batch``,
+        or "" when it can or nothing says. Never raises: a headroom question
+        that fails is no reason to stop, and the reserve itself still guards
+        every call."""
+        ask = self.config.reserve_shortfall
+        if ask is None:
+            return ""
+        try:
+            return str(ask(len(batch)) or "")
+        except Exception:  # noqa: BLE001 -- advisory; the budget still refuses a call it cannot hold
+            log.debug("could not read the budget's headroom for a batch", exc_info=True)
+            return ""
+
+    def _queue_stands(self) -> bool:
+        """Whether the next task of a batch that is running one at a time may
+        start without asking the orchestrator: nothing was sent back for it
+        to answer, and the task before closed. After a send-back, a capped
+        or failed task, or a failing check, the orchestrator decides, as it
+        does after any serial task; a batch would have run every child, but
+        its children could not see each other's work and these can."""
+        if self._done_refusal:
+            return False
+        last = self.history[-1] if self.history else None
+        if last is not None and getattr(last, "outcome", "closed") in ("turn_limited", "failed"):
+            return False
+        return not (self.checks and not self.checks[-1].get("passed"))
+
+    def _adopt_original_runs(self, runs) -> None:
+        """A parallel child's original-test records, into the parent's.
+
+        "Test selection changed" is recorded once per distinct set of files
+        (``_selection_changed``). Each child runs that check in its own
+        session with its own memory of what it recorded, so a batch added one
+        copy per child of the same record. The parent's memory decides."""
+        for run in runs or ():
+            names = _selection_record(run)
+            if names is not None:
+                if names in self._selection_recorded:
+                    continue
+                self._selection_recorded.add(names)
+            self.original_test_runs.append(run)
+
     def _parallel_enabled(self) -> bool:
         policy = self.config.repository_policy
         return bool(self.config.fork and self.config.max_parallel_tasks > 1 and self.project
@@ -7611,7 +7862,7 @@ class Session:
                 # can discharge them (Codex review of b6ba3ba, F5).
                 for entry in child.unexecuted_acceptance:
                     self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks), discharged_at=None))
-                self.original_test_runs.extend(child.original_test_runs)
+                self._adopt_original_runs(child.original_test_runs)
                 self.skip_baselines.extend(getattr(child, "skip_baselines", []))
                 # The child's design debt comes back with its findings, so a
                 # stop names it rather than a generic open finding (map G8).
@@ -8130,6 +8381,7 @@ class Session:
                 "renders; where one reads APPROVED, do not report the approval as absent.")
                if self.design_checks else "")
             + self._not_run_block()
+            + self._unmeasured_block()
             + "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
@@ -8369,7 +8621,8 @@ class Session:
                 not result.receipts and result.passed and skipped_count(result)):
             return result
         task = getattr(self._active_spec, "task_id", "run")
-        baseline, problem = run_original_tests(gate, self.project, self._original_tests, start)
+        baseline, problem = run_original_tests(gate, self.project, self._original_tests, start,
+                                               exclude=self.config.project_excludes)
         self._verify_dependencies(f"during run-start skip baseline ({task})")
         drift = self._source_drift(current)
         if drift:
@@ -9739,7 +9992,7 @@ class Session:
             # The block is built inside the guard too: the diff names files,
             # and a name that will not encode must not end a review call.
             diff = Project(self.project, exclude=self.config.project_excludes).diff(base)
-            return _measured_diff_block(diff, what, use=use, none=none)
+            return _measured_diff_block(diff, what, use=use, none=none) + self._unmeasured_note()
         except Exception:  # noqa: BLE001 -- a reading aid, never a failure
             log.debug("could not prepare the review diff", exc_info=True)
             return ""
@@ -10524,7 +10777,8 @@ class Session:
                     self._note(f"task {task}: authorized test changes in {', '.join([*repaired, *migrated])}; "
                                "their required cases executed; no other run-start test file changed")
                 return result
-        baseline, problem = run_original_tests(gate, self.project, originals, current, keep=[*repaired, *migrated])
+        baseline, problem = run_original_tests(gate, self.project, originals, current, keep=[*repaired, *migrated],
+                                               exclude=self.config.project_excludes)
         self._verify_dependencies(f"during original tests ({task})")
         drift = self._source_drift(current)
         if drift:
@@ -10652,7 +10906,8 @@ class Session:
             self._unverified_once("Run-start test files changed and no check is configured to "
                                              "run the original tests against the delivered source.")
             return ""
-        baseline, problem = run_original_tests(gate, self.project, self._original_tests, current, keep=keep)
+        baseline, problem = run_original_tests(gate, self.project, self._original_tests, current, keep=keep,
+                                               exclude=self.config.project_excludes)
         self._verify_dependencies("during original tests (DONE)")
         drift = self._source_drift(current)
         if drift:
@@ -10701,7 +10956,9 @@ class Session:
             "VERDICT: REJECT; that line is read as your decision, and a REJECT must "
             "name at least one BLOCKING: or UNRESOLVED: finding above it. Write nothing "
             "after the word on that line: an ACCEPT followed by anything else is not "
-            "read as an acceptance."
+            "read as an acceptance. Any VERDICT line that is not exactly VERDICT: ACCEPT "
+            "is read as a rejection, and the finding stands. If you write more than one "
+            "VERDICT line, the last is the one read."
             + self._review_turn_budget_note(verifier)
         )
 
@@ -11218,12 +11475,48 @@ def _render_fetches(fetched) -> str:
     return "\n\n".join(blocks)
 
 
+def _selection_record(run) -> Optional[tuple]:
+    """The file set of a "test selection changed" record
+    (``Session._selection_changed``), or None for any other original-test
+    record: those carry receipts or a pass, and each is its own run."""
+    if (isinstance(run, dict) and run.get("passed") is None and not run.get("receipts")
+            and "added" not in run and ": test selection in " in str(run.get("problem") or "")):
+        return tuple(run.get("changed") or ())
+    return None
+
+
+#: How build-output changes are named to a review seat and to the audit, and
+#: what they are told it means. Names only; no reader acts on a reply to it.
+_UNMEASURED_HEADING = "Files changed in folders the diff does not read"
+_UNMEASURED_MEANING = ("These are build output and similar folders that the measured source leaves out, so "
+                       "no diff shows their content. An observation, not a finding: it neither meets nor "
+                       "fails anything by itself; weigh it only where the work depends on such a file.")
+#: The most names kept per task.
+_UNMEASURED_NAMES = 60
+
+
 #: What a lead is told about :func:`_parse_consults`.
 _CONSULT_NAMES_RULE = (
     "Name the member as listed here: a consult naming anyone else is refused and still counts "
     "against the allowance. A reply that opens with a CONSULT line naming no member and then "
-    "goes on to other text is not read as a request, and it fails this task."
+    "goes on to other text is not read as a request: it is read as your delivery."
 )
+
+
+def _unserved_consult(body: str) -> bool:
+    """Whether a reply that holds no consult the harness can serve is still
+    nothing but CONSULT lines ("CONSULT Sol", with no question).
+
+    That is an unresolved request and never a draft. A reply that opens with
+    the word and then carries on with other text is a delivery (integrator's
+    ruling 13, review 1110): :func:`_parse_consults` already said its first
+    line names no member, and failing the task on its channel for the way a
+    draft happens to open was a stop no prompt had earned. A reply that is
+    one request naming a stranger never reaches here: it parses, and the
+    lead is told the name is not a member and asked again."""
+    lines = [line.strip() for line in (body or "").splitlines() if line.strip()]
+    return (bool(lines) and lines[0].startswith("CONSULT")
+            and all(line.upper().startswith("CONSULT") for line in lines))
 
 
 def _member_matches(name: str, keys) -> List[str]:
@@ -11349,6 +11642,14 @@ _WORKER_RECOVERY = (
 #: act on it. Kind and difficulty together are the routing decision: the few
 #: pinned kinds go where the evidence says, everything else rides the
 #: difficulty ladder across the subscriptions.
+#: What the orchestrator is told about ``Session._undeclared_design_work``:
+#: design work is settled by the files a task changed, not only by its label.
+_UNDECLARED_RENDER_RULE = (
+    "A task of any kind that changes a rendered file (template, page, component, stylesheet, markup) "
+    "names that file or its UI folder in SCOPE: one that changes it under a parent folder alone gets "
+    "no capture, and is left with an open finding that no render was reviewed."
+)
+
 #: The label vocabulary, stated once and shared by the task request and the
 #: plan request, so a plan is written in the labels a task is named with.
 _KIND_VOCABULARY = (
@@ -11359,7 +11660,7 @@ _KIND_VOCABULARY = (
     "reserve complex for genuinely hard reasoning. frontend means a page a user sees "
     "in a browser renders differently, and commits the task to a real-browser capture; "
     "code with no page, template, stylesheet or browser in its acceptance is not frontend, "
-    "even when it is JavaScript."
+    "even when it is JavaScript. " + _UNDECLARED_RENDER_RULE
 )
 
 def _kind_request_text(decider: bool = False) -> str:

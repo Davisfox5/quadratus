@@ -2850,9 +2850,12 @@ class CLIProvider(LLMProvider):
         if self._workdir:
             os.makedirs(self._workdir, exist_ok=True)
             return self._workdir
-        if not self._owned_workdir:
+        if not self._owned_workdir or not os.path.isdir(self._owned_workdir):
             # Under the private scratch root, not the shared temp folder that
-            # another call's workspace-write sandbox may write.
+            # another call's workspace-write sandbox may write. Made again
+            # when it is gone: a run's start removes day-old leftovers there
+            # (providers.sweep_scratch), and a provider held by a process
+            # older than that would otherwise be started in a missing folder.
             self._owned_workdir = tempfile.mkdtemp(prefix=f"quadratus-{self.name}-", dir=scratch_root())
         return self._owned_workdir
 
@@ -3223,6 +3226,17 @@ class CLIProvider(LLMProvider):
         log.debug("%s invoking: %s with %d arguments", self.label,
                   os.path.basename(str(argv[0])), len(argv) - 1)
         try:
+            # exec carries no NUL in an argument: subprocess answers one with
+            # ValueError("embedded null byte"), which is no ProviderError and
+            # stopped the run as an unknown failure. Named here, before
+            # anything is started; the argument itself is never quoted, since
+            # it is a prompt.
+            holding = [i for i, arg in enumerate(argv) if "\x00" in str(arg)]
+            if holding:
+                raise ProviderError(
+                    f"{self.label} CLI was not started: its prompt holds a NUL character "
+                    f"(argument {holding[0]} of {len(argv) - 1}), which a command line cannot "
+                    "carry. Nothing ran. Remove the NUL from the text this call was given.")
             proc = _launch(
                 argv,
                 input=composed if self.spec.prompt_on_stdin else None,

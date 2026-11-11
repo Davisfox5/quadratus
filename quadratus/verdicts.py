@@ -19,8 +19,8 @@ doubtful cases:
   (:func:`design_blocking`).
 - A reply accepts only when it says so plainly. An acceptance with a
   condition after it (``VERDICT: ACCEPT once fixed``), an approval beside a
-  blocking line, or two lines that disagree is not an acceptance. A rejection
-  stays a rejection whatever follows it.
+  blocking line, or a closing verdict line that is anything but the plain
+  word is a rejection. A rejection stays a rejection whatever follows it.
 
 A marker is read as written. Nothing here interprets prose, apart from the
 narrow negations the docstrings name.
@@ -168,12 +168,6 @@ def _findings(text, markers) -> List[Tuple[str, str]]:
     return out
 
 
-def _notes(text, markers) -> bool:
-    """Whether a prefixed line says nothing blocks ("BLOCKING: none")."""
-    return any(found and found[0] in markers and is_empty_note(found[1])
-               for found in map(_prefixed, str(text or "").splitlines()))
-
-
 def has_blocking_finding(text: str) -> bool:
     """A line opening with BLOCKING: that names something.
 
@@ -240,8 +234,8 @@ _VERDICT_WORD = re.compile(r"(ACCEPT\b|REJECT\w*)(.*)$", re.IGNORECASE)
 
 
 def security_verdict_line(text: str) -> Optional[bool]:
-    """The verifier's explicit verdict: True for ACCEPT, False for REJECT,
-    None when it wrote no VERDICT line.
+    """The verifier's explicit verdict: True for a plain ACCEPT, False for
+    any other VERDICT line, None when it wrote no VERDICT line at all.
 
     Series b1ff751 f6 and rule-b1ff751 f6 (2026-10-05/06): the cross-family
     verifier accepted the work and the task still closed FindingsOpen,
@@ -250,15 +244,15 @@ def security_verdict_line(text: str) -> Optional[bool]:
     VERDICT: ACCEPT or VERDICT: REJECT, and that line decides. The last such
     line wins, so a verdict restated after the findings is the one taken.
 
-    An ACCEPT counts only when the line ends there. "VERDICT: ACCEPT once
-    fixed" and the echoed instruction "VERDICT: ACCEPT or VERDICT: REJECT"
-    both read as ACCEPT before, which passed verification on a conditional
-    verdict; they are no verdict line now. Any VERDICT line that is not a
-    plain ACCEPT withdraws one written before it, whatever its wording
-    ("VERDICT: ACCEPT" and later "VERDICT: NOT ACCEPTED" was an acceptance).
-    A REJECT is a rejection whatever follows it: reading "VERDICT: REJECT
-    because the token is logged" as no verdict would hand the decision to
-    the marker scan, which could pass it.
+    An ACCEPT counts only when the line ends there. Every other VERDICT line
+    is a rejection (integrator's ruling, review 1110): "VERDICT: ACCEPT once
+    fixed", "VERDICT: NOT ACCEPTED", "VERDICT: ACCEPTED", "VERDICT: maybe"
+    and the echoed instruction "VERDICT: ACCEPT or VERDICT: REJECT". These
+    used to be no verdict line, which handed the decision to the marker
+    scan, and the scan passes a report that names its defect in lower case:
+    "The token must be fixed first." above "VERDICT: ACCEPT once fixed"
+    passed security verification. A verifier that wrote a verdict line has
+    answered; only a reply with none is read by the scan.
     """
     verdict = None
     for raw in str(text or "").splitlines():
@@ -266,21 +260,17 @@ def security_verdict_line(text: str) -> Optional[bool]:
         if found is None:
             continue
         word = _VERDICT_WORD.match(found.group(1))
-        if word and word.group(1).upper().startswith("REJECT"):
-            verdict = False
-        elif word and not word.group(2).strip(" .!"):
-            verdict = True
-        elif verdict:
-            verdict = None
+        verdict = bool(word and word.group(1).upper() == "ACCEPT" and not word.group(2).strip(" .!"))
     return verdict
 
 
 def security_finding_stands(verdict: str) -> bool:
     """Whether a prose verdict opens a security finding.
 
-    An explicit VERDICT line decides: REJECT opens one; ACCEPT opens one
-    only if the verifier also wrote a prefixed finding with content. Without
-    the line, the marker scan applies as before.
+    An explicit VERDICT line decides: anything but a plain ACCEPT opens one;
+    a plain ACCEPT opens one only if the verifier also wrote a prefixed
+    finding with content. With no VERDICT line at all, the marker scan
+    applies as before.
     """
     explicit = security_verdict_line(verdict)
     if explicit is None:
@@ -328,6 +318,9 @@ def no_findings(text: str) -> bool:
     followed by "REVIEW: COMPLETE" bought a full revision call against an
     empty critique. Any other line is something the reviewer said, and it
     still reaches the lead.
+
+    Nothing to answer is not the same as finished: "BLOCKING: none" by
+    itself buys no revision and is still no verdict (:func:`review_complete`).
     """
     lines = _content_lines(text)
     return bool(lines) and all(_states_nothing(line) for line in lines)
@@ -336,9 +329,11 @@ def no_findings(text: str) -> bool:
 def review_complete(text: str) -> bool:
     """Whether a collaborator's reply carries a verdict in a form the prompt
     names: NO FINDINGS opening or closing the reply, a BLOCKING finding, or
-    the REVIEW: COMPLETE line. A BLOCKING line that says none counts as well:
-    the reviewer stated that nothing blocks, which is a verdict even though
-    it is not a finding.
+    the REVIEW: COMPLETE line. Those three and no other (integrator's ruling,
+    review 1110): a BLOCKING line that says none is not a finding, and it is
+    not one of the three either, so "BLOCKING: none" by itself is a reply
+    that arrived and not a review that finished. With the REVIEW: COMPLETE
+    line beside it, the review is complete and has no findings.
 
     A closing "no findings." that ends a sentence wrapped from the line
     above ("... so for the second file there are" / "no findings.") is that
@@ -351,7 +346,7 @@ def review_complete(text: str) -> bool:
     closing = plain[-1] == _NO_FINDINGS and not _closes_sentence_above(raw, content[-1], "NO FINDINGS")
     if plain[0] == _NO_FINDINGS or closing or any(_COMPLETE_LINE.fullmatch(p) for p in plain):
         return True
-    return has_blocking_finding(text) or _notes(text, ("BLOCKING",))
+    return has_blocking_finding(text)
 
 
 # -- a recheck ------------------------------------------------------------------

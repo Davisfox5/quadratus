@@ -65,7 +65,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
                 decider_labels="unstated", repair_tests=(), test_changes=None,
                 trust_project_policy=None, allow_project_agent_config=False, declared_checks=True,
-                compete="off"):
+                compete="off", accept_watched_paths=False):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``compete`` is ``"off"`` (the run as it always was) or ``"complex"``: a
@@ -75,6 +75,12 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     ``contests`` section records each one, ``reviewers`` records what each
     review seat raised, and both are appended to the project's
     ``scoreboard.jsonl`` in the state folder, a record nothing reads back.
+
+    ``accept_watched_paths`` starts a run although the last run on this
+    project recorded a change to a watched path (a git hook, an env file, a
+    link: quadratus.project_watch) that is still in place (also
+    ``QUADRATUS_ACCEPT_WATCHED_PATHS=1``). By default such a project is
+    refused before any model call, with the paths named.
 
     ``trust_project_policy`` is the operator's approval of the project's own
     ``.quadratus/policy.json``, by that file's sha256 (also
@@ -154,10 +160,17 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     if not isinstance(project, Project):
         project = Project(project)
     state = _state_folder(project, state_dir)
+    # Before anything is created there: copies made inside the project would
+    # be measured and reviewed as its source.
+    from .providers import scratch_inside, sweep_scratch
+    misplaced = scratch_inside(project.root)
+    if misplaced:
+        raise ValueError(misplaced + ' Nothing was run and no model was called.')
 
     repair_tests = _repair_tests(project.root, repair_tests, forbid)
     test_changes = _test_changes(project.root, test_changes, goal=goal, forbid=forbid)
     agent_config = _refuse_agent_config(project, allow_project_agent_config, progress)
+    _refuse_standing_watch_findings(project, state, accept_watched_paths, progress)
     scan = None
     if not declared_checks:
         # The built-in policy names the scanned check as a gate; with the
@@ -181,6 +194,11 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         from .readiness import probes_from
         probes = probes_from(readiness, project.root)
     with _project_lock(project):
+        # What a killed run left under the scratch root, a day old or more.
+        swept = sweep_scratch()
+        if swept and progress:
+            progress(f'Removed {len(swept)} leftover scratch folder(s) or file(s) from earlier runs, '
+                     'each more than 24 hours old.')
         return _run(goal, project, settings, state=state, allow_writes=allow_writes,
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
                     ask_operator=ask_operator, plan_gate=plan_gate,
@@ -230,6 +248,151 @@ def _refuse_agent_config(project, allowed=False, progress=None):
         'you, on the first call. Nothing was run and no model was called. Read them, then remove '
         'them or allow them with --allow-project-agent-config '
         f'(run_project(allow_project_agent_config=True)) or {ALLOW_AGENT_CONFIG_ENV}=1.')
+
+
+#: The most of an earlier run's ``result.json`` the preflight reads, how many
+#: run folders it lists and how many of the newest it looks into for one.
+_MAX_OLD_RECORD_BYTES = 32 * 1024 * 1024
+_MAX_RUNS_LISTED = 20_000
+_NEWEST_RUNS_TRIED = 20
+
+
+def _read_bounded(path, limit):
+    """The file's bytes, or raise OSError: a regular file only, never
+    through a link, never more than ``limit``."""
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    fd = os.open(path, flags)
+    try:
+        import stat as _stat
+        info = os.fstat(fd)
+        if not _stat.S_ISREG(info.st_mode):
+            raise OSError('not a regular file')
+        if info.st_size > limit:
+            raise OSError(f'larger than {limit:,} bytes')
+        chunks, left = [], limit + 1
+        while left > 0:
+            chunk = os.read(fd, min(left, 1 << 20))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+        data = b''.join(chunks)
+        if len(data) > limit:
+            raise OSError(f'larger than {limit:,} bytes')
+        return data
+    finally:
+        os.close(fd)
+
+
+def _newest_run_record(state):
+    """``(run id, record, note)`` for the newest run folder under ``state``
+    that holds a ``result.json``. ``record`` is None when there is none or it
+    cannot be read, and ``note`` then says why when that is worth saying. An
+    old record is untrusted input: nothing about it raises."""
+    runs = Path(state) / 'runs'
+    try:
+        names = []
+        with os.scandir(runs) as listing:
+            for entry in listing:
+                if len(names) >= _MAX_RUNS_LISTED:
+                    break
+                if entry.is_dir(follow_symlinks=False):
+                    names.append(entry.name)
+    except FileNotFoundError:
+        return '', None, ''
+    except OSError as exc:
+        return '', None, f'the run records under {runs} could not be listed ({type(exc).__name__})'
+    for name in sorted(names, reverse=True)[:_NEWEST_RUNS_TRIED]:
+        path = runs / name / 'result.json'
+        try:
+            data = _read_bounded(path, _MAX_OLD_RECORD_BYTES)
+        except FileNotFoundError:
+            continue        # a run that ended before it wrote a record
+        except OSError as exc:
+            return name, None, f'the record of run {name} could not be read ({exc})'
+        try:
+            record = json.loads(data.decode('utf-8', errors='replace'))
+        except (ValueError, RecursionError) as exc:
+            return name, None, f'the record of run {name} is not readable JSON ({type(exc).__name__})'
+        if not isinstance(record, dict):
+            return name, None, f'the record of run {name} is not a JSON object'
+        return name, record, ''
+    return '', None, ''
+
+
+def _refuse_standing_watch_findings(project, state, accepted=False, progress=None):
+    """Refuse, before any model call, a project in which a watched path the
+    last run recorded as changed still holds what that run recorded.
+
+    The in-place stop ends with its run (quadratus.project_watch). Started
+    again with nothing removed, the new run listed the planted git hook or
+    link as its baseline, every later check passed on top of it, and no
+    diff or review copy ever showed it. So the finding is carried in the
+    run's record and asked about here. The operator removes or restores the
+    path, or accepts it for this run. A record that cannot be read is said
+    and is not a refusal: it proves nothing either way.
+    """
+    from .project_watch import (
+        ACCEPT_WATCHED_PATHS_ENV,
+        ProjectWatch,
+        WatchUnavailable,
+        describe,
+        still_in_place,
+        watched_paths_accepted,
+    )
+    run_id, record, note = _newest_run_record(state)
+    if note and progress:
+        progress(f'Watched paths: {note}, so whether the last run left a watched path changed is '
+                 'not known from it.')
+    recorded = ((record or {}).get('project_watch') or {}) if isinstance(record, dict) else {}
+    paths = recorded.get('paths') if isinstance(recorded, dict) else None
+    if not isinstance(paths, list) or not paths:
+        return []
+    way_out = ('Inspect each one, then remove or restore it, or accept them as they are for this run '
+               f'with accept_watched_paths=True (run_project) or {ACCEPT_WATCHED_PATHS_ENV}=1.')
+    try:
+        listing = ProjectWatch(project.root, exclude=project.exclude).listing()
+    except WatchUnavailable as exc:
+        if watched_paths_accepted(accepted):
+            return []
+        raise ValueError(
+            f'Run {run_id} recorded changes to watched paths in this project, and the project could '
+            f'not be listed to see whether they are still there ({exc}). Nothing was run and no model '
+            f'was called. {way_out}') from exc
+    standing = still_in_place(paths, listing)
+    if not standing:
+        return []
+    named = describe((f"{s['path']}" + (f" [{s['kind']}]" if s['kind'] else ''),
+                      s['what'] + (', and written to since' if s.get('since') else '')) for s in standing)
+    if watched_paths_accepted(accepted):
+        if progress:
+            progress(f'Watched paths run {run_id} left changed, accepted by the operator for this run: {named}')
+        return standing
+    raise ValueError(
+        f'The last run on this project ({run_id}) recorded that an editing call changed paths outside '
+        f'the measured source that no task may change, and the change is still in place: {named}. '
+        'No measured diff or review copy shows them, so a new run would take them as its starting '
+        f'point and every check would run on top of them. Nothing was run and no model was called. {way_out}')
+
+
+def _watch_record(fleet):
+    """The run's project-watch findings for ``result.json``: each finding as
+    the Fleet kept it, and for every changed path what it is (``kind``), what
+    happened (``what``), what it holds now (``record``) and what it was
+    before the run touched it (``before``), which is what the next run's
+    preflight compares. Never raises."""
+    try:
+        findings = [dict(f) for f in (getattr(fleet, 'watch_findings', None) or []) if isinstance(f, dict)]
+        records = dict(getattr(fleet, 'watch_records', None) or {})
+        paths = [dict(path=str(path), kind=str(r.get('kind') or ''), what=str(r.get('what') or ''),
+                      record=list(r['record']) if r.get('record') is not None else None,
+                      before=list(r['before']) if r.get('before') is not None else None,
+                      by=str(r.get('by') or ''))
+                 for path, r in sorted(records.items()) if isinstance(r, dict)]
+        json.dumps([findings, paths])
+    except Exception:  # noqa: BLE001 -- a record never fails a run
+        return dict(findings=[], paths=[], unavailable=True)
+    return dict(findings=findings, paths=paths)
 
 
 def _test_changes(root, raw, *, goal, forbid=(), originals=None):
@@ -664,6 +827,20 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     lines = [f'# {status}', '', f'Project: {project.root}', '',
              f'Edits: {"enabled" if allow_writes else "disabled"}', '',
              f'Run files: {run_dir}', '']
+    watch = _watch_record(fleet)
+    if watch['paths']:
+        from .project_watch import ACCEPT_WATCHED_PATHS_ENV, describe
+        named = describe(((w['path'] + (f" [{w['kind']}]" if w['kind'] else '')), w['what']) for w in watch['paths'])
+        lines += [f"Watched paths changed: an editing call of this run changed {len(watch['paths'])} "
+                  f'path(s) outside the measured source that no task may change: {named}. Nothing was '
+                  'reverted. The next run on this project is refused while a path still holds that '
+                  'content: remove or restore it, or accept it with accept_watched_paths '
+                  f'({ACCEPT_WATCHED_PATHS_ENV}=1). result.json lists each under project_watch.', '']
+    elif watch['findings']:
+        lines += [f"Watched paths changed: {len(watch['findings'])} editing call(s) changed paths outside "
+                  "the measured source in a parallel task's own copy of the project. That copy is "
+                  'deleted and none of those paths was merged. result.json lists each under '
+                  'project_watch.', '']
     if preview:
         lines += [f"Default family: {preview['primary_family']}", '',
                   f"Policy plan: {preview['hash']}", '']
@@ -781,6 +958,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,
         'codebase_map': map_record,
+        # Changes to watched paths (quadratus.project_watch), with what each
+        # path holds now: the next run's preflight reads this.
+        'project_watch': watch,
+        # By task: names its editing calls changed in build output and the
+        # like, which no diff reads. Told to review seats and the audit.
+        'unmeasured_changes': dict(getattr(session, 'unmeasured_changes', {}) or {}) if session else {},
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
@@ -797,6 +980,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # The folder has been owner-only since it was made, so this is the file's
     # own mode catching up, not the first protection.
     tighten_files(run_dir)
+    if trace_interrupted:
+        # The record above is whole. The interrupt is the operator's, so it
+        # goes on to whoever called: a series driver that loops over runs
+        # must stop here, and an absorbed Ctrl-C started its next run.
+        raise KeyboardInterrupt
     return ProjectResult(completed, report, run_dir, diff, error)
 
 

@@ -434,6 +434,12 @@ def shareable(record: dict) -> dict:
     reasoning snippets and rule text stay in the owner-only detail file."""
     out = {k: v for k, v in record.items()
            if k not in ("tool_calls", "commands", "protocol_attempts", "injected_rules")}
+    if "error" in record:
+        # A transcript that could not be parsed: the exception's type says
+        # what kind of failure it was. Its message is free text (a parser
+        # quotes the line it choked on), so it stays in the detail file.
+        kind = str(record.get("error") or "").split(":", 1)[0].strip()
+        out["error"] = kind if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,80}", kind) else "error"
     if "files_read" in record:
         # A Grep or Glob with no folder has its pattern as its target.
         out["files_read"] = [f for f in record.get("files_read") or [] if _shareable_path(f)]

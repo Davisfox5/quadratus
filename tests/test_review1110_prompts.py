@@ -306,9 +306,11 @@ def _fixed_rule_bytes(session, prompt):
 #: The fixed rules one decision carries, in bytes, with a little room. Measured
 #: on BASE at 6,950 and 9,540. These are ceilings to trip on, not targets: a
 #: new rule a reply is held to still gets its sentence, and whoever adds it
-#: raises the figure here on purpose, in the same change.
-MAX_FIXED_RULE_BYTES = 7_000
-MAX_FIXED_RULE_BYTES_WITH_CAPTURE = 9_600
+#: raises the figure here on purpose, in the same change. Raised from 7,000 and
+#: 9,600 for the rule that a task changing a rendered file names it in SCOPE
+#: (session._UNDECLARED_RENDER_RULE; measured 7,166 and 9,832).
+MAX_FIXED_RULE_BYTES = 7_230
+MAX_FIXED_RULE_BYTES_WITH_CAPTURE = 9_890
 
 
 def _over(fixed, ceiling):

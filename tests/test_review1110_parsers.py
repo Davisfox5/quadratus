@@ -175,20 +175,21 @@ def test_a_verdict_line_that_stands_apart_is_still_read(reply):
     ("VERDICT: REJECTED", False),
     ("VERDICT: ACCEPT\nsecond thoughts\nVERDICT: REJECT", False),
     ("VERDICT: REJECT\nfixed in review\nVERDICT: ACCEPT", True),     # the last line wins
-    # A conditional or echoed verdict is no verdict line.
-    ("VERDICT: ACCEPT once fixed", None),
-    ("VERDICT: ACCEPT or VERDICT: REJECT", None),
-    ("VERDICT: ACCEPT (no blocking findings)", None),
-    ("VERDICT: ACCEPTED", None),
-    ("VERDICT: maybe", None),
-    ("The final VERDICT: ACCEPT", None),
-    # A conditional line withdraws an earlier acceptance, never an earlier rejection.
-    ("VERDICT: ACCEPT\nVERDICT: ACCEPT once the logging is fixed", None),
+    # A conditional or echoed verdict is a rejection (integrator's ruling 10:
+    # it was no verdict line, and the marker scan could then pass it).
+    ("VERDICT: ACCEPT once fixed", False),
+    ("VERDICT: ACCEPT or VERDICT: REJECT", False),
+    ("VERDICT: ACCEPT (no blocking findings)", False),
+    ("VERDICT: ACCEPTED", False),
+    ("VERDICT: maybe", False),
+    ("The final VERDICT: ACCEPT", None),                             # no line opens with VERDICT
+    # A conditional line after an acceptance is the last line, so it decides.
+    ("VERDICT: ACCEPT\nVERDICT: ACCEPT once the logging is fixed", False),
     ("VERDICT: REJECT\nVERDICT: ACCEPT once the logging is fixed", False),
     # So does any later VERDICT line that is not a plain ACCEPT: these stayed
     # an acceptance, because a line with another word on it was not read.
-    ("VERDICT: ACCEPT\nOn reflection:\nVERDICT: NOT ACCEPTED", None),
-    ("VERDICT: ACCEPT\nVERDICT: undecided, the logging path is unread", None),
+    ("VERDICT: ACCEPT\nOn reflection:\nVERDICT: NOT ACCEPTED", False),
+    ("VERDICT: ACCEPT\nVERDICT: undecided, the logging path is unread", False),
     ("VERDICT: REJECT\nVERDICT: undecided", False),
     ("VERDICT: NOT ACCEPTED\nVERDICT: ACCEPT", True),               # the last line still wins
 ])
@@ -203,8 +204,10 @@ def test_an_accept_counts_only_when_the_line_ends_there(report, verdict):
     ("VERDICT: REJECT because the token is logged in clear text", True),
     ("Looks fine overall.\nVERDICT: REJECTED", True),
     ("BLOCKING: the token is logged in clear text\nVERDICT: ACCEPT", True),
-    # Withdrawn by the line after it, so the marker scan decides.
+    # Withdrawn by the line after it, which is itself the rejection.
     ("The token logging is BLOCKING.\nVERDICT: ACCEPT\nVERDICT: NOT ACCEPTED", True),
+    ("The token must be fixed first.\nVERDICT: ACCEPT once fixed", True),   # ruling 10: no marker, still stands
+    ("VERDICT: NOT ACCEPTED", True),
     ("Nothing here is BLOCKING for release.\n- BLOCKING: none found.\nVERDICT: ACCEPT", False),
     ("The guard is correct.\n**VERDICT: ACCEPT**", False),
 ])
@@ -217,7 +220,7 @@ def test_the_verifier_is_told_to_end_the_line_at_the_word(store):
     prompt = session._verifier_prompt(TaskSpec("t1", "harden it"), "draft", OPUS)
     assert "Write nothing after the word on that line" in prompt
     assert "an ACCEPT followed by anything else is not read as an acceptance" in prompt
-    assert V.security_verdict_line("VERDICT: ACCEPT once fixed") is None
+    assert V.security_verdict_line("VERDICT: ACCEPT once fixed") is False
 
 
 # -- findings: one empty-finding rule (first half, item 7) ----------------------
@@ -275,13 +278,15 @@ def test_the_prose_marker_scan_reads_the_unstyled_line(text, finding):
     ("**NO FINDINGS**", True, True),                          # the report's case: an unfinished review
     ("NO FINDINGS\nREVIEW: COMPLETE", True, True),            # the report's case: bought a revision
     ("- NO FINDINGS\n- **Review: complete**", True, True),
-    ("BLOCKING: none", True, True),                           # says nothing blocks; nothing to answer
+    # Ruling 11: nothing to answer, so no revision; but none of the three
+    # forms that make a reply a verdict, so an unfinished review.
+    ("BLOCKING: none", True, False),
     ("BLOCKING: none\nREVIEW: COMPLETE", True, True),
     ("REVIEW: COMPLETE", True, True),
     # Something was said, so it reaches the lead; the verdict is still a verdict.
     ("NO FINDINGS\nOne note: the helper could be shorter.", False, True),
     ("Minor: rename x.\nREVIEW: COMPLETE", False, True),
-    ("Minor: rename x.\nBLOCKING: none", False, True),
+    ("Minor: rename x.\nBLOCKING: none", False, False),
     ("BLOCKING: the escaping drops surrogate pairs", False, True),
     ("notes\n- **BLOCKING:** malformed numbers accepted", False, True),
     ("NO FINDINGS\nBLOCKING: the escaping drops surrogate pairs", False, True),
@@ -303,7 +308,9 @@ def test_the_prose_marker_scan_reads_the_unstyled_line(text, finding):
 def test_a_clean_review_and_a_finished_review_are_read_by_one_reader(review, clean, complete):
     assert V.no_findings(review) is clean
     assert V.review_complete(review) is complete
-    assert not clean or complete, "a clean review is always a finished one"
+    lone = [line for line in review.splitlines() if line.strip()]
+    assert not clean or complete or all(V.is_empty_note(line.split(":", 1)[-1]) for line in lone), (
+        "a clean review is a finished one, except a reply that is only 'BLOCKING: none'")
 
 
 class Reviewed(Recorder):
@@ -333,12 +340,15 @@ def _review(store, review, recheck="RESOLVED", **config):
     return session, rec
 
 
-@pytest.mark.parametrize("review", ["NO FINDINGS\nREVIEW: COMPLETE", "**NO FINDINGS**", "BLOCKING: none"])
+@pytest.mark.parametrize("review", ["NO FINDINGS\nREVIEW: COMPLETE", "**NO FINDINGS**", "BLOCKING: none",
+                                    "BLOCKING: none\nREVIEW: COMPLETE"])
 def test_a_clean_review_buys_no_revision_and_opens_no_finding(store, review):
     session, rec = _review(store, review)
     assert not rec.asked("Revise your work"), "a revision against an empty critique"
     assert not rec.asked("Check only your BLOCKING findings"), "a recheck of a finding that does not exist"
-    assert not any("unfinished review" in f for f in session.open_findings)
+    # Ruling 11: "BLOCKING: none" by itself is none of the three forms that
+    # make a reply a verdict, so it is the one clean reply recorded unfinished.
+    assert any("unfinished review" in f for f in session.open_findings) is (review == "BLOCKING: none")
 
 
 def test_a_formatted_resolved_ends_the_fix_cycle(store):
@@ -793,13 +803,14 @@ def test_a_draft_opening_with_a_stranger_is_never_served_as_a_consult(store):
     summary = session.run_task(TaskSpec("t1", "work", complexity=S.Complexity.SIMPLE))
     assert not any("area of strength" in c["prompt"] for c in rec.calls), "no consultant was called"
     assert not any("not a member you can consult" in c["prompt"] for c in rec.calls), "no consult was charged"
-    # The rule the lead's prompt states: it is no request, and a reply that
-    # opens with an unserved request line fails the task.
-    assert summary.outcome == "failed" and session.failed_records["t1"]["cause"] == "channel"
+    # The rule the lead's prompt states: it is no request. Integrator's
+    # ruling 13: a draft that opens this way and carries on is a delivery,
+    # where it used to fail the task on its channel.
+    assert getattr(summary, "outcome", "closed") != "failed" and "t1" not in session.failed_records
     lead = next(c["prompt"] for c in rec.calls if "You are leading" in c["prompt"])
     assert S._CONSULT_NAMES_RULE in lead
     assert "naming no member and then goes on to other text is not read as a request" in S._CONSULT_NAMES_RULE
-    assert "it fails this task" in S._CONSULT_NAMES_RULE
+    assert "it is read as your delivery" in S._CONSULT_NAMES_RULE
 
 
 def test_a_consult_that_names_a_stranger_is_refused_in_words_and_the_lead_asked_again(store):

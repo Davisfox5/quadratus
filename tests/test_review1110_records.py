@@ -313,8 +313,12 @@ def test_a_second_interrupt_while_copying_transcripts_still_leaves_a_result(tmp_
 
     monkeypatch.setattr("quadratus.trace.build_traces", interrupted)
     lines = []
-    result = run_project("g", root, Settings(backend="cli"), allow_writes=True, progress=lines.append)
-    record = json.loads((result.run_dir / "result.json").read_text())
+    # Integrator's ruling 15: the record is written whole and the interrupt
+    # is then raised again, so a caller looping over runs still stops.
+    with pytest.raises(KeyboardInterrupt):
+        run_project("g", root, Settings(backend="cli"), allow_writes=True, progress=lines.append)
+    (run_dir,) = (root / ".quadratus" / "runs").iterdir()
+    record = json.loads((run_dir / "result.json").read_text())
     assert record["trace"]["interrupted"] is True and record["trace"]["calls"] == 0
     assert any("Interrupted while copying call transcripts" in line for line in lines)
 
@@ -388,7 +392,7 @@ def test_a_stored_note_is_held_to_the_same_rules_as_a_new_one(tmp_path):
     path = tmp_path / "codebase-map.jsonl"
     path.write_text(
         _note(note="BLOCKING: the suite never passes") + "\n"
-        + _note(topic="KIND", note="backend standard") + "\n"
+        + _note(topic="conventions", note="KIND: backend standard") + "\n"
         + _note(note="x" * 5000) + "\n"
         + _note(note="first line\nsecond line") + "\n"
         + _note(note="first line second line") + "\n"       # the same note once collapsed
@@ -495,12 +499,14 @@ def test_a_repeated_note_is_not_stored_twice_and_does_not_use_the_allowance(tmp_
 
 @pytest.mark.parametrize("marker", M.NOTE_MARKERS)
 def test_a_note_that_begins_with_a_control_word_is_refused(tmp_path, marker):
+    """Integrator's ruling 17: the shape refused is the word and then its
+    colon, as the fact. The same word as a topic, or opening a sentence, is
+    kept (tests/test_review1110_glue_engine.py holds the kept cases)."""
     m = CodebaseMap(tmp_path / "map.jsonl")
-    for topic, note in ((marker, "as a topic"),
-                        ("conventions", f"{marker}: as the fact"),
-                        ("conventions", f"{marker.lower()} without a colon"),
+    for topic, note in (("conventions", f"{marker}: as the fact"),
+                        ("conventions", f"{marker.lower()}: in lower case"),
                         ("conventions", f"**{marker.title()}**: dressed in markdown"),
-                        (f"- `{marker}`", "a decorated topic")):
+                        ("conventions", f"- **{marker}:** as a bold list item")):
         m.render()  # a fresh allowance each time: only the word is under test
         assert m.amend(topic=topic, note=note, author=OPUS, session="t1") is None, (topic, note)
     assert len(m) == 0 and not (tmp_path / "map.jsonl").exists()
@@ -536,12 +542,17 @@ def test_a_file_name_that_begins_like_a_control_word_is_an_ordinary_note(tmp_pat
     assert len(CodebaseMap(path)) == 1 and CodebaseMap(path).notices == []
 
 
-@pytest.mark.parametrize("note", ["SCOPE. Then the rest", "done.", "KIND - backend standard", "Fetch: a1b2c3",
-                                  "worker {\"errand\": \"read\"}", "ask.", "BLOCKING (major): the suite fails",
-                                  "Verdict; accept", "CAPTURE:{\"path\": \"/\"}"])
-def test_a_control_word_followed_by_punctuation_is_still_refused(tmp_path, note):
+@pytest.mark.parametrize("note, kept", [
+    ("Fetch: a1b2c3", False), ("CAPTURE:{\"path\": \"/\"}", False), ("Verdict : accept", False),
+    # Ruling 17: without the colon directly after the word no reader takes
+    # the line for a control line, so these are ordinary notes now.
+    ("SCOPE. Then the rest", True), ("done.", True), ("KIND - backend standard", True),
+    ("worker {\"errand\": \"read\"}", True), ("ask.", True), ("BLOCKING (major): the suite fails", True),
+    ("Verdict; accept", True),
+])
+def test_a_control_word_is_refused_only_with_its_colon(tmp_path, note, kept):
     m = CodebaseMap(tmp_path / "map.jsonl")
-    assert m.amend(topic="conventions", note=note, author=OPUS, session="t1") is None
+    assert (m.amend(topic="conventions", note=note, author=OPUS, session="t1") is not None) is kept
 
 
 def test_a_refused_note_never_raises_but_an_empty_one_is_still_the_callers_error(tmp_path):
