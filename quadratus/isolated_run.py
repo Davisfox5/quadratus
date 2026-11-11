@@ -67,6 +67,37 @@ def _tree(path):
 
 _AUTH_FILES = {'.codex/auth.json', '.claude/.credentials.json', '.grok/auth.json'}
 
+#: The operator's standing trust settings, carried into the container by
+#: name. They decide whether a run starts at all: the approval of a project's
+#: own policy file by hash (quadratus.policy.TRUST_ENV) and the permission to
+#: run in a project that carries vendor agent configuration
+#: (quadratus.project_watch.ALLOW_AGENT_CONFIG_ENV). Without them a contained
+#: run refused what the same operator's direct run accepted. Neither is a
+#: credential: one is a file hash, the other a yes. Nothing else in the
+#: harness's environment is carried, and no credential ever is. Spelled here
+#: so this module stays free of the engine's imports; a test holds the two
+#: names equal to their owners'.
+TRUST_SETTINGS = ('QUADRATUS_TRUST_PROJECT_POLICY', 'QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG')
+
+
+def _trust_env(environ=None):
+    """``--env`` arguments carrying each trust setting the operator has set.
+
+    A setting that is unset or blank is left out, so the container reads it
+    as unset too. The value goes in as written, as one argument and through
+    no shell: what the contained run makes of it is what a direct run would.
+    Returns the arguments and the names carried.
+    """
+    environ = os.environ if environ is None else environ
+    args, names = [], []
+    for name in TRUST_SETTINGS:
+        value = environ.get(name, '')
+        if not value.strip():
+            continue
+        args += ['--env', f'{name}={value}']
+        names.append(name)
+    return args, names
+
 
 def _credential_tree(path):
     """Accept a private, explicitly prepared auth-only tree, never a host home.
@@ -92,8 +123,16 @@ def _credential_tree(path):
 
 
 def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=False,
-                 credentials=None, heartbeat=None, stall_seconds=None):
+                 credentials=None, heartbeat=None, stall_seconds=None, forward_trust=True):
     """Run a command in a disposable container and always remove its processes.
+
+    The container's environment is fixed, with one addition: the operator's
+    two standing trust settings (``TRUST_SETTINGS``) are carried in when set,
+    so a contained run starts or refuses exactly as a direct run by the same
+    operator would. ``forward_trust=False`` carries neither, and the run
+    inside then decides from its own flags alone. No credential is ever
+    carried this way; the only credentials a container sees are the files of
+    an explicit ``credentials`` seed.
 
     Timeout bounds the workload; Docker control-plane cleanup has a separate
     bounded grace. Cleanup failure raises instead of claiming work has stopped.
@@ -152,6 +191,11 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
         command = ['/bin/sh', '-c',
                    'umask 077; mkdir -p "$HOME" && cp -R /run/solver-auth/. "$HOME"/ '
                    '&& exec "$@"', 'solver-auth-bootstrap', *command]
+    trust_args, trusted = _trust_env() if forward_trust else ([], [])
+    if trusted:
+        # Names only: the policy approval is a file hash, but it is the
+        # operator's and nothing here needs to print it.
+        log.info('Carrying the operator\'s trust settings into the container: %s', ', '.join(trusted))
     name = 'quadratus-blind-' + uuid.uuid4().hex
     deadline = time.monotonic() + wall_seconds
     args = ['docker', 'create', '--name', name, '--pull', 'never', '--init',
@@ -161,7 +205,7 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
             '--memory', '2g', '--cpus', '2', '--pids-limit', '512',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
             '--env', 'HOME=/tmp/solver-home', '--env', 'PYTHONDONTWRITEBYTECODE=1',
-            '--env', 'PYTHONPATH=/opt/quadratus', '--workdir', '/work',
+            '--env', 'PYTHONPATH=/opt/quadratus', *trust_args, '--workdir', '/work',
             '--mount', f'type=bind,source={work},target=/work',
             '--mount', f'type=bind,source={runtime},target=/opt/quadratus,readonly',
             *auth_mount,

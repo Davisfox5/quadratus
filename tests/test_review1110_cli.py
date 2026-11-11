@@ -324,16 +324,26 @@ def _outcome(call):
 
 
 @pytest.mark.parametrize("values", FORM_CASES)
-def test_the_shared_validation_agrees_with_the_project_form(values):
-    """The GUI still calls its own copy; until it calls this one the two must
-    give the same limits and the same refusal, word for word."""
+def test_the_project_form_calls_the_shared_validation(values, monkeypatch):
+    """The GUI had its own copy of this rule and a test held the two equal,
+    word for word. It now calls the shared one: every form value goes to it
+    under its field name, and what it returns or refuses is the form's answer."""
     enabled, *fields = values
     shared = _outcome(lambda: limits_from_fields(enabled, dict(zip(LIMIT_FIELDS, fields, strict=True))))
+    calls = []
+
+    def recorded(*args, **kwargs):
+        calls.append((args, kwargs))
+        return limits_from_fields(*args, **kwargs)
+
+    monkeypatch.setattr(gui, "limits_from_fields", recorded)
     assert shared == _outcome(lambda: gui.limits_from_form(*values))
+    assert calls == [((enabled, dict(zip(LIMIT_FIELDS, fields, strict=True))), {})]
 
 
 def test_the_shared_fields_are_the_forms_and_each_has_a_label():
-    assert LIMIT_FIELDS == gui.LIMIT_FIELDS
+    assert gui.LIMIT_FIELDS is LIMIT_FIELDS and gui.LIMIT_LABELS is LIMIT_LABELS
+    assert not hasattr(gui, "_whole") and not hasattr(gui, "_LIMIT_LABELS"), "the form keeps no copy"
     assert set(LIMIT_FIELDS) <= set(LIMIT_LABELS) and set(LIMIT_FIELDS) == set(cli._LIMIT_FLAGS)
 
 

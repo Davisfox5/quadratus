@@ -41,7 +41,8 @@ import threading
 from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 __all__ = ["CREDENTIAL_WORDS", "NEVER_FOR_A_VENDOR_CLI", "PASS_VARIABLE", "VENDOR_LOGIN", "check_env",
-           "credential_shaped", "moves_transport", "vendor_env", "withheld", "withheld_names"]
+           "credential_shaped", "moves_transport", "vendor_env", "withheld", "withheld_names",
+           "withheld_notice"]
 
 log = logging.getLogger(__name__)
 
@@ -257,3 +258,17 @@ def withheld_names(base: Optional[Mapping[str, str]] = None) -> List[str]:
     source = dict(os.environ if base is None else base)
     passed = _passed(source)
     return sorted(name for name in source if withheld(name) and name not in passed)
+
+
+def withheld_notice(base: Optional[Mapping[str, str]] = None) -> str:
+    """One line for a status display or the start of a run: the names a child
+    process is not given and how to keep one, or "" when nothing is withheld.
+    Names only, never values. The removal itself is logged at a level the
+    default logging hides, so without this line a check that fails for want
+    of an inherited variable shows only the project's own error."""
+    names = withheld_names(base)
+    if not names:
+        return ""
+    return ("Environment variables not passed to checks, previews, probes or vendor CLIs (a vendor CLI "
+            f"keeps only its own subscription sign-in): {', '.join(names)}. "
+            f"Set {PASS_VARIABLE}=NAME,NAME to keep one.")

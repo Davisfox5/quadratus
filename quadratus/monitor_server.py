@@ -21,12 +21,12 @@ run id and error text, and "project folder X does not exist" told a caller
 which folders exist). Two rules hold on every request:
 
 - The Host header must be a loopback name with the serving port, or a name
-  the operator admitted (``allow_hosts``, ``QUADRATUS_MONITOR_ALLOW_HOST``).
+  the operator admitted (``--allow-host``, ``QUADRATUS_MONITOR_ALLOW_HOST``).
   A page that re-points its own name at 127.0.0.1 still sends that name,
   so it gets a 421 and nothing else. A Tailscale or tunnel name is admitted
   the same way: by the operator, by name.
 - ``?project=`` and ``?series=`` are honoured only for the launch values
-  and the folders the operator admitted (``allow_projects``,
+  and the folders the operator admitted (``--allow-project``,
   ``QUADRATUS_MONITOR_ALLOW_PROJECT``). Anything else gets one fixed
   refusal, decided before the filesystem is touched, so it says nothing
   about what exists.
@@ -46,7 +46,7 @@ from .local_http import env_list, host_allowed, parse_allowed_hosts, split_host
 from .monitor import UNKNOWN, read_status, run_history
 
 __all__ = ["MonitorServer", "render_html", "serve", "DEFAULT_PORT", "REFRESH_SECONDS",
-           "ALLOW_HOST_ENV", "ALLOW_PROJECT_ENV", "PATH_REFUSAL"]
+           "ALLOW_HOST_ENV", "ALLOW_PROJECT_ENV", "ALLOW_HOST_FLAG", "ALLOW_PROJECT_FLAG", "PATH_REFUSAL"]
 
 DEFAULT_PORT = 7861
 #: The page reloads itself this often. Every read is bounded, so it is cheap.
@@ -59,10 +59,15 @@ ALLOW_HOST_ENV = "QUADRATUS_MONITOR_ALLOW_HOST"
 #: Comma separated project folders or series directories ``?project=`` and
 #: ``?series=`` may name besides the launch values.
 ALLOW_PROJECT_ENV = "QUADRATUS_MONITOR_ALLOW_PROJECT"
+#: The command-line spellings of the two settings (``quadratus --monitor
+#: --serve``), named beside them wherever a refusal says how to admit more.
+ALLOW_HOST_FLAG = "--allow-host"
+ALLOW_PROJECT_FLAG = "--allow-project"
 #: The one answer to a path that was not admitted. It is the same whether or
 #: not the path exists, and it is sent before anything is read.
 PATH_REFUSAL = ("This monitor shows only the project and series it was started with. "
-                f"Admit another folder with {ALLOW_PROJECT_ENV} when starting it.")
+                f"Admit another folder with {ALLOW_PROJECT_FLAG} DIR (or {ALLOW_PROJECT_ENV}) "
+                "when starting it.")
 
 
 def _host_refusal(values) -> str:
@@ -70,8 +75,8 @@ def _host_refusal(values) -> str:
     # reads this on the phone to learn which name to admit.
     pair = split_host(values[0]) if len(values) == 1 else None
     named = f"the host name {pair[0]}" if pair else "that host name"
-    return (f"This monitor does not answer to {named}. Admit a name with {ALLOW_HOST_ENV} "
-            "(comma separated) when starting the monitor.")
+    return (f"This monitor does not answer to {named}. Admit a name with {ALLOW_HOST_FLAG} NAME "
+            f"(or {ALLOW_HOST_ENV}, comma separated) when starting the monitor.")
 
 
 def _same_path(value: str) -> str:
@@ -334,11 +339,13 @@ def serve(port: int = DEFAULT_PORT, *, project: Optional[str] = None, series: Op
     launch project and series only. A host entry that is not a host name is
     reported and nothing is served (exit 2).
     """
-    hosts = [*(allow_hosts or ()), *env_list(ALLOW_HOST_ENV)]
+    given, standing = list(allow_hosts or ()), list(env_list(ALLOW_HOST_ENV))
+    hosts = [*given, *standing]
     projects = [*(allow_projects or ()), *env_list(ALLOW_PROJECT_ENV)]
     try:
-        admitted = ", ".join(name if at is None else f"{name}:{at}"
-                             for name, at in parse_allowed_hosts(hosts, ALLOW_HOST_ENV))
+        # Read apart so a bad entry is reported under the setting it came from.
+        pairs = (*parse_allowed_hosts(given, ALLOW_HOST_FLAG), *parse_allowed_hosts(standing, ALLOW_HOST_ENV))
+        admitted = ", ".join(name if at is None else f"{name}:{at}" for name, at in pairs)
     except ValueError as exc:
         announce(f"Error: {exc}")
         return 2
@@ -350,7 +357,7 @@ def serve(port: int = DEFAULT_PORT, *, project: Optional[str] = None, series: Op
                  "then Share > Add to Home Screen.")
         announce(f"The page answers to 127.0.0.1 and localhost on port {bound}, and to "
                  f"{admitted or 'no other name'}. Admit the phone's address by name: "
-                 f"{ALLOW_HOST_ENV}=<name>.")
+                 f"{ALLOW_HOST_FLAG} <name> (or {ALLOW_HOST_ENV}=<name>).")
         try:
             server.serve_forever()
         except KeyboardInterrupt:

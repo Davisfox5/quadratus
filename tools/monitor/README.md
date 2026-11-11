@@ -32,33 +32,41 @@ own browser that points its name at `127.0.0.1`. So the server checks two
 things on every request.
 
 **The host name.** It answers to `127.0.0.1` and `localhost` on its own
-port. Any other name gets a one-line `421` that names the setting below
-and nothing else. A phone reaches the page by another name (the
-Tailscale or tunnel address), so admit that name when the monitor starts:
+port. Any other name gets a one-line `421` that names the flag and the
+setting below and nothing else. A phone reaches the page by another name
+(the Tailscale or tunnel address), so admit that name when the monitor
+starts, with the flag or with the environment setting:
 
 ```
+quadratus --monitor --serve --project DIR --allow-host mac.example.ts.net
 QUADRATUS_MONITOR_ALLOW_HOST=mac.example.ts.net quadratus --monitor --serve --project DIR
 ```
 
-Several names are comma separated. A name alone admits any port;
+Repeat `--allow-host` for several names; in the environment setting they
+are comma separated, and the two add up. A name alone admits any port;
 `name:8443` admits that port only. Give the name alone, without `https://`
-or a path: anything else stops the monitor at start with the reason. Under
-launchd the setting goes in the plist's `EnvironmentVariables`, as the
-committed example shows. If the phone shows the refusal, the name it prints
-is the one to admit.
+or a path: anything else stops the monitor at start with the reason and
+the flag or setting it came from. Under launchd the setting goes in the
+plist's `EnvironmentVariables`, as the committed example shows (or add
+`--allow-host` and the name to its `ProgramArguments`). If the phone shows
+the refusal, the name it prints is the one to admit.
 
 **The project and series.** `?project=` and `?series=` are honoured for the
 values the monitor was started with. To switch between folders from the
 page without a restart, admit them at start:
 
 ```
+quadratus --monitor --serve --project DIR --allow-project /abs/project-a --allow-project /abs/project-b
 QUADRATUS_MONITOR_ALLOW_PROJECT=/abs/project-a,/abs/project-b
 ```
 
 The page then shows a small form offering those folders. Any other path
 gets one fixed refusal, the same whether or not the path exists, and
 nothing is read for it. A folder with a comma in its name cannot be given
-this way.
+in the environment setting; `--allow-project` takes it.
+
+Both flags need `--serve`: the one-screen `--monitor` status checks no host
+name and takes no folder from a request, so it refuses them.
 
 ## 2. Reach it from your own devices only
 
@@ -71,7 +79,7 @@ tailscale serve --bg 7861
 This prints an `https://<mac>.<tailnet>.ts.net` address that only devices
 on your tailnet can open, with a real certificate. The server itself stays
 on loopback; Tailscale is the only way in. `tailscale serve --bg off`
-removes it. Admit that address's host name with
+removes it. Admit that address's host name with `--allow-host` or
 `QUADRATUS_MONITOR_ALLOW_HOST` as above.
 
 ## 3. Make it an app
@@ -120,8 +128,9 @@ once its records are copied over, which Cloudflare does on import.
    email code, then show the page. If it shows the page without asking,
    stop the tunnel: Access isn't in front of it yet. If it shows a line
    saying the monitor does not answer to that host name, the monitor was
-   started without `QUADRATUS_MONITOR_ALLOW_HOST=monitor.dfconsulting.tech`
-   (the committed plist sets it).
+   started without `--allow-host monitor.dfconsulting.tech` or
+   `QUADRATUS_MONITOR_ALLOW_HOST=monitor.dfconsulting.tech` (the committed
+   plist sets the second).
 
 4. Keep it up across restarts:
 

@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from pathlib import Path
 
+from .safe_io import make_private_dir, write_private
+
 
 class RunBudgetExceeded(RuntimeError):
     """Terminal run control, deliberately not a recoverable ProviderError."""
@@ -344,9 +346,9 @@ class RunBudget:
         if self.path:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = self.path.with_suffix('.tmp')
-                temporary.write_text(json.dumps(self._snapshot(), indent=2) + '\n')
-                temporary.replace(self.path)
+                # Owner-only from creation and written whole (safe_io): the
+                # old temporary name was fixed and took the umask's mode.
+                write_private(self.path, json.dumps(self._snapshot(), indent=2) + '\n')
             except OSError as exc:
                 self._reason = self._reason or 'budget_state_unavailable'
                 raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
@@ -460,10 +462,9 @@ class RunBudget:
             if self._reason and reply and self.path:
                 folder = self.path.parent / 'budget-responses'
                 try:
-                    folder.mkdir(exist_ok=True)
+                    make_private_dir(folder)
                     target = folder / f'attempt-{ticket}.txt'
-                    target.write_text(reply)
-                    target.chmod(0o600)
+                    write_private(target, reply)
                     self._responses.append(str(target.relative_to(self.path.parent)))
                 except OSError as exc:
                     raise RunBudgetExceeded('Run stopped: response_storage_unavailable') from exc

@@ -33,6 +33,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .safe_io import append_private
+
 __all__ = ["PRICES", "Price", "InvocationRecord", "UsageMeter", "CHARS_PER_TOKEN"]
 
 #: The estimation rule of thumb. Real tokenisers vary by ±25% either side of
@@ -168,8 +170,9 @@ class UsageMeter:
             self._records.append(entry)
             if self.path is not None:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(row) + "\n")
+                # Owner-only from the first line: the log names every model
+                # called and what each call cost. Never written through a link.
+                append_private(self.path, json.dumps(row) + "\n")
         return entry
 
     def wrap(self, invoke):

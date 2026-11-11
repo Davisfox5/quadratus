@@ -109,6 +109,12 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     before the first model call. A failing probe stops the run as an
     operator handoff; a passing one proves readiness, never acceptance.
     """
+    # Before anything else, in words: None (a cleared form field) used to end
+    # as a TypeError from the comparison below, and a fraction went on to the
+    # session. Nothing is coerced here; a caller that parses text hands over
+    # a real whole number.
+    if isinstance(max_tasks, bool) or not isinstance(max_tasks, int):
+        raise ValueError(f'max_tasks must be a whole number of at least 1, not {max_tasks!r}')
     from .runtime import Fleet, new_session
 
     if not goal.strip():
@@ -483,7 +489,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # The allowance this run was given, saved before any model call so an
     # interrupted run still says what it was allowed (Codex GUI plan, #35),
     # with the lead turn cap the session is about to be built with.
-    selected = _selected_limits(max_tasks, run_limits, survey, lead_turns, lead_source)
+    selected = _selected_limits(max_tasks, run_limits, survey, lead_turns, lead_source,
+                                session_settings=session_options)
     write_private(run_dir / 'run-limits.json', json.dumps(selected, indent=2) + '\n')
     if progress:
         progress('Run limits: ' + selected['described'])
@@ -698,6 +705,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'policy_plans': getattr(session, 'policy_plans', []),
         'budget': budget.snapshot() if budget else None,
         'selected_limits': selected,
+        # The chosen session settings again, at the top level where a reader
+        # of the record looks for how the run was set up; absent when none.
+        **({'session_settings': selected['session_settings']} if 'session_settings' in selected else {}),
         'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
         'original_test_runs': list(getattr(session, 'original_test_runs', []) or []) if session else [],
         # Harness runs of the task gate seats were shown; never task checks.
@@ -893,9 +903,24 @@ def _retire_stale_fixtures(root, run_dir, progress=None):
     return dict(path=where, resolves=resolves, state_directory=dict(device=held.st_dev, inode=held.st_ino))
 
 
-def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source=None):
+def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source=None, session_settings=None):
+    """What this run was allowed and how it was set up, for run-limits.json.
+
+    ``session_settings`` are the session settings the caller chose
+    (session_knobs). Only those that differ from SessionConfig's own default
+    are recorded, under ``session_settings``, and the key is absent when none
+    does: the record of a run that chose nothing is the record it always had.
+    Before this they were only a progress line, so a run made with
+    ``design_cross_check`` off said so nowhere in its own record.
+    """
     from .run_budget import SUMMARY_CALL_RESERVE_TOKENS, describe_limits
     reserve = run_limits.reserve_tokens_per_call if run_limits is not None else 0
+    # The class itself, not this module's name for it: an embedding caller or
+    # a test may put a wrapper under that name, and a wrapper has no fields.
+    from .session import SessionConfig as config_type
+    defaults = {f.name: f.default for f in dataclasses.fields(config_type)}
+    changed = {name: value for name, value in sorted((session_settings or {}).items())
+               if name not in defaults or defaults[name] != value}
     return {
         'max_tasks': max_tasks,
         'run_limits': dataclasses.asdict(run_limits) if run_limits is not None else None,
@@ -904,6 +929,7 @@ def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source
         'lead_max_turns_source': lead_source,
         'survey_recovery_tasks': survey.recovery_tasks if survey is not None else None,
         'described': describe_limits(run_limits, survey, max_tasks, lead_turns, lead_source),
+        **({'session_settings': changed} if changed else {}),
     }
 
 

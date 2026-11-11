@@ -106,6 +106,9 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     API-price counterfactual.
     """
     options = _session_options(args)
+    withheld = _withheld_line()
+    if withheld:
+        print(f">> {withheld}", flush=True)
     if args.project:
         from .project import Project
         from .project_run import run_project
@@ -132,6 +135,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 # session setting is exactly the call made before they existed.
                 **({"run_limits": limits} if limits is not None else {}),
                 **({"session_options": options} if options else {}),
+                **_trust(args),
                 direct_tier=bool(getattr(args, "direct_tier", False)),
                 tasks=_task_list(getattr(args, "tasks", None)),
                 progress=lambda message: print(f">> {message}", flush=True),
@@ -149,7 +153,14 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         return 0 if result.completed else 1
 
     state = Path(args.state_dir or ".quadratus").expanduser()
-    state.mkdir(parents=True, exist_ok=True)
+    # Owner-only and ignored by git from the moment it exists, as a project
+    # run's state folder is: it holds artifacts, the map and the usage log.
+    from .safe_io import prepare_state_dir
+    try:
+        prepare_state_dir(state)
+    except OSError as exc:
+        print(_c(f"\nError: the state directory {state} cannot be used: {exc}", Fore.RED, True))
+        return 1
     try:
         with _state_lock(state):
             return _run_projectless(goal, args, settings, state, options)
@@ -220,16 +231,26 @@ def _run_projectless(goal: str, args: argparse.Namespace, settings: Settings, st
         print(plan)
         return input("\nRun this plan? [y/N] ").strip().lower() in ("y", "yes")
 
+    code_map = CodebaseMap(state / "codebase-map.jsonl")
+    for notice in list(getattr(code_map, "notices", ()) or ()):
+        # What a damaged or over-long map cost, said once as a project run says it.
+        progress(f"Codebase map: {notice}")
+    decider = _decider_for(args, meter)
+    if decider is not None:
+        # Said before any task text is sent, as a project run says it: the
+        # --decider help promises the run names the destination.
+        from .decisions import disclosure
+        progress(disclosure(decider))
     config = SessionConfig(
         mode=args.mode,
-        codebase_map=CodebaseMap(state / "codebase-map.jsonl"),
+        codebase_map=code_map,
         plan_gate=plan_gate if args.plan_gate else None,
         ask_operator=ask_operator,
         # So the lead prompt states the cap the Fleet applies (--lead-max-turns).
         lead_max_turns=getattr(settings, "lead_max_turns", None),
         security_verdict_json=getattr(args, "security_verdict_json", False),
         progress=progress,
-        decider=_decider_for(args, meter),
+        decider=decider,
         decider_labels=getattr(args, "decider_labels", "unstated"),
         **session_options(options),
     )
@@ -322,14 +343,60 @@ def _run_monitor(args: argparse.Namespace) -> int:
         return 1
     if args.serve is not None:
         from .monitor_server import serve
+        # Passed only when given: a line without them is the call made before
+        # the flags existed, and the two environment settings still apply.
+        admitted = {}
+        if args.allow_host:
+            admitted["allow_hosts"] = tuple(args.allow_host)
+        if args.allow_project:
+            admitted["allow_projects"] = tuple(args.allow_project)
         return serve(args.serve, project=args.project, series=args.series,
-                     state_dir=args.state_dir, history=args.history)
+                     state_dir=args.state_dir, history=args.history, **admitted)
     status = read_status(args.project, args.series, state_dir=args.state_dir)
     project = status.get("project")
     history = run_history(project, state_dir=args.state_dir, limit=args.history) \
         if project and project != "unknown" else []
     print(render_text(status, history))
     return 0
+
+
+def _trust(args) -> dict:
+    """The operator's trust choices as ``run_project`` arguments.
+
+    Only the ones given, so a line without them is the call made before the
+    flags existed and the two environment settings still decide.
+    """
+    chosen = {}
+    if getattr(args, "trust_project_policy", None):
+        chosen["trust_project_policy"] = args.trust_project_policy
+    if getattr(args, "allow_project_agent_config", False):
+        chosen["allow_project_agent_config"] = True
+    if getattr(args, "no_declared_checks", False):
+        chosen["declared_checks"] = False
+    return chosen
+
+
+def _policy_hash(text):
+    """An argparse type: a policy file's sha256, read by the rule the policy
+    loader uses (policy.approval_digest). A mistyped hash is refused here: a
+    project with no policy file would otherwise pass over it in silence."""
+    from .policy import PolicyError, approval_digest
+    try:
+        digest = approval_digest(text, "the value")
+    except PolicyError:
+        digest = ""
+    if not digest:
+        raise argparse.ArgumentTypeError(
+            f"expected the policy file's sha256 (64 hexadecimal characters), not {str(text)[:80]!r}")
+    return digest
+
+
+def _withheld_line() -> str:
+    """One line naming the environment variables a child process is not
+    given, or "" when there are none. Without it a check that fails for want
+    of an inherited variable shows only the project's own error."""
+    from .child_env import withheld_notice
+    return withheld_notice()
 
 
 def _task_list(path):
@@ -375,6 +442,20 @@ _NEEDS = {
                  "pipeline uses {them}"),
     "monitor": "{names} can only be used with --monitor",
 }
+
+#: How much of a task description an external decider is sent, for the
+#: --decider help (decisions.TASK_TEXT_LIMIT; a test holds the two equal).
+_DECIDER_TEXT_LIMIT = 8_000
+
+#: The two standing trust settings, named in the flags' help. Spelled here so
+#: the parser builds without importing the policy and watch modules; a test
+#: holds them equal to policy.TRUST_ENV and project_watch.ALLOW_AGENT_CONFIG_ENV.
+_TRUST_ENV = "QUADRATUS_TRUST_PROJECT_POLICY"
+_AGENT_CONFIG_ENV = "QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG"
+
+#: Monitor flags only the served page reads: the one-screen status checks no
+#: host name and takes no folder from a request.
+_SERVE_ONLY = ("allow_host", "allow_project")
 
 #: Parse-time defaults are None so a flag that was typed can be told from one
 #: that was not; the real defaults are filled in once the line is accepted.
@@ -479,6 +560,10 @@ def _misplaced(parser, args) -> str:
         if args.prompt or strays:
             return ("--monitor reads a run and starts nothing: it takes no prompt"
                     + (f" and does not use {', '.join(strays)}" if strays else ""))
+        unserved = [_flag_name(a) for a in given if a.dest in _SERVE_ONLY]
+        if unserved and args.serve is None:
+            return (f"{', '.join(unserved)} require --serve: only the served page checks a host "
+                    "name or takes a folder from a request")
         return ""
     met = {
         "project": bool(args.project),
@@ -649,8 +734,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Who answers a routing decision the orchestrator left unlabelled (task kind and "
             "difficulty): 'rule' is the deterministic default; 'jev' asks TypeSafe AI's Jev "
-            "(pip install 'quadratus[decisions]', TYPESAFE_API_KEY), a billed API call that is "
-            "metered and recorded on the task. A stated label is never overridden."
+            "(pip install 'quadratus[decisions]', TYPESAFE_API_KEY). With 'jev', each task "
+            f"description it routes, up to {_DECIDER_TEXT_LIMIT:,} characters, is sent to "
+            "api.typesafe.ai (ai-gateway.vercel.sh for a vck_ key, or the host in "
+            "TYPESAFE_BASE_URL) as a billed API call, metered and recorded on the task. Task "
+            "text can carry file paths, requirement text and code; the run names the "
+            "destination in its first progress lines. A stated label is never overridden."
         ),
     )
     flag(
@@ -718,6 +807,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     flag(engine, "--policy-preview", needs="project", action="store_true",
          help="Show the resolved policy without running models or checks.")
+    flag(
+        engine, "--trust-project-policy", needs="project", type=_policy_hash, default=None, metavar="SHA256",
+        help=(
+            "Approve the project's own .quadratus/policy.json by the sha256 of that exact file. "
+            "Needed only when the file grants something (a command check, external effects, a "
+            "withheld instruction file): the run is then refused before any model call and the "
+            "refusal prints the hash and what the file asks for. A policy that only narrows needs "
+            f"no approval. --policy-preview reads it too. Same as {_TRUST_ENV}."
+        ),
+    )
+    flag(
+        engine, "--allow-project-agent-config", needs="project", action="store_true",
+        help=(
+            "Let the run start in a project that carries vendor agent configuration "
+            "(.claude/settings.json, .mcp.json, .codex/, .grok/). A headless vendor CLI started "
+            "there can run its hooks and MCP servers as you without asking, so such a project is "
+            "otherwise refused before any model call. Allows exactly the files present at the "
+            f"start. Same as {_AGENT_CONFIG_ENV}=1."
+        ),
+    )
+    flag(
+        engine, "--no-declared-checks", needs="project", action="store_true",
+        help=(
+            "Run only your own checks (--check, --extra-check): nothing the project declares is "
+            "added beside them or run in their place. --policy-preview reads it too."
+        ),
+    )
     flag(engine, "--path", needs="project", dest="declared_paths", action="append", default=[],
          help="Declare a narrow project-relative path; whole-project dot is refused. Repeat as needed.")
     flag(engine, "--forbid", needs="project", action="append", default=[],
@@ -815,7 +931,26 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "With --monitor: keep running and serve the status as a read-only web "
             "page on 127.0.0.1 (default port 7861) that reloads itself. Loopback "
-            "only; use `tailscale serve --bg PORT` to open it on a phone."
+            "only, and it answers only to 127.0.0.1 and localhost: to open it on a "
+            "phone use `tailscale serve --bg PORT` (or a tunnel) and admit that "
+            "address's host name with --allow-host."
+        ),
+    )
+    flag(
+        watch, "--allow-host", needs="monitor", action="append", default=[], metavar="NAME",
+        help=(
+            "With --monitor --serve: a host name the page also answers to, such as the "
+            "Tailscale or tunnel name a phone uses (repeatable). The name alone admits any "
+            "port; name:port admits that port only. Give no http:// and no path. Adds to "
+            "QUADRATUS_MONITOR_ALLOW_HOST."
+        ),
+    )
+    flag(
+        watch, "--allow-project", needs="monitor", action="append", default=[], metavar="DIR",
+        help=(
+            "With --monitor --serve: a project folder or series directory the page may also "
+            "be pointed at with ?project= or ?series= (repeatable). Any other path gets one "
+            "fixed refusal. Adds to QUADRATUS_MONITOR_ALLOW_PROJECT."
         ),
     )
     flag(parser, "-v", "--verbose", monitor=True, action="store_true", help="Enable debug logging.")
@@ -850,8 +985,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         from .policy import preview_policy
         try:
+            # Each only when given. --no-declared-checks is read too: the
+            # preview is of the run this line would start, and that run would
+            # not have the project's own check.
             plan = preview_policy(args.project, args.declared_paths, forbid=args.forbid,
-                                  writing=args.allow_writes)
+                                  writing=args.allow_writes,
+                                  **({"trust_project_policy": args.trust_project_policy}
+                                     if args.trust_project_policy else {}),
+                                  **({"declared_checks": False} if args.no_declared_checks else {}))
         except (ValueError, OSError) as exc:
             print(f"Error: {exc}")
             return 1
@@ -886,6 +1027,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(_c("\nModel aliases:", Fore.CYAN, True))
         for line in _alias_lines():
             print(f"  - {line}")
+        withheld = _withheld_line()
+        if withheld:
+            print(_c("\nChild environment:", Fore.CYAN, True))
+            print(f"  - {withheld}")
         return 0
 
     if args.session or args.project:

@@ -132,6 +132,17 @@ def _approval(value) -> str:
     named = 'trust_project_policy'
     if not str(value or '').strip():
         value, named = os.environ.get(TRUST_ENV, ''), TRUST_ENV
+    return approval_digest(value, named)
+
+
+def approval_digest(value, named='trust_project_policy') -> str:
+    """``value`` as a policy approval in canonical form, '' when blank.
+
+    The one reading of an approval's spelling, for the loader, the command
+    line and the Project form: a 'sha256:' prefix and upper case are
+    accepted, anything else raises PolicyError calling the value ``named``.
+    Never reads the environment.
+    """
     text = str(value or '').strip().lower().removeprefix('sha256:')
     if text and not re.fullmatch(r'[0-9a-f]{64}', text):
         raise PolicyError(f"{named} must be the policy file's sha256: "
@@ -578,8 +589,22 @@ def _untrusted_message(path, digest, grants, given) -> str:
         f"{TRUST_ENV}={digest}.")
 
 
-def preview_policy(root, paths=(), *, forbid=(), writing=False, trust_project_policy=None):
-    return load_policy(root, forbid=forbid,
+def preview_policy(root, paths=(), *, forbid=(), writing=False, trust_project_policy=None,
+                   declared_checks=True):
+    """The plan a run with these inputs would resolve. Nothing is run.
+
+    ``declared_checks`` False previews a run that declines the project's own
+    declared checks (``run_project(declared_checks=False)``): the built-in
+    policy is built from a scan without them, as that run builds it. The
+    preview used to list the scanned check for such a run all the same.
+    """
+    scan = None
+    if not declared_checks:
+        from dataclasses import replace
+        folder = Path(root).expanduser().resolve()
+        if folder.is_dir():  # load_policy reports a folder that is not there
+            scan = replace(scan_repo(folder), check_command=None, declared_checks=[])
+    return load_policy(root, forbid=forbid, scan=scan,
                        trust_project_policy=trust_project_policy).resolve(paths, writing=writing)
 
 

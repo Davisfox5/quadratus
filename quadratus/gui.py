@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 import queue
 import re
@@ -15,6 +14,10 @@ from typing import List, Optional
 from .config import Settings, env_with_legacy
 from .orchestrator import Orchestrator
 from .providers import ProviderError, Turn
+from .run_budget import LIMIT_FIELDS, LIMIT_LABELS, limits_from_fields, whole_number
+
+# The run-limit fields, their labels and their validation above are the
+# shared ones: the form and the command line bound a run by one rule.
 
 _BRAND_DIR = Path(__file__).resolve().parent.parent / "brand"
 
@@ -161,61 +164,64 @@ RUN_LIMIT_PRESETS = {
         reserve_tokens_per_call=0, max_tokens_per_call=0, recovery_tasks=0),
 }
 
-#: Form order of the limit fields, shared by the preset filler and the form reader.
-LIMIT_FIELDS = ('max_calls', 'max_reported_tokens', 'wall_seconds', 'max_concurrent_workers',
-                'reserve_tokens_per_call', 'max_tokens_per_call', 'recovery_tasks')
-
-_LIMIT_LABELS = {
-    'max_tasks': 'Task limit',
-    'max_calls': 'Maximum model calls',
-    'max_reported_tokens': 'Total reported tokens',
-    'wall_seconds': 'Time limit (seconds)',
-    'max_concurrent_workers': 'Parallel workers',
-    'reserve_tokens_per_call': 'Tokens that must remain before a call starts',
-    'max_tokens_per_call': 'Stop after a single call reports more than (tokens, 0 for none)',
-    'recovery_tasks': 'Extra recovery tasks after failures (0 for none)',
+#: The Project form's Trust section: each input's label, which names the
+#: command-line flag it stands for, and one line saying what it allows.
+TRUST_LABELS = {
+    'trust_project_policy': "Approve this project's policy file (sha256, --trust-project-policy)",
+    'allow_project_agent_config': ('Allow vendor agent configuration in the project '
+                                   '(--allow-project-agent-config)'),
+    'no_declared_checks': 'Run only my own checks (--no-declared-checks)',
+}
+TRUST_ALLOWS = {
+    'trust_project_policy': ("Allows the project's own .quadratus/policy.json to grant what it asks for "
+                             '(a command check, external effects, a withheld instruction file). Paste '
+                             'the hash the refusal prints: it approves exactly that file.'),
+    'allow_project_agent_config': ('Allows the run to start in a project that carries .claude/settings.json, '
+                                   '.mcp.json, .codex/ or .grok/. A vendor CLI started there can run their '
+                                   'hooks and MCP servers as you, without asking.'),
+    'no_declared_checks': ('Allows a run without the checks the project itself declares: only the test '
+                           'command and the further checks entered above are run.'),
 }
 
 
-def _whole(value, field, minimum):
-    label = _LIMIT_LABELS[field]
-    if isinstance(value, bool) or value is None or (isinstance(value, str) and not value.strip()):
-        raise ValueError(f'{label}: enter a whole number.')
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise ValueError(f'{label}: {value!r} is not a number.') from None
-    if not math.isfinite(number) or number != int(number) or number < minimum:
-        raise ValueError(f'{label} must be a whole number of at least {minimum}.')
-    return int(number)
+def mode_choices():
+    """The Collaboration modes the form offers, and a line about any left out.
+
+    A mode the shared runner refuses before any call is not offered: solo
+    while the requirements ledger is on, by the rule the runner and the
+    command line apply (``registry.mode_audit_gap``). The dropdown used to
+    list it and the run then ended as "Run failed". The line says why it is
+    missing and how to get it back; it is "" when every mode is offered.
+    """
+    from .registry import MODE_ROSTERS, mode_audit_gap
+    from .session import SessionConfig
+    offered, left_out = [], []
+    for mode in sorted(MODE_ROSTERS):
+        gap = mode_audit_gap(mode)
+        if gap and SessionConfig(mode=mode).requirements_ledger:
+            left_out.append(f'{mode} is not offered: {gap}')
+        else:
+            offered.append(mode)
+    return offered, ' '.join(left_out)
 
 
 def limits_from_form(enabled, *values):
     """The validated RunLimits and SurveyConfig the form describes.
 
-    Returns ``(None, None)`` when limits are off and no recovery task is
-    asked for, which is exactly the call a run without these options made
-    before they existed. Raises ValueError naming the field otherwise, before
-    any project, provider or model is touched.
+    The form's values in LIMIT_FIELDS order, read by the one rule the command
+    line also uses (``run_budget.limits_from_fields``); this module keeps no
+    copy of it. Returns ``(None, None)`` when limits are off and no recovery
+    task is asked for, which is exactly the call a run without these options
+    made before they existed. Raises ValueError naming the field otherwise,
+    before any project, provider or model is touched.
     """
-    from .run_budget import RunLimits
-    from .session import SurveyConfig
-    fields = dict(zip(LIMIT_FIELDS, values, strict=True))
-    recovery = _whole(fields.get('recovery_tasks', 0) or 0, 'recovery_tasks', 0)
-    survey = SurveyConfig(recovery_tasks=recovery) if recovery else None
-    if not enabled:
-        return None, survey
-    per_call = _whole(fields.get('max_tokens_per_call', 0) or 0, 'max_tokens_per_call', 0)
-    limits = RunLimits(
-        max_calls=_whole(fields.get('max_calls'), 'max_calls', 1),
-        max_reported_tokens=_whole(fields.get('max_reported_tokens'), 'max_reported_tokens', 1),
-        wall_seconds=_whole(fields.get('wall_seconds'), 'wall_seconds', 1),
-        max_concurrent_workers=_whole(fields.get('max_concurrent_workers'), 'max_concurrent_workers', 1),
-        reserve_tokens_per_call=_whole(fields.get('reserve_tokens_per_call', 0) or 0,
-                                       'reserve_tokens_per_call', 0),
-        max_tokens_per_call=per_call or None,
-    )
-    return limits, survey
+    return limits_from_fields(enabled, dict(zip(LIMIT_FIELDS, values, strict=True)))
+
+
+def task_limit(value) -> int:
+    """The form's Task limit as a whole number of at least 1, or ValueError
+    naming the field, by the same rule as every other limit."""
+    return whole_number(value, LIMIT_LABELS['max_tasks'], 1)
 
 
 def limits_summary(max_tasks, enabled, *values, operator_turns=None) -> str:
@@ -224,7 +230,7 @@ def limits_summary(max_tasks, enabled, *values, operator_turns=None) -> str:
     from .run_budget import describe_limits, effective_lead_turns
     try:
         limits, survey = limits_from_form(enabled, *values)
-        tasks = _whole(max_tasks, 'max_tasks', 1)
+        tasks = task_limit(max_tasks)
     except ValueError as exc:
         return f'**Run limits are not valid:** {exc}'
     return '**This run will use:** ' + describe_limits(limits, survey, tasks,
@@ -240,12 +246,18 @@ def preset_values(name):
 def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                    *, forbid=(), declared_paths=(), channel: Optional[OperatorChannel] = None,
                    neutral: bool = False, capture_profile=None, extra_checks=(), readiness=None,
-                   run_limits=None, survey=None, repair_tests=()):
+                   run_limits=None, survey=None, repair_tests=(),
+                   trust_project_policy=None, allow_project_agent_config=False, declared_checks=True):
     """Stream progress while the shared project runner performs model calls.
 
     ``run_limits`` (a RunLimits) and ``survey`` (a SurveyConfig) go to the
     shared runner unchanged; leaving them out is the run this function made
     before they existed: no shared allowance and no recovery tasks.
+
+    The three trust inputs are the command line's ``--trust-project-policy``,
+    ``--allow-project-agent-config`` and ``--no-declared-checks``. Each
+    reaches the runner only when chosen, so a form that leaves the Trust
+    section alone makes the call it made before the section existed.
     """
     import dataclasses
 
@@ -261,6 +273,17 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
     notes = ['**Run limits:** ' + describe_limits(
         run_limits, survey, tasks, *effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits))]
     yield notes[0], '', []
+    from .child_env import withheld_notice
+    withheld = withheld_notice()
+    if withheld:
+        notes.append(withheld)
+    trust = {}
+    if str(trust_project_policy or '').strip():
+        trust['trust_project_policy'] = str(trust_project_policy).strip()
+    if allow_project_agent_config:
+        trust['allow_project_agent_config'] = True
+    if not declared_checks:
+        trust['declared_checks'] = False
     with ThreadPoolExecutor(max_workers=1) as pool:
         # ``tasks``, not a second int(max_tasks): that one was unguarded, so a
         # cleared Task limit raised TypeError out of this generator instead
@@ -273,6 +296,7 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                              extra_checks=tuple(extra_checks), readiness=readiness or None,
                              run_limits=run_limits, survey=survey,
                              **({'repair_tests': tuple(repair_tests)} if repair_tests else {}),
+                             **trust,
                              progress=events.put,
                              ask_operator=channel.ask if channel is not None else None)
         while not future.done():
@@ -405,13 +429,31 @@ def downloadable_files(run_dir):
     return copies, ""
 
 
-def policy_preview_ui(folder, paths='', forbid='', writing=False):
-    """Same resolver as CLI and dispatch; no project creation or provider construction."""
+def policy_approval(text) -> str:
+    """The Trust section's policy hash in canonical form, '' when the field
+    is blank. Raises ValueError naming the field for anything that is not a
+    sha256, so a mistyped approval is refused by name and never passed over
+    in silence by a project that has no policy file."""
+    from .policy import approval_digest
+    return approval_digest(text, TRUST_LABELS['trust_project_policy'])
+
+
+def policy_preview_ui(folder, paths='', forbid='', writing=False, trust_project_policy='',
+                      own_checks_only=False):
+    """Same resolver as CLI and dispatch; no project creation or provider construction.
+
+    ``trust_project_policy`` is the Trust section's approval of the project's
+    own policy file and ``own_checks_only`` its "Run only my own checks" box.
+    Each is passed on only when chosen, so the preview is of the run the form
+    would start."""
     from .policy import preview_policy, render_preview
     try:
+        approval = policy_approval(trust_project_policy)
         plan = preview_policy(folder, [p.strip() for p in paths.splitlines() if p.strip()],
                               forbid=[p.strip() for p in forbid.splitlines() if p.strip()],
-                              writing=writing)
+                              writing=writing,
+                              **({'trust_project_policy': approval} if approval else {}),
+                              **({'declared_checks': False} if own_checks_only else {}))
         return render_preview(plan)
     except (ValueError, OSError) as exc:
         return f'Policy preview failed: {exc}'
@@ -475,9 +517,11 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                 project_info = gr.Markdown('Choose an existing folder or a destination for a new project.')
                 source_files = gr.Textbox(label='Project files', lines=8, interactive=False)
                 goal = gr.Textbox(label='What should change?', lines=4)
+                modes, modes_note = mode_choices()
                 with gr.Row():
                     edits = gr.Checkbox(label='Allow changes to project files', value=False)
-                    mode = gr.Dropdown(['adversarial', 'collaborative', 'solo'], value='adversarial', label='Collaboration')
+                    mode = gr.Dropdown(modes, value='adversarial', label='Collaboration',
+                                       info=modes_note or None)
                     max_tasks = gr.Number(value=20, minimum=1, precision=0, label='Task limit')
                 check = gr.Textbox(label='Test or build command (optional)',
                                    placeholder='Auto-detect from the project, or enter a command')
@@ -502,15 +546,15 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                                     label='Fill from preset')
                     with gr.Row():
                         limit_calls = gr.Number(value=24, precision=0, minimum=1,
-                                                label=_LIMIT_LABELS['max_calls'])
+                                                label=LIMIT_LABELS['max_calls'])
                         limit_tokens = gr.Number(value=500_000, precision=0, minimum=1,
-                                                 label=_LIMIT_LABELS['max_reported_tokens'])
+                                                 label=LIMIT_LABELS['max_reported_tokens'])
                         limit_seconds = gr.Number(value=900, precision=0, minimum=1,
-                                                  label=_LIMIT_LABELS['wall_seconds'])
+                                                  label=LIMIT_LABELS['wall_seconds'])
                         limit_workers = gr.Number(value=2, precision=0, minimum=1,
-                                                  label=_LIMIT_LABELS['max_concurrent_workers'])
+                                                  label=LIMIT_LABELS['max_concurrent_workers'])
                     limit_recovery = gr.Number(value=0, precision=0, minimum=0,
-                                               label=_LIMIT_LABELS['recovery_tasks'])
+                                               label=LIMIT_LABELS['recovery_tasks'])
                     with gr.Accordion('Advanced token rules', open=False):
                         gr.Markdown('The first is checked before a call starts: no call begins unless this '
                                     'many tokens of the total remain. The second is checked after a call '
@@ -518,9 +562,9 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                     'itself has already run.')
                         with gr.Row():
                             limit_reserve = gr.Number(value=0, precision=0, minimum=0,
-                                                      label=_LIMIT_LABELS['reserve_tokens_per_call'])
+                                                      label=LIMIT_LABELS['reserve_tokens_per_call'])
                             limit_per_call = gr.Number(value=0, precision=0, minimum=0,
-                                                       label=_LIMIT_LABELS['max_tokens_per_call'])
+                                                       label=LIMIT_LABELS['max_tokens_per_call'])
                     def summarize(*values):
                         return limits_summary(*values, operator_turns=settings.lead_max_turns)
                     limits_info = gr.Markdown(summarize(20, False, 24, 500_000, 900, 2, 0, 0, 0))
@@ -535,10 +579,26 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                 repair_paths = gr.Textbox(label='Existing test files this run may repair (exact paths, one per line)',
                                           lines=1, info='Only these stand as repaired when the original tests are '
                                           're-run, and only while every original case still runs unskipped.')
+                with gr.Accordion('Trust', open=False):
+                    gr.Markdown('What this run may take from the project folder on trust: the command '
+                                "line's three trust flags. Left alone, only the two environment settings "
+                                '(QUADRATUS_TRUST_PROJECT_POLICY, QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG) '
+                                'apply. A choice here is for the project that is open: opening a project '
+                                'clears this section.')
+                    trust_policy = gr.Textbox(label=TRUST_LABELS['trust_project_policy'], lines=1,
+                                              placeholder='64 hexadecimal characters',
+                                              info=TRUST_ALLOWS['trust_project_policy'])
+                    trust_agent_config = gr.Checkbox(label=TRUST_LABELS['allow_project_agent_config'],
+                                                     value=False,
+                                                     info=TRUST_ALLOWS['allow_project_agent_config'])
+                    trust_own_checks = gr.Checkbox(label=TRUST_LABELS['no_declared_checks'], value=False,
+                                                   info=TRUST_ALLOWS['no_declared_checks'])
+                trust_inputs = [trust_policy, trust_agent_config, trust_own_checks]
                 preview_button = gr.Button('Preview policy')
                 policy_info = gr.Markdown()
                 preview_button.click(policy_preview_ui,
-                                     inputs=[selected, declared_paths, forbid_paths, edits],
+                                     inputs=[selected, declared_paths, forbid_paths, edits, trust_policy,
+                                             trust_own_checks],
                                      outputs=[policy_info])
                 neutral = gr.Checkbox(label='Run without my personal CLI settings '
                                             '(plugins, hooks, user config; account rules are only recorded)',
@@ -568,20 +628,39 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                     return (str(project.root), info, '\n'.join(files[:150]), '', '',
                             gr.update(interactive=True))
 
-                open_button.click(open_project, inputs=[project_path, clone_url, branch],
-                                  outputs=[selected, project_info, source_files, clone_url, branch, run_button])
+                opened = open_button.click(open_project, inputs=[project_path, clone_url, branch],
+                                           outputs=[selected, project_info, source_files, clone_url, branch,
+                                                    run_button])
+
+                def clear_trust():
+                    # A trust choice is made for the project that is open. The
+                    # section is folded shut, so a box ticked for the last
+                    # project would otherwise stay ticked, unseen, for the next
+                    # one opened or cloned here.
+                    return '', False, False
+
+                opened.success(clear_trust, outputs=trust_inputs)
 
                 def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, repairs, no_personal,
-                                 profile_path, further, probes, *limit_values):
+                                 profile_path, further, probes, *rest):
                     if not folder:
                         raise gr.Error('Open a project first.')
+                    # The run-limit fields, then the Trust section's three. A
+                    # caller that stops after the limits chose nothing there.
+                    limit_values, trust = rest[:len(limit_inputs)], rest[len(limit_inputs):]
+                    untouched = ('', False, False)
+                    policy_hash, agent_config, own_checks = (*trust, *untouched[len(trust):])[:3]
                     try:
                         run_limits, survey = limits_from_form(*limit_values)
                         # The Task limit is refused here by name, in the words
                         # the form's own summary uses, like every other limit.
-                        limit = _whole(limit, 'max_tasks', 1)
+                        limit = task_limit(limit)
                     except ValueError as exc:
                         raise gr.Error(f'Run limits are not valid: {exc}') from exc
+                    try:
+                        approval = policy_approval(policy_hash)
+                    except ValueError as exc:
+                        raise gr.Error(str(exc)) from exc
                     yield from run_project_ui(goal, folder, writes, command, mode, limit, settings,
                                               declared_paths=[p.strip() for p in paths.splitlines() if p.strip()],
                                               forbid=[p.strip() for p in forbid.splitlines() if p.strip()],
@@ -592,12 +671,15 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                               readiness=(probes or '').strip() or None,
                                               run_limits=run_limits, survey=survey,
                                               repair_tests=[p.strip() for p in (repairs or '').splitlines()
-                                                            if p.strip()])
+                                                            if p.strip()],
+                                              trust_project_policy=approval or None,
+                                              allow_project_agent_config=bool(agent_config),
+                                              declared_checks=not own_checks)
 
                 run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths,
                                                        forbid_paths, repair_paths, neutral, capture_profile,
                                                        extra_checks, readiness,
-                                                       *limit_inputs],
+                                                       *limit_inputs, *trust_inputs],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
                 gr.Markdown('This is a separate chat for snippets. To follow the team working on your project, '

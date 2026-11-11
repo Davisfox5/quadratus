@@ -670,8 +670,12 @@ def test_the_token_address_sets_the_cookie_and_the_app_then_works_end_to_end(ser
     code, _, config = _request(port, "/config", headers=cookie)
     assert code == 200 and json.loads(config)["root"] == served["base"]
     # One real call through the queue and its event stream: the Project tab's policy preview.
+    # One value per input, as the page sends them: the opened folder's slot (session state,
+    # so the server uses its own), the paths, the forbidden paths, the edit switch and the
+    # Trust section's two inputs a preview reads (the policy approval and "Run only my own
+    # checks"), which the preview gained with that section.
     code, _, queued = _request(port, "/gradio_api/call/policy_preview_ui", method="POST", headers=cookie,
-                               body={"data": [str(served["project"]), "", "", False]})
+                               body={"data": [str(served["project"]), "", "", False, "", False]})
     assert code == 200
     code, _, stream = _request(port, f"/gradio_api/call/policy_preview_ui/{json.loads(queued)['event_id']}",
                                headers=cookie)
