@@ -318,7 +318,11 @@ def test_a_reviewer_timeout_stops_protectively_with_a_reconcile_record_and_no_re
 @pytest.mark.requirements_ledger
 def test_a_reviewer_quota_stops_protectively_with_no_fallback_vendor(tmp_path, monkeypatch):
     def collab(call, replay):
-        return H.claude_error("You've reached your usage limit for this window.")
+        # With the status the CLI itself reports: a spent window is a typed
+        # fact of the CLI's own report, never wording in an error envelope
+        # around model output.
+        return json.dumps({**json.loads(H.claude_error("You've reached your usage limit for this window.")),
+                           "api_error_status": 429})
 
     replay = _run(tmp_path, monkeypatch, R1 + T1, collaborator=collab, max_tasks=2)
     result = H.result_json(replay)
