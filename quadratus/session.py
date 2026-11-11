@@ -4222,8 +4222,9 @@ _CASE_NAME = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^
 def _cited_cases(text: str) -> List[str]:
     """Explicit ``file::[Class::]name[param]`` case citations, as written:
     the file and class a seat named stay bound to the case."""
-    return [f"{m.group(1).lstrip('./') if m.group(1).startswith('./') else m.group(1)}::{m.group(2)}"
-            for m in _CASE_CITATION.finditer(text or "")]
+    # A leading "./" goes as a prefix (_scope_path): lstrip("./") strips
+    # characters, so "./.storybook/a.test.js" lost the dot of its folder.
+    return [f"{_scope_path(m.group(1))}::{m.group(2)}" for m in _CASE_CITATION.finditer(text or "")]
 
 
 def _proof_cases(proof: dict) -> set:

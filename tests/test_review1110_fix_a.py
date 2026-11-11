@@ -28,6 +28,8 @@ from quadratus.artifacts import ArtifactStore
 from quadratus.providers import ProviderRefusal
 from quadratus.scope import TaskScope
 from quadratus.session import RunStalled, Session, SessionConfig, TaskSpec
+from tests.lifecycle import harness as H
+from tests.lifecycle.test_lifecycle_matrix import covered_met
 
 OPUS = "claude:opus"
 CALC = "def add(a, b):\n    return a + b\n"
@@ -76,7 +78,8 @@ class Script:
                 return "COMPLETE"
             if kind == "lead":
                 return self.act(model, prompt, root)
-            return "NO FINDINGS"
+            # A review of work that covers requirements owes a MET line for each.
+            return ("NO FINDINGS\n" + covered_met(prompt)).strip()
         return invoke
 
     def of(self, kind):
@@ -214,7 +217,10 @@ def _auditor(verdicts, shown):
         block = prompt.split("## Requirements", 1)[1].split("\n\n", 2)[1]
         ids = [line.split(":")[0] for line in block.splitlines() if line.startswith("R")]
         shown.append(ids)
-        return "\n".join(f"{rid}: {verdicts.get(rid, 'MET - calc.py')}" for rid in ids)
+        # The task's SCOPE acceptance string is a row the audit judges on its
+        # own line; a row left unjudged keeps its requirements not met.
+        rows = [f"{oid}: SUFFICIENT calc.py shows it" for oid in H.obligation_ids(prompt, modality="legacy")]
+        return "\n".join([f"{rid}: {verdicts.get(rid, 'MET - calc.py')}" for rid in ids] + rows)
     return audit
 
 
