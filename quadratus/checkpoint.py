@@ -24,6 +24,13 @@ checkpoint whose digest does not match its body, a source, goal, policy,
 limits, settings, gate or dependency identity that differs from now, state
 the checkpoint does not carry, or no allowance left. A refusal is never a
 partial resume.
+
+The run folder is inside the project, so every digest here is one an editing
+call could rewrite along with the file. The resume therefore also holds the
+parent's manifest to the one the run's own ``result.json`` names
+(``project_run._parent_record``): that record is written after the run's
+last call and is a watched path. The export and the resume marker are
+written through ``safe_io`` and read bounded, never through a link.
 """
 
 from __future__ import annotations
