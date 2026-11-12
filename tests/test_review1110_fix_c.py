@@ -684,12 +684,15 @@ def test_the_contest_passes_the_operators_exclusions_to_the_copys_gate(tmp_path)
 # newest check only.
 
 def _recorder():
-    """What ``Session._record_check_attempt`` reads of a session."""
+    """What ``Session._record_check_attempt`` reads of a session. Since the
+    merge that includes the run's order counter (``_next_run_seq``), which
+    numbers each check attempt."""
+    import itertools
     from types import SimpleNamespace
     outcome = SimpleNamespace(checks=[], note=lambda *a, **k: "noted")
     return SimpleNamespace(_outcome=outcome, checks=[], review_checks=[], run_outcome=outcome,
                            store=SimpleNamespace(put=lambda *a, **k: SimpleNamespace(id="a1")),
-                           _source_identity=lambda: "source")
+                           _source_identity=lambda: "source", _next_run_seq=itertools.count(1).__next__)
 
 
 def _record_as_the_session_does(stub, result):
@@ -800,23 +803,22 @@ def test_one_gate_runs_names_are_bounded_across_its_commands():
 def test_an_observed_check_keeps_counts_and_no_names(tmp_path):
     """gate 4: an observation before review is read for its counts. It went
     to result.json with every name as well."""
-    from types import SimpleNamespace
-
-    from quadratus import session
+    from quadratus.artifacts import ArtifactStore
     from quadratus.integration import GateCommand, GateSuite
+    from quadratus.session import Session, SessionConfig, TaskSpec
     project = tmp_path / "project"
     project.mkdir()
     (project / "app.py").write_text("X = 1\n")
     names = [f"tests/test_a.py::test_case[{n}]" for n in range(50)]
     gate = GateSuite([GateCommand(id="check", argv=("pytest", "-q"))], cwd=project)
     gate.run = lambda: _suite_result([_named_report(names)])
-    stub = SimpleNamespace(config=SimpleNamespace(integration_gate=gate, project_excludes=()), project=project,
-                           review_checks=[], _required=lambda *a, **k: True, _current_gate=lambda: gate,
-                           _source_fingerprint=lambda: "source", _verify_dependencies=lambda *a, **k: None,
-                           _activity=lambda *a, **k: None, _note=lambda *a, **k: None)
-    session.Session._observe_checks(stub, SimpleNamespace(task_id="t1"), "review")
-    (observed,) = stub.review_checks
-    assert observed["passed"] and names[7] not in json.dumps(stub.review_checks)
+    # A real session, not a stub of one: since the merge an observation also
+    # records the identity it ran under, as an operation of the session.
+    session = Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
+                      config=SessionConfig(project=project, integration_gate=gate))
+    session._observe_checks(TaskSpec("t1", "work"), "review")
+    (observed,) = session.review_checks
+    assert observed["passed"] and names[7] not in json.dumps(session.review_checks)
     assert observed["receipts"][0]["report"]["passed_cases_omitted"] == 50
     assert observed["receipts"][0]["report"]["counts"]["passed"] == 50 and observed["receipts"][0]["tests"] == 50
 
