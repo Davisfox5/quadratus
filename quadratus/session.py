@@ -22820,7 +22820,9 @@ class Session:
         # rules, requirements, rulings, harness records and summaries are
         # rendered as before; each task's full work is listed by artifact id,
         # every one served whole by FETCH. And the question says what it is:
-        # the goal decision, which the independent audit follows.
+        # the goal decision, which the independent audit follows. It says
+        # "audit", not "auditor": scripted runs tell the audit's own prompt
+        # from this one by its opening words, "independent auditor".
         audit = ("\n\nYour answer is the goal decision, not the requirement audit: if you reply DONE, "
                  "an independent audit then checks every numbered requirement against the current "
                  "source, and your DONE does not stand in for that check."
