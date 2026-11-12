@@ -3,9 +3,11 @@
 Codex 0.154 discarded a capacity 429's body and Retry-After inside its API
 bridge and ended two runs on a bare status after its own retries; 0.163.0,
 which waits inside the same sampling session, is the first version this
-engine qualified (live, 2026-10-21). The engine adds no retry of its own:
-it records which client answered, how a failed turn ended, and refuses a
-run before any call when the installed client parses below that minimum.
+engine qualified (live, 2026-10-21). The wait for capacity belongs to the
+client: the engine records which client answered, how a failed turn ended,
+and refuses a run before any call when the installed client parses below
+that minimum. The engine's own re-send is separate and typed: a call that
+cannot write whose failure carries ``retryable`` is re-sent by the provider.
 """
 import json
 import os
