@@ -497,8 +497,10 @@ from .session_types import (  # noqa: F401
     TaskSpec,
     _environment_signature,
     _frontend_without_rendered_file,
+    _held_lead,
     _Intake,
     _invocation_role,
+    _lead_hold,
     _literal_paths,
     _needs_lines,
     _never_replaced,
@@ -3415,7 +3417,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         chosen, self._dispatch_lead = self._dispatch_lead, None
         # Picked once: a pre-dispatch capability check already chose (and the
         # rotation already advanced for) this task's lead.
-        lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
+        lead = _held_lead(chosen, spec) or self._pick_lead(spec)
         if self._outcome is not None:
             self._outcome.lead = lead
         self._bind_contract(lead)
@@ -6601,7 +6603,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                 self._named_last = ()
                 return False
             chosen, self._dispatch_lead = self._dispatch_lead, None
-            lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
+            lead = _held_lead(chosen, spec) or self._pick_lead(spec)
             parsed.append((replace(spec, lead=lead), covers))
         # A wave admitted after the final audit was consumed makes a second
         # audit necessary: its capacity is held again before the wave's own

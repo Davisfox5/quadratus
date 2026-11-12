@@ -103,3 +103,40 @@ def test_a_kept_final_audit_is_not_reused_once_the_unmeasured_changes_differ(tmp
     one = s._audit_binding(None)
     s.unmeasured_changes = {"t1": ["build/helper.txt"], "t2": ["a", "b"]}
     assert s._audit_binding(None) == one != changed
+
+
+# -- intake:2: a lead held for a sent-back task does not lead another task of the same id --
+
+
+@pytest.mark.requirements_ledger
+def test_a_lead_picked_for_a_sent_back_task_is_not_kept_for_a_different_task_under_its_id(tmp_path, monkeypatch):
+    """Naming spends no id, so the task named after a send-back has the id
+    of the one sent back. The lead asked about the first task's packet was
+    picked for a complex backend task; the simple one named next is routed
+    on its own labels."""
+    import json
+
+    from quadratus.session import Session
+    from tests.lifecycle import harness as H
+    from tests.lifecycle import test_packet_extension as px
+
+    def task(scope, kind):
+        return f"KIND: {kind}\nSCOPE: {json.dumps(scope)}\nImplement add in app.py.\nCOVERS: R1"
+
+    picks = []
+    pick = Session._pick_lead
+
+    def record(self, spec):
+        lead = pick(self, spec)
+        picks.append((spec.task_id, spec.complexity, lead))
+        return lead
+    monkeypatch.setattr(Session, "_pick_lead", record)
+    replay = H.run(tmp_path, monkeypatch,
+                   px._script(px.FIRST_REQ + task(px._oversized(), "backend complex"),
+                              task(px._narrow(), "backend simple")),
+                   files=px.FILES, max_tasks=2, record_complete=False)
+    assert replay.of("packet-justification"), "the first task was sent back over its packet"
+    assert [(tid, level) for tid, level, _ in picks] == [("t1", "complex"), ("t1", "simple")]
+    led = {call.model for call in replay.of("lead")}
+    asked = {call.model for call in replay.of("packet-justification")}
+    assert picks[0][2] != picks[1][2] and led and led != asked, "the simple task has its own routed lead"

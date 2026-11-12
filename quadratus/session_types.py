@@ -361,6 +361,27 @@ def _repeat_key(spec) -> tuple:
     return (spec.description, tuple(sorted({_scope_path(p) for p in paths})))
 
 
+def _held_lead(chosen, spec) -> Optional[str]:
+    """The lead a check before dispatch picked for ``spec``, or None.
+
+    ``chosen`` is ``(task id, lead)`` or ``(task id, lead, what was named)``.
+    Naming spends no id, so a task sent back and a different task named
+    next share one: a hold that says what was named (kind, difficulty and
+    permitted paths) stands only for that, and the other task is routed on
+    its own labels. A hold of two parts is from a check that dispatches at
+    once and stands on the id."""
+    if not chosen or chosen[0] != spec.task_id:
+        return None
+    if len(chosen) > 2 and chosen[2] != _lead_hold(spec):
+        return None
+    return chosen[1]
+
+
+def _lead_hold(spec) -> tuple:
+    """What a held lead was picked for: what routing reads off the task."""
+    return (spec.kind, spec.complexity, _repeat_key(spec)[1])
+
+
 def _literal_paths(scope) -> Optional[set]:
     paths = list(getattr(scope, "permitted_paths", ()) or ())
     if not paths or any(any(ch in p for ch in "*?[]") for p in paths):

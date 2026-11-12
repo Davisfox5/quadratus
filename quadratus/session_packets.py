@@ -33,7 +33,7 @@ from .reply_parsers import (
 from .routing import WorkClass
 from .run_budget import FinishReserved
 from .session_prompts import _PACKET_NARROW_TEXT
-from .session_types import CapabilityUnavailable, RunStalled, TaskSpec
+from .session_types import CapabilityUnavailable, RunStalled, TaskSpec, _held_lead, _lead_hold
 
 
 class PacketsMixin:
@@ -246,11 +246,13 @@ class PacketsMixin:
     def _packet_lead(self, spec) -> str:
         """The lead asked to justify: the one dispatch will use (picked once
         and held for this task id, as the capture check does)."""
-        chosen = getattr(self, "_dispatch_lead", None)
-        if chosen and chosen[0] == spec.task_id:
-            return chosen[1]
+        held = _held_lead(getattr(self, "_dispatch_lead", None), spec)
+        if held:
+            return held
         lead = self._pick_lead(spec)
-        self._dispatch_lead = (spec.task_id, lead)
+        # This check sends the task back, so the hold says what was named:
+        # the next task named has the same id and may be another task.
+        self._dispatch_lead = (spec.task_id, lead, _lead_hold(spec))
         return lead
 
     def _packet_justify(self, spec, prepared, fingerprint, role, needed, default, ceiling, basis, components):
