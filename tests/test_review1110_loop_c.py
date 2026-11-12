@@ -377,6 +377,8 @@ def test_item12_a_skip_record_names_its_check_and_no_report_changes_nothing(tmp_
     assert "\nName a task that fixes them (with COVERS)." in plain._done_refusal
     assert plain._not_run_remedy(["R1"]) == ("", [])
     assert "NOT RUN report" not in plain._done_refusal and "No task lifts" not in plain._done_refusal
+    # Nothing follows the instruction: its last sentence closes the refusal.
+    assert plain._done_refusal.endswith(S._REPAIR_OUTCOME_RULE)
 
 
 def test_item12_the_editing_call_is_told_the_rule_the_discharge_holds_it_to(tmp_path, monkeypatch):
