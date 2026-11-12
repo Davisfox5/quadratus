@@ -13,7 +13,10 @@ What a contest is, in the engine's own terms:
 * the winner is decided by measured facts in a fixed order (:data:`RULES`);
   a judge from a third vendor is asked only when the measurements tie, or
   when one draft changed no file and so cannot be measured against the other
-  (:func:`one_unchanged`);
+  (:func:`one_unchanged`). The judge comes from the brain trust, which has
+  two vendors since Grok left it on 2026-11-01, and both are drafting: no
+  judge can be seated today, the record says "no verdict", and the tie goes
+  to the smaller diff, then the routed lead;
 * only the winner's measured changes are merged into the project, and the
   task then continues through the ordinary review, checks and close-out.
 

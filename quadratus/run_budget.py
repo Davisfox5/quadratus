@@ -140,7 +140,9 @@ class APICostRate:
 #: the CLI re-sends the whole conversation every turn and reports cached
 #: input at full weight. A seed, like every other number here.
 #: What a one-turn summary call reserves: a measured allowance, not a hard
-#: bound. The close-out's prompt is bounded at 32,000 bytes
+#: bound. Since 2026-10-21 no run makes this call (the harness writes every
+#: close-out); the figure serves only a caller that asks Fleet for the
+#: summary view itself. The close-out's prompt is bounded at 32,000 bytes
 #: (runtime.Fleet._closeout) and, on the CLIs whose argv carries
 #: ``--max-turns 1`` (claude, grok; CLISpec.summary_turn_capped), the call
 #: is one model turn. Nothing caps its output tokens at the CLI: the view's
@@ -348,9 +350,11 @@ def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_s
                      'gets only the time left, but checks and captures between calls are not cut off.')
         if limits.reserve_tokens_per_call:
             reserve = limits.reserve_tokens_per_call
+            # No summary-call sentence since 2026-11-12: no run makes one
+            # (the harness writes every close-out), so it promised a cheap
+            # call that never happens.
             parts.append(f'An ordinary call starts only while at least {reserve:,} tokens of the total '
-                         f'remain; a one-turn summary call on a CLI whose flags hold it to one turn '
-                         f'(Claude, Grok) needs {min(reserve, SUMMARY_CALL_RESERVE_TOKENS):,}. '
+                         'remain. '
                          'While a call is running, the amount it needed to start stays set aside, so '
                          'a second call at the same time needs its own amount on top.')
         if limits.max_tokens_per_call:
@@ -489,7 +493,8 @@ class RunBudget:
             'export_failures': self._export_failures,
             # Included in every total above: spent by earlier episodes.
             'carried_from_earlier_episodes': dict(self._carried),
-            'shape_boundary': ('a summary-only call whose CLI argv enforces one model turn reserves '
+            'shape_boundary': ('no run makes a summary-only call since 2026-10-21, so '
+                               'shaped_reservations stays 0; a summary-only call whose CLI argv enforces one model turn reserves '
                                'min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS), a measured '
                                'allowance (largest saved close-out 24,006 reported tokens), not a hard '
                                'bound: output tokens are not capped at the CLI; every other call, '

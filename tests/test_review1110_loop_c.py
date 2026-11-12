@@ -320,21 +320,23 @@ def _report(session, task, covers, line):
 
 
 def test_item12_a_report_that_names_no_file_is_called_unliftable_not_fixable(tmp_path):
+    # Changed 2026-11-12 (merge, exception 1): the development line's
+    # restatement route (RUNS lines, a DISCHARGES task) does lift such a
+    # report, so the refusal names that route and no longer says nothing can.
     assert S._item_paths("the browser scenario") == []
     session, _, _ = _project_session(tmp_path, "R1: MET - app.py\nR5: MET - app.py")
     _report(session, "t3", ["R5"], "NOT RUN: the browser scenario - no playwright")
     assert session._requirements_satisfied() is False
     refusal = session._done_refusal
     assert "- R5: acceptance reported NOT RUN by the covering task: t3: the browser scenario" in refusal
-    assert ("A report is lifted only by a later required check that names its file, and this one names none: "
-            "it stands for the rest of this run.") in refusal
-    assert refusal.rstrip().endswith("No task lifts the report on R5: do not name one for it.")
-    assert "Name a task that fixes" not in refusal, "the only unmet requirement cannot be fixed by a task"
+    assert ("No check runs it as written. It is lifted when its own task's lead, or the lead of a later task "
+            "naming 'DISCHARGES: O1', restates it with 'RUNS: O1 - file::[Class::]test_case' lines") in refusal
+    assert "No task lifts the report" not in refusal and "stands for the rest of this run" not in refusal
     assert session.memory.ledger.requirement_status["R5"].startswith("NOT MET"), "the lowering rule is unchanged"
     # The next DONE finds R5 uncovered; that refusal carries the same signpost.
     assert session._requirements_satisfied() is False
     assert "not covered by any finished task: R5" in session._done_refusal
-    assert "No task lifts the report on R5" in session._done_refusal
+    assert "naming 'DISCHARGES: O1'" in session._done_refusal
 
 
 def test_item12_a_report_that_names_a_file_says_what_lifts_it(tmp_path):
@@ -352,8 +354,11 @@ def test_item12_a_fixable_and_an_unliftable_requirement_are_told_apart(tmp_path)
     session, _, _ = _project_session(tmp_path, "R1: NOT MET - no filter\nR5: MET - app.py")
     _report(session, "t3", ["R5"], "NOT RUN: the browser scenario - no playwright")
     assert session._requirements_satisfied() is False
-    assert "Name a task that fixes R1 (with COVERS)." in session._done_refusal
-    assert "No task lifts the report on R5: do not name one for it." in session._done_refusal
+    # Changed 2026-11-12 (merge, exception 1): R5's report has a route, so
+    # both are asked for and R5's line says which kind of task lifts it.
+    assert "Name a task that fixes them (with COVERS)." in session._done_refusal
+    assert "naming 'DISCHARGES: O1'" in session._done_refusal
+    assert "No task lifts the report" not in session._done_refusal
 
 
 def test_item12_a_skip_record_names_its_check_and_no_report_changes_nothing(tmp_path):
@@ -403,10 +408,14 @@ def test_item12_the_editing_call_is_told_the_rule_the_discharge_holds_it_to(tmp_
     told = " ".join(seen[0].split())
     # The development line's NOT_RUN_RULE names the item forms (cycle22).
     assert "'NOT RUN: <item> - <why>'" in told, "the line format is still told"
-    assert ("A NOT RUN or BLOCKED line must name the test file it is about, alone or as the file a command "
-            "runs (tests/ui/search.test.js, or node tests/browser/run.js)") in told
-    assert ("a line that names no file path, such as 'the browser scenario', can never be matched to a later "
-            "check and keeps its requirement open for the rest of the run") in told
+    # Changed 2026-11-12 (merge, exception 1): a scenario id, case or class is
+    # a valid item that names no file, so the sentence no longer says a line
+    # with no file path can never be matched.
+    assert ("Where the item is a test file, name it alone or as the file a command runs "
+            "(tests/ui/search.test.js, or node tests/browser/run.js)") in told
+    assert ("A line in words only, such as 'the browser scenario', names nothing a check can run: no later "
+            "check discharges it") in told
+    assert "can never be matched" not in told and "must name the test file" not in told
     # The examples the sentence gives, read by the parser the discharge uses.
     assert S._item_paths("tests/ui/search.test.js") == ["tests/ui/search.test.js"]
     assert S._item_paths("node tests/browser/run.js") == ["tests/browser/run.js"]
@@ -595,14 +604,16 @@ def test_item12_an_uncovered_requirement_nothing_can_lift_is_not_asked_for_a_tas
     _report(session, "t3", ["R5"], "NOT RUN: the browser scenario - no playwright")
     assert session._requirements_satisfied() is False
     refusal = session._done_refusal
-    assert "not covered by any finished task: R5" in refusal and "Name a task for" not in refusal
-    assert refusal.rstrip().endswith("No task lifts the report on R5: do not name one for it.")
+    # Changed 2026-11-12 (merge, exception 1): the report has the
+    # restatement route, so a task is asked for and the route is named.
+    assert "not covered by any finished task: R5" in refusal and "Name a task for them (with COVERS)" in refusal
+    assert "naming 'DISCHARGES: O1'" in refusal and "No task lifts the report" not in refusal
     # Beside one a task can still cover, only that one is asked for.
     status["R1"] = "open"
     assert session._requirements_satisfied() is False
-    assert ("Name a task for R1 (with COVERS), or explain in the task why one cannot be done."
+    assert ("Name a task for them (with COVERS), or explain in the task why one cannot be done."
             in session._done_refusal)
-    assert "No task lifts the report on R5: do not name one for it." in session._done_refusal
+    assert "naming 'DISCHARGES: O1'" in session._done_refusal
     # With no standing report the wording is the old one, unchanged.
     plain, _, _ = _project_session(tmp_path / "plain", "")
     plain.memory.ledger.requirement_status["R1"] = "open"

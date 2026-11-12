@@ -54,26 +54,9 @@ def test_the_review_carries_the_measured_change_and_the_counterpart_lens(tmp_pat
     assert "Diff measured by the harness" not in plain and S._COUNTERPART_LENS in plain
 
 
-def test_an_unchanged_source_says_so_and_a_read_only_run_shows_no_diff(tmp_path):
-    session, project = _session(tmp_path)
-    before = session._capture_source()
-    got = session._measured_change(before, "## H", "guide", "Nothing: unchanged.")
-    assert got == "\n\n## H\n\nNothing: unchanged."
-    reader, _ = _session(tmp_path / "ro", writes=False)
-    assert reader._measured_change(reader._capture_source(), "## H", "guide", "empty") == ""
-    assert session._measured_change(None, "## H", "guide", "empty") == ""
-
-
-def test_a_large_change_is_cut_and_says_so_with_every_file_still_named(tmp_path, monkeypatch):
-    session, project = _session(tmp_path)
-    monkeypatch.setattr(S, "REVIEW_DIFF_CHARS", 200)
-    before = session._capture_source()
-    (project / "big.py").write_text("".join(f"LINE_{i} = {i}\n" for i in range(200)))
-    (project / "zz_last.py").write_text("Z = 0\n")
-    got = session._measured_change(before, "## H", "guide", "empty")
-    assert "big.py (200)" in got and "zz_last.py (1)" in got, "the file list is whole even when the diff is cut"
-    assert "The diff is cut at 200 of" in got and "read the listed files for the rest" in got
-    assert "LINE_199" not in got and got.count("~~~") == 2
+# Removed 2026-11-12 (merge ruling 11, one measured diff block): two tests of
+# this line's own block, _measured_change, went with that unused function.
+# The review batch's block is tested in tests/test_review1110_prompts.py.
 
 
 def test_revision_fix_and_recheck_name_counterparts_generically(tmp_path):

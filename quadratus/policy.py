@@ -7,7 +7,8 @@ ship it and an editing call can write it, so it is untrusted input. What the
 code enforces for it:
 
 * It may narrow without approval: more write denials, sensitive paths, a
-  smaller scope, a family choice.
+  family choice. Its ``scope_max_lines`` is only the default size estimate
+  for a task that declares none: size is advisory and stops nothing.
 * It can never remove a built-in write denial. ``BUILTIN_DENY_WRITE`` is
   unioned into whatever it declares.
 * Anything that grants capability (a command gate the harness would run, an

@@ -784,10 +784,14 @@ class Fleet:
                     "do not retry variants, delegate it or use another tool to execute it. "
                     + NOT_RUN_RULE + " Put NOT RUN lines above the closing CHANGED line, and finish "
                     "with the edits and available evidence. "
-                    "A NOT RUN or BLOCKED line must name the test file it is about, alone or as the "
-                    "file a command runs (tests/ui/search.test.js, or node tests/browser/run.js): a "
-                    "line that names no file path, such as 'the browser scenario', can never be "
-                    "matched to a later check and keeps its requirement open for the rest of the run. "
+                    # Reworded 2026-11-12 (merge): a scenario id, a case or a
+                    # class is a valid item with no file path, so the old
+                    # "names no file path can never be matched" was false.
+                    "A BLOCKED line is read the same way as a NOT RUN line. Where the item is a test "
+                    "file, name it alone or as the file a command runs (tests/ui/search.test.js, or "
+                    "node tests/browser/run.js). A line in words only, such as 'the browser scenario', "
+                    "names nothing a check can run: no later check discharges it, and it keeps its "
+                    "requirement open until it is restated as exact cases. "
                     "Do not change permissions."
                 )
             # The second listing, beside the source diff: what the measured

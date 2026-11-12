@@ -242,7 +242,7 @@ def run_baseline(goal, project, settings, *, model, check='', extra_checks=(), g
     watched_accepted = _refuse_standing_watch_findings(project, state, accept_watched_paths, progress)
     policy = load_policy(project.root, forbid=forbid, trust_project_policy=trust_project_policy,
                          **({} if declared_checks else {'declared_checks': False}))
-    # The whole goal is one call here, so the task-size ceiling does not
+    # The whole goal is one call here, so the task-size guide does not
     # apply; the path protections do, exactly as a task's scope carries them.
     scope = TaskScope(permitted_paths=tuple(declared_paths or ()),
                       forbidden_paths=tuple(policy.scope(None).forbidden_paths))

@@ -387,7 +387,9 @@ Key design decisions already settled:
 - **The codebase map is the cross-session memory** (`codebase_map.py`):
   append-only notes about the repository itself, with provenance, rendered
   as a bounded data block into every orchestrator and lead prompt and
-  amended from close-outs. The
+  amended from close-outs. (Corrected 2026-11-12: since 2026-10-21 no
+  close-out amends the map. The orchestrator's map notes and the harness's
+  sizing note are the two places it is amended.) The
   ledger records what a run did; the map records what was learned about the
   code, which is worth as much on the hundredth run as the first.
 - **An exhausted seat re-asks once rather than ending the run** (operator
@@ -490,6 +492,9 @@ Key design decisions already settled:
   `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, and the record carries the
   lead turn cap the session is built with and its source
   (`run_budget.effective_lead_turns`, the same rule the runner applies).
+  Corrected 2026-11-12: no run makes a summary call (the harness writes
+  every close-out), so the wording no longer states that reserve. The
+  record still carries `summary_call_reserve_tokens`.
 - **Capture-only samples belong to one run** (Codex review on #53,
   2026-10-09). Task ids restart at t1, so a sample an earlier run left under
   `.quadratus/capture-fixtures/t1/` counted as supplied for the next run's
@@ -727,7 +732,9 @@ Key design decisions already settled:
   is: a continuation inside a batch skipped the recovery allowance, the
   hypothesis record, the unchanged-retry check and its contract's
   predecessor. The cap, the size ceiling and the completion gates are
-  unchanged.
+  unchanged. (Corrected 2026-11-12: size is advisory since 2026-10-20, so
+  there is no ceiling, and the planner's note now says to declare a task at
+  its real size.)
 - **Automated acceptance is what the configured checks can show** (Step 2
   r02 on 3b629cf, narrowed after root's review of 86e2841). r02's t1 named a
   scratch two-Store Python session as acceptance, the lead reported it NOT
@@ -991,6 +998,12 @@ Key design decisions already settled:
   retry system was added. The workflow fake vendor reports 99.0.0 because
   one fake serves three vendors. Controls: `tests/test_provider_contract.py`
   and the vendor cases in `tests/test_client_version_preflight.py`.
+  Corrected 2026-11-12 (merge ruling 9), for this entry and the one before
+  it: a call that cannot write whose failure carries the typed `retryable`
+  fact is re-sent by the provider, up to `max_retries`, so a bare 429 is
+  retried. A call that can write is never re-sent inside a provider. The
+  client minimum is still a run precondition. `runtime._looks_exhausted`
+  reads only the typed `window_exhausted` fact and no wording.
 - **The PROVES rule is stated to every seat that writes or judges a
   delivery, and a malformed line comes back with its measured reason**
   (the settings-migration run, 2026-10-21: P11 first named a test class,
@@ -1031,7 +1044,9 @@ Key design decisions already settled:
   ENDS/MAP NOTES parser are deleted, and `_closes_factually` is always
   true, so no plan stage, remainder or exposure reserves a close-out call
   (`runtime.Fleet._closeout`, root's file, stays as the bounded summary
-  view and is called by nothing in the session). The record carries the
+  view and is called by nothing in the session; the merge of 2026-11-11
+  brought the review batch's copy of the model close-out back with no
+  caller, and it was removed again on 2026-11-12). The record carries the
   task's measured changes and source fingerprint, the last check with
   whether it ran on this source (a check on another source or a failed
   one is named as such, never promoted), each review's disposition and
@@ -1332,7 +1347,9 @@ Key design decisions already settled:
   copy was handed (`handed_source`, `handed_checks`, measured by the runtime
   on the copy), so a live change during the review leaves it stale with its
   raw result kept; and the own-report producers (`quadratus-pytest/6`,
-  `quadratus-unittest/2`) name every case they count passed
+  `quadratus-unittest/2`; corrected 2026-11-12: the merged pytest producer
+  says `quadratus-pytest/5` and a `/6` or `/7` report is foreign) name every
+  case they count passed
   (`passed_cases`, one per count, validated), so the unchanged quiet
   declared gates show exact executed identity without verbose output. Whether the executed test establishes the clause stays the
   seat's judgment. The R22 ledger replayed through the hold refuses row 17
@@ -1699,7 +1716,9 @@ Key design decisions already settled:
   operator's figure in full (Codex review of 961d2da). It never raises a
   reserve, every other call reserves the operator's figure in full, the
   post-return threshold is unchanged, and the snapshot counts
-  `shaped_reservations`.
+  `shaped_reservations`. Corrected 2026-11-12: since 2026-10-21 no run
+  makes a summary-only call, so that count stays 0 in a run. The shape
+  remains for a caller that asks Fleet for the summary view itself.
 - **The Stage B check declares the harness report, and a cache-free pytest
   is the same check** (series rule-7590b13 f3, 2026-10-07). A gate failure
   buys a fix call only when the check carries `--quadratus-report={report}`
@@ -2818,7 +2837,9 @@ Key design decisions already settled:
   `TestLoader.getTestCaseNames` and pytest's default prefix read),
   bounded (1000 classes, 1000 members, else `classes_truncated` and
   nothing attested), validated by the parser (`quadratus-pytest/7`,
-  `quadratus-unittest/3`; a report without the field is still valid and
+  `quadratus-unittest/3`; corrected 2026-11-12: the merged pytest producer
+  says `quadratus-pytest/5`, with both lines' fields, and a `/7` report is
+  foreign; a report without the field is still valid and
   attests nothing). An item that is exactly `<file>.py::<Class>`
   (`_CLASS_CLAIM`) binds under kind `class` to the methods the class body
   declares (`_class_declaration`, ast) as a floor and typed case list,
@@ -3218,6 +3239,10 @@ Key design decisions already settled:
   - *Unchanged.* TurnLimitReached, refusals, PartialWorkSuspected, window
     and auth exhaustion, unknown usage and every other ProviderError keep
     their behaviour.
+  - *Corrected 2026-11-12 (merge ruling 9).* The 529 is not the only
+    re-sent failure. Any call that cannot write whose failure carries the
+    typed `retryable` fact is re-sent by the provider, up to `max_retries`.
+    This handler takes a 529 first.
 - **A documentation assertion about behaviour is not the behaviour**
   (cycle07 run 20261108T091024Z-75154efd, PR73 6720016289). R23 was "README
   documents the new Store methods, HTTP endpoints and CLI commands,
@@ -4440,6 +4465,11 @@ Key design decisions already settled:
   the token effect is unmeasured until a run shows it. Reusing the
   harness's own check runs on an unchanged source already existed
   (`_observe_checks` skips a repeat; review seats get `harness_checks`).
+  Corrected 2026-11-12 (merge ruling 11): review seats get one diff block,
+  the review batch's `Session._review_diff` and `_recheck_diff`, bounded at
+  12,000 bytes. `_measured_change`, `REVIEW_DIFF_CHARS` and the
+  `_review_before` capture were unused after the merge and are removed. The
+  counterpart texts are unchanged.
 
 - **Rounds per call are recorded, and the monitor shows where the tokens
   went** (Davis, 2026-11-05: grok-worker-01's 40 calls recorded no model
@@ -5028,6 +5058,7 @@ Key design decisions already settled:
   changes are merged, and review and checks follow as usual. The routed
   lead's refusal still stops the run (`session._never_replaced`), and a
   contest result is never evidence that the work is verified.
+  Corrected 2026-11-12: the trust has two vendors, so no judge is seated.
 - **The scoreboard is a record and nothing reads it back** (same review;
   `.quadratus/scoreboard.jsonl`, `tools/scoreboard.py`). One line per
   contest and per review call: who won and by which rule, what each
@@ -5081,6 +5112,66 @@ Key design decisions already settled:
   `.env.example`, and the README lists the vendor-flag probes nobody has
   made yet. CI has read-only permissions and actions pinned to commit SHAs.
 
+- **The two lines were merged on Davis's instruction, the review batch
+  first** (2026-11-12). Where they disagreed, the review batch's rule is
+  what the engine does. The development line's rule stands where the owner
+  had ruled there and the review batch never changed it on purpose: task
+  size is advisory, no model writes a close-out, a slot is charged at
+  dispatch, roster keys name a family, and a recheck is one line per
+  finding. The review batch's stands for the rest, among them: one verdict
+  reader (`verdicts.py`), the typed retry, the stop on a refused reserve,
+  one measured diff block for review seats, and send-back corrections
+  counted per kind.
+- **After the merge, prompts and operator text say one thing** (conformance
+  audit, 2026-11-12). The DONE refusal named the RUNS and DISCHARGES route
+  for a NOT RUN item and then said no task lifts it; `_not_run_remedy` now
+  states the route each item really has, and only an item with no
+  obligation id is called stuck. The editing instructions no longer say a
+  line naming no file can never be matched. The planner's note names no
+  size ceiling. The limits text, the help and the README promise no
+  summary call. On the two-vendor trust a contest has no judge, and the
+  texts say so.
+- **A vendor binary asked for its version or its model listing gets the
+  query profile** (conformance audit, 2026-11-12; `child_env.query_env`).
+  `grok models` ran with the harness's whole environment, and `--version`
+  ran under the check profile, which keeps any name in
+  `QUADRATUS_ENV_PASS`. Both now get the vendor limit with no sign-in kept:
+  no billed key and no vendor's sign-in variable, even when passed.
+  Sign-in files under HOME still apply.
+- **Transport failures keep their typed facts** (same audit). A spent
+  window is not hidden by a permission block on the same call. A status a
+  CLI states as a field (codex's `turn.failed` status, grok's `statusCode`
+  or `code`) feeds the typed fact, not only the ledger. A 529 stays a
+  `TransientOverload` whatever stderr holds. A re-send refused by the
+  finish hold raises the call's own failure, because `FinishReserved`
+  means no call was made. The ledger's failure class reads what the typed
+  fact reads: "cap" only beside no status or a 429.
+- **A run folder's own state goes through safe_io too** (conformance
+  audit, 2026-11-12; `checkpoint.py`, `jobstore.py`). The checkpoint export
+  was written to the fixed name `checkpoint.tmp`, so a planted link took
+  the write. The export, the resume marker and `lineage.json` are now
+  owner-only, written whole and never through a link. The job store opens
+  its folders without following one, and its readers take regular files
+  only, non-blocking, to a byte bound (`jobstore._read_file`). A resume
+  copies only the parent's artifacts that hash to their id.
+- **A resume holds the parent run to the record the run wrote itself**
+  (merge conformance, 2026-11-12; `project_run._held_parent`). The run
+  folder is inside the project, so an editing call can rewrite a
+  checkpoint, its manifest and every digest. A run's `result.json` names
+  the manifests its own store committed (`committed_manifests`), and a
+  parent whose manifest is not one of them is never resumed. A parent that
+  left no record (a killed process, an older engine) is refused unless the
+  operator passes `--accept-unrecorded-parent`, which needs `--resume`.
+  The acceptance is recorded, carried into later episodes, and makes
+  `tools/truth_check.py` answer unverified.
+- **The watch lists an ended run's committed state, and a resumed episode
+  keeps the job's observations** (same audit; `project_watch.RUN_STATE`,
+  `checkpoint._CARRIED`). In an ended run's folder the manifest, exports,
+  resume marker, lineage and diff are watched, with every link or
+  non-regular file in `records` and `artifacts`. Unmeasured changes,
+  unnamed test files, contests and reviewer records are carried across a
+  resume, so a two-episode job reads like the same job in one. The resume
+  identity covers `--compete` and the session settings, each only when set.
 - **session.py was split by moving code, and two rules keep it split**
   (2026-11-11, redone 2026-11-12 after the development line was merged;
   `tests/test_review1110_split.py`). It went from 29,386 lines to 10,238
