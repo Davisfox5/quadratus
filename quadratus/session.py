@@ -4322,7 +4322,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                 # refusal must not end a run the routed lead alone carries on.
                 if exc is not None and _stops_the_run(exc) and not isinstance(exc, FinishReserved):
                     fatal = fatal or exc
-            # The routed lead's refusal or denied capability stops the run as
+            # The routed lead's refusal, denied capability or permission block stops the run as
             # it does with one lead: no re-plan repairs either and a refusal
             # is never rerouted, so no other draft stands in for its own,
             # whatever the challenger delivered.
