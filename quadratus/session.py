@@ -4222,8 +4222,9 @@ _CASE_NAME = re.compile(r"(?<![\w/.:-])((?:[A-Za-z_]\w*(?:\.|::))?test\w*(?:\[[^
 def _cited_cases(text: str) -> List[str]:
     """Explicit ``file::[Class::]name[param]`` case citations, as written:
     the file and class a seat named stay bound to the case."""
-    return [f"{m.group(1).lstrip('./') if m.group(1).startswith('./') else m.group(1)}::{m.group(2)}"
-            for m in _CASE_CITATION.finditer(text or "")]
+    # A leading "./" goes as a prefix (_scope_path): lstrip("./") strips
+    # characters, so "./.storybook/a.test.js" lost the dot of its folder.
+    return [f"{_scope_path(m.group(1))}::{m.group(2)}" for m in _CASE_CITATION.finditer(text or "")]
 
 
 def _proof_cases(proof: dict) -> set:
@@ -14655,10 +14656,13 @@ class Session:
                 "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
                 + "\n".join(f"- {r}: {shown[r][0]}" + self._basis_label(r) + f"\n  route: {routes[r]['route']}"
                              for r in unmet)
+                # The review batch's sentence first, word for word, then the
+                # development line's routes: which id goes on which line and
+                # what kind of task each route is.
                 + ("" if stuck and not fixable else
                    "\nName a task that fixes " + ("them" if not stuck else ", ".join(fixable))
-                   + " with these requirement ids in COVERS (RESOLVES names only "
-                   "finding ids, F<n> or RFT<task>-<n>, never a requirement): a repair for a finding on the "
+                   + " (with COVERS). COVERS takes these requirement ids; RESOLVES names only "
+                   "finding ids, F<n> or RFT<task>-<n>, never a requirement. Name a repair for a finding on the "
                    "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
                    "independent audit judges the repaired source. " + _REPAIR_OUTCOME_RULE)
                 + remedy)
@@ -15273,7 +15277,12 @@ class Session:
         reply_ref = self.store.put(reply or "(no reply)", kind=f"audit-reply:{auditor}", author=auditor).id
         omitted = [] if failed else self._audit_omitted(reply or "", required)
         completion = None
-        if omitted:
+        # A reply with no verdict for any audited requirement judged nothing:
+        # it is an audit that did not run, retried whole at the next DONE,
+        # so no completion is spent on it (a completion of every id would be
+        # a second audit under another name).
+        judged_any = not audited or any(rid in audited for rid, _, _ in _audit_lines(reply or ""))
+        if omitted and judged_any:
             # One same-auditor completion of exactly the omitted ids, on the
             # job's shared judgment allowance (cycle05): never a second audit
             # of the answered ids, never an inference from a requirement's
@@ -22875,9 +22884,11 @@ class Session:
         # rules, requirements, rulings, harness records and summaries are
         # rendered as before; each task's full work is listed by artifact id,
         # every one served whole by FETCH. And the question says what it is:
-        # the goal decision, which the independent audit follows.
+        # the goal decision, which the independent audit follows. It says
+        # "audit", not "auditor": scripted runs tell the audit's own prompt
+        # from this one by its opening words, "independent auditor".
         audit = ("\n\nYour answer is the goal decision, not the requirement audit: if you reply DONE, "
-                 "an independent auditor then checks every numbered requirement against the current "
+                 "an independent audit then checks every numbered requirement against the current "
                  "source, and your DONE does not stand in for that check."
                  if self.memory.ledger.requirements and self.config.requirements_ledger else "")
         prompt = self.memory.render(

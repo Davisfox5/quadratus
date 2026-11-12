@@ -559,7 +559,10 @@ def test_a_task_closing_into_a_failed_check_stop_gets_no_model_close_out(tmp_pat
     assert not H.result_json(replay)["checks"][-1]["passed"]
     assert not replay.of("closeout") and len(replay.of("orchestrator")) == 1
     record = json.loads(replay.artifact_texts("factual-closeout")[0])
-    assert "stops on its open findings" in record["why"] and "last check FAILED" in record["check"]
+    # The review opens with NO FINDINGS, which the one verdict reader takes
+    # as a finished review (review 2026-11-10), so no review finding is open
+    # and the stop the record names is the failed check itself.
+    assert "stops on its failed check" in record["why"] and "last check FAILED" in record["check"]
 
 
 @pytest.mark.requirements_ledger

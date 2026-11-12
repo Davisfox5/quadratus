@@ -33,16 +33,38 @@ from quadratus.integration import GateResult
 from quadratus.providers import ProviderError, TurnLimitReached
 from quadratus.session import RunStalled, Session, SessionConfig, SurveyConfig, TaskSpec
 from tests.lifecycle import harness as H
+from tests.lifecycle.test_lifecycle_matrix import covered_met, judging
 from tests.test_parallel_tasks import BATCH, Orchestrated, _block
 from tests.test_parallel_tasks import _session as parallel_session
 
 SERIAL = _block("c.py")
 
 
-def _design_block(path):
-    scope = json.dumps({"permitted_paths": [path], "intended_result": f"{path} shows the button",
-                        "acceptance": ["the page shows a button"], "max_lines": 20})
-    return f"KIND: frontend simple\nSCOPE: {scope}\nAdd a button in {path}"
+def _reading_proof(rid):
+    """The proof scenario the development line's intake asks of a task that
+    COVERS a requirement. Here it is a reading claim at README.md, which the
+    scripted auditor judges on its own ``O<n>: SUFFICIENT`` line; a test
+    scenario would need a gate that executes its case."""
+    return H.proofs_for(rid, "README.md", evidence="reading")
+
+
+#: The scripted auditor's line for each reading claim above.
+READ = "SUFFICIENT README.md states it"
+
+
+def _design_block(path, covers=None):
+    scope = {"permitted_paths": [path], "intended_result": f"{path} shows the button",
+             "acceptance": ["the page shows a button"], "max_lines": 20}
+    if covers:
+        scope["proofs"] = _reading_proof(covers)
+    return (f"KIND: frontend simple\nSCOPE: {json.dumps(scope)}\nAdd a button in {path}"
+            + (f"\nCOVERS: {covers}" if covers else ""))
+
+
+def _covering_block(path, rid):
+    scope = json.dumps({"permitted_paths": [path], "intended_result": f"{path} written",
+                        "acceptance": [f"{path} exists"], "max_lines": 20, "proofs": _reading_proof(rid)})
+    return f"KIND: backend simple\nSCOPE: {scope}\nwork in {path}\nCOVERS: {rid}"
 
 
 DESIGN_BATCH = "PARALLEL\n" + _design_block("templates/a.html") + "\n---\n" + _design_block("templates/b.html")
@@ -53,11 +75,10 @@ class Script:
     ``lead(root, target, prompt)`` and returns the lead's reply (or raises);
     by default it writes the one file its task names."""
 
-    def __init__(self, plan, *, lead=None, audit=None, closeout=None):
+    def __init__(self, plan, *, lead=None, audit=None):
         self.plan = list(plan)
         self.lead = lead or self.write
         self.audit = audit
-        self.closeout = closeout or (lambda root, prompt: "SUMMARY: done\nREASONING: done")
         self.decisions, self.leads, self.audits, self.roots = [], [], [], []
 
     @staticmethod
@@ -74,15 +95,14 @@ class Script:
             if "You are an independent auditor." in prompt:
                 self.audits.append(prompt)
                 return self.audit
-            if "The task is finished" in prompt:
-                return self.closeout(root, prompt)
             if "You are leading" in prompt:
                 target = re.search(r" in (\S+\.(?:py|html))", prompt).group(1)
                 self.leads.append((str(root), target, prompt))
                 return self.lead(root, target, prompt)
             if "final renders of this design work" in prompt:
                 return "APPROVED"
-            return "NO FINDINGS"
+            # A review of work that covers requirements owes a MET line for each.
+            return ("NO FINDINGS\n" + covered_met(prompt)).strip()
         return invoke
 
 
@@ -109,6 +129,18 @@ def _captures(root, target, prompt):
     task = {"templates/a.html": "t1", "templates/b.html": "t2"}[target]
     H.evidence(Path(root), task, age=H.FRESH)
     return reply
+
+
+def _at_close_out(monkeypatch, before):
+    """Call ``before(root)`` when a task's close-out is written. The harness
+    writes the close-out itself (no model is asked), so this is the last step
+    inside a task, after its renders were checked and approved."""
+    real = Session._task_close_out
+
+    def close_out(self, lead, spec, task, **kw):
+        before(Path(self.project))
+        return real(self, lead, spec, task, **kw)
+    monkeypatch.setattr(Session, "_task_close_out", close_out)
 
 
 def _sha(path):
@@ -139,16 +171,18 @@ def test_a_new_run_starts_at_t1_and_a_dispatched_task_spends_its_id(tmp_path):
 
 
 def test_an_unmerged_childs_id_is_not_issued_again(tmp_path):
-    """t2 wrote outside its scope and was not merged, so the history holds
-    one entry; the next task was named t2 again, sharing its evidence folder,
-    capture fixtures and outcome lookups with the first t2."""
-    script = Orchestrated([BATCH, SERIAL], rogue="b.py", lead_delay=0)
+    """t2 wrote outside its scope and was not merged; the next task was named
+    t2 again, sharing its evidence folder, capture fixtures and outcome
+    lookups with the first t2. (Step 2 on the development line: such a child
+    is a failed task on the history and the planner is asked again, where the
+    run used to stop with one history entry.)"""
+    script = Orchestrated([BATCH, "DONE", SERIAL], rogue="b.py", lead_delay=0)
     session, project = parallel_session(tmp_path, script)
     session.run(max_tasks=4)
-    assert [s.task_id for s in session.history] == ["t1"] and not (project / "b.py").exists()
-    assert "t2" in session._partial_tasks
+    assert [(s.task_id, s.outcome) for s in session.history] == [("t1", "closed"), ("t2", "failed")]
+    assert not (project / "b.py").exists() and "t2" in session._partial_tasks
     spec = session.next_task()
-    assert spec.task_id == "t3", "t2 is spent although it left no history entry"
+    assert spec.task_id == "t3", "t2 is spent although nothing of it was merged"
     assert [o.task_id for o in session.task_outcomes].count("t2") == 1
 
 
@@ -240,10 +274,12 @@ def test_a_merged_childs_design_evidence_is_in_the_project_and_the_run_completes
 
 @pytest.mark.requirements_ledger
 def test_the_audit_is_shown_render_paths_that_exist(tmp_path):
-    batch = ("PARALLEL\n" + _design_block("templates/a.html") + "\nCOVERS: R1\n---\n"
-             + _design_block("templates/b.html") + "\nCOVERS: R2")
-    script = Script([batch, "DONE"], lead=_captures, audit="R1: MET - templates/a.html\nR2: MET - templates/b.html")
+    batch = ("PARALLEL\n" + _design_block("templates/a.html", covers="R1") + "\n---\n"
+             + _design_block("templates/b.html", covers="R2"))
+    script = Script([batch, "DONE"], lead=_captures, audit="R1: MET - templates/a.html\nR2: MET - templates/b.html"
+                                                           f"\nO1: {READ}\nO2: {READ}")
     session, project = _session(tmp_path, script, requirements_ledger=True)
+    (project / "README.md").write_text("Page a and page b each show a button.\n")
     session.memory.ledger.requirements = {"R1": "page a shows a button", "R2": "page b shows a button"}
     session.requirement_reviews.append({"reviewer": "claude:opus", "result": "reviewed"})
     session.run(max_tasks=4)
@@ -277,12 +313,12 @@ def test_evidence_that_cannot_be_brought_over_leaves_the_design_unverified(tmp_p
     assert (project / "templates" / "a.html").exists(), "the source was merged all the same"
 
 
-def test_an_unmerged_childs_renders_are_not_brought_over_and_its_record_says_so(tmp_path):
-    def closeout(root, prompt):
-        if (Path(root) / "templates" / "b.html").exists() and not (Path(root) / "templates" / "a.html").exists():
-            raise ProviderError("the close-out call failed")       # after t2's renders were approved
-        return "SUMMARY: done\nREASONING: done"
-    script = Script([DESIGN_BATCH, "DONE"], lead=_captures, closeout=closeout)
+def test_an_unmerged_childs_renders_are_not_brought_over_and_its_record_says_so(tmp_path, monkeypatch):
+    def fails(root):
+        if (root / "templates" / "b.html").exists() and not (root / "templates" / "a.html").exists():
+            raise ProviderError("the task failed at its close")    # after t2's renders were approved
+    _at_close_out(monkeypatch, fails)
+    script = Script([DESIGN_BATCH, "DONE"], lead=_captures)
     session, project = _session(tmp_path, script)
     session.run(max_tasks=4)
     assert not session.completed and any("t2 was not merged (ProviderError" in f for f in session.open_findings)
@@ -305,16 +341,16 @@ def test_an_unmerged_childs_renders_are_not_brought_over_and_its_record_says_so(
     assert "- renders from t2: NOT verified" in session._harness_facts()
 
 
-def test_a_verified_record_naming_a_render_the_copy_lost_is_not_brought_over_as_verified(tmp_path):
+def test_a_verified_record_naming_a_render_the_copy_lost_is_not_brought_over_as_verified(tmp_path, monkeypatch):
     """The copy mirrors what the child holds; a render its verified record
     names and the copy no longer holds would leave the record, and the audit,
     naming a file the project does not have."""
-    def closeout(root, prompt):
-        lost = Path(root) / ".quadratus" / "design-evidence" / "t1" / "mobile" / "page.png"
+    def loses(root):
+        lost = root / ".quadratus" / "design-evidence" / "t1" / "mobile" / "page.png"
         if lost.exists():
             lost.unlink()               # after t1's renders were checked and approved
-        return "SUMMARY: done\nREASONING: done"
-    script = Script([DESIGN_BATCH, "DONE"], lead=_captures, closeout=closeout)
+    _at_close_out(monkeypatch, loses)
+    script = Script([DESIGN_BATCH, "DONE"], lead=_captures)
     session, project = _session(tmp_path, script)
     session.run(max_tasks=4)
     assert not session.completed
@@ -435,11 +471,11 @@ def test_the_independent_check_finds_a_merged_batchs_approved_renders_in_the_pro
 
     def block(path, rid):
         scope = dict(permitted_paths=[path], intended_result=f"{path} shows a button",
-                     acceptance=[f"{path} has a button"], max_lines=20)
+                     acceptance=[f"{path} has a button"], max_lines=20, proofs=_reading_proof(rid))
         return f"KIND: frontend simple\nSCOPE: {json.dumps(scope)}\nAdd a button to {path}.\nCOVERS: {rid}"
     docs = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(
         permitted_paths=["README.md"], intended_result="README names add", acceptance=["README names add"],
-        max_lines=20)) + "\nDocument add in README.md.\nCOVERS: R3")
+        max_lines=20, proofs=_reading_proof("R3"))) + "\nDocument add in README.md.\nCOVERS: R3")
     plan = ["REQUIREMENTS:\nR1: page a shows a button\nR2: page b shows a button\nR3: the README names add\n"
             "PARALLEL\n" + block(pages["t1"], "R1") + "\n---\n" + block(pages["t2"], "R2"), docs]
 
@@ -452,8 +488,9 @@ def test_the_independent_check_finds_a_merged_batchs_approved_renders_in_the_pro
         return f'Added the button.\nCHANGED: ["{pages[call.task]}"]'
     replies = Replies(orchestrator=lambda call, replay: plan.pop(0) if plan else "DONE", lead=lead,
                       **{"requirements-review": lambda call, replay: "COMPLETE",
-                         "auditor": lambda call, replay: ("R1: MET - templates/a.html\nR2: MET - templates/b.html\n"
-                                                          "R3: MET - README.md"),
+                         "auditor": judging(lambda call, replay: ("R1: MET - templates/a.html\n"
+                                                                  "R2: MET - templates/b.html\nR3: MET - README.md"),
+                                            reading=READ),
                          "design-review": lambda call, replay: "APPROVED"})
     files = {**FILES, "app.py": FIXED, "templates/a.html": "<p>a</p>\n", "templates/b.html": "<p>b</p>\n"}
     replay = H.run(tmp_path, monkeypatch, replies, files=files, max_tasks=5)
@@ -649,30 +686,35 @@ def test_a_capped_childs_handoff_reaches_the_task_that_continues_it(tmp_path):
 def test_a_failed_childs_record_comes_back_with_it(tmp_path):
     def lead(root, target, prompt):
         if target == "a.py" and "CONTINUES" not in prompt and "Handoff" not in prompt:
-            (Path(root) / "a.py").write_text("x = 1\n" * 200)     # far past its 20-line estimate
-            return 'Wrote it\nCHANGED: ["a.py"]'
+            (Path(root) / "a.py").write_text("# half\n")
+            return "ASK: which name should the function take?"     # a lead has no ASK channel
         return Script.write(root, target, prompt)
     finish = _block("a.py", "finish").replace("\nfinish", "\nCONTINUES: t1\nfinish")
     script = Script([BATCH, finish, "DONE"], lead=lead)
     session, project = _session(tmp_path, script)
     session.run(max_tasks=6)
     assert session.history[0].outcome == "failed", [(s.task_id, s.outcome) for s in session.history]
-    assert session.failed_records["t1"]["cause"] == "scope" and "t1" in session._cap_baselines
+    assert session.failed_records["t1"]["cause"] == "channel" and "t1" in session._cap_baselines
     assert "## Handoff from t1" in script.leads[-1][2]
 
 
 def test_an_unmerged_childs_record_does_not_come_back(tmp_path):
     """Its files are not in the project, so a note saying what it changed
-    there would be false."""
+    there would be false. (Step 2 on the development line: the parent files
+    its own failed record for such a child, which says nothing was merged.)"""
     def lead(root, target, prompt):
         if target == "b.py":
             (Path(root) / "shared.py").write_text("# not in scope\n")
         return Script.write(root, target, prompt)
     script = Script([BATCH], lead=lead)
-    session, _ = _session(tmp_path, script)
+    session, project = _session(tmp_path, script)
     session.run(max_tasks=4)
-    assert any("t2 was not merged" in f for f in session.open_findings)
-    assert "t2" not in session.failed_records and "t2" not in session._cap_baselines
+    assert session.failed == ["t2"] and not (project / "b.py").exists()
+    record = session.failed_records["t2"]
+    assert record["error"].startswith("not merged: changed files outside its scope: shared.py")
+    assert record["note"] == "parallel batch: nothing was merged" and record["content"] == {}
+    assert "already on disk" not in json.dumps(record), "the child's own note about the project is not kept"
+    assert session._cap_baselines["t2"] == {"b.py": b"", "shared.py": b""}, "what the project still holds"
 
 
 # -- item 15: one reading of the directive lines --------------------------------------------
@@ -791,11 +833,12 @@ def test_a_block_with_a_covers_problem_sends_the_batch_back_with_the_covers_remi
     """The single-task COVERS rule, through the same reading; the reminder
     about COVERS lines is this problem's and no other's."""
     reqs = "REQUIREMENTS:\nR1: a works\nR2: b works\n"
-    missing = "PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py")
-    unknown = "PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py") + "\nCOVERS: R9"
-    good = "PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py") + "\nCOVERS: R2"
-    script = Script([reqs + missing, unknown, good], audit="R1: MET - a.py\nR2: MET - b.py")
-    session, _ = _session(tmp_path, script, requirements_ledger=True)
+    missing = "PARALLEL\n" + _covering_block("a.py", "R1") + "\n---\n" + _block("b.py")
+    unknown = "PARALLEL\n" + _covering_block("a.py", "R1") + "\n---\n" + _block("b.py") + "\nCOVERS: R9"
+    good = "PARALLEL\n" + _covering_block("a.py", "R1") + "\n---\n" + _covering_block("b.py", "R2")
+    script = Script([reqs + missing, unknown, good], audit=f"R1: MET - a.py\nR2: MET - b.py\nO1: {READ}\nO2: {READ}")
+    session, project = _session(tmp_path, script, requirements_ledger=True)
+    (project / "README.md").write_text("a works and b works.\n")
     session.requirement_reviews.append({"reviewer": "claude:opus", "result": "reviewed"})
     session.run(max_tasks=6)
     assert ("--- BATCH SENT BACK ---\nt2: The task has no COVERS line. Name the tasks again with COVERS "

@@ -11,8 +11,9 @@ test_truth_canaries.py; offline, scripted replies below the vendor CLIs.
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_check_debt import IMPLEMENT, MET, REQS, _fixes, _plan
-from tests.lifecycle.test_lifecycle_matrix import FILES, Script
+from tests.lifecycle.test_lifecycle_matrix import ADD_PROOF, ADD_SHOWN, FILES, Script
 from tests.lifecycle.test_truth_canaries import _record, truth
 
 pytestmark = pytest.mark.requirements_ledger
@@ -22,8 +23,11 @@ MISSED = dict(auditor="openai:gpt-5.6-sol", result="the auditor call failed: Pro
 
 
 def _run(tmp_path, monkeypatch, auditor):
+    # The scripted auditor also writes the SUFFICIENT line the development
+    # line's audit asks for on the task's executed scenario.
     overrides = dict(orchestrator=_plan(REQS + IMPLEMENT), lead=_fixes,
-                     **{"requirements-review": lambda call, replay: "COMPLETE", "auditor": auditor})
+                     **{"requirements-review": lambda call, replay: "COMPLETE",
+                        "auditor": judging_scenarios(auditor, ADD_PROOF, basis=ADD_SHOWN)})
     return H.run(tmp_path, monkeypatch, Script(**overrides), files=FILES, max_tasks=4)
 
 

@@ -17,8 +17,9 @@ import pytest
 
 from quadratus.session import Session
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_check_debt import IMPLEMENT, MET, REQS, _fixes, _plan
-from tests.lifecycle.test_lifecycle_matrix import FILES, Script
+from tests.lifecycle.test_lifecycle_matrix import ADD_PROOF, ADD_SHOWN, FILES, Script
 from tests.lifecycle.test_truth_canaries import truth
 
 pytestmark = pytest.mark.requirements_ledger
@@ -29,8 +30,11 @@ NO_REVIEW = "I could not open the working directory, so I cannot compare the lis
 
 
 def _run(tmp_path, monkeypatch, review, auditor=lambda call, replay: MET, **kw):
+    # The scripted auditor also writes the SUFFICIENT line the development
+    # line's audit asks for on the task's executed scenario.
     overrides = dict(orchestrator=_plan(REQS + IMPLEMENT), lead=_fixes,
-                     **{"requirements-review": review, "auditor": auditor})
+                     **{"requirements-review": review,
+                        "auditor": judging_scenarios(auditor, ADD_PROOF, basis=ADD_SHOWN)})
     return H.run(tmp_path, monkeypatch, Script(**overrides), files=FILES, **{"max_tasks": 4, **kw})
 
 

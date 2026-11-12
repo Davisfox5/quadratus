@@ -263,7 +263,10 @@ def test_a_parallel_wave_charges_one_slot_per_task_and_a_sent_back_batch_none(tm
     assert [s.task_id for s in session.history] == ["t1", "t2"]
     events = [(e["event"], tuple(e["tasks"]), e["slots_used"], e.get("how")) for e in session.slot_ledger]
     assert events == [("sent_back", ("t1", "t2"), 0, None), ("charged", ("t1", "t2"), 2, "batch")]
-    assert session._slots_used == 2 and session._covers_corrections == 1
+    # Corrections are counted per kind and cleared when a task or batch is
+    # dispatched (review 2026-11-10): the batch sent back is on the ledger
+    # above, and nothing is left counted once the next batch ran.
+    assert session._slots_used == 2 and not session._covers_corrections
 
 
 @pytest.mark.requirements_ledger
