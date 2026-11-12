@@ -363,6 +363,26 @@ def test_the_watch_lists_an_ended_runs_committed_state_and_leaves_a_live_run_to_
     assert ProjectWatch.changes(ended, watch.listing())[0] == []
 
 
+def test_the_watch_lists_a_run_whose_process_died_once_this_process_has_a_run_of_its_own(tmp_path):
+    """A killed run leaves no result.json. The monitor reads its manifest's
+    terminal record, so a later run's editing call that rewrites it is a
+    watched change; the later run's own folder stays its store's."""
+    project, dead = _project(tmp_path)
+    checkpoint.write(dead, _body(HELD), store=JobStore(dead), budget_snapshot=BUDGET)
+    watch = ProjectWatch(project)
+    rel = f".quadratus/runs/{RUN}"
+    assert f"{rel}/manifest.json" not in watch.listing().sensitive, "a process with no run cannot tell"
+    live = project_run._new_run_dir(project / ".quadratus")
+    store = JobStore(live)
+    store.publish({"budget": BUDGET})
+    before = watch.listing()
+    store.publish({"budget": dict(BUDGET, reserved_attempts=4)})        # the harness, during a call
+    assert ProjectWatch.changes(before, watch.listing()) == ([], [])
+    _forge(dead, FORGED)
+    changed = dict(ProjectWatch.changes(before, watch.listing())[0])
+    assert changed == {f"{rel}/manifest.json": "changed", f"{rel}/checkpoint.json": "changed"}
+
+
 def test_the_monitor_does_not_take_a_completion_from_a_manifest_the_record_does_not_name(tmp_path, no_stall):
     project, run_dir = _project(tmp_path)
     (run_dir / "result.json").write_text(json.dumps(dict(completed=False, error="RequirementsUnmet: R1",

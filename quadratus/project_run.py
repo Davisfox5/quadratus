@@ -1033,6 +1033,9 @@ def _new_run_dir(state):
     prepare_state_dir(state)
     make_private_dir(state / 'runs')
     os.mkdir(run_dir, 0o700)
+    # The watch leaves this folder to the run's own store while it is going.
+    from .project_watch import made_here
+    made_here(run_dir)
     return run_dir
 
 

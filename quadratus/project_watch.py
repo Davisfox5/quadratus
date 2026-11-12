@@ -73,7 +73,9 @@ editing call fails the task as a scope violation, and nothing is reverted):
   run's own record is written, so an editing call that plants or rewrites
   one is changing what a later resume would carry as the job's record. A
   run still going has no ``result.json`` and is left to its own store,
-  which refuses a manifest it did not write (``jobstore.JobStore``).
+  which refuses a manifest it did not write (``jobstore.JobStore``). A
+  folder with no ``result.json`` that this process did not make, beside one
+  it did, is a run whose process died, and is listed like an ended one.
 
 A sensitive change that is still in place stops the run: Fleet makes no
 further call for the project but the orchestrator's until the path is back
@@ -214,6 +216,18 @@ RUN_RECORD = "result.json"
 RUN_STATE = ("manifest.json", "checkpoint.json", "budget.json", "resumed-by.json", "lineage.json",
              "changes.diff")
 RUN_STATE_DIRS = ("records", "artifacts")
+#: Run folders this process made (``made_here``). Where it made one, every
+#: other folder beside it with no ``result.json`` is a run whose process
+#: died: nothing writes there any more, so it is listed like an ended run.
+_MADE_HERE: set = set()
+_MADE_IN: set = set()
+
+
+def made_here(run_dir) -> None:
+    """Note a run folder this process just made and will write to."""
+    path = os.path.realpath(run_dir)
+    _MADE_HERE.add(path)
+    _MADE_IN.add(os.path.dirname(path))
 #: Report and cache folders: output no tool fills with Python.
 _PYTHON_FREE = OUTPUT_NAMES - PYTHON_OUTPUT_NAMES
 #: Folders named like harness state that are not the project's own state.
@@ -750,9 +764,18 @@ class ProjectWatch:
                         state["kinds"][record] = "run-record"
                     elif found is not None:
                         self._sensitive(sub, RUN_RECORD, record, found, state, "run-record")
-                    if found is not None:
+                    ended = found is not None or self._died(rel)
+                    if ended:
                         self._run_state(sub, rel, state)
-                    self._unlisted(sub, child, state, own=frozenset({RUN_RECORD}), ended=found is not None)
+                    self._unlisted(sub, child, state, own=frozenset({RUN_RECORD}), ended=ended)
+
+    def _died(self, rel) -> bool:
+        """Whether a run folder with no record is one no process writes to:
+        this process made a run folder beside it and did not make this one.
+        A process that made none (a reader, a test) cannot tell, and leaves
+        the folder to its store as before."""
+        path = os.path.realpath(self.root / rel)
+        return path not in _MADE_HERE and os.path.dirname(path) in _MADE_IN
 
     def _run_state(self, fd, rel, state):
         """What a run that ended committed: each ``RUN_STATE`` file by lstat
