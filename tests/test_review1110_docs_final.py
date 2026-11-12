@@ -391,6 +391,7 @@ REVIEW_ENTRIES = (
     "- **The gate counts only what a runner printed as its summary",
     "- **Undeclared design work is decided from the changed file's own type**",
     "- **The repo's statements about itself are tested**",
+    "- **session.py was split by moving code",
 )
 
 

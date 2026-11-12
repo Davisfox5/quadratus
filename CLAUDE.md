@@ -4950,7 +4950,7 @@ Key design decisions already settled:
   an unfinished review unless `REVIEW: COMPLETE` stands beside it. An audit
   line is `R1: MET - citation`, and no verdict is not met.
 - **An audit that did not run is not NOT MET** (review 2026-11-10, loop_c 4;
-  `completion_decision.py`, `session.py`). No auditor from another
+  `completion_decision.py`, `session_audit.py`). No auditor from another
   vendor, a failed auditor call, a tree that moved during the audit, or a
   reply with no verdict for any requirement judges nothing. No status is
   written, DONE is sent back once, and a second miss (or a miss at the task
@@ -5080,6 +5080,19 @@ Key design decisions already settled:
   is in the README, every `QUADRATUS_` variable the package reads is in
   `.env.example`, and the README lists the vendor-flag probes nobody has
   made yet. CI has read-only permissions and actions pinned to commit SHAs.
+
+- **session.py was split by moving code, and two rules keep it split**
+  (2026-11-11, redone 2026-11-12 after the development line was merged;
+  `tests/test_review1110_split.py`). It went from 29,386 lines to 10,238
+  with no body, signature or prompt string changed: types in
+  `session_types.py`, parsers in `reply_parsers.py`, prompt text in
+  `session_prompts.py`, receipt readers in `check_facts.py`, and Session's
+  methods in fourteen mixins, one module each (`session_checks.py`,
+  `session_design.py`, `session_audit.py`, `session_findings.py` and ten
+  more, all listed in the README). Every moved name is imported back into
+  the session module, and no moved module imports it. Code that reads a
+  name a test replaces on the session module stays in session.py. Batches
+  and contests stay too: they build a child `Session`.
 
 ## How development is coordinated
 
