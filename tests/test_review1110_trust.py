@@ -984,6 +984,9 @@ def test_a_lead_recovery_does_not_close_clean_over_what_the_failed_lead_left(tmp
     finish the task with the hook in place and only a note about it."""
     H, FILES, FIXED, Script = _lifecycle()
     from tests.lifecycle.test_lifecycle_matrix import DECL_T2, FILES_OK
+    # The simple rung is no longer Grok's (operator directive, 2026-11-01),
+    # so the case that injects a Grok lead selects it by name.
+    H.grok_lead_routing(monkeypatch, trust=True)
 
     def lead(call, replay):
         if call.vendor == "grok":
@@ -1096,7 +1099,10 @@ def test_a_run_records_build_output_and_carries_on(tmp_path, monkeypatch):
 
     replay = H.run(tmp_path, monkeypatch, Script(lead=lead), files=FILES, max_tasks=1, record_complete=False)
     result = H.result_json(replay)
-    assert result["failed_tasks"] == [] and [c.task for c in replay.of("closeout")] == ["t1"]
+    # The task closed. The harness writes the close-out now (owner ruling,
+    # 2026-10-21), so its record stands where the model's call did.
+    assert result["failed_tasks"] == [] and replay.of("closeout") == []
+    assert [json.loads(text)["task"] for text in replay.artifact_texts("factual-closeout")] == ["t1"]
     rows = [json.loads(line) for line in
             (Path(replay.result.run_dir) / "invocations.jsonl").read_text().splitlines()]
     called = [row for row in rows if row["role"] == "lead" and row["invoked"]]

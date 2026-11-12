@@ -183,6 +183,7 @@ def carried_snapshot(session) -> dict:
         "task_outcomes": [dataclasses.asdict(o) for o in session.task_outcomes],
         "breaker_counted": [o.task_id for o in getattr(session, "_breaker_counted", [])],
         "slots_used": int(getattr(session, "_slots_used", 0)),
+        "ids_issued": int(getattr(session, "_ids_issued", 0) or 0),
     }
     for name in _CARRIED:
         state[name] = getattr(session, name, None)
@@ -206,6 +207,7 @@ def capture_state(session) -> dict:
         "task_outcomes": [dataclasses.asdict(o) for o in session.task_outcomes],
         "breaker_counted": [o.task_id for o in getattr(session, "_breaker_counted", [])],
         "slots_used": int(getattr(session, "_slots_used", 0)),
+        "ids_issued": int(getattr(session, "_ids_issued", 0) or 0),
     }
     for name in _CARRIED:
         state[name] = getattr(session, name, None)
@@ -269,6 +271,11 @@ def restore_state(session, state: dict) -> None:
     by_id = {o.task_id: o for o in outcomes}
     session._breaker_counted = [by_id[t] for t in state["breaker_counted"] if t in by_id]
     session._slots_used = int(state["slots_used"])
+    # The task-id counter: an id spent in an earlier episode is never issued
+    # again (Session._next_task_id). A checkpoint written before the counter
+    # was carried holds none, and the highest id on its record stands in.
+    numbered = [re.fullmatch(r"t(\d+)", str(item.task_id or "")) for item in [*session.history, *outcomes]]
+    session._ids_issued = max([int(state.get("ids_issued") or 0), *(int(m.group(1)) for m in numbered if m)])
     for name in _CARRIED:
         if name in _ADDED_LATER and name not in state:
             # A checkpoint written before these records existed carries

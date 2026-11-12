@@ -1531,13 +1531,20 @@ class Fleet:
                 effort=sent_effort,
                 effort_reasons=effort_reasons,
                 effort_policy=getattr(decision, "policy", "") or "",
-                resolution_source=(self._job.resolutions[canonical_key(key)].source
-                                   if canonical_key(key) in self._job.resolutions else ""),
+                resolution_source=self._resolution_source(key),
             )
             record_invocation(self.delegation_ledger, event)
             _recorded_event.set(event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
             log.debug("could not record invocation for %s", key, exc_info=True)
+
+    def _resolution_source(self, key) -> str:
+        """Where this job resolved the model from, or "" when it did not: a
+        fleet with no job record (built bare, as a test does) still writes
+        the row."""
+        resolutions = getattr(getattr(self, "_job", None), "resolutions", None) or {}
+        found = resolutions.get(canonical_key(key))
+        return found.source if found is not None else ""
 
     def _report_call(self, key, provider, role, task, seconds, invoked, outcome) -> None:
         """One live progress line as each call ends. Never raises.

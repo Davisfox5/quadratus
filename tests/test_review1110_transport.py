@@ -65,7 +65,10 @@ GROK = "grok:default"
 
 def _fake_cli(tmp_path, name, body):
     """An executable that stands in for a vendor CLI. Each run appends a line
-    to ``<name>.runs`` first, so a test can count how often it was started."""
+    to ``<name>.runs`` first, so a test can count how often it was started.
+    The ``--version`` probe a provider makes once when it is built is not a
+    call: it is answered before the line is written, with no version, so the
+    count stays the number of calls."""
     folder = tmp_path / "bin"
     folder.mkdir(exist_ok=True)
     runs = tmp_path / f"{name}.runs"
@@ -73,6 +76,8 @@ def _fake_cli(tmp_path, name, body):
     script.write_text(
         f"#!{sys.executable}\n"
         "import json, os, sys, time\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        "    sys.exit(0)\n"
         f"open({str(runs)!r}, 'a').write('run\\n')\n"
         "sys.stdin.read()\n"
         + textwrap.dedent(body))
