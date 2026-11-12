@@ -288,6 +288,7 @@ The remaining options (`quadratus --help` has the full text):
 | `--compete complex` | draft each complex task twice and merge the better draft (default `off`; see Competing drafts) |
 | `--baseline MODEL`, `--fix-rounds N` | run one model alone on the goal (see Measuring against one model alone) |
 | `--trust-project-policy SHA256`, `--allow-project-agent-config`, `--no-declared-checks`, `--accept-watched-paths` | trust choices for one project (see Security model) |
+| `--accept-unrecorded-parent` | with `--resume`: resume a run that left no record of its own (no readable `result.json`, as after a killed process, or one from before records named their committed state); otherwise refused. Recorded in `result.json` `trust` for every later episode, and `tools/truth_check.py` reports them unverified. Same as `QUADRATUS_ACCEPT_UNRECORDED_PARENT=1` |
 | `--allow-host NAME`, `--allow-project DIR` | with `--monitor --serve`: a host name the page also answers to, and a folder `?project=` or `?series=` may name; repeatable |
 | `--series DIR`, `--history N` | with `--monitor`: a Stage B series to read, and how many recent runs to list (default 10) |
 | `--calls` | with `--monitor`: also print every call of the run under the by-role summary; refused with `--serve`, whose page lists every call already |

@@ -29,7 +29,9 @@ The run folder is inside the project, so every digest here is one an editing
 call could rewrite along with the file. The resume therefore also holds the
 parent's manifest to the one the run's own ``result.json`` names
 (``project_run._parent_record``): that record is written after the run's
-last call and is a watched path. The export and the resume marker are
+last call and is a watched path. A parent that left no such record (a killed
+process, an older engine) is refused unless the operator accepts it
+(``accept_unrecorded_parent``), which the new run's record says. The export and the resume marker are
 written through ``safe_io`` and read bounded, never through a link.
 """
 
