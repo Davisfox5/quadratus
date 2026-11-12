@@ -1362,6 +1362,12 @@ class Fleet:
                 # gets: FinishReserved means "refused before it started" and
                 # the session reads it as no call made. The refusal is on the
                 # budget's record already (as LLMProvider._generate_once does).
+                if isinstance(first, PartialWorkSuspected):
+                    # Measured unchanged before the replay: not partial work,
+                    # so the ordinary failure a second failed attempt is.
+                    first = carry_transport_facts(ProviderError(
+                        f"{key} call failed with the project measured unchanged: {first.cause or first}"),
+                        first.cause)
                 first.resend_refused = str(held)[:300]
                 try:
                     first.args = (f"{first}; it was not sent again, to keep the calls held for the finish",)

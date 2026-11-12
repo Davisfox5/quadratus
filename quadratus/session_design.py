@@ -38,6 +38,7 @@ from .session_types import (
     CapabilityUnavailable,
     PreviewUnavailable,
     _frontend_without_rendered_file,
+    _lead_hold,
     _rendered_file,
     is_design_task,
 )
@@ -961,7 +962,9 @@ class DesignMixin:
         if can_run is None:
             return ""
         lead = self._pick_lead(spec)
-        self._dispatch_lead = (spec.task_id, lead)
+        # The hold says what was named: a later intake check may still send
+        # this task back, and the task named next has the same id.
+        self._dispatch_lead = (spec.task_id, lead, _lead_hold(spec))
         if can_run is not None and not can_run(lead, "python -m quadratus.design_evidence"):
             raise CapabilityUnavailable(
                 f"task {spec.task_id} is UI work whose renders the harness requires, and its lead "

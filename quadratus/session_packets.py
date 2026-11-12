@@ -258,7 +258,9 @@ class PacketsMixin:
         and the count of the task's other requests, for its numbering."""
         mine = [r for r in self.packet_requests if r.get("task") == task_id]
         child.packet_requests = [r for r in mine if r.get("state") == "granted"]
-        child._packet_requests_withheld = len(mine) - len(child.packet_requests)
+        # Plus what this session's own parent kept back from it.
+        above = int(getattr(self, "_packet_requests_withheld", 0) or 0)
+        child._packet_requests_withheld = len(mine) - len(child.packet_requests) + above
 
     def _packet_lead(self, spec) -> str:
         """The lead asked to justify: the one dispatch will use (picked once

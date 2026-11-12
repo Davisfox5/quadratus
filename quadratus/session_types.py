@@ -368,8 +368,8 @@ def _held_lead(chosen, spec) -> Optional[str]:
     Naming spends no id, so a task sent back and a different task named
     next share one: a hold that says what was named (kind, difficulty and
     permitted paths) stands only for that, and the other task is routed on
-    its own labels. A hold of two parts is from a check that dispatches at
-    once and stands on the id."""
+    its own labels. Both checks that hold a lead (capture, packet) say what
+    was named; a hold of two parts, from older code, stands on the id."""
     if not chosen or chosen[0] != spec.task_id:
         return None
     if len(chosen) > 2 and chosen[2] != _lead_hold(spec):

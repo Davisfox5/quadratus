@@ -295,3 +295,65 @@ def test_a_batch_named_after_one_that_was_not_started_does_not_read_as_not_start
     events = [(e["event"], e["tasks"]) for e in intake._ledger(replay) if e["event"] in ("not_started", "sent_back")]
     assert events[0] == ("not_started", ["t1", "t2"])
     assert events[1] == ("sent_back", ["t3", "t4"]), "its own ids, and its own reason"
+
+
+# -- check of engine: the same holes by their other doors ---------------------------------
+
+
+@pytest.mark.requirements_ledger
+def test_a_lead_held_by_the_capture_check_is_not_kept_for_a_different_task_under_its_id(tmp_path, monkeypatch):
+    """The capture check also picks and holds a lead, and the path and packet
+    checks after it can still send the task back. Its hold says what was
+    named too, so a different task named next under the id is routed anew."""
+    from quadratus.session import Session
+    from tests.lifecycle import harness as H
+    from tests.lifecycle import test_packet_extension as px
+
+    picks = []
+    pick = Session._pick_lead
+
+    def record(self, spec):
+        lead = pick(self, spec)
+        picks.append((spec.task_id, spec.complexity, lead))
+        return lead
+    monkeypatch.setattr(Session, "_pick_lead", record)
+    ui = dict(px._narrow(), permitted_paths=["index.html", "readme.md"])
+    first = px.FIRST_REQ + f"KIND: frontend complex\nSCOPE: {json.dumps(ui)}\nImplement add in app.py.\nCOVERS: R1"
+    second = f"KIND: backend simple\nSCOPE: {json.dumps(px._narrow())}\nImplement add in app.py.\nCOVERS: R1"
+    H.run(tmp_path, monkeypatch, px._script(first, second), files=dict(px.FILES, **{"index.html": "<p>x</p>\n"}),
+          max_tasks=2, record_complete=False)
+    assert [(tid, level) for tid, level, _ in picks] == [("t1", "complex"), ("t1", "simple")], picks
+
+
+def test_a_refused_replay_of_a_call_measured_unchanged_is_not_a_partial_work_stop(monkeypatch):
+    """A failure that could have written is PartialWorkSuspected until the
+    project is measured. Measured unchanged and then refused its replay, it is
+    the ordinary failure a second failed attempt would have been."""
+    from quadratus import runtime
+    from quadratus.providers import PartialWorkSuspected, ProviderError
+    from quadratus.run_budget import FinishReserved
+
+    fleet = object.__new__(runtime.Fleet)
+    raised = [PartialWorkSuspected("did not complete", cause=OSError("reset"), interrupted=False, retryable=True),
+              FinishReserved("held for the finish")]
+
+    def generate(*a, **k):
+        raise raised.pop(0)
+    fleet._generate = generate
+    fleet._project_unchanged = lambda before: True
+    fleet._note_replay = lambda key, exc: None
+    monkeypatch.setattr(runtime.time, "sleep", lambda s: None)
+    with pytest.raises(ProviderError) as caught:
+        fleet._generate_editing("claude:opus", type("V", (), {"retry_base_delay": 0})(), "p", {}, "")
+    assert not isinstance(caught.value, PartialWorkSuspected) and caught.value.resend_refused
+    assert "measured unchanged" in str(caught.value)
+
+
+def test_a_childs_own_child_counts_the_requests_kept_back_above_it():
+    from quadratus.session import Session
+
+    parent, child = object.__new__(Session), object.__new__(Session)
+    parent.packet_requests = [dict(id="PX-t2-2", task="t2", state="granted")]
+    parent._packet_requests_withheld = 1
+    parent._packet_requests_for_child(child, "t2")
+    assert child._packet_request_id("t2") == "PX-t2-3"
