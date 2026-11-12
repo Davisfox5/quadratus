@@ -15,6 +15,7 @@ import dataclasses
 import hashlib
 import json
 import time
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Tuple
@@ -428,6 +429,8 @@ class ChecksMixin:
         it stands for the rest of the run and the orchestrator is told not
         to plan for it."""
         lines, stuck = [], []
+        # An id two items hold names neither in a RUNS line, so it is no route.
+        oids = Counter(e.get("oid") for e in self.unexecuted_acceptance if e.get("oid"))
         for entry in self._standing_not_run():
             hit = [r for r in entry["requirements"] if r in rids]
             if not hit:
@@ -442,15 +445,18 @@ class ChecksMixin:
                 lines.append(head + f"Lifted when a later run of required check {entry['receipt']} passes "
                              "with those cases executed and none skipped.")
             elif entry.get("restatements") and self._discharge_record(entry) is not None:
-                lines.append(head + f"Restated as {', '.join(cases)[:160]} and executed on this source; lifted "
-                             "when an independent seat judges those cases sufficient, never by another task.")
+                # The judgment as it stands, from the one reader the route
+                # line uses: a current INSUFFICIENT has a DISCHARGES route,
+                # so "never by another task" would be false for it.
+                lines.append(head + f"Restated as {', '.join(cases)[:160]} and executed on this source; "
+                             + self._restatement_status(entry) + ".")
             elif runnable and cases:
                 lines.append(head + "Lifted only when a later required check passes with "
                              f"{', '.join(cases)[:160]} executed and passed, with no filter and nothing skipped.")
             elif paths:
                 lines.append(head + "Lifted only when a later required check passes while naming "
                              f"{', '.join(paths)[:160]} as a whole file, with no filter and nothing skipped.")
-            elif oid:
+            elif oid and oids[oid] <= 1:
                 # No check runs it as written, but it is not stuck: the
                 # restatement route clears it (the same route _evidence_route
                 # names), so the orchestrator is not told to leave it.
@@ -459,8 +465,8 @@ class ChecksMixin:
                              "file::[Class::]test_case' lines, a complete passing run executes those cases, and an "
                              "independent seat judges them sufficient.")
             else:
-                lines.append(head + "It names nothing a check can run and has no obligation id to restate it "
-                             "under: it stands for the rest of this run.")
+                lines.append(head + "It names nothing a check can run and has no obligation id of its own to "
+                             "restate it under: it stands for the rest of this run.")
                 stuck += [r for r in hit if r not in stuck]
         if not lines:
             return "", []

@@ -476,7 +476,7 @@ NOT_RUN_RULE = (
     "shows every method of the class passed), or a test file or the exact command. The harness's own "
     "complete run on the current source discharges an item named this way, with no further run by you. A "
     "report naming none of these (a whole suite in words, a reason in place of an identity, an unreadable "
-    "case) is kept as written, holds the requirements it serves and nothing can discharge it; a claim a "
+    "case) is kept as written, holds the requirements it serves and no check can discharge it as written; a claim a "
     "passing run cannot establish, such as mutation detection, stays held beside any scenarios it names."
 )
 
