@@ -462,6 +462,8 @@ def _trust(args) -> dict:
         chosen["declared_checks"] = False
     if getattr(args, "accept_watched_paths", False):
         chosen["accept_watched_paths"] = True
+    if getattr(args, "accept_unrecorded_parent", False):
+        chosen["accept_unrecorded_parent"] = True
     return chosen
 
 
@@ -559,6 +561,9 @@ _TRUST_ENV = "QUADRATUS_TRUST_PROJECT_POLICY"
 _AGENT_CONFIG_ENV = "QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG"
 #: The same for the watched-paths acceptance (project_watch.ACCEPT_WATCHED_PATHS_ENV).
 _WATCHED_ENV = "QUADRATUS_ACCEPT_WATCHED_PATHS"
+#: The same for a resume from a run that left no record of its own
+#: (project_run.ACCEPT_UNRECORDED_PARENT_ENV).
+_UNRECORDED_ENV = "QUADRATUS_ACCEPT_UNRECORDED_PARENT"
 
 #: Monitor flags only the served page reads: the one-screen status checks no
 #: host name and takes no folder from a request.
@@ -696,6 +701,9 @@ def _misplaced(parser, args) -> str:
     elif any(a.dest == "fix_rounds" for a in given):
         problems.append("--fix-rounds requires --baseline: it is how many fix calls a failing check "
                         "may buy the one model")
+    if any(a.dest == "accept_unrecorded_parent" for a in given) and not getattr(args, "resume", None):
+        problems.append("--accept-unrecorded-parent requires --resume: only a resume has a parent run "
+                        "to accept")
     for need, wording in _NEEDS.items():
         unmet = [a for a in given if a.needs == need and not met[need]]
         if not unmet:
@@ -978,6 +986,19 @@ def build_parser() -> argparse.ArgumentParser:
             "before any model call, with each path named: inspect them first. An acceptance is "
             "written to this run's record, and later runs do not ask about the same paths again. "
             f"Same as {_WATCHED_ENV}=1."
+        ),
+    )
+    flag(
+        engine, "--accept-unrecorded-parent", needs="project", action="store_true",
+        help=(
+            "With --resume: resume a run that left no record of its own to hold its checkpoint to "
+            "(no readable result.json, as after a killed process or a restart, or a result.json "
+            "from before records named their committed state). Such a run is otherwise refused "
+            "before any model call, because nothing in its folder proves the checkpoint is the one "
+            "the harness wrote: inspect the run folder first. Every other check of the resume still "
+            "runs. The acceptance is written to this run's record and to every later episode of the "
+            "job, and tools/truth_check.py reports them unverified. A run whose record names a "
+            f"different committed state stays refused. Same as {_UNRECORDED_ENV}=1."
         ),
     )
     flag(

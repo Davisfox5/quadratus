@@ -24,6 +24,15 @@ checkpoint whose digest does not match its body, a source, goal, policy,
 limits, settings, gate or dependency identity that differs from now, state
 the checkpoint does not carry, or no allowance left. A refusal is never a
 partial resume.
+
+The run folder is inside the project, so every digest here is one an editing
+call could rewrite along with the file. The resume therefore also holds the
+parent's manifest to the one the run's own ``result.json`` names
+(``project_run._parent_record``): that record is written after the run's
+last call and is a watched path. A parent that left no such record (a killed
+process, an older engine) is refused unless the operator accepts it
+(``accept_unrecorded_parent``), which the new run's record says. The export and the resume marker are
+written through ``safe_io`` and read bounded, never through a link.
 """
 
 from __future__ import annotations
@@ -67,6 +76,12 @@ _CARRIED = (
     "scope_sendbacks", "done_declarations", "receipt_coverage", "resolves_normalized", "inherited_not_run",
     "boundary_notes", "restatement_judgments", "packet_refusals", "packet_requests",
     "packet_decisions_rejected", "test_change_decisions",
+    # What the review batch observes about a job (2026-11-12). A resumed
+    # episode that forgot them told its seats and its record less than the
+    # same job run in one episode: an unmeasured change, a test file no check
+    # names, a contest, a review and the audit-miss count are the job's.
+    "unmeasured_changes", "unnamed_test_files", "_unnamed_since", "contests", "reviewer_records",
+    "_audit_misses",
 )
 #: Carried state added by the A+B batch (2026-10-18): absent from earlier
 #: checkpoints, which are still readable and resumable with these empty.
@@ -82,7 +97,15 @@ _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admis
                           "scope_sendbacks", "done_declarations", "receipt_coverage",
                           "resolves_normalized", "inherited_not_run", "boundary_notes",
                           "restatement_judgments", "packet_refusals", "packet_requests",
-                          "packet_decisions_rejected", "test_change_decisions"})
+                          "packet_decisions_rejected", "test_change_decisions",
+                          "unmeasured_changes", "unnamed_test_files", "_unnamed_since", "contests",
+                          "reviewer_records", "_audit_misses"})
+#: Carried state a session sets only when it first has something to hold.
+#: Absent or None, it is left unset, as a fresh session has it.
+_SET_ON_USE = frozenset({"unnamed_test_files", "_unnamed_since"})
+#: What an older checkpoint's missing field starts as, where not a list.
+_EMPTY = {"_requirement_revision_record": {}, "_route_forfeit": None, "_terminal_route": None,
+          "goal_question_skipped": None, "unmeasured_changes": {}, "_audit_misses": 0}
 #: Carried state the engine no longer holds, with what a non-empty value
 #: means. A checkpoint written before 2026-10-20 may carry size-trim
 #: records whose independent preservation judgment was still pending; the
@@ -277,11 +300,12 @@ def restore_state(session, state: dict) -> None:
     numbered = [re.fullmatch(r"t(\d+)", str(item.task_id or "")) for item in [*session.history, *outcomes]]
     session._ids_issued = max([int(state.get("ids_issued") or 0), *(int(m.group(1)) for m in numbered if m)])
     for name in _CARRIED:
+        if name in _SET_ON_USE and state.get(name) is None:
+            continue
         if name in _ADDED_LATER and name not in state:
             # A checkpoint written before these records existed carries
             # none: the records start empty, which is what that run held.
-            setattr(session, name, {"_requirement_revision_record": {}, "_route_forfeit": None,
-                                    "_terminal_route": None, "goal_question_skipped": None}.get(name, []))
+            setattr(session, name, _EMPTY.get(name, []))
             continue
         setattr(session, name, state[name])
     session._carried_baselines = dict(_original_tests=state["_original_tests"],
@@ -387,8 +411,8 @@ def write(run_dir, body: dict, *, store=None, budget_snapshot=None, extra=None) 
     committed. A store publication that fails removes the export rather than
     leave an older point a resume could mistake for this one; the store
     itself stays refused (quadratus.jobstore)."""
+    from .safe_io import write_private
     target = Path(run_dir) / NAME
-    temporary = target.with_suffix(".tmp")
     record = dict(body=body, digest=_digest(body))
     if store is not None:
         updates = {"checkpoint": record}
@@ -399,22 +423,22 @@ def write(run_dir, body: dict, *, store=None, budget_snapshot=None, extra=None) 
             store.publish(updates)
         except Exception:  # noqa: BLE001 -- the store is latched; the export must not outlive it
             log.warning("could not publish the checkpoint generation; removing the export", exc_info=True)
-            for path in (temporary, target):
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
-            return False
-    try:
-        temporary.write_text(json.dumps(record) + "\n")
-        os.replace(temporary, target)
-    except OSError:
-        log.warning("could not write the checkpoint export; removing the old one", exc_info=True)
-        for path in (temporary, target):
             try:
-                path.unlink()
+                target.unlink()
             except OSError:
                 pass
+            return False
+    try:
+        # Through safe_io like every run record: owner-only, under a fresh
+        # temporary name, renamed in. The fixed name checkpoint.tmp was
+        # written through whatever link an editing call left there.
+        write_private(target, json.dumps(record) + "\n")
+    except OSError:
+        log.warning("could not write the checkpoint export; removing the old one", exc_info=True)
+        try:
+            target.unlink()
+        except OSError:
+            pass
         return store is not None
     return True
 
@@ -470,8 +494,10 @@ def _read_record(run_dir) -> dict:
             raise CheckpointRefused("the committed checkpoint record is not a record")
         return data
     try:
-        return json.loads((run_dir / NAME).read_text())
-    except (OSError, ValueError) as exc:
+        # Bounded, a regular file only, never through a link (the job
+        # store's reader): a FIFO or a link in the export's place refuses.
+        return json.loads(jobstore.read_export(run_dir, NAME, jobstore.MAX_CHECKPOINT_BYTES))
+    except (OSError, ValueError, RecursionError) as exc:
         raise CheckpointRefused(f"no readable checkpoint in {run_dir.name}: {type(exc).__name__}") from exc
 
 
@@ -499,7 +525,7 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
     if not body.get("resumable"):
         raise CheckpointRefused("the checkpoint is not resumable: "
                                 + ", ".join(body.get("uncarried") or ["no carried state"]))
-    if (run_dir / RESUMED).exists():
+    if os.path.lexists(run_dir / RESUMED):
         raise CheckpointRefused("the run was already resumed; resume its latest episode instead")
     # Before the budget, the identities and the claim: a checkpoint whose
     # carried state this engine can no longer hold whole is refused here,
@@ -685,10 +711,14 @@ def _same_authority(run_dir, body: dict) -> None:
 def claim(run_dir, child_run_dir, episode: int) -> None:
     """Record that ``run_dir`` was resumed, before the episode makes a call:
     a second resume of the same parent is refused (one lineage, no forks)."""
-    target = Path(run_dir) / RESUMED
+    from .safe_io import create_in
+    data = (json.dumps(dict(child=Path(child_run_dir).name, episode=episode)) + "\n").encode()
+    # Owner-only, and there whole or not at all (safe_io). Anything already
+    # at the name, a link included, means the run was resumed.
+    dir_fd = os.open(run_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    except FileExistsError as exc:
-        raise CheckpointRefused("the run was already resumed; resume its latest episode instead") from exc
-    with os.fdopen(fd, "w") as handle:
-        handle.write(json.dumps(dict(child=Path(child_run_dir).name, episode=episode)) + "\n")
+        created = create_in(dir_fd, RESUMED, data)
+    finally:
+        os.close(dir_fd)
+    if not created:
+        raise CheckpointRefused("the run was already resumed; resume its latest episode instead")

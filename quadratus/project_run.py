@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -100,7 +99,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
                 decider_labels="unstated", repair_tests=(), test_changes=None,
                 trust_project_policy=None, allow_project_agent_config=False, declared_checks=True,
-                compete="off", accept_watched_paths=False, resume_from=None):
+                compete="off", accept_watched_paths=False, resume_from=None,
+                accept_unrecorded_parent=False):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``compete`` is ``"off"`` (the run as it always was) or ``"complex"``: a
@@ -137,6 +137,15 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     ``resume_from`` is the run folder of an interrupted run of the same job
     (quadratus.checkpoint): the new run is its next episode, carrying its
     record, its lineage and what it spent, or it is refused before any call.
+
+    ``accept_unrecorded_parent`` resumes a parent that left no record of its
+    own to hold its checkpoint to: no readable ``result.json`` (a killed
+    process, a restart) or one that names no committed state (an older
+    engine). Also ``QUADRATUS_ACCEPT_UNRECORDED_PARENT=1``. By default such a
+    parent is refused, with this way out named. Only that one check is
+    waived; the acceptance is written to this run's record (``trust``) and
+    carried into every later episode of the job. A parent whose record names
+    a different committed state is refused either way.
 
     ``tasks`` is an operator-written task list (explicit-task entry): each
     text is read as an orchestrator reply would be and run in order under the
@@ -263,7 +272,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
                     decider_labels=decider_labels, repair_tests=repair_tests, test_changes=test_changes,
                     declared_checks=declared_checks, agent_config=agent_config, compete=compete,
-                    watched_accepted=watched_accepted, resume_from=resume_from)
+                    watched_accepted=watched_accepted, resume_from=resume_from,
+                    accept_unrecorded_parent=accept_unrecorded_parent)
 
 
 def _refuse_scratch_in_project(project):
@@ -634,6 +644,29 @@ def _watch_record(fleet):
     return dict(findings=findings, paths=paths)
 
 
+def _carry_watch(watch, parent_record):
+    """``watch`` with the watched-path findings an earlier episode of the
+    same job recorded in front of this episode's: the final record of a
+    resumed job says what the whole job changed outside the measured source,
+    as the same job run in one episode would. A later record of a path
+    stands over an earlier one. Never raises."""
+    earlier = parent_record.get('project_watch') if isinstance(parent_record, dict) else None
+    if not isinstance(earlier, dict):
+        return watch
+    try:
+        named = {entry['path'] for entry in watch['paths']}
+        paths = [dict(e) for e in earlier.get('paths') or []
+                 if isinstance(e, dict) and isinstance(e.get('path'), str) and e['path'] not in named]
+        findings = [dict(f) for f in earlier.get('findings') or [] if isinstance(f, dict)]
+        merged = dict(watch, findings=findings + watch['findings'], paths=paths + watch['paths'])
+        if earlier.get('unavailable'):
+            merged['unavailable'] = True
+        json.dumps(merged)
+        return merged
+    except Exception:  # noqa: BLE001 -- a record never fails a run
+        return dict(watch, unavailable=True)
+
+
 def _watch_report_lines(watch):
     """The report's lines for a run's watched-path changes (``_watch_record``),
     or []. One wording for a project run and a baseline."""
@@ -666,6 +699,193 @@ def _accepted_report_lines(accepted):
     return [f'Watched paths accepted: this run started over {len(accepted)} path(s) an earlier run '
             'changed outside the measured source, which the operator accepted: '
             f'{named}. No diff or check of this run covers what they hold.', '']
+
+
+#: A stored artifact's name: the text, its first reference, or one more.
+_ARTIFACT_NAME = re.compile(r'([0-9a-f]{12})(?:\.txt|\.json|\.[0-9a-f]{12}\.json)')
+_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+
+
+def _copy_artifacts(source, target):
+    """Copy a parent run's stored artifacts into ``target`` so the record's
+    references resolve in the new episode. Returns ``(copied, skipped)``.
+
+    Never through a link, the way the store itself reads: the folder is
+    opened without following one, and only regular files named as the store
+    names them are read (non-blocking, so a FIFO cannot stall the resume).
+    A text whose bytes do not hash to its id is not the artifact the record
+    names. Everything else is skipped and counted, never copied and never an
+    error: ``shutil.copytree`` followed a planted link and stored an outside
+    file where any seat could FETCH it, and raised on a dangling one after
+    the parent was already marked resumed."""
+    import stat as _stat
+
+    from .safe_io import create_in
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+    directory = getattr(os, 'O_DIRECTORY', 0)
+    try:
+        src = os.open(source, flags | directory)
+    except FileNotFoundError:
+        return 0, 0
+    except OSError:
+        return 0, 1     # a link or a file in the folder's place: nothing of it is taken
+    copied = skipped = 0
+    try:
+        dst = os.open(target, flags | directory)
+        try:
+            for name in sorted(os.listdir(src)):
+                match = _ARTIFACT_NAME.fullmatch(name)
+                data = None
+                if match:
+                    try:
+                        fd = os.open(name, flags | getattr(os, 'O_NONBLOCK', 0), dir_fd=src)
+                    except OSError:
+                        fd = None
+                    if fd is not None:
+                        try:
+                            info = os.fstat(fd)
+                            if _stat.S_ISREG(info.st_mode) and info.st_size <= _MAX_ARTIFACT_BYTES:
+                                chunks = []
+                                while True:
+                                    chunk = os.read(fd, 1 << 20)
+                                    if not chunk:
+                                        break
+                                    chunks.append(chunk)
+                                data = b''.join(chunks)
+                        except OSError:
+                            data = None
+                        finally:
+                            os.close(fd)
+                if data is not None and name.endswith('.txt') and (
+                        hashlib.sha256(data).hexdigest()[:12] != match.group(1)):
+                    data = None
+                if data is None:
+                    skipped += 1
+                    continue
+                create_in(dst, name, data)
+                copied += 1
+        finally:
+            os.close(dst)
+    finally:
+        os.close(src)
+    return copied, skipped
+
+
+#: The operator's acceptance of a resume from a run that left no record of
+#: its own to hold its checkpoint to.
+ACCEPT_UNRECORDED_PARENT_ENV = 'QUADRATUS_ACCEPT_UNRECORDED_PARENT'
+
+_UNREADABLE_EARLIER = "an earlier episode's record of this is not readable"
+
+
+def unrecorded_parent_accepted(flag=False):
+    """Whether the operator accepted a parent with no record of its own: the
+    run's own flag, or the environment permission."""
+    return bool(flag) or os.environ.get(ACCEPT_UNRECORDED_PARENT_ENV, '').strip().lower() in {'1', 'true', 'yes'}
+
+
+def _held_parent(parent, accept_unrecorded=False):
+    """``(record, acceptance)``: the parent run's own ``result.json`` after
+    holding its committed state to it, or CheckpointRefused.
+
+    The run folder is inside the project, so an editing call can rewrite the
+    manifest, the records and the checkpoint, and every digest in them is a
+    digest of the file itself. What it cannot rewrite unseen is the record
+    the run wrote after its last call: the watch lists ``result.json``, and
+    it names the manifest the run's own store committed, from memory. A
+    parent whose manifest is not that one is never resumed. A parent that
+    left no such record (a process that was killed, an older engine) is
+    refused too, unless the operator accepts it: nothing says its checkpoint
+    is the one the harness wrote, and that is theirs to take on. Then
+    ``acceptance`` says which parent and why, for the run's record, and
+    ``record`` is what could be read (None when nothing could)."""
+    from . import checkpoint, jobstore
+    way_out = ('Nothing in the run folder proves its checkpoint is the one the harness wrote: an '
+               'editing call could have written or rewritten it. Inspect the folder, then resume it '
+               'anyway with --accept-unrecorded-parent (accept_unrecorded_parent=True for run_project) '
+               f'or {ACCEPT_UNRECORDED_PARENT_ENV}=1. Every other check of the resume still runs, the '
+               "acceptance is written to the new run's record, and tools/truth_check.py reports the job "
+               'unverified.')
+
+    def unrecorded(why, refusal, record=None, cause=None):
+        if not unrecorded_parent_accepted(accept_unrecorded):
+            raise checkpoint.CheckpointRefused(f'{refusal}. {way_out}') from cause
+        return record, dict(parent=parent.name, why=why)
+
+    try:
+        record = json.loads(_read_bounded(parent / 'result.json', _MAX_OLD_RECORD_BYTES)
+                            .decode('utf-8', errors='replace'))
+    except (OSError, ValueError, RecursionError) as exc:
+        return unrecorded(
+            f'no readable result.json ({type(exc).__name__})',
+            f'{parent.name} left no readable record of its own (result.json: {type(exc).__name__}), as a '
+            'killed process or a restart leaves it, so nothing outside its checkpoint says which state '
+            'the run committed; it is not resumed', cause=exc)
+    held = record.get('committed_manifests') if isinstance(record, dict) else None
+    if isinstance(held, list) and not held:
+        # A record that says its store committed nothing denies any committed
+        # state found beside it: that is a contradiction, not a missing record.
+        try:
+            planted = jobstore.read_manifest(parent) is not None
+        except jobstore.GenerationCorrupt as exc:
+            raise checkpoint.CheckpointRefused(f"the parent's committed state is corrupt: {exc}") from exc
+        if planted:
+            raise checkpoint.CheckpointRefused(
+                f"{parent.name}'s own record says the run committed nothing, yet its folder holds a "
+                'committed state; that state was written after the run ended, and the run is not resumed')
+    if held is None or (isinstance(held, list) and not held):
+        return unrecorded(
+            'result.json names no committed state',
+            f"{parent.name}'s record names no committed state (it was written by an older engine, or the "
+            'run committed nothing); the checkpoint cannot be held to it and is not resumed',
+            record=record if isinstance(record, dict) else None)
+    try:
+        manifest = jobstore.read_manifest(parent)
+    except jobstore.GenerationCorrupt as exc:
+        raise checkpoint.CheckpointRefused(f"the parent's committed state is corrupt: {exc}") from exc
+    # A record that names a state is held to it whatever was accepted.
+    if not isinstance(held, list) or manifest is None or manifest.digest not in held:
+        raise checkpoint.CheckpointRefused(
+            f"the committed state in {parent.name} is not the one the run's own record names; its manifest "
+            'or records were written after the run ended, and the run is not resumed')
+    return record, None
+
+
+def _parent_record(parent):
+    """The parent's own record with nothing accepted (``_held_parent``)."""
+    return _held_parent(parent)[0]
+
+
+def _unrecorded_parents(acceptance, parent_record):
+    """The run's ``trust.unrecorded_parent_accepted``: this episode's
+    acceptance behind the ones earlier episodes of the job recorded, so the
+    final record of a job says it once continued from a run that left no
+    record. An earlier record of it that cannot be read is carried as that."""
+    carried = []
+    if isinstance(parent_record, dict):
+        trust = parent_record.get('trust')
+        earlier = trust.get('unrecorded_parent_accepted') if isinstance(trust, dict) else None
+        if (trust is not None and not isinstance(trust, dict)) or (
+                earlier is not None and not isinstance(earlier, list)):
+            carried.append(dict(parent='unknown', why=_UNREADABLE_EARLIER, carried=True))
+        for entry in earlier if isinstance(earlier, list) else ():
+            if isinstance(entry, dict):
+                carried.append(dict(parent=str(entry.get('parent'))[:200], why=str(entry.get('why'))[:200],
+                                    carried=True))
+            else:
+                carried.append(dict(parent='unknown', why=_UNREADABLE_EARLIER, carried=True))
+    return carried + ([dict(acceptance, carried=False)] if acceptance else [])
+
+
+def _unrecorded_report_lines(accepted):
+    """The report's lines for a job that continued from a run with no record
+    of its own, or []."""
+    if not accepted:
+        return []
+    named = '; '.join(f"{a['parent']} ({a['why']})" for a in accepted)
+    return ['Unrecorded parent accepted: this job was resumed from a run that left no record of its '
+            f'own to hold its checkpoint to, which the operator accepted: {named}. Nothing proves that '
+            'checkpoint was the one the harness wrote, and no check of this run covers that.', '']
 
 
 def _resume_parent(state, resume_from):
@@ -905,6 +1125,9 @@ def _new_run_dir(state):
     prepare_state_dir(state)
     make_private_dir(state / 'runs')
     os.mkdir(run_dir, 0o700)
+    # The watch leaves this folder to the run's own store while it is going.
+    from .project_watch import made_here
+    made_here(run_dir)
     return run_dir
 
 
@@ -942,7 +1165,7 @@ def _declared_checks_record(declined):
                      + ('.' if declined else ', and the project declared none that was read.'))
 
 
-def _trust_record(policy, agent_config, declared, watched_accepted=()):
+def _trust_record(policy, agent_config, declared, watched_accepted=(), unrecorded_parents=()):
     """What the operator let a run take on trust, for ``result.json``: the
     project's own policy file and whether it was approved, the vendor agent
     configuration files allowed at the start, whether the project's declared
@@ -957,7 +1180,12 @@ def _trust_record(policy, agent_config, declared, watched_accepted=()):
         declared_checks_declined=bool((declared or {}).get('declined')),
         watched_paths_accepted=[dict(path=str(s.get('path')), kind=str(s.get('kind') or ''),
                                      what=str(s.get('what') or ''))
-                                for s in watched_accepted or () if isinstance(s, dict)])
+                                for s in watched_accepted or () if isinstance(s, dict)],
+        # A resume from a run that left no record of its own, accepted by the
+        # operator in this episode or an earlier one of the same job. Only
+        # when there is one: a record without the key says there was none.
+        **({'unrecorded_parent_accepted': [dict(entry) for entry in unrecorded_parents]}
+           if unrecorded_parents else {}))
 
 
 def _child_environment_record():
@@ -1083,7 +1311,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
          decider=None, decider_labels="unstated", repair_tests=(), test_changes=(),
-         declared_checks=True, agent_config=None, compete="off", watched_accepted=(), resume_from=None):
+         declared_checks=True, agent_config=None, compete="off", watched_accepted=(), resume_from=None,
+         accept_unrecorded_parent=False):
     parent = _resume_parent(state, resume_from) if resume_from is not None else None
     run_dir = _new_run_dir(state)
     from .run_activity import RunActivity
@@ -1132,9 +1361,15 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                     security_verdict_json=security_verdict_json, repair_tests=list(repair_tests or ()),
                     explicit_tasks=list(tasks) if tasks is not None else None,
                     plan_gate=plan_gate is not None, ask_operator=ask_operator is not None,
-                    **({'test_changes': list(test_changes)} if test_changes else {})))
+                    **({'test_changes': list(test_changes)} if test_changes else {}),
+                    # Only when set, so a run without them keeps its digest:
+                    # a resume under other contest or session settings is
+                    # another job.
+                    **({'compete': compete} if compete != 'off' else {}),
+                    **({'session_options': dict(sorted(session_options.items()))} if session_options else {})))
     lineage = dict(root=run_dir.name, parent=None, episode=1)
     carried = None
+    parent_record, carried_diff, unrecorded_parent = None, '', None
     if parent is not None:
         from .deptree import DependencyGuard
         try:
@@ -1154,18 +1389,47 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             # the final audit, and resumes to finish that decision without
             # asking, auditing or executing again; any other is spent.
             raise checkpoint.CheckpointRefused("the job's task slots are spent; nothing is left to resume with")
+        parent_record, unrecorded_parent = _held_parent(parent, accept_unrecorded_parent)
+        if unrecorded_parent and progress:
+            progress(f"Resume: {parent.name} left no record of its own to hold its checkpoint to "
+                     f"({unrecorded_parent['why']}). Accepted by the operator; written to this run's "
+                     'record and to every later episode of the job.')
         prior = body.get('lineage') or {}
         lineage = dict(root=prior.get('root') or parent.name, parent=parent.name,
                        episode=int(prior.get('episode') or 1) + 1)
+        # The record's artifact references resolve in the new episode. Copied
+        # before the claim, so a copy that fails leaves the parent resumable.
+        try:
+            _, not_copied = _copy_artifacts(parent / 'artifacts', run_dir / 'artifacts')
+        except OSError as exc:
+            raise checkpoint.CheckpointRefused(
+                f"the parent's artifacts could not be copied ({type(exc).__name__}: {exc})") from exc
+        if not_copied and progress:
+            progress(f"{not_copied} entry(ies) in {parent.name}'s artifacts were not copied: a link, "
+                     'something that is not a regular file, a name the store does not write, or a text '
+                     'that does not match its id.')
+        # The job's diff, not the episode's: measured from the job's own
+        # run-start source where the checkpoint carries it, else the
+        # parent's diff goes in front of this episode's.
+        try:
+            start = checkpoint._decode((body.get('state') or {}).get('_run_start_contents'))
+        except (TypeError, ValueError):
+            start = None
+        if isinstance(start, dict) and all(isinstance(k, str) and isinstance(v, bytes) for k, v in start.items()):
+            before = start
+        else:
+            try:
+                carried_diff = _read_bounded(parent / 'changes.diff', _MAX_OLD_RECORD_BYTES).decode(
+                    'utf-8', errors='replace')
+            except OSError:
+                carried_diff = ("The earlier episode's changes could not be read "
+                                f'({parent.name}/changes.diff).\n')
         checkpoint.claim(parent, run_dir, lineage['episode'])
-        if (parent / 'artifacts').is_dir():
-            # The record's artifact references resolve in the new episode.
-            shutil.copytree(parent / 'artifacts', run_dir / 'artifacts', dirs_exist_ok=True)
         if progress:
             progress(f"Resuming {parent.name} as episode {lineage['episode']} of {lineage['root']}; "
                      f"carried {carried['calls']} call(s), "
                      f"{carried['input_tokens'] + carried['output_tokens']:,} reported tokens")
-    (run_dir / 'lineage.json').write_text(json.dumps(lineage, indent=2) + '\n', encoding='utf-8')
+    write_private(run_dir / 'lineage.json', json.dumps(lineage, indent=2) + '\n')
     # The run's durable job store (quadratus.jobstore): every budget
     # mutation, checkpoint and session effect is one committed generation
     # under one manifest; budget.json and checkpoint.json stay as exports.
@@ -1276,6 +1540,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             fleet.freeze(frozen)
     in_flight, folder_lost = {}, False
     interrupted = False
+    scored = (0, 0)
     try:
         if preview and preview['blocked']:
             raise ValueError('; '.join(preview['blocked']))
@@ -1304,6 +1569,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             checkpoint.restore_state(session, body['state'])
             session._interrupted_admissions = list((carried or {}).get('interrupted_admissions') or [])
             _carry_recoveries(session, parent)
+            # The parent already put these on the scoreboard.
+            scored = (len(getattr(session, 'contests', None) or []),
+                      len(getattr(session, 'reviewer_records', None) or []))
         _record_models(session, fleet)
         session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
@@ -1358,7 +1626,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
     traces, trace_interrupted = _collect_traces(run_dir, project, delegation, progress)
-    diff = project.diff(before)
+    diff = carried_diff + project.diff(before)
     completed = bool(session and session.completed and not error)
     # The terminal state is committed before it is announced: the record of
     # what the run ended as and the acceptance basis it ended on, in the
@@ -1414,9 +1682,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     lines = [f'# {status}', '', f'Project: {project.root}', '',
              f'Edits: {"enabled" if allow_writes else "disabled"}', '',
              f'Run files: {run_dir}', '']
-    watch = _watch_record(fleet)
+    watch = _carry_watch(_watch_record(fleet), parent_record)
     lines += _watch_report_lines(watch)
     lines += _accepted_report_lines(watched_accepted)
+    unrecorded_parents = _unrecorded_parents(unrecorded_parent, parent_record)
+    lines += _unrecorded_report_lines(unrecorded_parents)
     declared = _declared_checks_record(declined)
     lines += _declared_checks_lines(declared)
     if preview:
@@ -1606,7 +1876,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # the commands left out when they were declined.
         'declared_checks': declared,
         # What the operator let this run take on trust, in one place.
-        'trust': _trust_record(policy, agent_config, declared, watched_accepted),
+        'trust': _trust_record(policy, agent_config, declared, watched_accepted, unrecorded_parents),
         'child_environment': _child_environment_record(),
         'policy_plans': getattr(session, 'policy_plans', []),
         **_budget_fields(budget),
@@ -1642,6 +1912,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'unmeasured_changes': dict(getattr(session, 'unmeasured_changes', {}) or {}) if session else {},
         'lineage': lineage,
         'resumable': interrupted,
+        # The manifest this run's store committed, from the store's memory
+        # and never read back from disk. A resume holds the run folder to it
+        # (_parent_record): this record is written after the last call and
+        # is a watched path, the manifest beside it is neither.
+        'committed_manifests': job_store.committed_digests(),
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
@@ -1651,7 +1926,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         ],
     }, indent=2))
     write_private(run_dir / 'delegation.md', delegation.render_report())
-    _append_scoreboard(state, run_dir.name, contests, reviewers, progress)
+    _append_scoreboard(state, run_dir.name, contests[scored[0]:], reviewers[scored[1]:], progress)
     write_private(run_dir / 'findings.json',
                   json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2))
     # A record another module appended under the usual mode is closed here.

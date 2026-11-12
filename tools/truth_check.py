@@ -1646,6 +1646,19 @@ def _judge(run_dir, project, failed, unshown):
         named = ", ".join(str(a.get("path")) for a in accepted[:5] if isinstance(a, dict))
         unshown.append(f"the run started over {len(accepted)} watched path(s) an earlier run left changed, "
                        f"accepted by the operator and covered by no diff or check: {named[:160]}")
+    # A job resumed from a run that left no record of its own (a killed
+    # process, an older engine), which the operator accepted in this episode
+    # or an earlier one. Nothing held that run's checkpoint to what the
+    # harness wrote, so what the job carried from it is not shown.
+    unrecorded = trust.get("unrecorded_parent_accepted") if isinstance(trust, dict) else None
+    if isinstance(trust, dict) and unrecorded is not None and not isinstance(unrecorded, list):
+        unshown.append("the record's trust.unrecorded_parent_accepted is not readable, so whether the job "
+                       "continued from a run that left no record of its own is not known")
+    elif unrecorded:
+        named = ", ".join(str(u.get("parent")) if isinstance(u, dict) else "unreadable entry"
+                          for u in unrecorded[:5])
+        unshown.append("the job continued from a run that left no record of its own to hold its "
+                       f"checkpoint to, accepted by the operator: {named[:160]}")
     designs = record.get("design_checks") or []
     for design in designs:
         task = design.get("task")

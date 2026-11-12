@@ -61,7 +61,21 @@ editing call fails the task as a scope violation, and nothing is reverted):
   ``result.json`` (by lstat signature). The next run's preflight reads
   those records, so an editing call that adds, removes or rewrites one is
   changing what that preflight will be told. The harness writes a run's
-  own ``result.json`` once, after its last call.
+  own ``result.json`` once, after its last call;
+* in a run folder that has its ``result.json`` (a run that ended): the
+  state a resume and the monitor read (``RUN_STATE``: the manifest, the
+  checkpoint and budget exports, the resume marker, the lineage and the
+  diff, each by lstat signature), and in its ``records`` and ``artifacts``
+  folders every link and everything else that is not a regular file. A
+  record's bytes are held by the manifest's digest of it and an artifact's
+  by its id, so regular files there are not read. The harness writes none
+  of this once the
+  run's own record is written, so an editing call that plants or rewrites
+  one is changing what a later resume would carry as the job's record. A
+  run still going has no ``result.json`` and is left to its own store,
+  which refuses a manifest it did not write (``jobstore.JobStore``). A
+  folder with no ``result.json`` that this process did not make, beside one
+  it did, is a run whose process died, and is listed like an ended one.
 
 A sensitive change that is still in place stops the run: Fleet makes no
 further call for the project but the orchestrator's until the path is back
@@ -197,6 +211,23 @@ _BUILD = PYTHON_OUTPUT_NAMES - _ENVIRONMENTS
 #: Under a state folder: the run records the next run's preflight reads.
 RUNS_DIR = "runs"
 RUN_RECORD = "result.json"
+#: In a run folder whose record is written: the files a resume or the
+#: monitor reads, and the folders whose entries they read.
+RUN_STATE = ("manifest.json", "checkpoint.json", "budget.json", "resumed-by.json", "lineage.json",
+             "changes.diff")
+RUN_STATE_DIRS = ("records", "artifacts")
+#: Run folders this process made (``made_here``). Where it made one, every
+#: other folder beside it with no ``result.json`` is a run whose process
+#: died: nothing writes there any more, so it is listed like an ended run.
+_MADE_HERE: set = set()
+_MADE_IN: set = set()
+
+
+def made_here(run_dir) -> None:
+    """Note a run folder this process just made and will write to."""
+    path = os.path.realpath(run_dir)
+    _MADE_HERE.add(path)
+    _MADE_IN.add(os.path.dirname(path))
 #: Report and cache folders: output no tool fills with Python.
 _PYTHON_FREE = OUTPUT_NAMES - PYTHON_OUTPUT_NAMES
 #: Folders named like harness state that are not the project's own state.
@@ -635,7 +666,7 @@ class ProjectWatch:
             self._unlisted(fd, parts, state, own=frozenset(STATE_FILES), runs=True)
 
     def _unlisted(self, fd, parts, state, *, mocks=False, link="symlink", ledger="",
-                  own=frozenset(), runs=False):
+                  own=frozenset(), runs=False, ended=False, plain=False):
         """A folder no other listing reads (harness state, a tool cache, git's
         own storage): walked by name, never through a link, recording only
         what a runner loads by position and every link that leads to a
@@ -645,7 +676,11 @@ class ProjectWatch:
 
         ``own`` names entries of this folder already recorded; ``runs``
         marks a state folder, whose ``runs`` holds the run records;
-        ``ledger`` is ``refs`` or ``logs`` below one of git's."""
+        ``ledger`` is ``refs`` or ``logs`` below one of git's. ``ended``
+        marks the folder of a run whose record is written, and ``plain`` its
+        ``records`` or ``artifacts`` folder, where the harness keeps regular
+        files only: a link to a file or a FIFO there is recorded too, since
+        a resume reads those folders."""
         self._deep(parts)
         with self._scan(fd, "/".join(parts)) as listing:
             for entry in listing:
@@ -669,12 +704,17 @@ class ProjectWatch:
                             self._runs(sub, child, state)
                         else:
                             self._unlisted(sub, child, state, mocks=mocks or lower == MOCKS_DIR,
-                                           link=link, ledger=ledger)
-                elif mocks or _loaded(lower) or (is_link and self._leads_to_folder(entry)):
+                                           link=link, ledger=ledger,
+                                           plain=plain or (ended and name in RUN_STATE_DIRS))
+                elif mocks or _loaded(lower) or (is_link and (plain or self._leads_to_folder(entry))):
                     st = self._lstat(entry, rel)
                     if st is None or (ledger and not is_link and self._git_ledger(fd, name, st, ledger, state)):
                         continue
                     self._sensitive(fd, name, rel, st, state, link if is_link else "loaded-code")
+                elif plain:
+                    st = self._lstat(entry, rel)
+                    if st is not None and not stat.S_ISREG(st.st_mode):
+                        self._sensitive(fd, name, rel, st, state, "run-record")
 
     @staticmethod
     def _leads_to_folder(entry) -> bool:
@@ -724,7 +764,34 @@ class ProjectWatch:
                         state["kinds"][record] = "run-record"
                     elif found is not None:
                         self._sensitive(sub, RUN_RECORD, record, found, state, "run-record")
-                    self._unlisted(sub, child, state, own=frozenset({RUN_RECORD}))
+                    ended = found is not None or self._died(rel)
+                    if ended:
+                        self._run_state(sub, rel, state)
+                    self._unlisted(sub, child, state, own=frozenset({RUN_RECORD}), ended=ended)
+
+    def _died(self, rel) -> bool:
+        """Whether a run folder with no record is one no process writes to:
+        this process made a run folder beside it and did not make this one.
+        A process that made none (a reader, a test) cannot tell, and leaves
+        the folder to its store as before."""
+        path = os.path.realpath(self.root / rel)
+        return path not in _MADE_HERE and os.path.dirname(path) in _MADE_IN
+
+    def _run_state(self, fd, rel, state):
+        """What a run that ended committed: each ``RUN_STATE`` file by lstat
+        signature. The harness writes none of them after the run's record,
+        so a difference across an editing call is the call's. The
+        ``RUN_STATE_DIRS`` folders are walked by ``_unlisted``."""
+        for leaf in RUN_STATE:
+            path = f"{rel}/{leaf}"
+            found = self._named(fd, leaf, path, state)
+            if found is None:
+                continue
+            if stat.S_ISREG(found.st_mode):
+                state["sensitive"][path] = ("stat", *self._signature(found))
+                state["kinds"][path] = "run-record"
+            else:
+                self._sensitive(fd, leaf, path, found, state, "run-record")
 
     def _git_ledger(self, fd, name, st, ledger, state) -> bool:
         """Whether a file below git's ``refs`` or ``logs`` holds what git
