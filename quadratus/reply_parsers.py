@@ -488,8 +488,9 @@ def _split_item_reason(text: str) -> Tuple[str, str]:
     return text, ""
 
 
-#: Kept because the development line's readers and one of its tests still
-#: name it. New code reads audit lines through quadratus.verdicts.audit_lines.
+#: Kept because one of the development line's tests still names it. Nothing
+#: in the engine reads it: audit lines go through quadratus.verdicts.audit_lines
+#: and a reviewer's requirement lines through verdicts.requirement_line.
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 #: The id a reply line answers: its leading '<id>:' (a bullet, a number and
 #: backticks allowed), for the audit's required-line list (cycle05).

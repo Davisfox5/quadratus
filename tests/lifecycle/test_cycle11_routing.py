@@ -68,7 +68,7 @@ def test_the_planner_is_shown_the_registrys_current_disposition_beside_the_froze
     prompt = session._findings_prompt()
     closed = prompt.split("--- FINDINGS CLOSED NOW (the registry, current) ---", 1)
     assert len(closed) == 2, prompt
-    assert "- RFT4-14: RESOLVED - by openai:sol" in closed[1] and "- RFT4-1: RESOLVED - by openai:sol" in closed[1]
+    assert "- RFT4-14: RESOLVED by openai:sol" in closed[1] and "- RFT4-1: RESOLVED by openai:sol" in closed[1]
     assert "is history from when that task closed" in closed[1]
     assert "RFT4-20 (by openai:sol on t4)" in closed[0], "the open one is still offered"
     assert "RFT4-14" not in closed[0]
@@ -141,7 +141,7 @@ def test_a_further_task_naming_a_since_closed_finding_is_admitted_and_runs(tmp_p
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "the task reached execution"
     assert not any("TASK SENT BACK" in p for p in seen.prompts["orchestrator"])
     second = seen.prompts["orchestrator"][1]
-    assert "--- FINDINGS CLOSED NOW (the registry, current) ---" in second and "- RFT1-1: RESOLVED - by" in second
+    assert "--- FINDINGS CLOSED NOW (the registry, current) ---" in second and "- RFT1-1: RESOLVED by" in second
     (note,) = record["resolves_normalized"]
     assert note["task"] == "t2" and note["closed_dropped"] == ["RFT1-1"]
     (finding,) = record["review_findings"]

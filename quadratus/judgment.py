@@ -104,9 +104,6 @@ def recheck_state(text: str) -> str:
 # --- per-finding rechecks (blueprint section 4) ------------------------------
 
 INVALIDATED = "invalidated"
-_ID_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?P<fid>[A-Z][A-Z0-9]*-?\d+)\s*:\s*"
-                      r"(?P<state>RESOLVED|UNRESOLVED|NOT\s+RESOLVED|INVALIDATED)\b\s*[-:,]?\s*(?P<why>.*)$",
-                      re.IGNORECASE)
 _NEW_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NEW|BLOCKING)\s*:\s*(?P<claim>.+)$", re.IGNORECASE)
 #: A NEW or BLOCKING line whose whole claim is the standalone sentinel for
 #: "no finding": none, n/a or nothing, alone or with a bounded tail (found,
@@ -129,8 +126,6 @@ def _empty_claim(claim: str) -> bool:
 _NOTE_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NOTE|SUGGESTION)\s*:\s*(?P<text>.+)$", re.IGNORECASE)
 _COVERAGE_LINE = re.compile(r"\s*COVERAGE\s*:\s*(?P<state>COMPLETE|PARTIAL)\b\s*[-:,]?\s*(?P<why>.*)$",
                             re.IGNORECASE)
-_SUFFICIENCY_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?P<oid>O-?\d+)\s*:\s*"
-                               r"(?P<state>SUFFICIENT|INSUFFICIENT)\b\s*[-:,]?\s*(?P<why>.*)$", re.IGNORECASE)
 #: What counts as a checkable reference in an INVALIDATED line: a
 #: requirement, finding, obligation or receipt id, a test function, a file
 #: path with an extension, or a quoted command. Prose alone is not evidence.
@@ -230,7 +225,7 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
             fid = read[0].upper()
             if fid in wanted:
                 lines.setdefault(fid, []).append((read[1], read[2]))
-            elif not _SUFFICIENCY_LINE.match(line):
+            elif not verdicts.row_line(raw):
                 foreign.append(read[0])
             continue
         said = verdicts.unresolved_line(raw)

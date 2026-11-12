@@ -379,7 +379,7 @@ class ObligationsMixin:
             said = verdicts.get(str(gap.get("id")).upper(), [])
             reads = [text for kind, text in said if kind == "READ" and text]
             problem = ("the reviewer said it could not read them" if any(kind == "UNREAD" for kind, _ in said)
-                       else "no plain 'READ <id> - <what they show>' line" if not reads or any(
+                       else "no 'READ <id> - <what they show>' line" if not reads or any(
                            not kind for kind, _ in said)
                        else "a file was unreadable when it was handed" if any(
                            d is None for d in (handed.get("files") or {}).values()) else "")
