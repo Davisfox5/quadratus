@@ -78,3 +78,28 @@ def test_an_editing_replay_refused_to_keep_the_finish_ends_in_the_first_calls_ow
     assert "keep the calls held for the finish" in str(caught.value) and caught.value.resend_refused
     # The refusal itself is still on the ledger, as a call that was not made.
     assert [(e.outcome, e.invoked) for e in ledger.events][-1] == ("FinishReserved", False)
+
+
+# -- trust:3: a kept final audit is not reused when the unmeasured changes differ ----------
+
+
+def test_a_kept_final_audit_is_not_reused_once_the_unmeasured_changes_differ(tmp_path):
+    """The audit prompt lists what editing calls changed where the measured
+    diff does not read. A kept audit answered a prompt with another list."""
+    from tests.test_unexecuted_acceptance import UNIT, _session
+
+    s, prompts = _session(tmp_path, f"R1: MET - {UNIT}\nR5: NOT MET - no console check\n")
+    s._audit_requirements(final=True)
+    before = s._audit_binding(None)
+    s._audit_requirements(final=True)
+    assert len(prompts) == 1, "nothing changed: the kept audit stands"
+    s.unmeasured_changes["t1"] = ["build/helper.txt"]
+    changed = s._audit_binding(None)
+    assert changed != before
+    s._audit_requirements(final=True)
+    assert len(prompts) == 2 and "build/helper.txt" in prompts[-1]
+    # Order of tasks and names is not a difference; another name is.
+    s.unmeasured_changes = {"t2": ["b", "a"], "t1": ["build/helper.txt"]}
+    one = s._audit_binding(None)
+    s.unmeasured_changes = {"t1": ["build/helper.txt"], "t2": ["a", "b"]}
+    assert s._audit_binding(None) == one != changed
