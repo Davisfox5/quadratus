@@ -738,6 +738,8 @@ def test_a_close_out_cannot_flood_the_map_or_file_a_control_line(tmp_path):
                 config=SessionConfig(codebase_map=m))
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     assert not any("The task is finished" in c["prompt"] for c in rec.calls)
+    # The task did close, on the harness's own record.
+    assert s.history[-1].task_id == "t1" and s.history[-1].summary.startswith("Recorded by the harness, not a model")
     assert len(m) == 0 and m.record()["not_kept"] == 0
     assert not (tmp_path / "map.jsonl").exists() or (tmp_path / "map.jsonl").stat().st_size == 0
 
