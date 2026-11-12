@@ -299,8 +299,10 @@ def client_version_at_least(found, minimum) -> Optional[bool]:
 
 
 #: Vendor wording for a spent subscription window, as seen or documented.
-#: One tuple with ``LIMIT_WORDING``, so the typed fact the fleet routes on
-#: (``window_exhausted``) and the class the ledger records cannot drift apart.
+#: One tuple with ``LIMIT_WORDING``. The ledger's class is a record nothing
+#: routes on; the fleet routes on the typed fact (``window_exhausted``). The
+#: two read under one rule: only a CLI's own error report, never a result
+#: that may be model text, and "cap" only beside no status or a 429.
 EXHAUSTION_MARKERS = LIMIT_WORDING
 #: Vendor wording for a rejected sign-in (codex 401 seen on GameTape run 6;
 #: grok "Not signed in" seen on blind-acceptance attempt 7).
@@ -324,7 +326,9 @@ def failure_facts(status, text) -> Dict[str, object]:
     a bare 4xx or 5xx in its error message) and a ``failure_class`` drawn only
     from what that status and the vendor's own wording establish. A cap
     (the subscription window) outranks a 429, because the vendor says it
-    with the same status; an auth rejection is 401 or 403 or its wording;
+    with the same status, and is read only beside no status or a 429, as
+    the typed ``window_exhausted`` fact is; an auth rejection is 401 or 403
+    or its wording;
     429 alone is rate limiting; 502, 503 and 504 are the service being
     unavailable. Nothing else is classified, no retry delay is inferred,
     and no text is kept: the message stays in the ledger's stderr tail."""
@@ -336,7 +340,7 @@ def failure_facts(status, text) -> Dict[str, object]:
     if status is not None:
         facts["status"] = status
     lowered = message.lower()
-    if any(marker in lowered for marker in EXHAUSTION_MARKERS):
+    if status in (None, 429) and any(marker in lowered for marker in EXHAUSTION_MARKERS):
         facts["failure_class"] = "cap"
     elif status in (401, 403) or any(marker in lowered for marker in _AUTH_MARKERS):
         facts["failure_class"] = "auth"
@@ -362,10 +366,12 @@ def client_version(path: str, args: Sequence[str]) -> Optional[str]:
     if key not in _CLIENT_VERSIONS:
         text = None
         try:
-            # Printing a version needs no sign-in and no credential, so this
-            # child gets the probe profile like every other one.
-            from .child_env import check_env
-            env, _ = check_env()
+            # Printing a version needs no sign-in and no credential. The
+            # child is a vendor binary, so it gets the vendor limit too: a
+            # billed key or a sign-in the operator passed for the project's
+            # tests is not handed to it.
+            from .child_env import query_env
+            env, _ = query_env()
             proc = subprocess.run([path, *args], capture_output=True, text=True, timeout=15, check=False,
                                   env=env)
             first = (proc.stdout or "").strip().splitlines()
@@ -375,6 +381,17 @@ def client_version(path: str, args: Sequence[str]) -> Optional[str]:
             text = None
         _CLIENT_VERSIONS[key] = text
     return _CLIENT_VERSIONS[key]
+
+
+def _claude_error_text_is_own(payload: dict) -> bool:
+    """Whether an ``is_error`` envelope's text must be the CLI's own report:
+    it stands beside an integer status, or the model wrote nothing (a
+    rejected request reports zero output tokens). An error envelope around
+    model output says nothing, to the typed facts and to the ledger alike."""
+    usage = payload.get("usage")
+    silent = (isinstance(usage, dict) and type(usage.get("output_tokens")) is int
+              and usage["output_tokens"] == 0)
+    return type(payload.get("api_error_status")) is int or silent
 
 
 def _extract_claude_result(stdout: str) -> str:
@@ -428,9 +445,7 @@ def _extract_claude_result(stdout: str) -> str:
         # output tokens). An error envelope around model output says nothing.
         status = payload.get("api_error_status")
         usage = payload.get("usage")
-        silent = (isinstance(usage, dict) and type(usage.get("output_tokens")) is int
-                  and usage["output_tokens"] == 0)
-        own = str(detail) if type(status) is int or silent else ""
+        own = str(detail) if _claude_error_text_is_own(payload) else ""
         if _own_error_facts(own, status).get("transport_status") == 529 and isinstance(usage, dict):
             # Overloaded, typed by the envelope's own status (or the client's
             # "API Error: 529" error line, read only where the text is the
@@ -482,6 +497,8 @@ def _extract_codex_result(stdout: str) -> str:
     #: where {"status": 503} alone let an earlier message through).
     failed = False
     failure_detail = ""
+    #: The integer status the last failed turn's error states as a field.
+    failure_status = None
     saw_json = False
     for line in stdout.splitlines():
         line = line.strip()
@@ -497,6 +514,7 @@ def _extract_codex_result(stdout: str) -> str:
             error = event.get("error")
             message = error.get("message") if isinstance(error, dict) else None
             status = error.get("status") if isinstance(error, dict) else None
+            failure_status = status if type(status) is int else None
             failure_detail = (message.strip() if isinstance(message, str) and message.strip()
                               else f"status {status}" if type(status) is int
                               else "the client reported no detail")
@@ -506,6 +524,7 @@ def _extract_codex_result(stdout: str) -> str:
             # session): the last terminal event in stream order decides.
             failed = False
             failure_detail = ""
+            failure_status = None
         item = event.get("item")
         if not isinstance(item, dict):
             continue
@@ -540,8 +559,10 @@ def _extract_codex_result(stdout: str) -> str:
                               + (f" (after a reported error: {errors[-1][:200]})" if errors else ""))
         error.partial_text = answer or None
         # ``turn.failed`` and ``error`` items are codex's own report, not the
-        # model's text, so the typed facts may be read from them.
-        raise _mark_transport(error, failure_detail)
+        # model's text, so the typed facts may be read from them. A status
+        # the client states as a field counts as much as one in its message:
+        # the ledger reads the same field (``_extract_codex_diagnostics``).
+        raise _mark_transport(error, failure_detail, failure_status)
     if errors:
         raise _mark_transport(ProviderError(f"codex reported an error: {errors[-1][:300]}"), errors[-1])
     if saw_json:
@@ -582,6 +603,17 @@ def _is_cap_shaped(payload: dict) -> bool:
     review of #33, 2026-09-26).
     """
     return not payload.get("error") and payload.get("stopReason") == "cancelled"
+
+
+def _grok_error_status(payload: dict):
+    """The integer status a failed grok envelope states, or None. One reader
+    for the typed facts and the ledger, so the two cannot disagree about
+    which field carries it (the error shape is not documented)."""
+    error = payload.get("error")
+    holder = error if isinstance(error, dict) else {}
+    return next((v for v in (holder.get("status"), holder.get("statusCode"), holder.get("code"),
+                             payload.get("status"), payload.get("statusCode"))
+                 if type(v) is int), None)
 
 
 def _extract_grok_result(stdout: str) -> str:
@@ -625,9 +657,9 @@ def _extract_grok_result(stdout: str) -> str:
         own = payload["error"]
         if isinstance(own, dict):
             report = "\n".join(value for value in own.values() if isinstance(value, str))
-            status = own.get("status")
         else:
-            report, status = str(own), None
+            report = str(own)
+        status = _grok_error_status(payload)
         raise _mark_transport(ProviderError(f"grok reported an error: {str(own)[:300]}"), report, status)
     text = payload.get("text")
     # A turn that did not reach end_turn still carries text, and that text is
@@ -750,9 +782,7 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         # error shape is not documented; a field that is not there is
         # unknown, not zero.
         holder = error if isinstance(error, dict) else {}
-        status = next((v for v in (holder.get("status"), holder.get("statusCode"), holder.get("code"),
-                                   payload.get("status"), payload.get("statusCode"))
-                       if type(v) is int), None)
+        status = _grok_error_status(payload)
         text = " ".join(str(v) for v in (holder.get("message") if holder else error, payload.get("message")) if v)
         diagnostics.update(failure_facts(status, text))
     names: List[str] = []
@@ -1637,7 +1667,11 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
             if isinstance(stop, str) and re.fullmatch(r"[A-Za-z_.-]{1,40}", stop):
                 diagnostics["stop_reason"] = stop
             errors = payload.get("errors")
-            text = str(payload.get("result") or "") + " " + (
+            # ``result`` is read only where the typed facts read it: around
+            # model output it is the model's text, and nothing classifies
+            # that. The ``errors`` list is the CLI's own field either way.
+            result = str(payload.get("result") or "") if _claude_error_text_is_own(payload) else ""
+            text = result + " " + (
                 " ".join(str(e) for e in errors) if isinstance(errors, list) else "")
             diagnostics.update(failure_facts(payload.get("api_error_status"), text))
     if malformed:
@@ -2394,8 +2428,12 @@ CODEX_SPEC = CLISpec(
     # deadline (core/src/responses_retry.rs; suite retry_after.rs). 0.163.0
     # is the first version this engine qualified, live on 2026-10-21; it is
     # not a claim about which upstream release first carried the wait.
-    # The engine runs no outer retry: the client is where the wait belongs,
-    # and a run on a client that cannot wait is refused before any call.
+    # The client is where the wait for capacity belongs, and a run on a
+    # client that cannot wait is refused before any call. The engine's own
+    # re-send is separate and typed: a call that cannot write whose failure
+    # carries ``retryable`` is re-sent by the provider up to ``max_retries``;
+    # a call that can write is re-sent only by Fleet, once, when the source
+    # and the watch listing measure unchanged.
     minimum_client="0.163.0",
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
@@ -3719,14 +3757,29 @@ class CLIProvider(LLMProvider):
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model
                     raise
-                if blocked:
+                # A spent window keeps its own road, as a cap and a failed
+                # sign-in do: replaced by the block, the typed fact was lost
+                # and the seat stayed routable. The block stays on the
+                # diagnostics. With no envelope, stderr is the CLI's voice.
+                # The approval line itself is left out of that reading: it
+                # quotes the target, which the model chose, and a target
+                # spelled with limit wording must not mark the seat spent.
+                spent = getattr(parsed, "window_exhausted", False) is True or (
+                    getattr(parsed, "no_envelope", False)
+                    and _own_error_facts(self._stderr_beside_block(proc.stderr, blocked)
+                                         ).get("window_exhausted") is True)
+                if blocked and not spent:
                     raise self._permission_blocked(parsed, blocked) from parsed
                 if not getattr(parsed, "exit_report", False):
                     detail = (proc.stderr or '').strip()[:400]
                     if detail:
                         # The wrapper is what the caller sees, so it keeps
-                        # what the envelope established.
-                        wrapped = ProviderError(f'{parsed}; {detail}')
+                        # what the envelope established: the typed facts and
+                        # the overload type, which the bounded re-send in
+                        # ``_generate_once`` is chosen by.
+                        wrapped = (TransientOverload(f'{parsed}; {detail}', status=parsed.status)
+                                   if isinstance(parsed, TransientOverload)
+                                   else ProviderError(f'{parsed}; {detail}'))
                         wrapped.diagnostics = self.last_diagnostics
                         carry_transport_facts(wrapped, parsed)
                         if getattr(parsed, "no_envelope", False):
@@ -3735,7 +3788,7 @@ class CLIProvider(LLMProvider):
                             # exit below. An envelope that did report (a
                             # cancelled turn and its narration, an error
                             # field) is never overruled from stderr.
-                            _mark_transport(wrapped, _own_stderr(proc.stderr))
+                            _mark_transport(wrapped, self._stderr_beside_block(proc.stderr, blocked))
                         raise wrapped from parsed
                     raise
             except Exception:  # noqa: BLE001 -- unparseable is the normal case
@@ -3749,7 +3802,7 @@ class CLIProvider(LLMProvider):
                 raise failure
             # Classified from stderr alone, which is the CLI's own voice.
             # stdout may be a model's text and is only quoted above.
-            raise _mark_transport(failure, _own_stderr(proc.stderr))
+            raise _mark_transport(failure, self._stderr_beside_block(proc.stderr, blocked))
 
         try:
             return self._extract(proc.stdout)
@@ -3759,15 +3812,34 @@ class CLIProvider(LLMProvider):
             raise
         except ProviderError as failure:
             failure.diagnostics = self.last_diagnostics
-            if blocked and not isinstance(failure, TurnLimitReached) and not getattr(failure, "auth_invalid", False):
+            if (blocked and not isinstance(failure, TurnLimitReached)
+                    and not getattr(failure, "auth_invalid", False)
+                    and getattr(failure, "window_exhausted", False) is not True):
                 raise self._permission_blocked(failure, blocked) from failure
             raise
+
+    def _stderr_beside_block(self, stderr, blocked) -> str:
+        """The two ends of stderr without the CLI's approval lines, when the
+        call carries a permission block; otherwise the two ends as they are."""
+        own = _own_stderr(stderr)
+        reader = self.spec.extract_permission_block
+        if not blocked or reader is None:
+            return own
+        kept = []
+        for line in own.splitlines():
+            try:
+                quoted = reader(line) is not None
+            except Exception:  # noqa: BLE001 -- unreadable: leave the line out
+                quoted = True
+            if not quoted:
+                kept.append(line)
+        return "\n".join(kept)
 
     def _permission_blocked(self, failure: ProviderError, blocked: Dict[str, object]) -> PermissionBlocked:
         """The typed denial for a failed turn whose stderr carries the CLI's
         own headless-approval line (cycle15). A refusal, a cap and an
-        authentication failure keep their own types (the caller re-raises
-        them first). The message names the tool, the scheme and the digest,
+        authentication failure keep their own types, and a spent window
+        keeps its typed fact (the caller re-raises them first). The message names the tool, the scheme and the digest,
         never the raw target."""
         exc = PermissionBlocked(
             f"{self.label} stopped: {blocked.get('tool')} on a {blocked.get('scheme')} target "

@@ -689,7 +689,7 @@ class LLMProvider:
         genuine retry: on a timeout, and on a failure that carries the typed
         ``retryable`` fact (``TRANSPORT_FACTS``).
         """
-        from .run_budget import RunBudgetExceeded
+        from .run_budget import FinishReserved, RunBudgetExceeded
 
         writes = bool(getattr(self, "allow_writes", False))
         last_exc: Optional[Exception] = None
@@ -707,8 +707,25 @@ class LLMProvider:
                 log.warning("%s was overloaded (status %s); re-sending the same call in %.1fs (attempt %d).",
                             self.label, exc.status, wait, attempt + 1)
                 self._retry_wait = dict(seconds=round(wait, 3), cause="overloaded", status=exc.status)
+                last_exc = exc
                 time.sleep(wait)
                 continue
+            except FinishReserved as held:
+                if last_exc is None:
+                    raise
+                # A re-send the finish hold refused. The call was sent and
+                # failed, so its own failure is what the caller gets:
+                # FinishReserved means "refused before it started", and
+                # every handler reads it as no call made. The refusal is on
+                # the budget's record already.
+                failure = (last_exc if isinstance(last_exc, ProviderError) else
+                           carry_transport_facts(ProviderError(f"{self.label} call failed: {last_exc}"), last_exc))
+                failure.resend_refused = str(held)[:300]
+                try:
+                    failure.args = (f"{failure}; it was not sent again, to keep the calls held for the finish",)
+                except Exception:  # noqa: BLE001 -- the failure stands as it is
+                    pass
+                raise failure from held
             except RunBudgetExceeded:
                 raise
             except ProviderError as exc:
