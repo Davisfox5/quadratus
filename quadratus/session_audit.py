@@ -1224,7 +1224,13 @@ class AuditMixin:
         # changes what the auditor was asked, so a cached audit is not
         # reused across it; these are not judgment bindings, so a recheck's
         # own completion gap never drifts its reading.
+        # And what editing calls changed where the measured diff does not
+        # read: the audit prompt lists those names, so an audit kept before
+        # the list changed was asked about another list.
+        unmeasured = sorted((str(task), sorted(str(name) for name in names or ()))
+                            for task, names in (getattr(self, "unmeasured_changes", None) or {}).items() if names)
         body = dict(ids=sorted(ids) if ids is not None else None, packet=self._packet().digest,
+                    unmeasured=unmeasured,
                     notes=hashlib.sha256(json.dumps(list(getattr(self, "review_notes", []) or []), sort_keys=True,
                                                     default=str).encode()).hexdigest()[:16],
                     gaps=hashlib.sha256(json.dumps(list(getattr(self, "judgment_gaps", []) or []), sort_keys=True,

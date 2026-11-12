@@ -72,7 +72,7 @@ JUDGE_ROLE = "judge"
 RULES = ("completed", "scope", "gate", "judge", "size", "default")
 
 #: ``decided_by`` when no rule was tried: the routed lead's own draft call
-#: ended in a policy refusal or a denied capability. Those stop a single-lead
+#: ended in a policy refusal, a denied capability or a permission block. Those stop a single-lead
 #: run and no re-plan repairs them, so the run stops the same way here,
 #: whatever the challenger delivered. No draft is merged in the routed
 #: lead's place; the challenger's stays on record as an artifact.
@@ -291,7 +291,7 @@ def ledger_line(record: dict) -> str:
     winner = record.get("winner_model")
     if not winner and record.get("decided_by") == ROUTED_STOP:
         return (f"contest: two blind drafts ({names}); the routed lead's own draft call ended in a "
-                "refusal or a denied capability, which stops the run as it does with one lead, so "
+                "refusal, a denied capability or a permission block, which stops the run as it does with one lead, so "
                 "no draft was merged in its place")
     if not winner:
         return (f"contest: two blind drafts ({names}); neither was usable, so the routed "

@@ -1346,12 +1346,34 @@ class Fleet:
         never an ordinary failure, which a session may hand to another lead
         and so replay all the same.
         """
+        from .run_budget import FinishReserved
+        first = None
         for attempt in (1, 2):
             try:
                 if attempt == 1:
                     # The same call, spelled as it always was.
                     return self._generate(key, view, prompt, system)
                 return self._generate(key, view, prompt, system, first_attempt=attempt)
+            except FinishReserved as held:
+                if first is None:
+                    raise
+                # The replay was refused to keep the finish. The call was
+                # sent once and failed, so its own failure is what the caller
+                # gets: FinishReserved means "refused before it started" and
+                # the session reads it as no call made. The refusal is on the
+                # budget's record already (as LLMProvider._generate_once does).
+                if isinstance(first, PartialWorkSuspected):
+                    # Measured unchanged before the replay: not partial work,
+                    # so the ordinary failure a second failed attempt is.
+                    first = carry_transport_facts(ProviderError(
+                        f"{key} call failed with the project measured unchanged: {first.cause or first}"),
+                        first.cause)
+                first.resend_refused = str(held)[:300]
+                try:
+                    first.args = (f"{first}; it was not sent again, to keep the calls held for the finish",)
+                except Exception:  # noqa: BLE001 -- the failure stands as it is
+                    pass
+                raise first from held
             except ProviderError as exc:
                 suspected = isinstance(exc, PartialWorkSuspected)
                 if getattr(exc, "window_exhausted", False) or (suspected and exc.interrupted):
@@ -1380,6 +1402,7 @@ class Fleet:
                         "is kept as it is for inspection.",
                         cause=exc, interrupted=False) from exc
                 if transient and attempt == 1:
+                    first = exc
                     self._note_replay(key, exc)
                     time.sleep(max(0.0, float(getattr(view, "retry_base_delay", 0.0) or 0.0)))
                     continue

@@ -17,7 +17,7 @@ from pathlib import PurePosixPath
 from typing import List, Optional
 
 from .delegation import invocation
-from .providers import ProviderError, ProviderRefusal
+from .providers import PermissionBlocked, ProviderError, ProviderRefusal
 from .routing import WorkClass
 from .scope import TaskScope
 from .task_kinds import KNOWN_NEEDS, TaskKind, needs_from_text, normalise_needs
@@ -361,6 +361,27 @@ def _repeat_key(spec) -> tuple:
     return (spec.description, tuple(sorted({_scope_path(p) for p in paths})))
 
 
+def _held_lead(chosen, spec) -> Optional[str]:
+    """The lead a check before dispatch picked for ``spec``, or None.
+
+    ``chosen`` is ``(task id, lead)`` or ``(task id, lead, what was named)``.
+    Naming spends no id, so a task sent back and a different task named
+    next share one: a hold that says what was named (kind, difficulty and
+    permitted paths) stands only for that, and the other task is routed on
+    its own labels. Both checks that hold a lead (capture, packet) say what
+    was named; a hold of two parts, from older code, stands on the id."""
+    if not chosen or chosen[0] != spec.task_id:
+        return None
+    if len(chosen) > 2 and chosen[2] != _lead_hold(spec):
+        return None
+    return chosen[1]
+
+
+def _lead_hold(spec) -> tuple:
+    """What a held lead was picked for: what routing reads off the task."""
+    return (spec.kind, spec.complexity, _repeat_key(spec)[1])
+
+
 def _literal_paths(scope) -> Optional[set]:
     paths = list(getattr(scope, "permitted_paths", ()) or ())
     if not paths or any(any(ch in p for ch in "*?[]") for p in paths):
@@ -491,11 +512,13 @@ def _stops_the_run(exc: BaseException) -> bool:
 
 def _never_replaced(exc) -> bool:
     """Whether a contest's routed lead ended on a stop a single-lead run
-    never replaces the lead for: a policy refusal or a denied capability.
+    never replaces the lead for: a policy refusal, a denied capability or
+    a permission block.
 
-    Both are among the stops no re-plan repairs, and a refusal is never
-    rerouted. Before this a refused routed lead lost on completion and the
-    challenger's draft was merged, so turning contests on was a quiet way
-    around a refusal the run would otherwise have stopped on. Only the
-    routed lead: a challenger's refusal is that draft losing, as before."""
-    return isinstance(exc, (ProviderRefusal, CapabilityUnavailable))
+    All three are among the stops no re-plan repairs, and none is ever
+    handed to another model. Before this a refused routed lead lost on
+    completion and the challenger's draft was merged, so turning contests
+    on was a quiet way around a refusal the run would otherwise have
+    stopped on; a permission block took the same road until 2026-11-12.
+    Only the routed lead: a challenger's stop is that draft losing."""
+    return isinstance(exc, (ProviderRefusal, CapabilityUnavailable, PermissionBlocked))

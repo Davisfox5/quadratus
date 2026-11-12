@@ -218,7 +218,7 @@ def test_intake_asks_the_lead_once_and_the_planner_decides(tmp_path):
     assert "PACKET GRANT: PX-t1-1 <bytes> | because:" in text and "NECESSARY, in the lead's words" in text
     (request,) = session.packet_requests
     assert request["state"] == "requested" and request["requested"] == 20_000 and request["lead"] == "claude:opus"
-    assert session._dispatch_lead == ("t1", "claude:opus"), "dispatch uses the lead that justified"
+    assert session._dispatch_lead[:2] == ("t1", "claude:opus"), "dispatch uses the lead that justified"
     again = session._packet_problem(_spec())
     assert len(calls) == 1 and "PX-t1-1" in again, "the same scope is not asked twice"
     decisions, spec = S._read_packet_decisions(replace(_spec(), description="Do the work.\nPACKET GRANT: PX-t1-1 "

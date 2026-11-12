@@ -33,7 +33,7 @@ from .reply_parsers import (
 from .routing import WorkClass
 from .run_budget import FinishReserved
 from .session_prompts import _PACKET_NARROW_TEXT
-from .session_types import CapabilityUnavailable, RunStalled, TaskSpec
+from .session_types import CapabilityUnavailable, RunStalled, TaskSpec, _held_lead, _lead_hold
 
 
 class PacketsMixin:
@@ -243,14 +243,35 @@ class PacketsMixin:
                     f"more bytes on each of {turns} rounds of {_PACKET_CARRYING_CALLS} calls) do not fit")
         return ""
 
+    def _packet_request_id(self, task_id) -> str:
+        """The next request id of a task: one past every request the run
+        holds for it. A batch child or a contest entrant is handed only its
+        task's granted requests, so it also counts the ones its parent kept
+        back (``_packet_requests_withheld``); numbered from its own short
+        list, its lead's request repeated the id of a granted one and the
+        orchestrator's decision was applied to the wrong record."""
+        held = sum(1 for r in self.packet_requests if r.get("task") == task_id)
+        return f"PX-{task_id}-{held + int(getattr(self, '_packet_requests_withheld', 0) or 0) + 1}"
+
+    def _packet_requests_for_child(self, child, task_id) -> None:
+        """Hand ``child`` its task's granted requests, the same records,
+        and the count of the task's other requests, for its numbering."""
+        mine = [r for r in self.packet_requests if r.get("task") == task_id]
+        child.packet_requests = [r for r in mine if r.get("state") == "granted"]
+        # Plus what this session's own parent kept back from it.
+        above = int(getattr(self, "_packet_requests_withheld", 0) or 0)
+        child._packet_requests_withheld = len(mine) - len(child.packet_requests) + above
+
     def _packet_lead(self, spec) -> str:
         """The lead asked to justify: the one dispatch will use (picked once
         and held for this task id, as the capture check does)."""
-        chosen = getattr(self, "_dispatch_lead", None)
-        if chosen and chosen[0] == spec.task_id:
-            return chosen[1]
+        held = _held_lead(getattr(self, "_dispatch_lead", None), spec)
+        if held:
+            return held
         lead = self._pick_lead(spec)
-        self._dispatch_lead = (spec.task_id, lead)
+        # This check sends the task back, so the hold says what was named:
+        # the next task named has the same id and may be another task.
+        self._dispatch_lead = (spec.task_id, lead, _lead_hold(spec))
         return lead
 
     def _packet_justify(self, spec, prepared, fingerprint, role, needed, default, ceiling, basis, components):
@@ -260,7 +281,7 @@ class PacketsMixin:
         packet: the lead is not working, cannot edit (a source copy, the
         declaration round cap) and its reply grants nothing. Asked once per
         task and scope; any failure is a request not made, never a stop."""
-        rid = f"PX-{spec.task_id}-{sum(1 for r in self.packet_requests if r.get('task') == spec.task_id) + 1}"
+        rid = self._packet_request_id(spec.task_id)
         request = dict(id=rid, task=spec.task_id, origin="intake", fingerprint=fingerprint, role=role,
                        roles=list(self._packet_roles(prepared)), needed=needed, default=default, ceiling=ceiling,
                        ceiling_basis=basis, components=dict(components), lead=None, state=None, requested=None,
