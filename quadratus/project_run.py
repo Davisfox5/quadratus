@@ -822,6 +822,17 @@ def _held_parent(parent, accept_unrecorded=False):
             'killed process or a restart leaves it, so nothing outside its checkpoint says which state '
             'the run committed; it is not resumed', cause=exc)
     held = record.get('committed_manifests') if isinstance(record, dict) else None
+    if isinstance(held, list) and not held:
+        # A record that says its store committed nothing denies any committed
+        # state found beside it: that is a contradiction, not a missing record.
+        try:
+            planted = jobstore.read_manifest(parent) is not None
+        except jobstore.GenerationCorrupt as exc:
+            raise checkpoint.CheckpointRefused(f"the parent's committed state is corrupt: {exc}") from exc
+        if planted:
+            raise checkpoint.CheckpointRefused(
+                f"{parent.name}'s own record says the run committed nothing, yet its folder holds a "
+                'committed state; that state was written after the run ended, and the run is not resumed')
     if held is None or (isinstance(held, list) and not held):
         return unrecorded(
             'result.json names no committed state',

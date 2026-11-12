@@ -159,6 +159,12 @@ def test_a_parent_whose_record_names_another_state_is_refused_even_when_accepted
     (first / "result.json").write_text(json.dumps(record))
     with pytest.raises(CheckpointRefused, match="not the one the run's own record names"):
         _episode(replay, resume_from=first.name, accept_unrecorded_parent=True)
+    # A record that says nothing was committed, beside a committed state: the same.
+    record["committed_manifests"] = []
+    (first / "result.json").write_text(json.dumps(record))
+    with pytest.raises(CheckpointRefused, match="says the run committed nothing") as refused:
+        _episode(replay, resume_from=first.name, accept_unrecorded_parent=True)
+    assert FLAG not in str(refused.value) and not (first / "resumed-by.json").exists()
 
 
 def test_every_other_check_of_the_resume_still_runs_under_the_acceptance(tmp_path, monkeypatch):
