@@ -291,3 +291,26 @@ def test_an_entrant_builds_its_packet_at_the_allowance_the_task_was_granted(tmp_
     assert all(px.TAIL in c.prompt and "## Role packet" in c.prompt for c in leads), "each carried the whole packet"
     assert {limit for role, mine, limit in builds if mine and role == "lead"} == {request["granted"]}
     assert "PacketTooLarge" not in (replay.result.error or "")
+
+
+def test_the_sizing_note_on_the_map_is_the_merged_change_never_the_losing_draft(tmp_path):
+    """The development line keeps one sizing note per task on the codebase
+    map, from its first measured change. Each entrant measured its own copy
+    and wrote that note, so the map kept the losing draft's size as the
+    task's. It is written once, where the project is, from what was merged."""
+    from quadratus.codebase_map import CodebaseMap
+    scope = json.dumps({"permitted_paths": ["calc.py"], "intended_result": "calc.py has sub",
+                        "acceptance": ["sub(3, 1) == 2"], "max_lines": 40,
+                        "estimate": {"implementation": 30, "proof": 5, "setup": 5}})
+    plan = f"KIND: backend complex\nSCOPE: {scope}\nAdd sub(a, b) to calc.py"
+    losing = "    difference = a - b\n    return difference  # BROKEN"
+    script = arena.Script([plan, "DONE"], {OPUS: arena._sub(losing), SOL: arena._sub()})
+    kept = CodebaseMap(tmp_path / "map.jsonl")
+    session, project = arena._session(tmp_path, script, compete="complex", codebase_map=kept)
+    session.run(max_tasks=3)
+    record = arena._held(session)
+    drafts = arena._by_role(record)
+    assert record["winner_model"] == SOL and record["decided_by"] == "gate"
+    assert (drafts["routed"]["changed_lines"], drafts["challenger"]["changed_lines"]) == (5, 4)
+    (sizing,) = [note for note in kept.notes if note.topic == "sizing"]
+    assert sizing.session == "t1" and "the first measured change was 4 code" in sizing.note

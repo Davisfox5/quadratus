@@ -8742,6 +8742,11 @@ class Session:
                 # lead alone would have drafted stopped the run on its size.
                 children[role].packet_requests = [r for r in self.packet_requests
                                                   if r.get("task") == spec.task_id and r.get("state") == "granted"]
+                # The sizing note on the codebase map is the task's, written
+                # once by this session from the merged change. An entrant's
+                # copy is not the project, and the losing draft's size was
+                # kept there as the task's first measured change.
+                children[role]._calibrated.add(spec.task_id)
         except BaseException as exc:
             stack.close()
             if not isinstance(exc, Exception) or classify(exc) == "budget":
