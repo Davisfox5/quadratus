@@ -337,7 +337,7 @@ def _run_projectless(goal: str, args: argparse.Namespace, settings: Settings, st
         answer is not one to guess at, so it is asked on the terminal and the
         answer becomes a standing ruling for the rest of the session."""
         print(_c(f"\n?? The orchestrator needs an answer:\n   {question}", Fore.CYAN, True))
-        return input("   > ").strip()
+        return _answer("   > ", question)
 
     def plan_gate(plan: str) -> bool:
         """Reviewing the plan is reviewing the work at a fraction of the cost."""
@@ -538,10 +538,21 @@ def _decider_for(args, meter=None):
     return decider_from_name(getattr(args, "decider", None), meter=meter)
 
 
+def _answer(prompt: str, question: str) -> str:
+    """Read the operator's answer. A closed terminal (a run started in the
+    background) is no operator, so the run stops on the question itself and
+    never on the read."""
+    from .session import OperatorInputNeeded
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        raise OperatorInputNeeded(question) from None
+
+
 def _operator(args):
     """Interactive answers, preceded by any rulings the operator gave in advance."""
     def interactive(question):
-        return input(f"\n{question}\n> ").strip()
+        return _answer(f"\n{question}\n> ", question)
     path = getattr(args, "rulings", None)
     if not path:
         return interactive
