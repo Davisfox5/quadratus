@@ -4373,6 +4373,11 @@ _OWED_REVIEW_GRAMMAR = (
     "BLOCKING finding and no such line is recorded as an unfinished review and settles nothing.")
 
 
+#: The review batch's words for a capped review or verification, kept in the
+#: owed-review reason so a record written either way reads the same.
+_CAP_NO_VERDICT = " (it did not finish within its turn cap)"
+
+
 def _review_disposition(note: str, capped: bool, rids) -> str:
     """How one review ended, in the record's words, for a factual close-out."""
     if capped:
@@ -8088,6 +8093,7 @@ class Session:
                     capped.add(peer)
                     note = self._capped_review(spec, peer, "review", exc)
                     self._owe_review(spec, peer, "review", f"stopped at {exc.turns or 'its'} rounds with no verdict"
+                                     + _CAP_NO_VERDICT
                                      + ("; its completion gave none either" if recovered is not None else ""),
                                      role="collaborator", record=rv)
             if peer not in capped:
@@ -8110,7 +8116,8 @@ class Session:
                     # A reply arrived; a review did not finish. Held as owned
                     # review debt; the text still reaches the lead as a note.
                     self._owe_review(spec, peer, "review", "ended without a verdict (no NO FINDINGS, no BLOCKING "
-                                     f"finding, no {_REVIEW_COMPLETE} line)", role="collaborator", record=rv)
+                                     f"finding, no {_REVIEW_COMPLETE} line); recorded as an unfinished review",
+                                     role="collaborator", record=rv)
                     self._note(f"task {spec.task_id}: review by {peer} gave no verdict; held as owned review debt")
                 elif rv is not None and rv.get("result") == "pending":
                     self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
@@ -9769,7 +9776,7 @@ class Session:
                                      event=self._call_event(spec.task_id, "verifier", verifier), exc=exc)
             rv["eligible"], rv["decision"] = ["hold_owned_debt"], "hold_owned_debt"
             self._owe_review(spec, verifier, "verification", f"stopped at {exc.turns or 'its'} rounds with "
-                             "no verdict", role="verifier", record=rv)
+                             "no verdict" + _CAP_NO_VERDICT, role="verifier", record=rv)
         # Complete here means the seat answered; whether the answer accepts
         # is decided by the verdict readers, as before.
         self._record_review(spec, verifier, "verifier", verdict or "", complete=verdict is not None,
@@ -28640,8 +28647,9 @@ def _operator_limit_note(limit, scope, listed=()) -> str:
     """An operator limit over a task, as what it adds to the task's own scope.
 
     Its path limits always; an exclusion only when ``listed`` (what the
-    prompt has already named) does not hold it; a size only when it lowers
-    the stop the task scope stated. Nothing binding is dropped: an exclusion
+    prompt has already named) does not hold it; a size only when the task
+    declared none, since the operator's figure is then the estimate the
+    change is measured against. Nothing binding is dropped: an exclusion
     left out here is one the scope block in the same prompt already names.
     Returns "" when the limit adds nothing.
     """
@@ -28657,13 +28665,13 @@ def _operator_limit_note(limit, scope, listed=()) -> str:
         lines.append("Also finished only when:\n" + "\n".join(f"  - {a}" for a in limit.acceptance))
     if limit.review_only and not scope.review_only:
         lines.append("No source edits: report findings; do not change project source.")
-    if limit.max_lines:
-        # The stop _measure_scope applies: the lower size and the lower ratio.
-        size = min(limit.max_lines, scope.max_lines or limit.max_lines)
-        stop = int(size * min(limit.overrun_ratio, scope.overrun_ratio))
-        told = int(scope.max_lines * TaskScope().overrun_ratio) if scope.max_lines else None
-        if told is None or stop < told:
-            lines.append(f"Size: under the operator's limits the task stops past {stop} changed lines.")
+    if limit.max_lines and not scope.max_lines:
+        # The figure _measure_scope reports against: the task's own estimate
+        # when it declared one, else this one. Size is advisory (owner
+        # directive 2026-10-20), so this used to state a stop that no longer
+        # exists; a task with its own estimate is told nothing more.
+        lines.append(f"Size: the operator's limits put the estimate at about {limit.max_lines} changed lines; "
+                     "it is measured and reported, and stops nothing.")
     if not lines:
         return ""
     return "Operator limits (also binding):\n" + "\n".join(lines)
@@ -28958,7 +28966,7 @@ def _unserved_consult(body: str) -> bool:
 def _member_matches(name: str, keys) -> List[str]:
     """The roster keys among ``keys`` that a consult's member name could mean.
 
-    Leads say 'Sol' or 'GPT-5.6 Sol' or a full key; all resolve. An exact
+    Leads say 'Sol' or 'GPT Sol' or a full key; all resolve. An exact
     key, alias or label names that member alone. Otherwise the name must
     stand in a label as whole words and hold a word of two letters or more.
     The old test was a substring one, so "5" or a single letter resolved to

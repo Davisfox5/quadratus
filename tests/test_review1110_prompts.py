@@ -21,7 +21,7 @@ from quadratus.design_evidence import parse_steps
 from quadratus.policy import load_policy
 from quadratus.scope import TaskScope
 from quadratus.session import Complexity, Session, SessionConfig, TaskSpec
-from quadratus.task_kinds import MAX_TASK_LINES, Need, TaskKind
+from quadratus.task_kinds import TASK_SIZE_GUIDE, Need, TaskKind
 from quadratus.workers import WorkerBudget, check_errand_fit
 
 OPUS, SOL, GROK = "claude:opus", "openai:gpt-5.6-sol", "grok:default"
@@ -311,8 +311,19 @@ def _fixed_rule_bytes(session, prompt):
 #: (session._UNDECLARED_RENDER_RULE; measured 7,166 and 9,832). The capture
 #: figure was raised again, by 100, for the rule that a capture-only sample
 #: is never a name a test runner loads (session._confined_fixture_target).
-MAX_FIXED_RULE_BYTES = 7_230
-MAX_FIXED_RULE_BYTES_WITH_CAPTURE = 9_990
+#:
+#: Raised by 5,972 each when the development line was merged (2026-11-11),
+#: which is exactly what its rules add to this prompt (measured: 7,214 and
+#: 9,973 on the review batch alone, 13,186 and 15,945 merged). What added
+#: them: the windowed FETCH sentence (100), the advisory size guide in place
+#: of the one-line ceiling (283, owner directive 2026-10-20), the goal's
+#: contract boundary rule (1,104, session._CONTRACT_BOUNDARY_RULE) and, in the
+#: SCOPE rule (4,485), the advisory size wording, sizing a delivery with its
+#: executed proof and the estimate split, the proof scenarios with the
+#: early-rejection, evidence-by-reading and test-command rules, what counts
+#: as a signature, and the role packet limit with its PACKET GRANT line.
+MAX_FIXED_RULE_BYTES = 13_202
+MAX_FIXED_RULE_BYTES_WITH_CAPTURE = 15_962
 
 
 def _over(fixed, ceiling):
@@ -340,48 +351,60 @@ def test_a_scope_correction_costs_one_copy_of_the_rules_not_two(tmp_path):
     for name, config, ceiling in (("plain", {}, MAX_FIXED_RULE_BYTES + 200),
                                   ("capture", dict(capture_profile=object()),
                                    MAX_FIXED_RULE_BYTES_WITH_CAPTURE + 300)):
-        session, seen = _orchestrator(tmp_path / name, [OVERSIZED, SCOPED], **config)
+        session, seen = _orchestrator(tmp_path / name, [UNSIZED, SCOPED], **config)
         session.next_task()
         assert "CORRECTION REQUIRED:" in seen[1]
         fixed = _fixed_rule_bytes(session, seen[1])
         assert fixed <= ceiling, _over(fixed, ceiling)
 
 
-def test_the_size_ceiling_is_stated_once_from_the_constants(tmp_path):
+def test_the_size_guide_is_stated_once_from_the_constants(tmp_path):
+    """The size is a guide since the owner directive of 2026-10-20: nothing
+    stops a task for size. The review's rule is unchanged: one prompt states
+    the figure once, and the SCOPE rule points at that statement."""
     session, seen = _orchestrator(tmp_path)
     session.next_task()
     prompt = seen[-1]
-    assert f"Size the task to change at most {MAX_TASK_LINES} lines." in S._SIZE_CEILING
-    assert prompt.count(f"at most {MAX_TASK_LINES} lines") == 1
-    for old in (f"no greater than {MAX_TASK_LINES}", "50 percent", "lines of diff", "Decompose larger work"):
+    assert f"Aim for tasks of about ~{TASK_SIZE_GUIDE} lines of diff" in S._SIZE_GUIDE
+    assert prompt.count(f"~{TASK_SIZE_GUIDE} lines") == 1 and prompt.count("lines of diff") == 1
+    for old in (f"no greater than {TASK_SIZE_GUIDE}", f"at most {TASK_SIZE_GUIDE} lines", "50 percent",
+                f"~{TASK_SIZE_GUIDE}-line guide", "Decompose larger work"):
         assert old not in prompt, old
     # The number appears once more, as the example value an orchestrator copies
     # (test_the_scope_example_still_quotes_the_ceiling_constant): not a rule.
-    assert (S._SIZE_CEILING + S._SCOPE_REQUEST).count(str(MAX_TASK_LINES)) == 2
-    # The SCOPE rule points at that one statement and gives the stop as the
-    # ratio every scope carries, the figure the lead is stopped by.
-    ratio = TaskScope().overrun_ratio
-    assert "a whole number from 1 to the size ceiling above" in S._SCOPE_REQUEST
-    assert f"an overrun (past {ratio:g} times max_lines) stops the task" in S._SCOPE_REQUEST
-    assert f"stops the task past {int(40 * ratio)} changed lines" in TaskScope(["a.py"], max_lines=40).render()
+    assert (S._SIZE_GUIDE + S._SCOPE_REQUEST).count(str(TASK_SIZE_GUIDE)) == 2
+    # The SCOPE rule points at that one statement and says what the harness
+    # does with the size: it measures and reports, and stops nothing.
+    assert "a task that needs more than the size guide above is declared at its real size" in S._SCOPE_REQUEST
+    assert "it stops nothing, and the reviewers judge whether the size was necessary" in S._SCOPE_REQUEST
+    assert "it stops nothing for size alone" in S._SIZE_GUIDE
+    rendered = TaskScope(["a.py"], max_lines=40).render()
+    assert "Expected size: about 40 changed lines" in rendered and "it stops nothing for size alone" in rendered
+    for gone in ("size ceiling", "stops the task past", "times max_lines"):
+        assert gone not in prompt + rendered, gone
 
 
 SCOPED = ('KIND: backend simple\nSCOPE: {"permitted_paths": ["app.py"], "intended_result": "subtract exists", '
           '"acceptance": ["subtract(3, 1) == 2"], "max_lines": 30}\nAdd subtract(a, b) to app.py.')
 OVERSIZED = SCOPED.replace('"max_lines": 30', '"max_lines": 5000')
+#: A declaration that still comes back for correction: a size that is no estimate.
+UNSIZED = SCOPED.replace('"max_lines": 30', '"max_lines": 0')
 
 
-def test_a_scope_at_the_ceiling_parses_and_one_over_it_is_sent_back(tmp_path):
-    session, seen = _orchestrator(tmp_path, [OVERSIZED, SCOPED])
+def test_a_scope_over_the_guide_parses_and_one_that_is_no_estimate_is_sent_back(tmp_path):
+    session, seen = _orchestrator(tmp_path / "over", [OVERSIZED, SCOPED])
+    spec = session.next_task()
+    assert spec.scope.max_lines == 5000 and len(seen) == 1, "declared at its real size; nothing is sent back for size"
+    session, seen = _orchestrator(tmp_path / "none", [UNSIZED, SCOPED])
     spec = session.next_task()
     assert spec.scope.max_lines == 30 and len(seen) == 2
-    assert f"CORRECTION REQUIRED: SCOPE max_lines must be between 1 and {MAX_TASK_LINES}" in seen[1]
+    assert "CORRECTION REQUIRED: SCOPE max_lines must be a positive integer" in seen[1]
 
 
 def test_a_correction_states_the_rule_it_corrects_in_full_and_only_once(tmp_path):
     """Every call is a fresh vendor session, so the correction prompt is whole;
     what it no longer does is carry the SCOPE rules twice."""
-    session, seen = _orchestrator(tmp_path, [OVERSIZED, SCOPED], capture_profile=object())
+    session, seen = _orchestrator(tmp_path, [UNSIZED, SCOPED], capture_profile=object())
     session.next_task()
     first, correction = seen
     assert first.count(S._SCOPE_REQUEST) == 1 and first.count(S._CAPTURE_SCOPE_REQUEST) == 1
@@ -391,7 +414,7 @@ def test_a_correction_states_the_rule_it_corrects_in_full_and_only_once(tmp_path
     assert "The SCOPE rules are restated in full in the correction at the end of this prompt." in correction
     assert "The capture rules are restated in full in the correction at the end of this prompt." in correction
     # Everything the correction does not restate is still in the prompt.
-    for block in (S._SIZE_CEILING, S._KIND_REQUEST, S._NEEDS_REQUEST, S._ORIENT_REQUEST, S._ASK_SPARINGLY):
+    for block in (S._SIZE_GUIDE, S._KIND_REQUEST, S._NEEDS_REQUEST, S._ORIENT_REQUEST, S._ASK_SPARINGLY):
         assert block in correction
     assert "This task's id will be t1." in correction
     assert len(correction.encode()) < len(first.encode()) + 400, "the rules are not paid for twice"
@@ -422,7 +445,7 @@ def test_a_re_ask_carries_every_rule_because_no_call_remembers_the_last(tmp_path
     assert "self.last_session_id = str(uuid.uuid4())" in inspect.getsource(cli_providers.CLIProvider._call)
     session, seen = _orchestrator(tmp_path, ["FETCH: nothing-here", "DONE"])
     assert session.next_task() is None and len(seen) == 2
-    for block in (S._SIZE_CEILING, S._KIND_REQUEST, S._NEEDS_REQUEST, S._SCOPE_REQUEST, S._ORIENT_REQUEST):
+    for block in (S._SIZE_GUIDE, S._KIND_REQUEST, S._NEEDS_REQUEST, S._SCOPE_REQUEST, S._ORIENT_REQUEST):
         assert block in seen[1]
     assert "## Fetched artifacts (you asked for these)" in seen[1]
 
@@ -479,7 +502,7 @@ def test_the_plan_is_asked_for_in_the_form_a_task_is_named_in(tmp_path):
     prompt = seen[0]
     assert "Do not start work." in prompt and "'KIND: <kind> <difficulty>'" in prompt
     assert "then its one-line description on the next line" in prompt
-    assert S._KIND_VOCABULARY in prompt and S._SIZE_CEILING in prompt
+    assert S._KIND_VOCABULARY in prompt and S._SIZE_GUIDE in prompt
     assert "KIND: <kind> --" not in prompt
     # Each planned task reads as a task: the same parser takes it.
     for block in PLAN.split("\n\n"):
@@ -494,7 +517,7 @@ def test_a_plan_on_a_run_whose_decider_labels_everything_asks_for_no_kind_line(t
                       config=SessionConfig(decider=object(), decider_labels="all"))
     session.plan()
     assert "one per line, each a one-line description. Mark anything you are unsure about" in seen[0]
-    assert "KIND:" not in seen[0] and S._SIZE_CEILING in seen[0]
+    assert "KIND:" not in seen[0] and S._SIZE_GUIDE in seen[0]
 
 
 def test_an_approved_plan_rides_into_every_later_decision(tmp_path):
@@ -790,12 +813,26 @@ def test_an_operator_limit_states_only_what_it_adds(tmp_path):
     session, prompts = _limited(tmp_path, limit)
     seat = _sent(session, prompts)
     assert "Also never change: secrets/**." in seat and seat.count(FORBIDDEN[0]) == 1
-    # A tighter operator size lowers the stop the scope block stated (60).
-    assert "Size: under the operator's limits the task stops past 15 changed lines." in seat
+    # Size is advisory since the owner directive of 2026-10-20: the task's own
+    # estimate (40) is the one its change is measured against, so a second
+    # operator figure adds nothing and no stop is stated.
+    assert "the operator's limits put the estimate" not in seat and "stops past" not in seat
+    assert seat.count("Expected size: about 40 changed lines") == 1
     spec = session._active_spec
-    (session.project / "app.py").write_text(ADD + "".join(f"x{i} = {i}\n" for i in range(16)))
+    more = ADD + "".join(f"x{i} = {i}\n" for i in range(16))
+    (session.project / "app.py").write_text(more)
     report = session._measure_scope(spec, {"app.py": ADD.encode()})
-    assert report.oversized and report.max_lines == 10, "the figure in the prompt is the one enforced"
+    assert report.max_lines == 40 and not report.oversized, "the figure in the prompt is the one measured against"
+    # A task that declared no size is measured against the operator's figure,
+    # and that is the one case where the limit's size is something it adds.
+    session, prompts = _limited(tmp_path / "unsized", limit,
+                                scope=TaskScope(["app.py"], forbidden_paths=FORBIDDEN))
+    seat = _sent(session, prompts)
+    assert ("Size: the operator's limits put the estimate at about 10 changed lines; it is measured and "
+            "reported, and stops nothing.") in seat and "Expected size" not in seat
+    (session.project / "app.py").write_text(more)
+    report = session._measure_scope(session._active_spec, {"app.py": ADD.encode()})
+    assert report.max_lines == 10 and report.oversized and report.within_scope, "measured, never a stop"
 
 
 def test_a_limit_that_adds_nothing_adds_no_block(tmp_path):
@@ -875,7 +912,7 @@ def test_the_redeclaration_rule_the_prompt_states_is_the_one_enforced(tmp_path, 
 def test_a_whole_run_hands_the_reviewer_the_diff_and_offers_the_direct_tier_no_worker(tmp_path, monkeypatch):
     """The favicon task from the direct-tier journeys, on both tiers, through
     run_project and the Fleet: what each seat was really sent."""
-    from tests.lifecycle.test_direct_tier import _decl, _run
+    from tests.lifecycle.test_direct_tier import _decl, _non_goal, _run
     for name in ("normal", "direct"):
         (tmp_path / name).mkdir()
     normal = _run(tmp_path / "normal", monkeypatch, _decl(tier="normal"), direct=False)
@@ -885,11 +922,17 @@ def test_a_whole_run_hands_the_reviewer_the_diff_and_offers_the_direct_tier_no_w
     assert "the lead's own account of it, in the lead's words (not a measurement):\nAdded the favicon." in review
     assert _offers_workers(normal.of("lead")[0].prompt)
 
-    direct = _run(tmp_path / "direct", monkeypatch, _decl())
+    # Work that covers a requirement is refused the direct tier on the
+    # development line, so the direct run is the one that covers none.
+    direct = _run(tmp_path / "direct", monkeypatch, _non_goal(monkeypatch))
     lead = direct.of("lead")[0].prompt
     assert ("This is a direct-tier task (one small change, made in one pass), so no worker is offered. "
             "Do its reading and its edits yourself.") in lead
-    assert not _offers_workers(lead) and "WORKER" not in lead
+    # The lead is a codex seat on the merged roster, and codex takes its role
+    # text inside the prompt. The Fleet's standing sentence about the CHANGED
+    # line names WORKER on every editing call; it offers nothing.
+    standing = "A standalone FETCH, CONSULT or WORKER request may omit the line"
+    assert not _offers_workers(lead) and "WORKER" not in lead.replace(standing, "")
     design = direct.of("design-review")[0].prompt
     assert "## Diff measured by the harness: " + WHOLE in design and "+<svg/>" in design
 
@@ -1014,10 +1057,10 @@ def test_the_redeclaring_lead_is_told_the_file_path_rule_it_is_held_to(tmp_path,
 
 def test_the_scope_example_still_quotes_the_ceiling_constant():
     """The example value is what an orchestrator copies. It stayed at the
-    ceiling, as on every recorded run: a lower literal would anchor estimates
-    low, and the stop is 1.5 times the estimate."""
-    assert '"max_lines": ' + str(MAX_TASK_LINES) + "}. The line starts at the left margin" in S._SCOPE_REQUEST
-    assert S._SCOPE_REQUEST.count(str(MAX_TASK_LINES)) == 1, "an example, not a second statement of the rule"
+    guide figure (the old ceiling), as on every recorded run: a lower literal
+    would anchor estimates low."""
+    assert '"max_lines": ' + str(TASK_SIZE_GUIDE) + "}. The line starts at the left margin" in S._SCOPE_REQUEST
+    assert S._SCOPE_REQUEST.count(str(TASK_SIZE_GUIDE)) == 1, "an example, not a second statement of the rule"
 
 
 def test_text_inside_a_measured_diff_never_counts_as_the_packet_or_the_scope(tmp_path):
