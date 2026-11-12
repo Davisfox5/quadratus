@@ -95,7 +95,7 @@ def test_a_repeated_fix_cycle_raises_the_editor_and_the_recheck_explicitly(tmp_p
 
     def recheck(call, replay):
         rechecks.append(call)
-        return "RFT1-1: UNRESOLVED still" if len(rechecks) == 1 else "RFT1-1: RESOLVED now"
+        return "RFT1-1: UNRESOLVED still" if len(rechecks) == 1 else "RFT1-1: RESOLVED - now"
     replay = H.run(_at(tmp_path, "cycles"), monkeypatch,
                    _script(collaborator=lambda c, r: CODE_FINDING + MET, revision=revision, recheck=recheck),
                    files=FILES, max_tasks=1, record_complete=False)

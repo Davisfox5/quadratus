@@ -313,7 +313,7 @@ def test_a_fresh_or_stale_executed_row_is_never_judged_from_requirement_verdicts
     session._sync_obligation(stale)
     session._judge_obligations("claude:opus", "R1: MET - x\nR2: MET - x", {}, ids=["R1", "R2"])
     assert session.evidence_obligations[0]["sufficiency"] == "unjudged"
-    session._judge_obligations("claude:opus", "O1: SUFFICIENT the case shows it", {}, ids=["R1", "R2"])
+    session._judge_obligations("claude:opus", "O1: SUFFICIENT - the case shows it", {}, ids=["R1", "R2"])
     assert session.evidence_obligations[0]["sufficiency"] == "unjudged", "a stale row cannot be found sufficient"
     session._judge_obligations("claude:opus", "O1: INSUFFICIENT it ran on another source", {}, ids=["R1", "R2"])
     assert session.evidence_obligations[0]["sufficiency"] == "insufficient", "an explicit INSUFFICIENT still counts"
@@ -327,7 +327,7 @@ def test_an_explicit_line_decides_and_a_conflict_leaves_the_row_unjudged_with_no
     session._judge_obligations("claude:opus", "O1: INSUFFICIENT negative sums are not shown", dict(raw))
     row = session.evidence_obligations[0]
     assert row["sufficiency"] == "insufficient" and row["sufficiency_source"] == "explicit line by claude:opus"
-    session._judge_obligations("claude:opus", "O1: SUFFICIENT fine\nO1: INSUFFICIENT not fine", dict(raw))
+    session._judge_obligations("claude:opus", "O1: SUFFICIENT - fine\nO1: INSUFFICIENT not fine", dict(raw))
     row = session.evidence_obligations[0]
     assert row["sufficiency"] == "unjudged" and row["sufficiency_source"] == "" and row["sufficiency_note"]
 
@@ -343,7 +343,7 @@ def test_a_prior_judgment_about_exactly_this_evidence_stands_until_a_seat_speaks
     session._judge_obligations("claude:opus", "R1: MET\nR2: MET", dict(raw), ids=["R1", "R2"])
     after = session.evidence_obligations[0]
     assert (after["sufficiency"], after["judged_by"], after["judged_binding"]) == ("insufficient", "openai:sol", before["judged_binding"])
-    session._judge_obligations("claude:opus", "O1: SUFFICIENT the case divides by zero on this source", dict(raw))
+    session._judge_obligations("claude:opus", "O1: SUFFICIENT - the case divides by zero on this source", dict(raw))
     after = session.evidence_obligations[0]
     assert (after["sufficiency"], after["judged_by"]) == ("sufficient", "claude:opus"), "an explicit line still decides"
     # New evidence makes the judgment stale: it is no longer current, and

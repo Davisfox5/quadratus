@@ -32,6 +32,7 @@ from .session_prompts import (
     _FRONTEND_WITHOUT_RENDER,
     _ONE_CAPTURE_MARKER,
     _ONE_FIXTURE_FENCE,
+    _PLAIN_VERDICT_RULE,
     _design_fix_delivery,
 )
 from .session_types import (
@@ -638,10 +639,10 @@ class DesignMixin:
             + self._review_diff("this task's whole change, against the source it started from",
                                 design=True)
             + ((authority + "\n\n## Declared visual scenarios (evidence capture)" + self._obligations_block(capture_rows)
-                + "\n\nFor each capture row above, add exactly one line '<O-id>: SUFFICIENT <what these renders "
+                + "\n\nFor each capture row above, add exactly one line '<O-id>: SUFFICIENT - <what these renders "
                 "show for that requirement and scenario>' or '<O-id>: INSUFFICIENT <what they do not show>'. "
                 "APPROVED alone judges no row; a row left unjudged keeps its requirement not met; a line "
-                "naming any other row is not read.")
+                "naming any other row is not read. " + _PLAIN_VERDICT_RULE)
                if capture_rows else "")
             + "\n\nFirst check that the renders show the interface this task added or changed. "
             "If they show a page where that interface does not appear, reply exactly "

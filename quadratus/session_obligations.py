@@ -32,7 +32,6 @@ from .check_facts import (
 from .reply_parsers import (
     _CASE_CITATION,
     _CASE_NAME,
-    _INSPECTION_VERDICT,
     _MAX_SCOPE_LINES,
     _MAX_SCOPE_PATH_CHARS,
     _MAX_SCOPE_PATHS,
@@ -54,8 +53,9 @@ from .reply_parsers import (
 )
 from .scope import _matches as _scope_matches
 from .scope import is_test_path
-from .session_prompts import _display_item, _replaced_note
+from .session_prompts import _PLAIN_VERDICT_RULE, _display_item, _replaced_note
 from .session_types import _EDITING_ROLES
+from .verdicts import inspection_lines as _inspection_lines
 
 # One logger name for the engine, wherever its code lives.
 log = logging.getLogger("quadratus.session")
@@ -196,12 +196,12 @@ class ObligationsMixin:
                          + (f" by {o['judged_by']}" if o.get("judged_by") else "")
                          + self._scenario_line(o))
         if any(o.get("modality", "test") == "test" and o.get("execution") == "ran" for o in rows):
-            lines.append("An executed test row is judged only by your own line, '<O-id>: SUFFICIENT <what the "
+            lines.append("An executed test row is judged only by your own line, '<O-id>: SUFFICIENT - <what the "
                          "executed case shows for that requirement and scenario>' or '<O-id>: INSUFFICIENT <what "
                          "it does not establish>'; your MET or NOT MET on a requirement it binds does not judge "
                          "it, and unjudged it keeps that requirement not met.")
         if any(o.get("modality") == "legacy" for o in rows):
-            lines.append("A legacy acceptance row is judged only by your own line, '<O-id>: SUFFICIENT <the "
+            lines.append("A legacy acceptance row is judged only by your own line, '<O-id>: SUFFICIENT - <the "
                          "project evidence you read that shows it>' or '<O-id>: INSUFFICIENT <what it does not "
                          "establish>'; your MET on its requirement does not judge it, and unjudged it keeps that "
                          "requirement not met.")
@@ -212,7 +212,7 @@ class ObligationsMixin:
                          "requirement does not judge it.")
         if any(o.get("modality") == "reading" for o in rows):
             lines.append("A reading row (evidence reading, a documentation scenario) is judged only by your own "
-                         "line, '<O-id>: SUFFICIENT <why reading can demonstrate this exact requirement and "
+                         "line, '<O-id>: SUFFICIENT - <why reading can demonstrate this exact requirement and "
                          "scenario, and what the cited file shows>' or '<O-id>: INSUFFICIENT <what reading cannot "
                          "establish, or what the file does not show>'. A SUFFICIENT line must cite the file the "
                          "scenario names; one that does not is not counted. A requirement about runtime "
@@ -364,9 +364,11 @@ class ObligationsMixin:
         the reply, so a file changed in between is not attested as read and
         reopens the gap. The hand-off is consumed either way; a missing,
         empty or refused judgment leaves the gap open, recorded."""
+        # Read by verdicts.py: a READ counts only as 'READ <id> - <what the
+        # files show>', so "READ <id> not yet" attests nothing.
         verdicts: Dict[str, List[tuple]] = {}
-        for m in _INSPECTION_VERDICT.finditer(reply or ""):
-            verdicts.setdefault(m.group(2).upper(), []).append((m.group(1).upper(), m.group(3).strip()))
+        for kind, gid, text in _inspection_lines(reply or ""):
+            verdicts.setdefault(gid, []).append((kind, text))
         for gap in self.inspection_gaps:
             handed = next((h for h in reversed(gap.get("handed") or [])
                            if h.get("task") == task and h.get("peer") == peer and h.get("stage") == stage
@@ -377,7 +379,8 @@ class ObligationsMixin:
             said = verdicts.get(str(gap.get("id")).upper(), [])
             reads = [text for kind, text in said if kind == "READ" and text]
             problem = ("the reviewer said it could not read them" if any(kind == "UNREAD" for kind, _ in said)
-                       else "no 'READ <id> - <what they show>' line" if not reads
+                       else "no plain 'READ <id> - <what they show>' line" if not reads or any(
+                           not kind for kind, _ in said)
                        else "a file was unreadable when it was handed" if any(
                            d is None for d in (handed.get("files") or {}).values()) else "")
             if problem:
@@ -1613,7 +1616,7 @@ class ObligationsMixin:
 
     def _judge_restated(self, auditor: str, reply: str, task: Optional[str] = None, *,
                         oids: Optional[Sequence[str]] = None) -> None:
-        """An independent seat's own '<O-id>: SUFFICIENT|INSUFFICIENT <why>'
+        """An independent seat's own '<O-id>: SUFFICIENT - <why> or INSUFFICIENT <why>'
         line on a restated NOT RUN item (cycle02): whether the restated cases
         exercise the whole reported behaviour. The restating task's reviewer
         (``task``: its review or recheck) or the audit; recorded on the item
@@ -1660,10 +1663,11 @@ class ObligationsMixin:
                             f"; restated by {last.get('task')}'s lead as {', '.join(e.get('cases') or [])}; its "
                             "earlier judgment no longer holds for the source as it is now"))
         return ("\n\n## NOT RUN items restated as cases that need your judgment\n" + "\n".join(lines)
-                + "\nFor each, add one line '<O-id>: SUFFICIENT <how these cases exercise the whole reported "
+                + "\nFor each, add one line '<O-id>: SUFFICIENT - <how these cases exercise the whole reported "
                 "behaviour>' or '<O-id>: INSUFFICIENT <what they leave unexercised>'. Judge the cases against "
                 "everything the item reported, not whether they pass: the harness settles execution itself. These "
-                "lines do not change your verdict form; without a SUFFICIENT line the item stays held.")
+                "lines do not change your verdict form; without a SUFFICIENT line the item stays held. "
+                + _PLAIN_VERDICT_RULE)
 
     def _row_route_note(self, row: dict) -> str:
         """The real route for a row no run can settle as it stands, stated

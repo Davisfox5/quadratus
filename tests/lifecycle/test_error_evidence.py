@@ -38,7 +38,7 @@ def _scoped(paths, text, covers):
 
 #: This file's own explicit judgment of t2's documentation scenario (a reading
 #: row): README.md names add(a, b) and its result, which is all R2 asks.
-DOCS_JUDGED = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
+DOCS_JUDGED = "SUFFICIENT - README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 R1 = "add(a, b) raises TypeError when either argument is not a number"
 #: This file's declared refusal scenario (_scoped below) and its authored basis.
 ERROR_PROOF = H.proofs_for("R1", "tests/test_app.py", operation="add('x', 1)", state="nothing stored",

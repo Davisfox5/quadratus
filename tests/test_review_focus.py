@@ -105,7 +105,7 @@ def test_the_recheck_is_shown_what_changed_since_the_review(tmp_path, monkeypatc
 
     def invoke(peer, prompt):
         seen["prompt"] = prompt
-        return "RFT1-1: RESOLVED fixed"
+        return "RFT1-1: RESOLVED - fixed"
     monkeypatch.setattr(session, "_invoke_model", invoke)
     session._active_spec = spec
     task = SimpleNamespace(record=lambda *a, **k: None, keep=lambda *a, **k: None, task_id="t1")

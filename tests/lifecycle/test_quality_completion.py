@@ -40,7 +40,7 @@ T1 = _simple("app.py", "Implement add in app.py.", "R1")
 T2 = _simple("README.md", "Document add in README.md.", "R2")
 NO_COVERS = T1.rsplit("\nCOVERS:", 1)[0]
 README = "# app\n\n`add(a, b)` returns the sum.\n"
-DOCS = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
+DOCS = "SUFFICIENT - README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 TYPED = ("def add(a, b):\n"
          "    for name, value in (('a', a), ('b', b)):\n"
          "        if not isinstance(value, (int, float)):\n"
@@ -85,7 +85,7 @@ def _auditor(verdicts, *, reject_debt=None, approve_debt=None):
             if reject_debt:
                 extra[oid] = f"INSUFFICIENT {reject_debt}"
             elif approve_debt:
-                extra[oid] = f"SUFFICIENT {approve_debt}"
+                extra[oid] = f"SUFFICIENT - {approve_debt}"
         return reply + "".join(f"\n{oid}: {text}" for oid, text in extra.items())
     return auditor
 
@@ -406,7 +406,7 @@ def test_both_recheck_routes_carry_the_original_contract_bound_to_the_findings_o
         return "NO FINDINGS\nR2: MET - README.md\nREVIEW: COMPLETE"
 
     def recheck(call, replay):
-        return "RFT1-1: RESOLVED fixed" if call.task == "t2" else "RFT1-1: UNRESOLVED: still returns a string."
+        return "RFT1-1: RESOLVED - fixed" if call.task == "t2" else "RFT1-1: UNRESOLVED: still returns a string."
 
     continuing = T2 + "\nCONTINUES: t1"
     script = Script(orchestrator=_plan(REQS + T1, continuing), lead=lead, revision=revision, collaborator=collaborator,
@@ -819,7 +819,7 @@ def test_a_capped_close_with_another_reviewers_finding_open_says_what_was_resolv
         if call.vendor == "grok":
             return "RFT1-2: UNRESOLVED: the scenario still does not state it."
         mine = [c for c in replay.of("recheck") if c.vendor == call.vendor]
-        return "RFT1-1: RESOLVED fixed" if len(mine) >= 2 else "RFT1-1: UNRESOLVED: add('x', 1) still returns a string."
+        return "RFT1-1: RESOLVED - fixed" if len(mine) >= 2 else "RFT1-1: UNRESOLVED: add('x', 1) still returns a string."
 
     script = Script(orchestrator=_plan(REQS.replace("R2: README documents add\n", "") + complex_t1), lead=lead,
                     revision=revision, collaborator=collaborator, recheck=recheck,
@@ -994,7 +994,7 @@ def _c3_script(case):
             return H.grok_ok("Now checking the TypeError path", stop="cancelled", num_turns=8)
         return Script(orchestrator=_plan(REQS.replace("R2: README documents add\n", "") + T1), lead=_c3_lead,
                       revision=revision, collaborator=lambda c, r: FINDING + "\nR1: MET - app.py\nREVIEW: COMPLETE",
-                      recheck=lambda c, r: ("RFT1-1: RESOLVED the TypeError path is in place\nNEW: add(None, 1) raises "
+                      recheck=lambda c, r: ("RFT1-1: RESOLVED - the TypeError path is in place\nNEW: add(None, 1) raises "
                                             "AttributeError instead of TypeError | basis: R1 | impact: crash"),
                       auditor=_auditor({"R1": "MET - app.py"}), **{"requirements-review": lambda c, r: "COMPLETE"})
 
@@ -1016,7 +1016,7 @@ def _c3_script(case):
         if call.vendor == "grok":
             return "RFT1-2: UNRESOLVED: the scenario still does not state it."
         if case == "invalidated" and len([c for c in replay.of("recheck") if c.vendor == call.vendor]) >= 2:
-            return "RFT1-1: INVALIDATED tests/test_app.py::test_add shows strings are allowed by R1"
+            return "RFT1-1: INVALIDATED - tests/test_app.py::test_add shows strings are allowed by R1"
         return "RFT1-1: UNRESOLVED: add('x', 1) still returns a string."
 
     complex_t1 = T1.replace("KIND: backend simple", "KIND: backend complex")

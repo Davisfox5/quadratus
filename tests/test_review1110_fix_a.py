@@ -219,7 +219,7 @@ def _auditor(verdicts, shown):
         shown.append(ids)
         # The task's SCOPE acceptance string is a row the audit judges on its
         # own line; a row left unjudged keeps its requirements not met.
-        rows = [f"{oid}: SUFFICIENT calc.py shows it" for oid in H.obligation_ids(prompt, modality="legacy")]
+        rows = [f"{oid}: SUFFICIENT - calc.py shows it" for oid in H.obligation_ids(prompt, modality="legacy")]
         return "\n".join([f"{rid}: {verdicts.get(rid, 'MET - calc.py')}" for rid in ids] + rows)
     return audit
 

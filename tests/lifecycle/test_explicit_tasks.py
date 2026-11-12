@@ -28,7 +28,7 @@ README_T2 = dict(T2, proofs=H.proofs_for("R1", "README.md", operation="the READM
 README_TASK = "KIND: docs simple\nSCOPE: " + json.dumps(README_T2) + "\nDocument add in README.md."
 #: This file's own explicit judgment of the README reading scenario, written
 #: per obligation id by a scripted auditor that was shown the row (opt-in).
-READING_JUDGED = "SUFFICIENT README.md on the delivered source names add(a, b) and says it returns a + b"
+READING_JUDGED = "SUFFICIENT - README.md on the delivered source names add(a, b) and says it returns a + b"
 #: The explicit-task baseline: a valid, distinct, pre-existing favicon, so
 #: tests/test_basic.py::test_favicon_file passes before any listed task runs
 #: and a README-only task's check is about that task (root's full suite on

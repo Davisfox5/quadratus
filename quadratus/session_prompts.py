@@ -536,6 +536,17 @@ _AUDIT_LINE_RULE = (
     "verdict for it, and no verdict is counted as not met."
 )
 
+#: What every seat that answers one line per id is told about the line
+#: readers in quadratus.verdicts (plain_acceptance): recheck lines, evidence
+#: row lines, a reviewer's requirement lines and inspection lines.
+_PLAIN_VERDICT_RULE = (
+    "RESOLVED, INVALIDATED, SUFFICIENT, MET and READ count only when the word ends its line or is followed at "
+    "once by ' - ' and the reason. A condition, a hedge or a question ('RESOLVED once ...', 'SUFFICIENT - only "
+    "if ...', 'MET, but ...'), both words, or the rejecting word in capitals inside the reason is read as no "
+    "verdict for that id, never as an acceptance: where the word is not fully earned, write the rejecting word "
+    "and what remains."
+)
+
 #: How a finding is stated, for reviewers and the auditor alike: what the
 #: orchestrator needs to test it (evidence loop, 2026-10-15).
 #: The two typed finding forms a reviewer may use for a defect no editor

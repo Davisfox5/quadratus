@@ -22,7 +22,7 @@ from .providers import ProviderError, TurnLimitReached
 from .reply_parsers import _PROVES_ANY, _PROVES_PID, _RUNS_ANY
 from .run_budget import FinishReserved
 from .scope import PROVES_RULE, TEST_SUBSTANCE_RULE
-from .session_prompts import _display_item, _replaced_note
+from .session_prompts import _PLAIN_VERDICT_RULE, _display_item, _replaced_note
 
 
 class DoneMixin:
@@ -110,11 +110,11 @@ class DoneMixin:
                 + "\n".join(f"{r}: {texts.get(r, '')}" for r in held)
                 + "\n\n## NOT RUN items restated as cases that need an independent judgment\n" + "\n".join(lines)
                 + "\n\nThe project in your working directory is the delivered work. You did not write these "
-                  "restatements. For each item give one line '<O-id>: SUFFICIENT <how these cases exercise "
+                  "restatements. For each item give one line '<O-id>: SUFFICIENT - <how these cases exercise "
                   "the whole reported behaviour>' or '<O-id>: INSUFFICIENT <what they leave unexercised>'. Judge "
                   "the cases against everything the item reported, not whether they pass: the harness settled "
                   "execution itself. Only lines for the ids listed above are read, one line per id; nothing else "
-                  "is asked, and requirements are the audit's.")
+                  "is asked, and requirements are the audit's. " + _PLAIN_VERDICT_RULE)
 
     @staticmethod
     def _restatement_unread(reply: str, oids: Sequence[str]) -> List[str]:

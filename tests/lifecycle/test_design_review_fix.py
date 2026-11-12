@@ -52,8 +52,8 @@ BUILD = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, proofs=HINT_PROOFS, 
 #: The scripted reviewer's observations of the fixed page (WIDER), one per
 #: covered requirement; a BLOCKING verdict judges no row.
 HINT_OBSERVED = {
-    "R1": "SUFFICIENT both renders show the search field with room beside the Ctrl+K hint inside the viewport",
-    "R2": "SUFFICIENT both renders show the Import button labelled 'Import' beside the search field and the hint",
+    "R1": "SUFFICIENT - both renders show the search field with room beside the Ctrl+K hint inside the viewport",
+    "R2": "SUFFICIENT - both renders show the Import button labelled 'Import' beside the search field and the hint",
 }
 
 

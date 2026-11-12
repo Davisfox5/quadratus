@@ -165,7 +165,7 @@ def test_a_resolves_of_a_finding_on_closed_work_is_not_charged_and_settles_by_it
 
     def recheck(call, replay):
         if call.task == "t2":
-            return replies.recheck_reply(call.prompt, default="RESOLVED tests/test_app.py::test_negative covers it")
+            return replies.recheck_reply(call.prompt, default="RESOLVED - tests/test_app.py::test_negative covers it")
         return inner_recheck(call, replay)
     script.overrides["lead"], script.overrides["recheck"] = lead, recheck
     script.overrides["collaborator"] = (lambda inner: (lambda c, r: ("NO FINDINGS\nR1: MET - app.py\nREVIEW: COMPLETE"
@@ -189,7 +189,7 @@ def test_a_resolves_of_a_finding_on_closed_work_is_not_charged_and_settles_by_it
 
 # -- 3. one finding id through a parallel child's deferral ------------------------------------------
 
-def _deferral_script(*, after_merge="RESOLVED the merged README states what add returns"):
+def _deferral_script(*, after_merge="RESOLVED - the merged README states what add returns"):
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
@@ -210,7 +210,7 @@ def _deferral_script(*, after_merge="RESOLVED the merged README states what add 
     def recheck(call, replay):
         if "now merged" in call.prompt or "Rows the harness deferred" in call.prompt:
             return replies.recheck_reply(call.prompt, default=after_merge) + "\nP1: SHOWN test_add ran"
-        return replies.recheck_reply(call.prompt, default="RESOLVED the docstring is there")
+        return replies.recheck_reply(call.prompt, default="RESOLVED - the docstring is there")
 
     script = Script(orchestrator=_plan(BATCH), lead=lead, collaborator=collaborator,
                     auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md",

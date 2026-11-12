@@ -255,10 +255,10 @@ def test_a_designated_close_updates_the_typed_record_the_held_entry_and_the_lega
         session._apply_review_reading(spec, peer, "recheck", judgment.recheck_verdicts(line, ["RFT1-1"]), binding)
     read("claude:opus", "RFT1-1: UNRESOLVED still missing")
     assert session.open_findings == [text] and not session.review_findings[0]["closed"]
-    read("openai:sol", "RFT1-1: RESOLVED the revision adds it")
+    read("openai:sol", "RFT1-1: RESOLVED - the revision adds it")
     assert session.open_findings == [text] and not session.review_findings[0]["closed"], \
         "another seat's verdict closes nothing: the designated judge decides"
-    read("claude:opus", "RFT1-1: RESOLVED the revision adds it")
+    read("claude:opus", "RFT1-1: RESOLVED - the revision adds it")
     assert session.review_findings[0]["closed"]
     assert session.open_findings == [], "the legacy text closed in the same step"
     assert all(not (f.kind == "unverified" and f.active) for f in outcome.facts), "and the fact is history"

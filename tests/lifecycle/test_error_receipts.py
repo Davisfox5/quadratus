@@ -38,7 +38,7 @@ from tests.lifecycle.test_lifecycle_matrix import Script, judging
 from tests.lifecycle.test_step2_evidence import _ROOT_LIMITS
 
 #: This file's own explicit judgment of a README documentation scenario (a reading row).
-DOCS_JUDGED = 'SUFFICIENT README.md names parse_switch and what it returns, which is all R2 asks'
+DOCS_JUDGED = 'SUFFICIENT - README.md names parse_switch and what it returns, which is all R2 asks'
 
 # The fixtures here run under the default-shaped bound (_ROOT_LIMITS,
 # 2,000,000 tokens): under admission/2 the known stages are paid from what

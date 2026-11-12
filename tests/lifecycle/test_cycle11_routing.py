@@ -68,7 +68,7 @@ def test_the_planner_is_shown_the_registrys_current_disposition_beside_the_froze
     prompt = session._findings_prompt()
     closed = prompt.split("--- FINDINGS CLOSED NOW (the registry, current) ---", 1)
     assert len(closed) == 2, prompt
-    assert "- RFT4-14: RESOLVED by openai:sol" in closed[1] and "- RFT4-1: RESOLVED by openai:sol" in closed[1]
+    assert "- RFT4-14: RESOLVED - by openai:sol" in closed[1] and "- RFT4-1: RESOLVED - by openai:sol" in closed[1]
     assert "is history from when that task closed" in closed[1]
     assert "RFT4-20 (by openai:sol on t4)" in closed[0], "the open one is still offered"
     assert "RFT4-14" not in closed[0]
@@ -128,7 +128,7 @@ def _stale_run(tmp_path, monkeypatch, name):
         H.write(call, {"app.py": body})
         return f'Implemented add.\nPROVES: P1 - {CASE}\nCHANGED: ["app.py"]'
     script = _script(seen, orchestrator=orchestrator, lead=lead, collaborator=collaborator,
-                     recheck=lambda c, r: "RFT1-1: RESOLVED test_add now runs on this source",
+                     recheck=lambda c, r: "RFT1-1: RESOLVED - test_add now runs on this source",
                      auditor=judging_scenarios(lambda c, r: f"R1: MET - {CASE}", PROOF_R1, basis=SHOWN))
     return H.run(_at(tmp_path, name), monkeypatch, script, files=FILES, max_tasks=2, record_complete=False), seen
 
@@ -141,7 +141,7 @@ def test_a_further_task_naming_a_since_closed_finding_is_admitted_and_runs(tmp_p
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "the task reached execution"
     assert not any("TASK SENT BACK" in p for p in seen.prompts["orchestrator"])
     second = seen.prompts["orchestrator"][1]
-    assert "--- FINDINGS CLOSED NOW (the registry, current) ---" in second and "- RFT1-1: RESOLVED by" in second
+    assert "--- FINDINGS CLOSED NOW (the registry, current) ---" in second and "- RFT1-1: RESOLVED - by" in second
     (note,) = record["resolves_normalized"]
     assert note["task"] == "t2" and note["closed_dropped"] == ["RFT1-1"]
     (finding,) = record["review_findings"]
@@ -187,7 +187,7 @@ def _parallel(tmp_path, monkeypatch, name, *, last):
     def auditor(call, replay):
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
-                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
+                + "".join(f"\n{o}: SUFFICIENT - README.md names add(a, b) and its result" for o in docs))
     script = Script(orchestrator=lambda c, r: batch if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
                     collaborator=collaborator, auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE"})
@@ -206,7 +206,7 @@ def _post_merge(seen):
 def test_the_post_merge_recheck_carries_the_authors_latest_counterexample(tmp_path, monkeypatch):
     """On e4d461e the post-merge packet showed only the original claim."""
     replay, seen = _parallel(tmp_path, monkeypatch, "answered",
-                             last="RFT1-1: RESOLVED tests/test_app.py::test_add now drives a negative second operand")
+                             last="RFT1-1: RESOLVED - tests/test_app.py::test_add now drives a negative second operand")
     shown = _post_merge(seen)
     assert "- RFT1-1: BLOCKING: no negative case covers subtraction of negatives" in shown
     assert f"your latest judgment (recheck, on an earlier source) kept it open: {OBJECTION}" in shown

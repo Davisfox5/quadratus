@@ -79,7 +79,7 @@ def _repair(tmp_path, monkeypatch, name, *, second, max_tasks=2):
 
     def recheck(call, replay):
         seen.keep("recheck", call)
-        return "RFT2-1: RESOLVED test_add covers it"
+        return "RFT2-1: RESOLVED - test_add covers it"
 
     def verdict(call, replay):
         audits.append(call)
@@ -163,7 +163,7 @@ def test_a_parallel_child_after_an_audit_sees_the_question_for_what_it_covers(tm
         audits.append(call)
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         r1 = FIRST if len(audits) == 1 else f"R1: MET - {CASE}"
-        return (f"{r1}\nR2: MET - README.md" + "".join(f"\n{o}: SUFFICIENT README.md names add" for o in docs))
+        return (f"{r1}\nR2: MET - README.md" + "".join(f"\n{o}: SUFFICIENT - README.md names add" for o in docs))
     script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
                     auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE"})

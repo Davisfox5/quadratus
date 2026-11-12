@@ -52,7 +52,7 @@ def _judge(verdict=SUFFICIENT, seen=None):
             if callable(verdict):
                 return verdict(call, replay)
             return "\n".join(f"{oid}: {verdict}" for oid in ASKED.findall(call.prompt))
-        return "RFT1-1: RESOLVED shown now"
+        return "RFT1-1: RESOLVED - shown now"
     return recheck
 
 
@@ -262,7 +262,7 @@ def _a2(tmp_path, *, auditor="openai:sol", available=lambda key: True, entries=N
 
     def invoke(key, prompt, **_kw):
         calls.append((key, prompt))
-        return reply(prompt) if reply else "O2: SUFFICIENT test_add drives the reported path"
+        return reply(prompt) if reply else "O2: SUFFICIENT - test_add drives the reported path"
     session = Session("goal", ArtifactStore(tmp_path / "a"), invoke,
                       config=SessionConfig(project=str(tmp_path), max_judgment_completions=limit))
     session._source_fingerprint = lambda: "S"
@@ -296,7 +296,7 @@ def test_an_independent_judge_is_another_vendors_available_seat_already_on_the_r
 def test_one_call_per_judge_for_all_its_items_asked_once_per_decision(tmp_path):
     second = dict(RESTATED, oid="O3", item="cli.py")
     session, calls = _a2(tmp_path, entries=[RESTATED, second],
-                         reply=lambda p: "O2: SUFFICIENT drives it\nO3: INSUFFICIENT never reaches the CLI path")
+                         reply=lambda p: "O2: SUFFICIENT - drives it\nO3: INSUFFICIENT never reaches the CLI path")
     (record,) = session._judge_restatements("done")
     assert len(calls) == 1 and calls[0][0] not in ("openai:sol",) and record["oids"] == ["O2", "O3"]
     assert record["sufficient"] == ["O2"] and record["insufficient"] == ["O3"] and record["unanswered"] == []
@@ -326,7 +326,7 @@ def test_an_auditor_that_did_not_write_the_restatement_judges_it_itself(tmp_path
 
 def test_a_self_judgment_line_is_never_read(tmp_path):
     session, calls = _a2(tmp_path)
-    session._judge_restated("openai:sol", "O2: SUFFICIENT I wrote it and it is fine")
+    session._judge_restated("openai:sol", "O2: SUFFICIENT - I wrote it and it is fine")
     assert not session.unexecuted_acceptance[0].get("restated_judgment")
 
 
@@ -476,7 +476,7 @@ def test_an_ordinary_reviewers_current_insufficient_ends_the_run_held_with_no_ex
         if call.task == "restatement-judgment":
             asked.append(call)
             return f"{ASKED.findall(call.prompt)[0]}: {SUFFICIENT}"
-        return _judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED handled"), ADVERSE_LINE)(call, replay)
+        return _judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED - handled"), ADVERSE_LINE)(call, replay)
     script = _script(Seen(), collaborator=lambda c, r: CODE + MET, orchestrator=_then_done(), lead=_lead(),
                      revision=_restating(), recheck=recheck, auditor=_answering)
     replay = H.run(_at(tmp_path, "adverse-review"), monkeypatch, script, files=FILES, record_complete=False,

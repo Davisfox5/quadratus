@@ -49,7 +49,7 @@ def _reading_proof(rid):
 
 
 #: The scripted auditor's line for each reading claim above.
-READ = "SUFFICIENT README.md states it"
+READ = "SUFFICIENT - README.md states it"
 
 
 def _design_block(path, covers=None):

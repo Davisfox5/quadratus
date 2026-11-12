@@ -76,9 +76,9 @@ def test_a_mixed_recheck_closes_the_fixed_finding_keeps_the_other_and_opens_the_
     and raises one. Each settles alone; the kept and the new one buy the fix
     round, the second recheck closes both by id, and the run completes."""
     replay = H.run(tmp_path, monkeypatch, _recheck_script([
-        "RFT2-1: RESOLVED the example is in README.md now\nRFT2-2: UNRESOLVED the wording still says sum of two\n"
+        "RFT2-1: RESOLVED - the example is in README.md now\nRFT2-2: UNRESOLVED the wording still says sum of two\n"
         "NEW: README claims add(1, 2) is 4 | basis: README.md | impact: correctness\nNOTE: rename the heading",
-        "RFT2-2: RESOLVED reworded\nRFT2-3: INVALIDATED README.md shows add(1, 2) is 3",
+        "RFT2-2: RESOLVED - reworded\nRFT2-3: INVALIDATED - README.md shows add(1, 2) is 3",
     ]), files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     findings = _findings(replay)
@@ -98,7 +98,7 @@ def test_a_mixed_recheck_closes_the_fixed_finding_keeps_the_other_and_opens_the_
 @pytest.mark.requirements_ledger
 def test_a_kept_finding_blocks_acceptance_while_the_fixed_one_stays_closed(tmp_path, monkeypatch):
     replay = H.run(tmp_path, monkeypatch, _recheck_script([
-        "RFT2-1: RESOLVED example added\nRFT2-2: UNRESOLVED still contradicts the goal",
+        "RFT2-1: RESOLVED - example added\nRFT2-2: UNRESOLVED still contradicts the goal",
         "RFT2-2: UNRESOLVED still contradicts the goal",
     ]), files=FILES, max_tasks=2, record_complete=False)
     # RFT2-2 names no basis and claims no immediate risk, so it does not stop
@@ -120,7 +120,7 @@ def test_a_duplicate_or_missing_line_settles_nothing_and_is_not_a_fix_round(tmp_
     are held under their ids for their author (recovery lifecycle,
     2026-10-31), and the job's completion decision refuses over them."""
     replay = H.run(tmp_path, monkeypatch, _recheck_script([
-        "RFT2-1: RESOLVED\nRFT2-1: RESOLVED again\nI believe RFT2-2 is fine as well.",
+        "RFT2-1: RESOLVED\nRFT2-1: RESOLVED - again\nI believe RFT2-2 is fine as well.",
     ]), files=FILES, max_tasks=2, record_complete=False)
     assert not replay.result.completed and replay.result.error.startswith("RequirementsUnmet")
     assert "RFT2-1" in replay.result.error and "RFT2-2" in replay.result.error
@@ -141,7 +141,7 @@ def test_a_basis_less_concern_is_carried_to_the_audit_by_id_and_judged_there(tmp
     review = "BLOCKING: the example might mislead users | impact: other\nR2: MET - README.md"
     script = _recheck_script(["RFT2-1: UNRESOLVED it still might"], t2_review=review)
     script.overrides["auditor"] = judging_scenarios(judging(lambda call, replay: (
-        "R1: MET - app.py\nR2: MET - README.md\nRFT2-1: INVALIDATED README.md shows add(1, 2) returning 3"),
+        "R1: MET - app.py\nR2: MET - README.md\nRFT2-1: INVALIDATED - README.md shows add(1, 2) returning 3"),
         reading=DOCS_JUDGED), *simple_proofs("R1"), basis=SIMPLE_SHOWN)
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
@@ -189,7 +189,7 @@ def test_a_post_merge_recheck_settles_each_deferred_finding_by_id(tmp_path, monk
 
     def recheck(call, replay):
         if "now merged" in call.prompt or "merged source" in call.prompt:
-            return "RFT2-1: RESOLVED the merged README has the example"
+            return "RFT2-1: RESOLVED - the merged README has the example"
         return "RFT2-1: UNRESOLVED no example yet"
     script = _script([batch], t2_review="BLOCKING: README lacks an example | basis: R2 | impact: correctness\n"
                                         "R2: MET - README.md")

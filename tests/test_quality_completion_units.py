@@ -235,7 +235,7 @@ def test_the_audit_prompt_asks_for_no_sufficiency_line_on_executed_debt_and_the_
 
 
 def test_unexecuted_debt_still_lowers_the_verdict_and_a_sufficient_line_credits_nothing(tmp_path):
-    reply = f"R5: MET - {UNIT}\nO1: SUFFICIENT the scenario is clearly covered\n"
+    reply = f"R5: MET - {UNIT}\nO1: SUFFICIENT - the scenario is clearly covered\n"
     session, _ = _session(tmp_path, reply)
     _not_run(session, "t3", ["R5"], f"NOT RUN: {SCENARIO} - not approved")
     verdicts = session._audit_requirements(ids=["R5"])
@@ -254,7 +254,7 @@ def test_a_mixed_record_is_held_and_never_credited(tmp_path):
     session._refresh_obligations()
     session.evidence_obligations[0]["purpose"] = "acceptance"
     assert D.purpose_of(session.evidence_obligations[0]) == "unknown"
-    session._judge_obligations("openai:sol", "O1: SUFFICIENT clearly covered", {"R5": (True, UNIT)})
+    session._judge_obligations("openai:sol", "O1: SUFFICIENT - clearly covered", {"R5": (True, UNIT)})
     row = session.evidence_obligations[0]
     assert row["sufficiency"] == "unjudged" and "unknown purpose is held" in row["sufficiency_note"]
     found = {"R5": (True, UNIT)}

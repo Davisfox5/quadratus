@@ -249,7 +249,7 @@ def _bundle_run(tmp_path, monkeypatch, name, *, limit=4):
     def recheck(call, replay):
         if call.task == "t1" and "in RESOLVES" not in call.prompt:
             return recheck_reply(call.prompt, default="UNRESOLVED still open")
-        return recheck_reply(call.prompt, default="RESOLVED shown on this source")
+        return recheck_reply(call.prompt, default="RESOLVED - shown on this source")
 
     plans = iter([SIMPLE1, RESOLVING])
 
@@ -283,7 +283,7 @@ def test_the_scenario_binding_editor_and_two_reviewer_bundle_is_four_calls_and_r
 def test_without_an_editor_the_binding_keeps_its_own_declaration_call(tmp_path, monkeypatch):
     seen = Seen()
     script = _script(seen, collaborator=lambda c, r: UNBOUND + MET,
-                     recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED shown"), auditor=_answering(),
+                     recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED - shown"), auditor=_answering(),
                      lead=lambda c, r: (H.write(c, {"app.py": FIXED}) or 'Implemented add.\nCHANGED: ["app.py"]'))
     script.overrides["proof-binding"] = lambda c, r: f"PROVES: P1 - {CASE}"
     replay = H.run(_at(tmp_path, "noeditor"), monkeypatch, script, files=FILES, max_tasks=1, record_complete=False)
@@ -335,7 +335,7 @@ def _prior_run(tmp_path, monkeypatch, name, *, claim=QUALIFIED, plans=None, limi
                                 LATER_PROOF, dict(LATER_PROOF, state="nothing is stored"), basis=SHOWN)
     seen = Seen()
     script = _script(seen, orchestrator=orchestrator, lead=lead, collaborator=review, auditor=auditor,
-                     recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the scenario now reads right"))
+                     recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED - the scenario now reads right"))
     limits = (RunLimits(max_calls=60, max_reported_tokens=10_000_000, wall_seconds=900, max_concurrent_workers=2)
               if limit is not None else None)
     replay = H.run(_at(tmp_path, name), monkeypatch, script, files=FILES, max_tasks=max_tasks, record_complete=False,

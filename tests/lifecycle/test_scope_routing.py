@@ -66,7 +66,7 @@ def _script(*, t1_recheck, revision, plans=(T1, T2)):
     def recheck(call, replay):
         if "RFT1-2" in expected_finding_ids(call.prompt):
             return t1_recheck(call, replay)
-        return recheck_reply(call.prompt, default="RESOLVED app.py now returns the sum")
+        return recheck_reply(call.prompt, default="RESOLVED - app.py now returns the sum")
     return Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator, recheck=recheck,
                   revision=revision, auditor=_default_auditor, **{"requirements-review": lambda c, r: "COMPLETE"})
 
@@ -78,7 +78,7 @@ def _declaring(call, replay):
 
 
 def _docs_fixed(call, replay):
-    return recheck_reply(call.prompt, {"RFT1-1": "UNRESOLVED app.py still returns 0", "RFT1-2": "RESOLVED documented"})
+    return recheck_reply(call.prompt, {"RFT1-1": "UNRESOLVED app.py still returns 0", "RFT1-2": "RESOLVED - documented"})
 
 
 def _of(replay, role, task):
@@ -132,7 +132,7 @@ def test_mixed_work_keeps_its_in_scope_round_and_drops_only_the_declared_finding
                                                "RFT1-2": "UNRESOLVED no example yet"})
         # The same reviewer rechecks its whole round; it still holds RFT1-1.
         return recheck_reply(call.prompt, {"RFT1-1": "UNRESOLVED app.py still returns 0"},
-                             default="RESOLVED now documented")
+                             default="RESOLVED - now documented")
     replay = H.run(_at(tmp_path, "mixed"), monkeypatch, _script(t1_recheck=t1_recheck, revision=revision),
                    files=FILES, max_tasks=3, record_complete=False)
     assert len(revisions) == 2

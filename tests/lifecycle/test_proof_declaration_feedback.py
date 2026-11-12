@@ -44,7 +44,7 @@ def _run(tmp_path, monkeypatch, name, lines, *, collaborator=None, revision=None
                     auditor=_default_auditor, **{"requirements-review": lambda c, r: "COMPLETE"})
     if revision is not None:
         script.overrides["revision"] = revision
-        script.overrides["recheck"] = lambda c, r: "RFT1-1: RESOLVED redeclared"
+        script.overrides["recheck"] = lambda c, r: "RFT1-1: RESOLVED - redeclared"
     return H.run(_at(tmp_path, name), monkeypatch, script, files=FILES, max_tasks=1, record_complete=False)
 
 

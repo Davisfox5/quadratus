@@ -48,7 +48,7 @@ def _limits(calls):
 
 #: This file's own explicit judgment of t2's documentation scenario (a
 #: reading row): README.md names add(a, b) and its result, which is all R2 asks.
-DOCS_JUDGED = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
+DOCS_JUDGED = "SUFFICIENT - README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 
 
 def _script(plan, *, t2_review="BLOCKING: README lacks an example\nR2: MET - README.md",

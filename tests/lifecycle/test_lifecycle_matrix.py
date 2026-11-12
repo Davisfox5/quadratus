@@ -295,7 +295,7 @@ def test_a_fix_round_is_told_which_files_are_already_recorded(tmp_path, monkeypa
         from tests.lifecycle.replies import recheck_reply
         if len(replay.of("recheck")) == 1:
             return recheck_reply(call.prompt, default="UNRESOLVED still no negative-number test")
-        return recheck_reply(call.prompt, default="RESOLVED the fix round adds the negative-number test")
+        return recheck_reply(call.prompt, default="RESOLVED - the fix round adds the negative-number test")
 
     def revision(call, replay):
         assert "Files this task has already changed" in call.prompt and "app.py" in call.prompt

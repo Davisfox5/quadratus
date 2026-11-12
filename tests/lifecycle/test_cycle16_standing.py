@@ -81,7 +81,7 @@ def _run(tmp_path, monkeypatch, name, *, planner_ignores=False):
             return replies.recheck_reply(call.prompt, default=f"UNRESOLVED {REASON}")
         if "named it in RESOLVES" in call.prompt:
             bound = f"binding bound: {REJECTS}" in call.prompt or f": {REJECTS}" in call.prompt.split("P2", 1)[-1]
-            return replies.recheck_reply(call.prompt, default=(f"RESOLVED P2 binds {REJECTS}" if bound and "P2" in
+            return replies.recheck_reply(call.prompt, default=(f"RESOLVED - P2 binds {REJECTS}" if bound and "P2" in
                                                                call.prompt else f"UNRESOLVED {REASON}"))
         return base_recheck(call, replay)
     script.overrides["lead"] = lead

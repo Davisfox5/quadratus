@@ -56,8 +56,8 @@ CLEAR_PROOFS = [
 ]
 #: The scripted reviewer's observations of the renders the capture produced.
 CLEAR_OBSERVED = {
-    "R1": "SUFFICIENT the renders after the Clear click show the search field empty and the Clear button disabled",
-    "R2": "SUFFICIENT the capture target ends in #q=Alpha and the final wait reached #clear:disabled after the click",
+    "R1": "SUFFICIENT - the renders after the Clear click show the search field empty and the Clear button disabled",
+    "R2": "SUFFICIENT - the capture target ends in #q=Alpha and the final wait reached #clear:disabled after the click",
 }
 
 

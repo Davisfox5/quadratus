@@ -100,12 +100,12 @@ def test_an_explicit_insufficient_or_a_conflicting_sufficiency_keeps_the_require
             if shape != "acceptance":
                 lines.append(f"{oid}: INSUFFICIENT the test never exercises the error response")
             if shape == "conflict":
-                lines.append(f"{oid}: SUFFICIENT it does answer /add")
+                lines.append(f"{oid}: SUFFICIENT - it does answer /add")
         for row in requested_obligations(call.prompt):
             if row["behavior"] == p2 and row["execution"] == "ran" and shape == "acceptance":
                 lines.append(f"{row['oid']}: INSUFFICIENT the test never exercises the error response")
         # The case's own lines for the declared scenarios it does not reject.
-        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt)
+        lines += [f"{oid}: SUFFICIENT - {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt)
                   if not any(line.startswith(f"{oid}: ") for line in lines)]
         return "\n".join(lines)
     script.overrides["auditor"] = auditor
@@ -140,7 +140,7 @@ def test_an_explicit_insufficient_or_a_conflicting_sufficiency_keeps_the_require
 @pytest.mark.requirements_ledger
 def test_an_invalidated_line_naming_nothing_on_the_record_keeps_the_finding_open(tmp_path, monkeypatch):
     replay = H.run(tmp_path, monkeypatch, _recheck_script([
-        "RFT2-1: INVALIDATED the `UTF8` handling covers it\nRFT2-2: RESOLVED reworded",
+        "RFT2-1: INVALIDATED - the `UTF8` handling covers it\nRFT2-2: RESOLVED - reworded",
     ]), files=FILES, max_tasks=2, record_complete=False)
     # Recovery lifecycle (2026-10-31): the finding is held under its id for
     # its author, so the job reaches its cap and the requirements decision
@@ -181,7 +181,7 @@ def test_the_final_audit_is_void_when_a_requirement_changes_while_it_runs(tmp_pa
 @pytest.mark.requirements_ledger
 def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_cannot_be_paid(tmp_path, monkeypatch):
     replies = ["RFT2-1: UNRESOLVED still no example\nRFT2-2: UNRESOLVED still contradicts the goal",
-               "RFT2-1: RESOLVED example added\nRFT2-2: RESOLVED reworded"]
+               "RFT2-1: RESOLVED - example added\nRFT2-2: RESOLVED - reworded"]
     replay = H.run(tmp_path, monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     assert len(replay.of("revision")) == 2
@@ -558,7 +558,7 @@ def test_combined_debt_names_every_reason_and_commits_an_incomplete_terminal(tmp
         rejected = [row["oid"] for row in requested_obligations(call.prompt)
                     if row["behavior"] == p2 and row["execution"] == "ran"]
         lines += [f"{oid}: INSUFFICIENT the test never exercises the error response" for oid in rejected]
-        lines += [f"{oid}: SUFFICIENT {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt) if oid not in rejected]
+        lines += [f"{oid}: SUFFICIENT - {HTTP_SHOWN}" for oid in _scenario_rows(call.prompt) if oid not in rejected]
         return "\n".join(lines)
     script.overrides["auditor"] = auditor
     replay = H.run(tmp_path, monkeypatch, script, files=HTTP_FILES, check=GATE_FILES, max_tasks=1,

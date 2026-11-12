@@ -54,6 +54,7 @@ from .session_prompts import (
     _HISTORY_REASON_CHARS,
     _HISTORY_TOTAL_CHARS,
     _OWED_SETTLEMENT_ATTEMPTS,
+    _PLAIN_VERDICT_RULE,
     _PROTOCOL_RULE,
     _REPAIR_OUTCOME_RULE,
 )
@@ -908,24 +909,26 @@ class AuditMixin:
             "file path with an extension, or a test function named test_* defined in a file "
             "whose name starts with test and ends in .py; other names do not resolve."
             + ("" if not carried else
-               " Then one line per review finding carried to you, by its id: '<id>: INVALIDATED <the "
+               " Then one line per review finding carried to you, by its id: '<id>: INVALIDATED - <the "
                "test, file, receipt or command showing it never held>' or '<id>: UNRESOLVED <why it "
                "stands>'; a finding you do not judge stays open.")
             + ("" if not any(o.get("execution") == "ran" and delivery.purpose_of(o) == "acceptance"
                              for o in obligations_rows) else
-               " Each executed acceptance obligation listed above needs its own line, '<O-id>: SUFFICIENT "
+               " Each executed acceptance obligation listed above needs its own line, '<O-id>: SUFFICIENT - "
                "<what the executed case shows for that requirement and scenario>' or '<O-id>: INSUFFICIENT "
                "<what it does not establish>'. Your verdict on a requirement never judges a row it binds: a "
                "row left unjudged keeps its requirement not met. An execution-debt row listed under its own "
                "heading is not judged; a line about one is recorded and applied to nothing.")
             + ("" if not any(o.get("modality") in ("legacy", "reading") for o in obligations_rows) else
-               " Each legacy acceptance or reading row listed above needs its own '<O-id>: SUFFICIENT "
+               " Each legacy acceptance or reading row listed above needs its own '<O-id>: SUFFICIENT - "
                "<evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; it is never judged by "
                "your verdict on its requirement.")
             + ("" if not any(k == "restatement" for _, k in required) else
-               " Each executed restatement listed under its own heading above needs its own '<O-id>: SUFFICIENT "
+               " Each executed restatement listed under its own heading above needs its own '<O-id>: SUFFICIENT - "
                "<how the cases exercise the whole reported behaviour>' or '<O-id>: INSUFFICIENT <what they leave "
                "unexercised>' line; your verdict on a requirement it holds never judges it.")
+            + ("" if not (carried or obligations_rows or any(k == "restatement" for _, k in required)) else
+               " " + _PLAIN_VERDICT_RULE)
         )
         prompt = evidence + instructions + self._audit_lines_block(required)
         saved = self._active_spec

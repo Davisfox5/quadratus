@@ -124,10 +124,10 @@ def test_the_audit_prompt_carries_the_design_review_verdict(tmp_path, monkeypatc
         for oid in H.obligation_ids(call.prompt, modality="legacy"):
             row = call.prompt.split(f"- {oid} (", 1)[1].split("\n", 1)[0]
             if "static/favicon.svg exists" in row:
-                lines.append(f"{oid}: SUFFICIENT static/favicon.svg is on the delivered source as a non-empty "
+                lines.append(f"{oid}: SUFFICIENT - static/favicon.svg is on the delivered source as a non-empty "
                              "SVG and templates/index.html links it as the icon")
             elif "tests pass" in row:
-                lines.append(f"{oid}: SUFFICIENT the harness check ran tests/test_basic.py::test_favicon_file "
+                lines.append(f"{oid}: SUFFICIENT - the harness check ran tests/test_basic.py::test_favicon_file "
                              "and tests/test_app.py::test_add on this source and both passed")
         return "\n".join(lines)
     reqs = "REQUIREMENTS:\nR1: GET /favicon.ico returns 200 with an SVG icon\n"

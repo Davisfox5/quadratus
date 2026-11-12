@@ -75,7 +75,7 @@ def test_a_missing_binding_is_declared_by_the_lead_and_settles_on_the_run_alread
     finding went to the harness: no binding call, no editor call, the row
     stayed unbound and missing."""
     seen, calls, replay = _run(tmp_path, monkeypatch, "declared", binding_reply=f"PROVES: P1 - {CASE}",
-                               recheck=lambda c, r: "RFT1-1: RESOLVED observed-1 shows test_add ran on this source")
+                               recheck=lambda c, r: "RFT1-1: RESOLVED - observed-1 shows test_add ran on this source")
     (call,) = calls
     assert call.task == "t1" and Path(call.cwd) != replay.project, "a source copy, never the project"
     # Prompt parity: the grammar the reader enforces is the one stated.
@@ -155,7 +155,7 @@ def test_a_bound_case_with_missing_execution_still_goes_to_the_harness(tmp_path,
                                collaborator=lambda c, r: ("BLOCKING: EVIDENCE P1 - test_add is not shown executed "
                                                           "on this source | basis: P1 | impact: contract" + MET),
                                binding_reply=f"PROVES: P1 - {CASE}",
-                               recheck=lambda c, r: "RFT1-1: RESOLVED observed-1 shows it")
+                               recheck=lambda c, r: "RFT1-1: RESOLVED - observed-1 shows it")
     assert not calls, "a bound scenario is never re-declared"
     assert _route(replay)["action"].startswith("no new run")
     assert replay.result.completed, replay.result.error
@@ -174,7 +174,7 @@ def test_a_binding_with_a_code_finding_is_settled_on_the_revised_source_not_the_
         return f'Added the negative case.\nPROVES: P1 - {CASE}\nCHANGED: ["tests/test_app.py"]'
     seen, calls, replay = _run(tmp_path, monkeypatch, "mixed", binding_reply=f"PROVES: P1 - {CASE}",
                                collaborator=lambda c, r: f"{UNBOUND}\n{CODE}{MET}",
-                               recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED shown on this source"),
+                               recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED - shown on this source"),
                                revision=revision)
     assert replay.of("proof-binding") == [], "no separate declaration call beside the revision"
     route = _route(replay)
@@ -196,7 +196,7 @@ def _resolving(*fids, text="Fix add in app.py as the open findings ask."):
             f"RESOLVES: {', '.join(fids)}")
 
 
-def _settling(*, own=lambda task: task == "t1", settle="RESOLVED the negative case is handled now"):
+def _settling(*, own=lambda task: task == "t1", settle="RESOLVED - the negative case is handled now"):
     """Reviews: ``own(task)`` tasks raise a finding of their own that their
     in-task recheck keeps open; every settlement recheck answers ``settle``."""
     def review(call, replay):
@@ -415,12 +415,12 @@ def test_a_parallel_child_declares_its_missing_binding_and_the_merge_gate_shows_
 
     def recheck(call, replay):
         seen.keep("recheck", call)
-        return "RFT1-1: RESOLVED the merge gate's receipt shows test_add ran on the merged source"
+        return "RFT1-1: RESOLVED - the merge gate's receipt shows test_add ran on the merged source"
 
     def auditor(call, replay):
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
-                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
+                + "".join(f"\n{o}: SUFFICIENT - README.md names add(a, b) and its result" for o in docs))
     calls, answer = _binding(f"PROVES: P1 - {CASE}")
     script = Script(orchestrator=lambda c, r: batch if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
                     collaborator=collaborator, auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),

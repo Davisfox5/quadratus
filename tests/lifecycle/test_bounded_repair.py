@@ -314,7 +314,7 @@ def test_a_capped_revision_that_settled_a_finding_continues_on_only_the_rest(tmp
 
     def recheck(call, replay):
         if len(replay.of("recheck")) == 1:
-            return "RFT1-1: RESOLVED the TypeError is raised\nRFT1-2: UNRESOLVED no docstring yet"
+            return "RFT1-1: RESOLVED - the TypeError is raised\nRFT1-2: UNRESOLVED no docstring yet"
         return "RESOLVED"
 
     script = Script(orchestrator=_plan(REQS.replace("R2: README documents add\n", "") + T1), lead=lead,
@@ -575,7 +575,7 @@ def test_root_a_genuine_correction_resolved_by_the_comparing_reviewer_completes(
 
     def recheck(call, replay):
         rechecks.append(call)
-        return recheck_reply(call.prompt, default="RESOLVED the case asserts the JSON error and the kept item again")
+        return recheck_reply(call.prompt, default="RESOLVED - the case asserts the JSON error and the kept item again")
     replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=WEAKENED,
                   comparison=lambda c, r: WEAKENS, recheck=recheck, revision=revision, plan=plan)
     result = H.result_json(replay)
@@ -596,7 +596,7 @@ def test_root_the_comparing_reviewer_may_retract_its_own_finding_on_unchanged_by
     reviewer retracts its own WEAKENED finding with a reasoned INVALIDATED
     citing the file on the record; that settles the comparison."""
     def recheck(call, replay):
-        return recheck_reply(call.prompt, default=f"INVALIDATED {FAILURES} still asserts the JSON error and the "
+        return recheck_reply(call.prompt, default=f"INVALIDATED - {FAILURES} still asserts the JSON error and the "
                                                   "kept item; my comparison misread the diff")
     replay = _run(tmp_path, monkeypatch, source=SOUND, failures=BROKEN, fixed_source=SOUND, fixed_failures=CORRECTED,
                   comparison=lambda c, r: f"TEST WEAKENED {FAILURES} - the cleanup assertion looks gone",
