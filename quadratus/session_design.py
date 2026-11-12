@@ -1,11 +1,13 @@
 """Design evidence and capture for the session engine, as a mixin of
 Session: who renders, the capture profile and its declaration, the
-capture-only samples the harness writes, the design check, its one
-recapture and one fix, and the cross-vendor review of the final renders.
+capture-only samples the harness writes, the one recapture and one fix
+of the design check, and the cross-vendor review of the final renders.
 
 The methods and the file helpers above them moved out of session.py
 unchanged on 2026-11-11. The methods reach the rest of Session only
-through ``self``. This module never imports quadratus.session.
+through ``self``. ``_check_design`` stays in session.py, because a test
+replaces ``is_review_only`` on that module and it must see the
+replacement. This module never imports quadratus.session.
 The move was redone on 2026-11-12, after the development line was merged
 into this file, and took that line's code of the same kind with it.
 """
