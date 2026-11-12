@@ -544,7 +544,8 @@ _PLAIN_VERDICT_RULE = (
     "once by ' - ' and the reason. A condition, a hedge or a question ('RESOLVED once ...', 'SUFFICIENT - only "
     "if ...', 'MET, but ...'), both words, or the rejecting word in capitals inside the reason is read as no "
     "verdict for that id, never as an acceptance: where the word is not fully earned, write the rejecting word "
-    "and what remains."
+    "and what remains. A second line that names the same id and the word in any other wording ('<id>: NOT YET "
+    "RESOLVED') makes both no verdict."
 )
 
 #: How a finding is stated, for reviewers and the auditor alike: what the

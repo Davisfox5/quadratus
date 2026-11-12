@@ -44,6 +44,7 @@ __all__ = [
     "has_security_finding",
     "inspection_lines",
     "is_empty_note",
+    "names_id",
     "no_findings",
     "normalise",
     "plain_acceptance",
@@ -690,7 +691,8 @@ def unresolved_line(line: str) -> Optional[str]:
     return found[1]
 
 
-_ROW = re.compile(r"(?P<oid>O-?\d+)\s*:\s*(?P<state>SUFFICIENT|INSUFFICIENT)\b(?P<rest>.*)$", re.IGNORECASE)
+_ROW = re.compile(r"(?P<oid>O-?\d+)\s*:\s*(?P<state>NOT\s+SUFFICIENT|SUFFICIENT|INSUFFICIENT)\b(?P<rest>.*)$",
+                  re.IGNORECASE)
 
 
 def row_line(line: str) -> Optional[Tuple[str, str, str]]:
@@ -703,7 +705,8 @@ def row_line(line: str) -> Optional[Tuple[str, str, str]]:
         found = _ROW.match(form)
         if found is None:
             continue
-        if found.group("state").upper() == "INSUFFICIENT":
+        if found.group("state").upper() != "SUFFICIENT":
+            # NOT SUFFICIENT is the same rejection in two words.
             return found.group("oid"), "insufficient", _free_tail(found.group("rest"))
         plain, why = plain_acceptance(found.group("rest"), "SUFFICIENT")
         return found.group("oid"), ("sufficient" if plain else ""), why
@@ -731,6 +734,22 @@ def requirement_line(line: str) -> Optional[Tuple[str, Optional[bool], str]]:
     return None
 
 
+def names_id(line: str, ids, words: str) -> Optional[str]:
+    """The id among ``ids`` (upper case) that a line opens with as ``<id>:``
+    when the rest holds one of the verdict ``words`` (a pattern), under any
+    formatting; None otherwise. For a line that names an expected id and a
+    verdict word in a form no reader takes ("RFT1-1: NOT YET RESOLVED",
+    "O1: barely SUFFICIENT"): beside an accepting line for the same id it
+    is a second, unread line, so the caller reads no verdict."""
+    opened = re.match(r"([A-Z][A-Z0-9]*-?\d+)\s*:(.*)$", unstyled(line), re.IGNORECASE)
+    if opened is None or opened.group(1).upper() not in ids:
+        return None
+    return opened.group(1).upper() if re.search(rf"\b(?:{words})\b", opened.group(2), re.IGNORECASE) else None
+
+
+#: A READ reason that says the reading did not happen.
+_NOT_READ = re.compile(r"(?:could\s*not|couldn'?t|cannot|can'?t|unable|did\s*not|didn'?t|failed|none|nothing|no)\b",
+                       re.IGNORECASE)
 _INSPECTION = re.compile(r"(?P<kind>READ|UNREAD)\s+(?P<gid>IG-[0-9a-f]{10})\b(?P<rest>.*)$", re.IGNORECASE)
 
 
@@ -754,5 +773,5 @@ def inspection_lines(reply: str) -> List[Tuple[str, str, str]]:
         # The stated form has a dash; "READ <id>: could not open either
         # file" is a colon and a refusal, so a colon does not stand in.
         dashed = re.match(r"\s*[-–—]", found.group("rest"))
-        out.append(("READ" if plain and why and dashed else "", gid, why))
+        out.append(("READ" if plain and why and dashed and not _NOT_READ.match(why) else "", gid, why))
     return out

@@ -228,6 +228,12 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
             elif not verdicts.row_line(raw):
                 foreign.append(read[0])
             continue
+        named = verdicts.names_id(raw, wanted, "RESOLVED|INVALIDATED")
+        if named:
+            # The id with wording the reader takes no verdict from ("NOT YET
+            # RESOLVED"): an unread line, so a RESOLVED beside it is not alone.
+            lines.setdefault(named, []).append(("", f"a line names it with no verdict the reader takes: {line[:120]}"))
+            continue
         said = verdicts.unresolved_line(raw)
         if said is not None:
             bare.append(said)
@@ -304,6 +310,12 @@ def sufficiency_reading(text: str, expected: Sequence[str]) -> Tuple[Dict[str, T
         row = verdicts.row_line(raw)
         if row and row[0].upper() in wanted:
             seen.setdefault(row[0].upper(), []).append((row[1], row[2]))
+            continue
+        named = None if row else verdicts.names_id(raw, wanted, "SUFFICIENT")
+        if named:
+            # The id with no verdict word the reader takes: an unread line.
+            seen.setdefault(named, []).append(("", "a line names it with no SUFFICIENT or INSUFFICIENT verdict: "
+                                                   + verdicts.unstyled(raw)[:120]))
     # A SUFFICIENT that is not a plain acceptance ("SUFFICIENT? No",
     # "SUFFICIENT only if ...") has an empty state: no verdict, named in
     # conflicts with the reader's reason, like two lines for one id.

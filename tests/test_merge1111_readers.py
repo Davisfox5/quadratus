@@ -432,3 +432,38 @@ def test_the_line_readers_live_in_verdicts_and_judgment_calls_them():
     source = open(judgment.__file__, encoding="utf-8").read()
     assert "verdicts.recheck_line(" in source and "verdicts.row_line(" in source
     assert "verdicts.resolved_verdict(" in source
+
+
+# -- check of the readers fixes: the same holes in other wording -----------------
+
+
+@pytest.mark.parametrize("second", ["RFT1-1: NOT YET RESOLVED", "RFT1-1: PARTIALLY RESOLVED - the race stays",
+                                    "- **RFT1-1**: only partly resolved"])
+def test_a_second_line_naming_the_id_and_the_word_leaves_no_verdict(second):
+    reading = judgment.recheck_verdicts("RFT1-1: RESOLVED - the check was added\n" + second, ["RFT1-1"])
+    assert reading.dispositions["RFT1-1"].state == judgment.INVALID
+    alone = judgment.recheck_verdicts(second, ["RFT1-1"])
+    assert alone.dispositions["RFT1-1"].state == judgment.INVALID
+
+
+def test_an_id_line_without_the_word_does_not_void_a_plain_verdict():
+    reading = judgment.recheck_verdicts("RFT1-1: the lock\nRFT1-1: RESOLVED - app.py takes it", ["RFT1-1"])
+    assert reading.dispositions["RFT1-1"].state == judgment.RESOLVED
+    assert judgment.recheck_verdicts("RFT1-1:\nRESOLVED", ["RFT1-1"]).dispositions["RFT1-1"].state == judgment.RESOLVED
+
+
+def test_not_sufficient_is_a_rejection_and_wins_beside_sufficient():
+    read, conflicts = judgment.sufficiency_reading(
+        "O1: SUFFICIENT - the case shows it\nO1: NOT SUFFICIENT\nO2: NOT SUFFICIENT - no float case\n"
+        "O3: SUFFICIENT - ok\nO3: well, barely sufficient", ["O1", "O2", "O3"])
+    assert read == {"O2": ("insufficient", "no float case")}
+    assert set(conflicts) == {"O1", "O3"}
+
+
+@pytest.mark.parametrize("line", ["READ IG-0123456789 - could not open either file",
+                                  "READ IG-0123456789 - unable to find tickets/store.py",
+                                  "READ IG-0123456789 - none of them were in my copy"])
+def test_a_read_line_whose_reason_says_nothing_was_read_attests_nothing(line):
+    assert [kind for kind, _, _ in verdicts.inspection_lines(line)] == [""]
+    kept = verdicts.inspection_lines("READ IG-0123456789 - store.py defines no schema")
+    assert [kind for kind, _, _ in kept] == ["READ"]
