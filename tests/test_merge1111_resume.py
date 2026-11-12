@@ -264,7 +264,7 @@ def _forge(run_dir, state):
     alone: a new checkpoint record, a manifest naming it and the export,
     every digest matching."""
     manifest = json.loads((run_dir / "manifest.json").read_text())
-    record = json.loads(next((run_dir / "records").glob("checkpoint-*.json")).read_text())
+    record = jobstore.read_record(run_dir, "checkpoint")
     forged = dict(record["body"], state=state)
     new = dict(body=forged, digest=checkpoint._digest(forged))
     data = jobstore._canonical(new)
@@ -343,18 +343,24 @@ def test_the_watch_lists_an_ended_runs_committed_state_and_leaves_a_live_run_to_
     rel = f".quadratus/runs/{RUN}"
     ended = watch.listing()
     assert ProjectWatch.changes(ended, watch.listing()) == ([], [])
-    assert {f"{rel}/manifest.json", f"{rel}/checkpoint.json", f"{rel}/records", f"{rel}/artifacts"} <= set(
-        ended.sensitive)
+    assert {f"{rel}/manifest.json", f"{rel}/checkpoint.json"} <= set(ended.sensitive)
     _forge(run_dir, FORGED)
     changed = dict(ProjectWatch.changes(ended, watch.listing())[0])
-    assert changed[f"{rel}/manifest.json"] == "changed" and changed[f"{rel}/checkpoint.json"] == "changed"
-    assert changed[f"{rel}/records"] == "changed"
-    # A link planted among the artifacts, and a resume marker removed.
+    assert changed == {f"{rel}/manifest.json": "changed", f"{rel}/checkpoint.json": "changed"}
+    # A link or a FIFO among the artifacts or records, and a planted resume marker.
     ended = watch.listing()
     os.symlink(tmp_path / "secret", run_dir / "artifacts" / "0123456789ab.txt")
+    os.mkfifo(run_dir / "records" / "budget-0000000000000000.json")
     (run_dir / "resumed-by.json").write_text("{}")
     changed = dict(ProjectWatch.changes(ended, watch.listing())[0])
-    assert changed[f"{rel}/artifacts"] == "changed" and changed[f"{rel}/resumed-by.json"] == "added"
+    assert changed == {f"{rel}/artifacts/0123456789ab.txt": "added", f"{rel}/resumed-by.json": "added",
+                       f"{rel}/records/budget-0000000000000000.json": "added"}
+    # In a run still going the same link is the store's to refuse, as before.
+    other = run_dir.parent / "20261112T000001Z-bbbbbbbb"
+    ArtifactStore(other / "artifacts")
+    ended = watch.listing()
+    os.symlink(tmp_path / "secret", other / "artifacts" / "0123456789ab.txt")
+    assert ProjectWatch.changes(ended, watch.listing())[0] == []
 
 
 def test_the_monitor_does_not_take_a_completion_from_a_manifest_the_record_does_not_name(tmp_path, no_stall):
