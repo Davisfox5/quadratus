@@ -785,6 +785,16 @@ def _committed_terminal(run_dir: Path, result: Dict[str, Any]):
         return result, f"the run's committed terminal record is corrupt: {exc}"
     if terminal is None:
         return result, "the run never committed its terminal state; its result.json is not an outcome"
+    if terminal.get("completed") and not result.get("completed"):
+        # The terminal record may lower what result.json says, never raise
+        # it on its own. The run folder is inside the project, and a
+        # manifest and terminal record planted beside an old run's record
+        # showed that run as complete. Only a manifest the run's own record
+        # names (project_run writes it from the store's memory) is believed
+        # over that record.
+        held = result.get("committed_manifests")
+        if not (isinstance(held, list) and manifest.digest in held):
+            return result, ""
     return dict(result, completed=bool(terminal.get("completed")), error=terminal.get("error") or ""), ""
 
 

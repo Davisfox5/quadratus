@@ -61,7 +61,16 @@ editing call fails the task as a scope violation, and nothing is reverted):
   ``result.json`` (by lstat signature). The next run's preflight reads
   those records, so an editing call that adds, removes or rewrites one is
   changing what that preflight will be told. The harness writes a run's
-  own ``result.json`` once, after its last call.
+  own ``result.json`` once, after its last call;
+* in a run folder that has its ``result.json`` (a run that ended): the
+  state a resume and the monitor read (``RUN_STATE``: the manifest, the
+  checkpoint and budget exports, the resume marker, the lineage and the
+  diff, each by lstat signature) and the ``records`` and ``artifacts``
+  folders (by what they list). The harness writes none of them once the
+  run's own record is written, so an editing call that plants or rewrites
+  one is changing what a later resume would carry as the job's record. A
+  run still going has no ``result.json`` and is left to its own store,
+  which refuses a manifest it did not write (``jobstore.JobStore``).
 
 A sensitive change that is still in place stops the run: Fleet makes no
 further call for the project but the orchestrator's until the path is back
@@ -197,6 +206,11 @@ _BUILD = PYTHON_OUTPUT_NAMES - _ENVIRONMENTS
 #: Under a state folder: the run records the next run's preflight reads.
 RUNS_DIR = "runs"
 RUN_RECORD = "result.json"
+#: In a run folder whose record is written: the files a resume or the
+#: monitor reads, and the folders whose entries they read.
+RUN_STATE = ("manifest.json", "checkpoint.json", "budget.json", "resumed-by.json", "lineage.json",
+             "changes.diff")
+RUN_STATE_DIRS = ("records", "artifacts")
 #: Report and cache folders: output no tool fills with Python.
 _PYTHON_FREE = OUTPUT_NAMES - PYTHON_OUTPUT_NAMES
 #: Folders named like harness state that are not the project's own state.
@@ -724,7 +738,34 @@ class ProjectWatch:
                         state["kinds"][record] = "run-record"
                     elif found is not None:
                         self._sensitive(sub, RUN_RECORD, record, found, state, "run-record")
+                    if found is not None:
+                        self._run_state(sub, rel, state)
                     self._unlisted(sub, child, state, own=frozenset({RUN_RECORD}))
+
+    def _run_state(self, fd, rel, state):
+        """What a run that ended committed: each ``RUN_STATE`` file by lstat
+        signature, and each ``RUN_STATE_DIRS`` folder by its own mode and
+        modification time, which adding, removing or renaming an entry
+        changes. A record's bytes are already held by the manifest's digest
+        of it and an artifact's by its id, so no file below is read. The
+        harness writes nothing here after the run's record: a difference
+        across an editing call is the call's."""
+        for leaf in RUN_STATE:
+            path = f"{rel}/{leaf}"
+            found = self._named(fd, leaf, path, state)
+            if found is None:
+                continue
+            if stat.S_ISREG(found.st_mode):
+                state["sensitive"][path] = ("stat", *self._signature(found))
+                state["kinds"][path] = "run-record"
+            else:
+                self._sensitive(fd, leaf, path, found, state, "run-record")
+        for leaf in RUN_STATE_DIRS:
+            path = f"{rel}/{leaf}"
+            found = self._named(fd, leaf, path, state)
+            if found is not None and stat.S_ISDIR(found.st_mode):
+                state["sensitive"][path] = ("entries", found.st_mode, found.st_mtime_ns)
+                state["kinds"][path] = "run-record"
 
     def _git_ledger(self, fd, name, st, ledger, state) -> bool:
         """Whether a file below git's ``refs`` or ``logs`` holds what git

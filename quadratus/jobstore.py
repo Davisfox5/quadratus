@@ -36,19 +36,30 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import threading
 from pathlib import Path
 from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 from . import generations as G
-from .safe_io import make_private_dir, write_private
+from .safe_io import make_private_dir, replace_in
 
 __all__ = ["MANIFEST", "StoreUnavailable", "GenerationCorrupt", "JobStore", "read_manifest",
-           "read_record", "read_budget", "read_terminal", "unsettled_operations", "operation_records",
+           "read_record", "read_export", "read_budget", "read_terminal", "unsettled_operations", "operation_records",
            "owner_of"]
 
 MANIFEST = "manifest.json"
 RECORDS = "records"
+#: Read bounds. A manifest names records by digest and is small. A checkpoint
+#: record carries the job's run-start source, so it gets the large bound;
+#: every other record (budget, terminal, receipts) the middle one.
+MAX_MANIFEST_BYTES = 8 << 20
+MAX_RECORD_BYTES = 64 << 20
+MAX_CHECKPOINT_BYTES = 1 << 30
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 
 class StoreUnavailable(RuntimeError):
@@ -78,7 +89,71 @@ def _fsync_dir(path: Path) -> None:
 def _write_durable(target: Path, data: bytes) -> None:
     # Through safe_io like every other run record: owner-only from creation,
     # the bytes on disk before the rename, and never written through a link.
-    write_private(target, data)
+    # The folder is opened without following a link either: a records folder
+    # an editing call swapped for a link took every later receipt with it.
+    target = Path(target)
+    dir_fd = os.open(target.parent, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC)
+    try:
+        replace_in(dir_fd, target.name, bytes(data))
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+    finally:
+        os.close(dir_fd)
+
+
+def _read_file(run_dir, relative: str, limit: int) -> Optional[bytes]:
+    """The bytes of one file of a run, or None when nothing has that name.
+
+    The monitor's rule, for every reader here: a regular file only, never
+    through a link (the file or a folder above it inside the run), opened
+    without blocking so a FIFO in its place cannot stall the caller, and
+    never more than ``limit`` bytes. Anything else is OSError."""
+    parts = [part for part in str(relative).split("/") if part]
+    fd = os.open(run_dir, os.O_RDONLY | _DIRECTORY | _CLOEXEC)
+    try:
+        for part in parts[:-1]:
+            try:
+                below = os.open(part, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=fd)
+            except FileNotFoundError:
+                return None
+            os.close(fd)
+            fd = below
+        try:
+            handle = os.open(parts[-1], os.O_RDONLY | _NOFOLLOW | _NONBLOCK | _CLOEXEC, dir_fd=fd)
+        except FileNotFoundError:
+            return None
+    finally:
+        os.close(fd)
+    try:
+        info = os.fstat(handle)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{relative} is not a regular file")
+        if info.st_size > limit:
+            raise OSError(f"{relative} is larger than {limit:,} bytes")
+        chunks, left = [], limit + 1
+        while left > 0:
+            chunk = os.read(handle, min(left, 1 << 20))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > limit:
+            raise OSError(f"{relative} is larger than {limit:,} bytes")
+        return data
+    finally:
+        os.close(handle)
+
+
+def read_export(run_dir, name: str, limit: int = MAX_RECORD_BYTES) -> bytes:
+    """A compatibility export (``budget.json``, ``checkpoint.json``) read by
+    the same rule as the records. OSError when it is missing or unsafe."""
+    data = _read_file(run_dir, name, limit)
+    if data is None:
+        raise FileNotFoundError(name)
+    return data
 
 
 class JobStore:
@@ -94,6 +169,13 @@ class JobStore:
         self._current: Optional[G.Generation] = None
         self._history: list = []
         self._loaded = False
+        #: The digests of the manifest this store wrote last and of the one
+        #: it is writing now. Once it has committed, the manifest on disk
+        #: must be one of the two: the run folder is inside the project, an
+        #: editing call can rewrite it, and a manifest the harness did not
+        #: write is never adopted.
+        self._written: Optional[str] = None
+        self._pending: Optional[str] = None
         #: Operations started and not settled, by the publisher that owns
         #: them: the budget's tickets, and each session's own effects
         #: (checks, captures, probes, fixture writes, evidence runs) under
@@ -122,6 +204,11 @@ class JobStore:
             return
         self._loaded = True
         manifest = read_manifest(self.run_dir)
+        if self._written is not None or self._pending is not None:
+            found = manifest.digest if manifest is not None else None
+            if found not in (self._written, self._pending):
+                raise GenerationCorrupt("the manifest on disk is not the one this run committed; something "
+                                        "else rewrote or removed it, and it is not adopted")
         if manifest is None:
             return
         self._current = manifest
@@ -132,6 +219,15 @@ class JobStore:
             if not opid.startswith("O-"):
                 self.session_unsettled.setdefault(owner_of(opid), set()).add(opid)
         self.reserved_unfinished = int(manifest.reserved_unfinished)
+
+    def committed_digests(self) -> list:
+        """The digests of the manifests this store wrote (the last one, and
+        one whose write was cut short), from memory and never from disk:
+        what the run's own record names, so a later resume can tell the
+        committed state from one written over it. Empty when it has
+        committed nothing."""
+        with self._lock:
+            return [d for d in (self._written, self._pending) if d]
 
     def current(self) -> Optional[G.Generation]:
         """The committed manifest as it is on disk now: re-read on every
@@ -203,10 +299,17 @@ class JobStore:
                 if (on_disk.digest if on_disk else None) != planned:
                     raise G.GenerationConflict("the manifest changed under this publication; another writer "
                                                "committed first, and nothing of this one is published")
+                self._pending = publication.generation.digest
                 _write_durable(self.run_dir / MANIFEST, _canonical(body))
                 self._step("manifest-fsync")
                 _fsync_dir(self.run_dir)
             except StoreUnavailable:
+                raise
+            except KeyboardInterrupt as exc:
+                # The operator's interrupt stays an interrupt (exit 130, a
+                # resumable record), never a budget failure. The commit is
+                # uncertain, so the store is latched all the same.
+                self._refused = f"{type(exc).__name__}: {str(exc)[:200]}"
                 raise
             except BaseException as exc:
                 self._refused = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -214,6 +317,7 @@ class JobStore:
             if current is not None:
                 self._history.append(current)
             self._current = publication.generation
+            self._written, self._pending = publication.generation.digest, None
             return publication.generation
 
     # -- reading ---------------------------------------------------------------
@@ -237,18 +341,25 @@ def _history(run_dir: Path, manifest: G.Generation) -> list:
 def read_manifest(run_dir) -> Optional[G.Generation]:
     """The committed manifest, or None when the run has none. A manifest
     that cannot be read or parsed is corrupt, never silently absent."""
-    path = Path(run_dir) / MANIFEST
-    if not path.exists():
+    try:
+        data = _read_file(run_dir, MANIFEST, MAX_MANIFEST_BYTES)
+    except FileNotFoundError:
+        return None  # no run folder at all
+    except OSError as exc:
+        raise GenerationCorrupt(f"the manifest is unreadable: {type(exc).__name__}: {str(exc)[:160]}") from exc
+    if data is None:
         return None
     try:
-        body = json.loads(path.read_text())
+        body = json.loads(data)
+        if not isinstance(body, dict):
+            raise TypeError("the manifest is not a JSON object")
         stored = body.pop("digest", None)
         body.pop("paths", None)
         body.pop("clean", None)
         body["records"] = dict(body.get("records") or {})
         body["unsettled"] = tuple(body.get("unsettled") or ())
         manifest = G.Generation(**body)
-    except (OSError, ValueError, TypeError, KeyError) as exc:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as exc:
         raise GenerationCorrupt(f"the manifest is unreadable: {type(exc).__name__}: {str(exc)[:160]}") from exc
     if stored != manifest.digest:
         # The stored digest is the manifest's own account of itself: a body
@@ -266,11 +377,14 @@ def read_record(run_dir, name: str, *, manifest: Optional[G.Generation] = None):
     manifest = manifest or read_manifest(run_dir)
     if manifest is None or name not in manifest.records:
         return None
-    path = run_dir / G.record_path(name, manifest.records[name])
+    limit = MAX_CHECKPOINT_BYTES if name == "checkpoint" else MAX_RECORD_BYTES
     try:
-        data = path.read_bytes()
+        data = _read_file(run_dir, G.record_path(name, manifest.records[name]), limit)
     except OSError as exc:
-        raise GenerationCorrupt(f"record {name} named by generation {manifest.number} is missing") from exc
+        raise GenerationCorrupt(f"record {name} named by generation {manifest.number} is not a readable "
+                                f"regular file: {str(exc)[:160]}") from exc
+    if data is None:
+        raise GenerationCorrupt(f"record {name} named by generation {manifest.number} is missing")
     if _digest_bytes(data) != manifest.records[name]:
         raise GenerationCorrupt(f"record {name} does not hash to what generation {manifest.number} names")
     return json.loads(data)
@@ -293,10 +407,9 @@ def read_budget(run_dir) -> Tuple[Optional[dict], Optional[str]]:
         except GenerationCorrupt as exc:
             return None, str(exc)
         return (record, None) if isinstance(record, dict) else (None, "the budget record is not a record")
-    path = run_dir / "budget.json"
     try:
-        record = json.loads(path.read_text())
-    except (OSError, ValueError) as exc:
+        record = json.loads(read_export(run_dir, "budget.json"))
+    except (OSError, ValueError, RecursionError) as exc:
         return None, f"budget.json: {type(exc).__name__}"
     return (record, None) if isinstance(record, dict) else (None, "budget.json is not a record")
 
