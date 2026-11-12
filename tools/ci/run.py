@@ -14,6 +14,13 @@ from pathlib import Path
 import pytest
 from plan import snapshot
 
+# The recorder writes between a test's call and its teardown, while whatever
+# the test replaced is still in place. Tests here replace file primitives
+# (Path.open, os.replace) to prove a reader's bound or a failed write, so the
+# recorder keeps the real ones from import time and never goes through Path.
+_open = open
+_replace = os.replace
+
 
 class Recorder:
     def __init__(self, out):
@@ -25,11 +32,12 @@ class Recorder:
 
     def event(self, kind, **fields):
         row = dict(event=kind, elapsed=time.monotonic() - self.start, **fields)
-        with (self.out / 'events.jsonl').open('a') as f:
+        with _open(self.out / 'events.jsonl', 'a') as f:
             f.write(json.dumps(row) + '\n')
         tmp = self.out / 'current.tmp'
-        tmp.write_text(json.dumps(dict(row, finished=self.finished, collected=self.collected)))
-        tmp.replace(self.out / 'current.json')
+        with _open(tmp, 'w') as f:
+            f.write(json.dumps(dict(row, finished=self.finished, collected=self.collected)))
+        _replace(tmp, self.out / 'current.json')
 
     def pytest_collection_finish(self, session):
         self.collected = len(session.items)

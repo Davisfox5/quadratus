@@ -145,3 +145,25 @@ def test_an_automatic_full_fallback_saves_its_plan_and_launches_no_pytest(tmp_pa
 def test_a_selection_that_reaches_every_test_is_not_a_fallback(tmp_path):
     p = repo(tmp_path, 'def test_one():\n    assert True\n')
     assert p['coverage'] == 'full' and p['fallback'] is False, p['reasons']
+
+
+def test_a_test_that_replaces_file_primitives_does_not_break_the_recorder(tmp_path):
+    """The recorder writes its progress between a test's call and its teardown,
+    while the test's replacements still stand. On the merged tree two tests
+    replace Path.open and os.replace for their own run, and each ended its
+    shard with an INTERNALERROR although every test had passed."""
+    body = (
+        'import os\nfrom pathlib import Path\n\n'
+        'def test_one(monkeypatch):\n'
+        '    def broken(*args, **kwargs):\n'
+        '        raise OSError("disk went away")\n'
+        '    monkeypatch.setattr(os, "replace", broken)\n'
+        '    monkeypatch.setattr(Path, "open", lambda self, *a, **k: object())\n'
+        '    assert True\n')
+    repo(tmp_path, body)
+    result = run(tmp_path)
+    assert 'INTERNALERROR' not in result.stdout + result.stderr, result.stdout[-2000:]
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    receipt = json.loads((tmp_path / 'result/receipt.json').read_text())
+    assert receipt['exit_code'] == 0 and receipt['finished'] == 1
+    assert [p['outcome'] for p in receipt['phases']] == ['passed'] * 3
