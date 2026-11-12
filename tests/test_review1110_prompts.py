@@ -684,40 +684,8 @@ def test_the_recitation_asks_for_the_delivery_and_nothing_else(tmp_path):
 
 
 # -- the close-out asks for what its reader takes (design 5) ---------------------------
-
-def _closeout_prompt(tmp_path, **config):
-    from quadratus.memory import TaskMemory
-    prompts = []
-    session = Session("goal", ArtifactStore(tmp_path / "artifacts"),
-                      lambda key, prompt, **kw: prompts.append(prompt) or CLOSEOUT,
-                      config=SessionConfig(**config))
-    spec = TaskSpec("t1", "do it")
-    session._close_out(OPUS, spec, TaskMemory("t1", OPUS, session.store))
-    return prompts[-1]
-
-
-def test_the_closeout_prompt_names_the_sections_its_parser_reads(tmp_path):
-    prompt = _closeout_prompt(tmp_path)
-    asked = [name for name in ("SUMMARY", "DECISIONS", "DEAD ENDS", "MAP NOTES", "REASONING")
-             if f"\n{name}:" in prompt]
-    assert asked == ["SUMMARY", "DECISIONS", "DEAD ENDS"], "MAP NOTES only with a map; REASONING is not asked"
-    assert "begin each section on its own line with its name in capitals and a colon" in prompt
-    assert "A record with no DECISIONS section has the summary copied into its place" in prompt
-    # A reply written the way the prompt asks is read section for section.
-    reply = "SUMMARY: built it\nDECISIONS: kept it pure (turn 2)\nDEAD ENDS:\ntried a cache\ntried a lock"
-    summary, reasoning, dead_ends, notes = S._parse_closeout(reply)
-    assert (summary, reasoning, dead_ends, notes) == ("built it", "kept it pure (turn 2)",
-                                                      ["tried a cache", "tried a lock"], [])
-    # And the cost the prompt names is the reader's real fallback.
-    summary, reasoning, _, _ = S._parse_closeout("SUMMARY: built it\nDEAD ENDS: none")
-    assert reasoning == summary
-
-
-def test_the_closeout_asks_for_map_notes_only_when_there_is_a_map(tmp_path):
-    prompt = _closeout_prompt(tmp_path, codebase_map=CodebaseMap(tmp_path / "map.jsonl"))
-    assert "\nMAP NOTES: last, one 'topic: fact' line per durable fact" in prompt
-    _, _, _, notes = S._parse_closeout(CLOSEOUT + "\nMAP NOTES:\napp.py: defines add and subtract")
-    assert notes == [("app.py", "defines add and subtract")]
+# Removed 2026-11-12 (merge ruling 2, no model writes a close-out): the two
+# tests of the model close-out prompt and its parser went with that code.
 
 
 # -- self-capture names what the policy allows (first 12) ------------------------------

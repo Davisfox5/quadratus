@@ -48,7 +48,7 @@ KNOWN_NEEDS List MAX_CAPTURE_STEPS MAX_PREFACE_LINES MAX_REQUEST_PREFACE_LINES
 MAX_SELECTOR_CHARS NOT_RUN_RULE NoCapableSeat OperatorInputNeeded Optional Origin PRECEDENCE
 PROVES_RULE PacketTooLarge PartialWorkStopped PartialWorkSuspected Path PermissionBlocked
 PersistentMemory PlanningUnaffordable PreviewUnavailable ProviderError ProviderRefusal
-PurePosixPath REVIEW_DIFF_CHARS ROUTING RepeatedFailure Required RunOutcome RunStalled SEND_BACK
+PurePosixPath ROUTING RepeatedFailure Required RunOutcome RunStalled SEND_BACK
 STEP ScopeReport Seat Sequence Session SessionConfig SimpleNamespace StructuredError
 SurveyConfig TASK_FAILURE_CAUSES TASK_SIZE_GUIDE TEST_SUBSTANCE_RULE TaskContract TaskFailed
 TaskKind TaskListInvalid TaskMemory TaskMetadata TaskOutcome TaskScope TaskSpec TaskSummary
@@ -57,7 +57,7 @@ _ASK_SPARINGLY _AUDIT_EXAMPLES _AUDIT_LINE _AUDIT_LINE_RULE _AUTHORITY_ORDER
 _BLOCKED_REPORT_RULE _BLOCKING_LINE _BOUNDARY_NOTE _BOUNDARY_NOTES_PER_REPLY
 _BOUNDARY_NOTE_CHARS _BOUNDARY_NOTE_RULE _CAPTURE_LINE _CAPTURE_MARKER _CAPTURE_SCOPE_REQUEST
 _CAPTURE_SHAPE _CAP_NO_VERDICT _CASE_CITATION _CASE_NAME _CLASS_CITATION _CLASS_CLAIM
-_CLASS_MEMBER _CLOSEOUT_HEADER _CLOSEOUT_STYLING _COMMAND_PROSE_STOPS _COMMAND_SELECTION_REASONS
+_CLASS_MEMBER _COMMAND_PROSE_STOPS _COMMAND_SELECTION_REASONS
 _COMMAND_WRAPPERS _CONSULT_NAMES_RULE _CONTINUES _CONTRACT_BOUNDARY_RULE _COORDINATOR
 _CORRECTION_EXPLANATION _COUNTERPART_FIX _COUNTERPART_LENS _COUNTERPART_RECHECK _COVERS
 _COVERS_REQUEST _DECIDE _DECIDER_LABELS_REQUEST _DEFERRED_ROW_LINE _DESIGN_RENDER_SHOWS
@@ -78,7 +78,7 @@ _ITEM_DISPLAY_CHARS _Intake _KIND_REQUEST _KIND_VOCABULARY _MAX_ASKS_PER_DECISIO
 _MAX_EVIDENCE_TEST_BYTES _MAX_ORIENT_NOTES _MAX_ORIENT_NOTE_CHARS _MAX_SCOPE_LINES
 _MAX_SCOPE_PATHS _MAX_SCOPE_PATH_CHARS _MEASURED_DIFF_BODY _MEMBER_NAME_CHARS
 _MISSING_SCENARIO_RULE _MODULE_NAME _NEEDS_INDENTED _NEEDS_LINE _NEEDS_REQUEST _NOT_MET_SEGMENT
-_NOT_RUN_FOR _NOT_RUN_LINE _NOT_RUN_REMEDY_LINES _NO_DEAD_ENDS _NO_REQUESTS_IN_FIX
+_NOT_RUN_FOR _NOT_RUN_LINE _NOT_RUN_REMEDY_LINES _NO_REQUESTS_IN_FIX
 _NO_VERDICT_CLASSES _OBJECT_CONTINUATION _ONE_CAPTURE_MARKER _ONE_CONTINUES_LINE
 _ONE_FIXTURE_FENCE _ORIENT_REQUEST _OUTSIDE_SCOPE _OUTSIDE_SCOPE_RULE _OWED_REVIEW_GRAMMAR
 _OWED_SETTLEMENT_ATTEMPTS _PACKET_CARRYING_CALLS _PACKET_DECISION _PACKET_EMPTY
@@ -109,11 +109,11 @@ _enclosing_call _environment_signature _error_clause _evidence_path_problem _exe
 _failure_rows _finding_id _fixture_body _folds_binding _frontend_without_rendered_file
 _gate_identity _handoff_note _has_blocking_finding _has_prefixed_finding _has_security_finding
 _inspection_attested _int_conversion_limit _invocation_role _is_empty_note _item_paths
-_kind_request_text _literal_paths _map_entry _measured_diff_block _member_matches
+_kind_request_text _literal_paths _measured_diff_block _member_matches
 _mentions_member _met_lines _missing_fixtures _named_outside_comments _named_skip_run
 _needs_lines _never_replaced _new_skips _no_findings _operator_limit_note _outside_measured_diff
 _packet_allowance_record _packet_bytes _packet_reason_problem _parallel_blocks _parallel_request
-_parse_capture_line _parse_closeout _parse_consults _parse_evidence _parse_fetch
+_parse_capture_line _parse_consults _parse_evidence _parse_fetch
 _parse_fetch_window _parse_fixture_blocks _parse_kind _parse_packet_request _population_clause
 _population_path _program_name _proof_cases _proves_problem _pure_reading _pytest_block
 _python_args _python_case_defs _python_starts_at _read_continues _read_covers _read_discharges
@@ -162,7 +162,7 @@ _capture_ineligible _capture_measurement _capture_problem _capture_receipt _capt
 _capture_state _case_declaration_current _case_state _case_texts _changed_originals_note
 _cheap_gate _check _check_design _check_failures_complete _check_findings_settled
 _check_passed_cases _check_scope _checked_final_source _checked_source _checks_standing_failed
-_child_renders_unverified _claim_judgment _close_decision _close_failed _close_out _close_owed
+_child_renders_unverified _claim_judgment _close_decision _close_failed _close_owed
 _close_policy _close_review_finding _close_review_finding_by_id _close_turn_limited
 _close_workers _closed_findings_note _closed_with_findings _closes_factually
 _closure_route_problem _collaboration_applicable _collaborator_prompt _collaborator_prompt_text
@@ -206,7 +206,7 @@ _ledger_at_settlement _lift_final_cap _limits_identity _live_capture_page _live_
 _live_design_instruction _live_security_verdict _live_tier _lower_unexecuted
 _lower_unexercised_errors _mandatory_stages _map_block _mark_covered _mark_deferred_rows
 _mark_not_run_display _mark_not_run_display_safely _mark_stale_bindings _measure_context
-_measure_entry _measure_scope _measured_change _mechanical_close_out _merge_files
+_measure_entry _measure_scope _mechanical_close_out _merge_files
 _missing_own_fixtures _module_case_ids _name_findings_stop _named_by_a_run_test
 _new_case_problems _next_explicit_task _next_run_seq _next_task_decision _next_task_id
 _no_contest_reason _no_edit_cap_note _no_worker_reason _normalize_resolves _not_met_basis
@@ -243,7 +243,7 @@ _record_unmerged_failure _record_work _recover_continued _recover_judgment _reco
 _recovery_attempt _recovery_context _recovery_decision _recovery_open _recovery_result
 _recovery_tried _refresh_obligations _refresh_recovery_results _refuse_admission_record
 _refuse_listed _refuse_mismatched _refuse_settlement_mismatch _refuse_unpayable_dispatch
-_refused_close_out _register_acceptance_obligations _register_obligation
+_register_acceptance_obligations _register_obligation
 _register_review_findings _release_renewal _renders_after_merge_gate _renew_audit_hold
 _repair_check _repair_context _repair_diagnosis _repaired _request_after_close _request_bindings
 _required _requirement_revisions _requirement_texts_now _requirements_satisfied
@@ -284,6 +284,15 @@ _worker_fields_problem _worker_limits_refusal _write_ceiling _writer_goal
 _writer_turn_budget_note _writes brain_trust collaborators_for next_task plan run run_task seat
 """.split()
 
+#: Removed on 2026-11-12, after the split, and taken out of the two lists
+#: above. No model writes a close-out (owner ruling, 2026-10-21), so the
+#: model close-out and its reply parser had no caller; review seats get one
+#: measured diff block (Session._review_diff), so the development line's own
+#: block and its bound had none either.
+REMOVED_NAMES = ["_CLOSEOUT_HEADER", "_CLOSEOUT_STYLING", "_NO_DEAD_ENDS", "_map_entry", "_parse_closeout",
+                 "REVIEW_DIFF_CHARS"]
+REMOVED_ATTRS = ["_close_out", "_refused_close_out", "_measured_change"]
+
 #: Names a test replaces on the session module, and the test that does it.
 #: Code that reads one must be in session.py, or it reads the original.
 PATCHED_ON_SESSION = {
@@ -291,7 +300,6 @@ PATCHED_ON_SESSION = {
     "_FETCH_CHAR_CAP": "tests/test_human_coherence_context_review.py",
     "_member_matches": "tests/test_review1110_parsers.py",
     "_measured_diff_block": "tests/test_review1110_prompts.py",
-    "REVIEW_DIFF_CHARS": "tests/test_review_focus.py",
     "_TEST_COMPARE_CHARS": "tests/lifecycle/test_bounded_repair.py",
     "_gate_identity": "tests/test_quality_completion_units.py",
     "_check_runs": "tests/test_cycle22_units.py",
@@ -327,7 +335,8 @@ def _fresh(code: str):
 
 
 def test_every_name_the_session_module_had_is_still_importable_from_it():
-    assert len(NAMES_AT_START) == 532
+    assert len(NAMES_AT_START) == 532 - len(REMOVED_NAMES)
+    assert not [name for name in REMOVED_NAMES + REMOVED_ATTRS if hasattr(S, name) or hasattr(S.Session, name)]
     missing = [name for name in NAMES_AT_START if not hasattr(S, name)]
     assert not missing, f"no longer importable from quadratus.session: {missing}"
     assert S.__all__ == ["Complexity", "PartialWorkStopped", "TaskSpec", "Session", "SessionConfig",
@@ -335,7 +344,7 @@ def test_every_name_the_session_module_had_is_still_importable_from_it():
 
 
 def test_every_attribute_session_had_still_resolves_on_it():
-    assert len(SESSION_ATTRS_AT_START) == 683
+    assert len(SESSION_ATTRS_AT_START) == 683 - len(REMOVED_ATTRS)
     missing = [name for name in SESSION_ATTRS_AT_START if not hasattr(S.Session, name)]
     assert not missing, f"no longer on Session: {missing}"
 

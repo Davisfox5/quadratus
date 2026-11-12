@@ -99,3 +99,29 @@ def test_the_planning_state_text_does_not_name_a_size_ceiling(tmp_path):
     for module in ("session", "session_admission", "session_prompts", "session_seat_prompts", "task_kinds",
                    "baseline"):
         assert "size ceiling" not in _text(f"quadratus/{module}.py"), module
+
+
+# -- leftovers:5: no model close-out code is left to read as live ----------------------
+
+def test_the_model_close_out_and_its_reply_parser_are_gone_and_the_harness_record_stays():
+    from quadratus import reply_parsers
+    for name in ("_close_out", "_refused_close_out"):
+        assert not hasattr(Session, name), name
+    for name in ("_parse_closeout", "_map_entry", "_CLOSEOUT_HEADER", "_CLOSEOUT_STYLING", "_NO_DEAD_ENDS"):
+        assert not hasattr(S, name) and not hasattr(reply_parsers, name), name
+    for module in ("session", "session_closeout"):
+        source = _text(f"quadratus/{module}.py")
+        assert '_invocation_role("closeout")' not in source and "The task is finished at this checkpoint" not in source
+    # What writes a task's record, and the excerpt the review diff still uses.
+    assert callable(Session._task_close_out) and callable(Session._factual_close_out)
+    assert S._closeout_excerpt("short", 2000) == "short"
+
+
+# -- leftovers:8: one measured diff block, and no capture nothing reads ----------------
+
+def test_the_development_lines_own_diff_block_and_its_unread_capture_are_gone(tmp_path):
+    assert not hasattr(Session, "_measured_change") and not hasattr(S, "REVIEW_DIFF_CHARS")
+    assert not hasattr(_session(tmp_path), "_review_before")
+    assert "_review_before" not in _text("quadratus/session.py")
+    # The block review seats do get.
+    assert callable(Session._review_diff) and callable(Session._recheck_diff)

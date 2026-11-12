@@ -27,9 +27,7 @@ from .task_kinds import ROUTING, TaskKind
 from .taskmeta import AmbiguousMetadata, TaskMetadata, lead_request, parse_metadata
 from .verdicts import REVIEW_COMPLETE as _REVIEW_COMPLETE
 from .verdicts import has_blocking_finding as _has_blocking_finding
-from .verdicts import is_empty_note as _is_empty_note
 from .verdicts import review_complete as _review_complete
-from .verdicts import unstyled as _unstyled
 
 #: The no-policy role packet's byte limit (``Session._role_packet``).
 _FALLBACK_PACKET_BYTES = 20_000
@@ -1340,78 +1338,3 @@ def _parse_kind(reply: str) -> tuple:
     except AmbiguousMetadata:
         return TaskKind.GENERAL, Complexity.SIMPLE, (reply or "").strip()
     return meta.kind, meta.difficulty, meta.description
-
-
-#: A close-out section header: the name, then a colon and the first of its
-#: text, or the name alone where markdown marks it as a heading.
-_CLOSEOUT_HEADER = re.compile(r"(SUMMARY|DECISIONS|REASONING|DEAD\s+ENDS|MAP\s+NOTES)\s*(?::(.*))?", re.IGNORECASE)
-#: What markdown puts around such a header: stars, backticks, a heading mark.
-#: A list bullet is not removed: a bulleted line is an entry, as it always was.
-_CLOSEOUT_STYLING = re.compile(r"[*`]+|^#{1,6}\s+")
-#: "No dead ends." and the like: the section's way of saying it is empty.
-_NO_DEAD_ENDS = re.compile(r"no\s+dead\s+ends?(?:\s+(?:were\s+|was\s+)?(?:recorded|found|noted|hit|encountered))?"
-                           r"[\s.!]*", re.IGNORECASE)
-
-
-def _map_entry(line: str) -> Optional[tuple]:
-    """``(topic, text)`` for a 'topic: text' line, bulleted or not; None for
-    anything else."""
-    topic, colon, note = line.lstrip("-\u2022* ").partition(":")
-    topic, note = topic.strip(" *_`"), note.strip()
-    return (topic, note) if colon and topic and note else None
-
-
-def _parse_closeout(reply: str):
-    """Split a close-out into summary, reasoning, dead ends and map notes.
-
-    Tolerant by design: a missing section degrades to a usable record rather
-    than failing the task, since the raw work is stored either way. Reasoning
-    falls back to the summary because the ledger refuses an empty one, and a
-    weak reason recorded honestly beats a lost task. Map notes that do not
-    parse as 'topic: fact' are dropped rather than guessed at -- the map is
-    long-lived, so a malformed note is worse there than nowhere.
-    """
-    sections: Dict[str, List[str]] = {
-        "SUMMARY": [], "DECISIONS": [], "REASONING": [], "DEAD ENDS": [], "MAP NOTES": [],
-    }
-    current = "SUMMARY"
-    notes_open = True
-    for line in (reply or "").splitlines():
-        stripped = line.strip()
-        # A header is read as written, or failing that without its markdown:
-        # "**SUMMARY:**" and "## Dead ends" used to be body text, which put
-        # the whole reply in the summary and the reasoning and dropped its
-        # map notes.
-        plain = _CLOSEOUT_STYLING.sub("", stripped).strip()
-        header = _CLOSEOUT_HEADER.fullmatch(stripped) or _CLOSEOUT_HEADER.fullmatch(plain)
-        if header and header.group(2) is None and plain == stripped:
-            # The bare word with no colon and no markdown is text, as it
-            # always was: a wrapped sentence can leave "summary" or "dead
-            # ends" alone on a line, and the lines after it would be filed
-            # under that section (as dead-end lessons, at worst).
-            header = None
-        if header:
-            current = " ".join(header.group(1).upper().split())
-            notes_open = True
-            stripped = (header.group(2) or "").strip()      # what follows the colon opens the section
-        if not stripped:
-            continue
-        if current == "MAP NOTES":
-            # The section is its entries and nothing after them: it ends at
-            # the first line that is not 'topic: text', so a sentence that
-            # follows the notes (and happens to hold a colon further on) is
-            # never stored as one.
-            notes_open = notes_open and _map_entry(stripped) is not None
-            if not notes_open:
-                continue
-        sections[current].append(stripped)
-
-    summary = " ".join(sections["SUMMARY"]).strip() or (reply or "").strip() or "(no summary)"
-    # DECISIONS replaced REASONING in the prompt; an older-style reply still parses.
-    reasoning = " ".join(sections["DECISIONS"] + sections["REASONING"]).strip() or summary
-    # The prompt says "or none": that answer is not a lesson. It was stored
-    # as the dead end "none" and rendered in every later orchestrator prompt.
-    dead_ends = [d for d in (d.lstrip("-•* ").strip() for d in sections["DEAD ENDS"])
-                 if d and not _NO_DEAD_ENDS.fullmatch(_unstyled(d)) and not _is_empty_note(d)]
-    map_notes = [entry for entry in map(_map_entry, sections["MAP NOTES"]) if entry is not None]
-    return summary, reasoning, dead_ends, map_notes
