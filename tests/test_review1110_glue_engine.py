@@ -869,9 +869,15 @@ def test_the_harness_writing_the_map_between_calls_is_no_finding(tmp_path, monke
 
 
 def test_the_map_is_amended_only_where_no_editing_call_is_in_flight():
-    """Where the harness writes the map: from the orchestrator's reply and
-    from a close-out's, each after its call returned. Anywhere else would
-    need the watch to make an exception, so a new site fails here first."""
+    """Where the harness writes the map: from the orchestrator's reply, and
+    its own sizing note when a task's change is first measured, each after
+    the call returned. Anywhere else would need the watch to make an
+    exception, so a new site fails here first.
+
+    Since the merge: the sizing note (_assess_scope) is the development
+    line's, and no model writes a close-out (owner ruling, 2026-10-21), so
+    the close-out's site is in code nothing calls. It is allowed here only
+    while that code is still in the file."""
     import inspect
     import re as _re
     source = inspect.getsource(S)
@@ -879,9 +885,15 @@ def test_the_map_is_amended_only_where_no_editing_call_is_in_flight():
     owners = []
     for at in sites:
         owners.append(_re.findall(r"\n    def (\w+)\(", source[:at])[-1])
-    assert sorted(owners) == ["_absorb_orientation", "_close_out"], owners
+    live = [name for name in sorted(owners) if name != "_close_out"]
+    assert live == ["_absorb_orientation", "_assess_scope"], owners
+    assert owners.count("_close_out") <= 1 and "self._close_out(" not in source, "the model close-out has no caller"
     assert "amend(" not in inspect.getsource(S.Session._tool_worker)
     assert "amend(" not in inspect.getsource(S.Session._serve_worker)
+    # The sizing note is written when an editing call's change is measured.
+    # The one call served while a lead's own call is still open is the worker
+    # tool, and it runs no write errand, so nothing is measured there.
+    assert "Write errands cannot run while your session is open" in inspect.getsource(S.Session._tool_worker)
 
 
 # -- item 18: a watch finding outlives its run ----------------------------------
@@ -1329,7 +1341,11 @@ def test_the_audit_is_given_the_names_by_task_and_told_what_they_are(tmp_path):
     assert "## Files changed in folders the diff does not read" in block
     assert "- t1: dist/app.js, build/x.py" in block and "- t2: .tox/py311/lib/site.py" in block and "t3" not in block
     assert "it neither meets nor fails anything by itself" in block
-    assert "self._unmeasured_block()" in inspect.getsource(Session._audit_requirements)
+    # The audit's context is built in one place since the merge, read by the
+    # final audit and by every evidence reassessment.
+    assert block in session._authority_context({"R1": "ship the bundle"})
+    assert "self._unmeasured_block()" in inspect.getsource(Session._authority_context)
+    assert "self._authority_context(audited, ids)" in inspect.getsource(Session._audit_requirements)
     # Bounded: a build that rewrote thousands of files is not copied into every prompt.
     session._absorb_unmeasured("t4", [f"dist/chunk-{i}.js" for i in range(5_000)])
     assert len(session.unmeasured_changes["t4"]) == S._UNMEASURED_NAMES
