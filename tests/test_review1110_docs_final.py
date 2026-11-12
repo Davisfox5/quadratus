@@ -44,8 +44,8 @@ def _section(text: str, heading: str) -> str:
 
 #: Set by the harness for a child it starts itself (the gate's report plugin,
 #: the worker tool's server). Nothing an operator writes in ``.env``.
-_SET_BY_THE_HARNESS = {"QUADRATUS_GATE_NONCE", "QUADRATUS_WORKER_SOCKET", "QUADRATUS_WORKER_TOKEN",
-                       "QUADRATUS_WORKER_SCHEMA"}
+_SET_BY_THE_HARNESS = {"QUADRATUS_GATE_NONCE", "QUADRATUS_GATE_REPORT", "QUADRATUS_WORKER_SOCKET",
+                       "QUADRATUS_WORKER_TOKEN", "QUADRATUS_WORKER_SCHEMA"}
 
 
 def _variables_in_the_package() -> set:

@@ -104,7 +104,10 @@ def _run(tmp_path, command, selection="", output="1 passed in 0.1s"):
     ("python3 -m unittest discover -s tests -k add", RUNNER_UNKNOWN, "1 passed in 0.1s", ["argv", "runner"]),
     ("python3 -m unittest discover -t . -s tests", RUNNER_UNKNOWN, "1 passed in 0.1s", ["argv"]),
     ("python3 -m unittest discover tests", RUNNER_UNKNOWN, "1 passed in 0.1s", ["runner"]),
-    ("python3 -m unittest discover -s tests", RUNNER_UNKNOWN, "Ran 1 test, 1 deselected", ["deselected"]),
+    # A deselected count is read only from a line a runner printed as its own
+    # summary (review 2026-11-10, checks 6); "Ran 1 test, 1 deselected" holds
+    # the count inside a sentence and is not one.
+    ("python3 -m unittest discover -s tests", RUNNER_UNKNOWN, "1 passed, 1 deselected in 0.1s", ["deselected"]),
     ("bash run_tests.sh", RUNNER_UNKNOWN, "1 passed in 0.1s", ["runner"]),
 ], ids=["discover", "mixed-external", "k", "top-level-false-negative", "positional", "deselected", "wrapper"])
 def test_only_the_unknown_runner_diagnostic_is_dropped_and_only_for_the_shape(tmp_path, command, selection, output,

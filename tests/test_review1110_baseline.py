@@ -23,6 +23,12 @@ FAKE_CLI = r'''
 import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
+if args == ['--version']:
+    # The provider reads the client's version once at construction. A real
+    # binary answers that without reading a prompt or running a turn, so
+    # this one does too and it is not traced as a model call.
+    print('fake-vendor 99.0.0')
+    sys.exit(0)
 def flag(key, default=''):
     return args[args.index(key) + 1] if key in args else default
 if '--prompt-file' in args:

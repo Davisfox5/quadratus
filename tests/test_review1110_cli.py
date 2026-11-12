@@ -829,15 +829,15 @@ def test_no_mode_seats_a_restricted_row_in_any_role():
         for role, keys in roles.items():
             for key in keys:
                 assert not R.resolve(key).restricted, f"{mode}.{role} -> {key}"
-    assert R.MODE_ROSTERS["collaborative"]["peers"] == ["claude:opus", "openai:gpt-5.6-sol"]
-    assert R.MODE_ROSTERS["collaborative"]["planners"] == ["claude:opus", "openai:gpt-5.6-sol"]
+    assert R.MODE_ROSTERS["collaborative"]["peers"] == ["claude:opus", "openai:sol"]
+    assert R.MODE_ROSTERS["collaborative"]["planners"] == ["claude:opus", "openai:sol"]
     assert R.resolve("openai:gpt-5.6-terra").restricted, "Terra stays what it is: an escalation target"
 
 
 def test_a_restricted_seat_is_rejected_at_import():
     R.assert_senior_seats_unrestricted()
-    old = {"collaborative": {"peers": ["claude:opus", "openai:gpt-5.6-terra"], "reviewers": [], "planners": []}}
-    with pytest.raises(ValueError, match="mode 'collaborative' peers seats openai:gpt-5.6-terra"):
+    old = {"collaborative": {"peers": ["claude:opus", "openai:terra"], "reviewers": [], "planners": []}}
+    with pytest.raises(ValueError, match="mode 'collaborative' peers seats openai:terra"):
         R.assert_senior_seats_unrestricted(old)
     with pytest.raises(ValueError, match="planners seats claude:haiku"):
         R.assert_senior_seats_unrestricted({"m": {"peers": [], "reviewers": [], "planners": ["claude:haiku"]}})
@@ -860,10 +860,10 @@ def test_the_registry_cannot_be_imported_with_a_restricted_peer(monkeypatch):
     """The check runs at import: with the old collaborative roster put back,
     the module itself refuses to load, whatever the tests call."""
     source = Path(R.__file__).read_text(encoding="utf-8")
-    now = '"peers": ["claude:opus", "openai:gpt-5.6-sol"],\n        "reviewers": ["claude:opus"],'
+    now = '"peers": ["claude:opus", "openai:sol"],\n        "reviewers": ["claude:opus"],'
     assert source.count(now) == 1
-    before = now.replace("openai:gpt-5.6-sol", "openai:gpt-5.6-terra")
-    with pytest.raises(ValueError, match="mode 'collaborative' peers seats openai:gpt-5.6-terra"):
+    before = now.replace("openai:sol", "openai:terra")
+    with pytest.raises(ValueError, match="mode 'collaborative' peers seats openai:terra"):
         _import_registry_source("quadratus._registry_with_terra", source.replace(now, before), monkeypatch)
     loaded = _import_registry_source("quadratus._registry_as_written", source, monkeypatch)
     assert loaded.MODE_ROSTERS == R.MODE_ROSTERS

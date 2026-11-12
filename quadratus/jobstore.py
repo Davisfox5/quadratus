@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 from . import generations as G
+from .safe_io import make_private_dir, write_private
 
 __all__ = ["MANIFEST", "StoreUnavailable", "GenerationCorrupt", "JobStore", "read_manifest",
            "read_record", "read_budget", "read_terminal", "unsettled_operations", "operation_records",
@@ -75,12 +76,9 @@ def _fsync_dir(path: Path) -> None:
 
 
 def _write_durable(target: Path, data: bytes) -> None:
-    temporary = target.with_name(target.name + ".tmp")
-    with open(temporary, "wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, target)
+    # Through safe_io like every other run record: owner-only from creation,
+    # the bytes on disk before the rename, and never written through a link.
+    write_private(target, data)
 
 
 class JobStore:
@@ -189,7 +187,8 @@ class JobStore:
                                                  history=self._history, unsettled=unsettled,
                                                  reserved_unfinished=self.reserved_unfinished)
                 folder = self.run_dir / RECORDS
-                folder.mkdir(parents=True, exist_ok=True)
+                # Owner-only from creation: it holds raw replies and receipts.
+                make_private_dir(folder)
                 for name, data in encoded.items():
                     path = self.run_dir / G.record_path(name, digests[name])
                     if str(path.relative_to(self.run_dir)) in publication.write:
