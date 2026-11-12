@@ -48,6 +48,7 @@ from .run_budget import FinishReserved
 from .session_prompts import (
     _NO_REQUESTS_IN_FIX,
     _NOT_RUN_REMEDY_LINES,
+    _PLAIN_VERDICT_RULE,
     _display_item,
     _replaced_note,
     _revision_changed_delivery,
@@ -407,9 +408,10 @@ class ChecksMixin:
             out += ("\n\n## Executed restatements awaiting your judgment (harness records)\n" + "\n".join(rows)
                     + "\nEach item above was restated as exact cases, and the harness's own complete passing run on "
                     "the current source executed every one of them. Judge each only by your own line '<O-id>: "
-                    "SUFFICIENT <how these cases exercise the whole reported behaviour>' or '<O-id>: INSUFFICIENT "
+                    "SUFFICIENT - <how these cases exercise the whole reported behaviour>' or '<O-id>: INSUFFICIENT "
                     "<what they leave unexercised>'. A requirement such an item holds stays not met until your "
-                    "SUFFICIENT line for it, and your MET on the requirement does not judge the item.")
+                    "SUFFICIENT line for it, and your MET on the requirement does not judge the item. "
+                    + _PLAIN_VERDICT_RULE)
         return out
 
     def _not_run_remedy(self, rids) -> tuple:

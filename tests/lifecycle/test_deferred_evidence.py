@@ -41,8 +41,8 @@ def _script(*, reading="P1: SHOWN test_add ran and returned 3 for add(1, 2)", br
 
     def recheck(call, replay):
         if "Rows the harness deferred to the merge gate" in call.prompt:
-            return replies.recheck_reply(call.prompt, default="RESOLVED the merged README states it") + "\n" + reading
-        return replies.recheck_reply(call.prompt, default="RESOLVED shown")
+            return replies.recheck_reply(call.prompt, default="RESOLVED - the merged README states it") + "\n" + reading
+        return replies.recheck_reply(call.prompt, default="RESOLVED - shown")
 
     script = Script(orchestrator=_plan(BATCH), lead=lead, collaborator=collaborator,
                     auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md",

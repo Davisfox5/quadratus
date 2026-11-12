@@ -42,15 +42,23 @@ __all__ = [
     "has_blocking_finding",
     "has_prefixed_finding",
     "has_security_finding",
+    "inspection_lines",
     "is_empty_note",
+    "names_id",
     "no_findings",
     "normalise",
+    "plain_acceptance",
+    "recheck_line",
     "renders_blind",
+    "requirement_line",
     "resolved_verdict",
     "review_complete",
     "review_reading",
+    "row_line",
     "security_finding_stands",
     "security_verdict_line",
+    "unmarked",
+    "unresolved_line",
     "unstyled",
 ]
 
@@ -76,7 +84,21 @@ def unstyled(line: str) -> str:
     go; whitespace is collapsed. Case and punctuation stay, so the result
     can still be shown to a person.
     """
-    text = (line or "").replace("`", "").strip()
+    return _plain((line or "").replace("`", ""))
+
+
+def unmarked(line: str) -> str:
+    """:func:`unstyled`, with backticks inside the line kept: a quoted
+    command in a reason is evidence a caller may check. A pair wrapping the
+    whole line is formatting and goes."""
+    text = (line or "").strip()
+    if len(text) > 1 and text[0] == text[-1] == "`" and text.count("`") == 2:
+        text = text[1:-1]
+    return _plain(text)
+
+
+def _plain(line: str) -> str:
+    text = (line or "").strip()
     while True:
         lead = _LEAD.match(text)
         if lead is None or not lead.end():
@@ -576,4 +598,180 @@ def audit_lines(reply: str) -> List[Tuple[str, bool, str]]:
         else:
             out.append((rid, False, f"the auditor wrote {len(lines)} verdict lines for {rid} that are not "
                                     "the same; none is read"))
+    return out
+
+
+# -- one line per id: rechecks, evidence rows, review lines, inspections ---------
+
+#: What a reason may not open with: the words that make an acceptance wait on
+#: something, take part of it back or question it. A closed list read at the
+#: start of the reason only; the prompts that ask for these lines state it.
+_CONDITION = re.compile(
+    r"(?:if|once|unless|until|provided|providing|assuming|only|but|except|partly|partially|maybe|perhaps|"
+    r"pending|or|however|although|though)\b"
+    r"|no\b(?=\s*(?:[,.:;!?–—-]|wait\b|$))"
+    r"|not\b(?=\s*(?:[,.:;!?]|yet\b|really\b|quite\b|fully\b|entirely\b|$))"
+    r"|\?", re.IGNORECASE)
+#: The rejecting words, in capitals as a seat writes a marker. One inside
+#: the reason of an accepting line contradicts the line.
+_CONTRARY = re.compile(r"\b(?:UNRESOLVED|NOT\s+RESOLVED|INSUFFICIENT|NOT\s+SUFFICIENT|NOT\s+MET|UNREAD|WEAKENED)\b")
+
+
+def plain_acceptance(rest: str, word: str) -> Tuple[bool, str]:
+    """Whether the text after an accepting word leaves it a plain acceptance.
+
+    ``(True, reason)`` when the word ends the line, or is followed at once by
+    the separator (a dash or a colon) and a reason. ``(False, why not)``
+    for anything else: text with no separator ("RESOLVED once the check is
+    added", "SUFFICIENT? No", "MET, but only partly", "RESOLVED or
+    UNRESOLVED"), a reason that opens with a condition or a hedge
+    ("RESOLVED - once fixed"), or a reason that names a rejecting word in
+    capitals ("RESOLVED - no, wait: UNRESOLVED"). A line that is not a plain
+    acceptance is no verdict for its id: never an acceptance, and never a
+    rejection made up for the seat (conformance review, 2026-11-12: each of
+    these closed a finding or judged evidence sufficient, and the run
+    reported complete).
+    """
+    rest = str(rest or "")
+    if not rest.strip(" .!"):
+        return True, ""
+    cited = _AUDIT_SEPARATOR.match(rest)
+    reason = cited.group(1).strip() if cited else ""
+    if cited is None or not reason:
+        return False, (f"{word} is read only alone or as '{word} - <reason>'; other text after the word is no "
+                       f"verdict: {rest.strip()[:120]}")
+    if _CONDITION.match(reason):
+        return False, f"{word} with a condition or a hedge is no verdict: {reason[:120]}"
+    if _CONTRARY.search(reason):
+        return False, f"{word} beside a rejecting word on its own line is no verdict: {reason[:120]}"
+    return True, reason
+
+
+def _free_tail(rest: str) -> str:
+    """What follows a rejecting word, kept whole: a rejection stays one."""
+    return re.sub(r"^\s*[-:,–—]?\s*", "", str(rest or "")).strip()
+
+
+def _forms(line: str) -> Tuple[str, str]:
+    """A line as it is matched: backticks kept where they can be, then
+    without them, so a backticked id is still read."""
+    return unmarked(line), unstyled(line)
+
+
+_RECHECK_LINE = re.compile(r"(?P<fid>[A-Z][A-Z0-9]*-?\d+)\s*:\s*"
+                           r"(?P<state>RESOLVED|UNRESOLVED|NOT\s+RESOLVED|INVALIDATED)\b(?P<rest>.*)$", re.IGNORECASE)
+
+
+def recheck_line(line: str) -> Optional[Tuple[str, str, str]]:
+    """One recheck line ``<id>: RESOLVED - <how>`` as ``(id, state, why)``,
+    or None when the line is not one.
+
+    ``state`` is RESOLVED, UNRESOLVED (NOT RESOLVED reads the same) or
+    INVALIDATED, or the empty string for a RESOLVED or INVALIDATED that is
+    not a plain acceptance (:func:`plain_acceptance`); ``why`` is then the
+    reader's reason. UNRESOLVED keeps whatever follows it."""
+    for form in _forms(line):
+        found = _RECHECK_LINE.match(form)
+        if found is None:
+            continue
+        state = re.sub(r"\s+", " ", found.group("state").upper())
+        if state in ("UNRESOLVED", "NOT RESOLVED"):
+            return found.group("fid"), "UNRESOLVED", _free_tail(found.group("rest"))
+        plain, why = plain_acceptance(found.group("rest"), state)
+        return found.group("fid"), (state if plain else ""), why
+    return None
+
+
+def unresolved_line(line: str) -> Optional[str]:
+    """What a line opening with ``UNRESOLVED:`` names, under any formatting;
+    None for any other line and for one that says none."""
+    found = _prefixed(line)
+    if found is None or found[0] != "UNRESOLVED" or is_empty_note(found[1]):
+        return None
+    return found[1]
+
+
+_ROW = re.compile(r"(?P<oid>O-?\d+)\s*:\s*(?P<state>NOT\s+SUFFICIENT|SUFFICIENT|INSUFFICIENT)\b(?P<rest>.*)$",
+                  re.IGNORECASE)
+
+
+def row_line(line: str) -> Optional[Tuple[str, str, str]]:
+    """One evidence row line ``<O-id>: SUFFICIENT - <why>`` as ``(id, state,
+    why)``, or None when the line is not one. ``state`` is "sufficient",
+    "insufficient", or the empty string for a SUFFICIENT that is not a plain
+    acceptance, with the reader's reason as ``why``. INSUFFICIENT keeps
+    whatever follows it."""
+    for form in _forms(line):
+        found = _ROW.match(form)
+        if found is None:
+            continue
+        if found.group("state").upper() != "SUFFICIENT":
+            # NOT SUFFICIENT is the same rejection in two words.
+            return found.group("oid"), "insufficient", _free_tail(found.group("rest"))
+        plain, why = plain_acceptance(found.group("rest"), "SUFFICIENT")
+        return found.group("oid"), ("sufficient" if plain else ""), why
+    return None
+
+
+def requirement_line(line: str) -> Optional[Tuple[str, Optional[bool], str]]:
+    """One per-requirement line of a review, ``R1: MET - <citation>``, as
+    ``(id, met, rest)``, or None when the line is not one.
+
+    ``met`` is True for a plain MET, False for NOT MET with whatever follows
+    it, and None for a MET that is not a plain acceptance ("R1: MET, but
+    only partly", "R1: MET once fixed", "R1: MET or NOT MET"): no verdict
+    for that requirement, with the reader's reason as ``rest``. The rule
+    :func:`audit_lines` applies to the auditor, for the reviewer's lines."""
+    for form in _forms(line):
+        found = _AUDIT_LINE.match(form)
+        if found is None:
+            continue
+        rid = found.group(1).upper()
+        if found.group(2).upper() != "MET":
+            return rid, False, _free_tail(found.group(3))
+        plain, why = plain_acceptance(found.group(3), "MET")
+        return rid, (True if plain else None), why
+    return None
+
+
+def names_id(line: str, ids, words: str) -> Optional[str]:
+    """The id among ``ids`` (upper case) that a line opens with as ``<id>:``
+    when the rest holds one of the verdict ``words`` (a pattern), under any
+    formatting; None otherwise. For a line that names an expected id and a
+    verdict word in a form no reader takes ("RFT1-1: NOT YET RESOLVED",
+    "O1: barely SUFFICIENT"): beside an accepting line for the same id it
+    is a second, unread line, so the caller reads no verdict."""
+    opened = re.match(r"([A-Z][A-Z0-9]*-?\d+)\s*:(.*)$", unstyled(line), re.IGNORECASE)
+    if opened is None or opened.group(1).upper() not in ids:
+        return None
+    return opened.group(1).upper() if re.search(rf"\b(?:{words})\b", opened.group(2), re.IGNORECASE) else None
+
+
+#: A READ reason that says the reading did not happen.
+_NOT_READ = re.compile(r"(?:could\s*not|couldn'?t|cannot|can'?t|unable|did\s*not|didn'?t|failed|none|nothing|no)\b",
+                       re.IGNORECASE)
+_INSPECTION = re.compile(r"(?P<kind>READ|UNREAD)\s+(?P<gid>IG-[0-9a-f]{10})\b(?P<rest>.*)$", re.IGNORECASE)
+
+
+def inspection_lines(reply: str) -> List[Tuple[str, str, str]]:
+    """A reviewer's lines on the inspection gaps it was handed, as ``(kind,
+    id, text)``: READ, UNREAD, or the empty string for a READ line that is
+    not ``READ <id> - <what the files show>`` ("READ IG-... not yet", a READ
+    with a condition, a READ with nothing after the id). A READ attests that
+    files were read, so it is held to the stated form; UNREAD keeps whatever
+    follows it."""
+    out = []
+    for raw in str(reply or "").splitlines():
+        found = _INSPECTION.match(unstyled(raw))
+        if found is None:
+            continue
+        gid = found.group("gid").upper()
+        if found.group("kind").upper() == "UNREAD":
+            out.append(("UNREAD", gid, _free_tail(found.group("rest"))))
+            continue
+        plain, why = plain_acceptance(found.group("rest"), "READ")
+        # The stated form has a dash; "READ <id>: could not open either
+        # file" is a colon and a refusal, so a colon does not stand in.
+        dashed = re.match(r"\s*[-–—]", found.group("rest"))
+        out.append(("READ" if plain and why and dashed and not _NOT_READ.match(why) else "", gid, why))
     return out

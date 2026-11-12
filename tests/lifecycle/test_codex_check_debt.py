@@ -11,7 +11,7 @@ from tests.lifecycle.test_check_debt import IMPLEMENT, MET, REQS, _looked, _plan
 from tests.lifecycle.test_lifecycle_matrix import FILES, Script, judging
 
 #: This file's own explicit judgment of the README documentation scenario (a reading row).
-DOCS_JUDGED = 'SUFFICIENT README.md describes add(a, b) and its result, which is all R1 asks of the docs'
+DOCS_JUDGED = 'SUFFICIENT - README.md describes add(a, b) and its result, which is all R1 asks of the docs'
 
 pytestmark = pytest.mark.requirements_ledger
 

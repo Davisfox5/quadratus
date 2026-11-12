@@ -279,7 +279,7 @@ def test_the_audit_prompt_lists_exactly_what_its_reader_requires_and_the_reader_
     assert "listed under this heading" in head, "the NOT MET rule names only its own heading"
     debt = session._obligations_block([r for r in rows if r["kind"] == "not_run"])
     assert "O7" not in debt, "not offered as a debt row to judge nothing about"
-    reply = "R1: MET - app.py\n- R2: NOT MET - docs; at README.md; example: none\nO3: SUFFICIENT ran\n**O4**: OK"
+    reply = "R1: MET - app.py\n- R2: NOT MET - docs; at README.md; example: none\nO3: SUFFICIENT - ran\n**O4**: OK"
     assert session._audit_omitted(reply, required) == ["F1", "O7"], "a malformed line is an answer, not an omission"
 
 
@@ -291,7 +291,7 @@ def test_the_completion_reads_only_omitted_ids_and_a_conflict_in_it_judges_nothi
         asked.append(kw["prompt"])
         session.judgment_completions.append(dict(task="audit", seat=peer, kind="audit", outcome="answered",
                                                  raw_artifact="raw", reply_artifact="rep"))
-        return "R1: MET - app.py\nF1: UNRESOLVED stands\nO7: SUFFICIENT covers it\nO7: INSUFFICIENT does not"
+        return "R1: MET - app.py\nF1: UNRESOLVED stands\nO7: SUFFICIENT - covers it\nO7: INSUFFICIENT does not"
     session._complete_judgment = complete
     required = [("R1", "requirement"), ("F1", "finding"), ("O7", "restatement")]
     merged, record = session._complete_audit("openai:sol", "R1: NOT MET - wrong", ["F1", "O7"], required, "BODY")

@@ -24,7 +24,6 @@ from .check_facts import _check_ids
 from .memory import TaskMemory
 from .providers import TurnLimitReached
 from .reply_parsers import (
-    _AUDIT_LINE,
     _BLOCKING_LINE,
     _COVERS,
     _RESOLVES,
@@ -54,6 +53,7 @@ from .session_types import TaskSpec, _invocation_role
 from .verdicts import REVIEW_COMPLETE as _REVIEW_COMPLETE
 from .verdicts import has_blocking_finding as _has_blocking_finding
 from .verdicts import is_empty_note as _is_empty_note
+from .verdicts import requirement_line as _requirement_line
 from .verdicts import resolved_verdict as _resolved_verdict
 from .verdicts import review_complete as _review_complete
 from .verdicts import unstyled as _unstyled
@@ -948,8 +948,11 @@ class FindingsMixin:
                     # 728c0fc: a continuation line was carried as an unchecked
                     # observation).
                     break
-                if line.strip() and not _AUDIT_LINE.match(line) and line.strip() not in (
-                        "NO FINDINGS", _REVIEW_COMPLETE):
+                # Only a line the strict reader took as a verdict is left
+                # out: a refused one ("R9: MET, but only partly: ...") is
+                # the reviewer's caveat and is kept for the audit.
+                if line.strip() and (_requirement_line(line) or (None, None))[1] is None and (
+                        line.strip() not in ("NO FINDINGS", _REVIEW_COMPLETE)):
                     lines.append(line.strip())
             text = " ".join(lines)
             if not text:
@@ -1031,6 +1034,9 @@ class FindingsMixin:
         review unfinished; a NOT MET line is a BLOCKING finding even when the
         reviewer did not write one. Returns the note the lead answers."""
         rids = [rid for rid, _ in self._covered_texts()]
+        # Whether this call held the review as unfinished, for the caller's
+        # review edge and reviewer record.
+        self._goal_review_owed = False
         if not rids:
             return note
         self._record_review_notes(spec, peer, note, rids)
@@ -1042,10 +1048,16 @@ class FindingsMixin:
             # An unfinished review, held as owned review debt for its seat
             # (recovery lifecycle, 2026-10-31: the bare unverified string
             # this used to open had no settlement route).
-            duplicated = [rid for rid in missing if rid in _review_judgments(note)]
+            self._goal_review_owed = True
+            judged = _review_judgments(note)
+            duplicated = [rid for rid in missing if rid in judged and judged[rid].lines > 1]
+            refused = [rid for rid in missing if rid in judged and judged[rid].lines == 1]
             self._owe_review(spec, peer, "review", f"gave no MET or NOT MET line for {', '.join(missing)}"
                              + (f"; duplicate MET lines for {', '.join(duplicated)} are no verdict"
-                                if duplicated else ""), role="collaborator", record=record)
+                                if duplicated else "")
+                             + (f"; the MET line for {', '.join(refused)} is not 'R<n>: MET - <citation>' "
+                                "(a condition or other text after MET is no verdict)" if refused else ""),
+                             role="collaborator", record=record)
             self._note(f"task {spec.task_id}: review by {peer} left {', '.join(missing)} without a verdict")
         unmet = [rid for rid in rids if verdicts.get(rid) is False]
         if unmet and not _has_blocking_finding(note):
@@ -1085,8 +1097,9 @@ class FindingsMixin:
         bounded = {rid for rid, _ in boundary_classes([(rid, texts[rid]) for rid in held])}
         lines = []
         for line in note.splitlines():
-            m = _AUDIT_LINE.match(line)
-            if m and m.group(1).upper() in held and m.group(2).upper() == "MET":
+            read = _requirement_line(line)
+            m = re.match(r"(R\d+)", read[0]) if read and read[1] is True and read[0] in held else None
+            if m:
                 line = (f"{m.group(1).upper()}: UNVERIFIED - MET claimed without executed negative-path "
                         "evidence (harness: its MET line cites no exact test case shown executed and passed, by "
                         "this review's scratch demonstration or a recorded check on this source); an untested "

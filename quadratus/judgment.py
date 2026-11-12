@@ -28,6 +28,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
+from . import verdicts
+
 __all__ = ["MET", "NOT_MET", "DUPLICATE", "Judgment", "combine", "has_blocking",
            "RESOLVED", "UNRESOLVED", "INVALID", "INVALIDATED", "recheck_state",
            "Verdict", "NewFinding", "RecheckReading", "recheck_verdicts", "checkable_reference",
@@ -82,26 +84,26 @@ _UNRESOLVED = re.compile(r"\bUNRESOLVED\b|\bNOT\s+RESOLVED\b", re.IGNORECASE)
 
 
 def recheck_state(text: str) -> str:
-    """RESOLVED only for one standalone RESOLVED line at the start or end of
-    the reply with nothing contradicting it (the rule ``_resolved_verdict``
-    always applied). UNRESOLVED when the reply says UNRESOLVED or NOT
-    RESOLVED anywhere, or raises a BLOCKING line: a genuine finding, never
-    treated as a format gap. INVALID otherwise: narration with a verdict
-    glued into it, a duplicate RESOLVED, an empty reply."""
-    if has_blocking(text) or _UNRESOLVED.search(text or ""):
-        return UNRESOLVED
-    lines = [line.strip().upper() for line in (text or "").splitlines() if line.strip()]
-    if lines and lines.count("RESOLVED") == 1 and "RESOLVED" in (lines[0], lines[-1]):
+    """RESOLVED only when ``verdicts.resolved_verdict`` reads the whole reply
+    as one: one standalone RESOLVED line at the start or end with nothing
+    contradicting it. That is the one reader of the bare form (conformance
+    review, 2026-11-12: the rule kept here took the last word of a wrapped
+    sentence, "... but the race isn't" / "resolved", as the verdict, and did
+    not see a BLOCKING line under a heading mark). UNRESOLVED when the reply
+    says UNRESOLVED or NOT RESOLVED anywhere, or raises a BLOCKING line: a
+    genuine finding, never treated as a format gap. INVALID otherwise:
+    narration with a verdict glued into it, a duplicate RESOLVED, an empty
+    reply."""
+    if verdicts.resolved_verdict(text or ""):
         return RESOLVED
+    if has_blocking(text) or verdicts.has_prefixed_finding(text or "") or _UNRESOLVED.search(text or ""):
+        return UNRESOLVED
     return INVALID
 
 
 # --- per-finding rechecks (blueprint section 4) ------------------------------
 
 INVALIDATED = "invalidated"
-_ID_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?P<fid>[A-Z][A-Z0-9]*-?\d+)\s*:\s*"
-                      r"(?P<state>RESOLVED|UNRESOLVED|NOT\s+RESOLVED|INVALIDATED)\b\s*[-:,]?\s*(?P<why>.*)$",
-                      re.IGNORECASE)
 _NEW_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NEW|BLOCKING)\s*:\s*(?P<claim>.+)$", re.IGNORECASE)
 #: A NEW or BLOCKING line whose whole claim is the standalone sentinel for
 #: "no finding": none, n/a or nothing, alone or with a bounded tail (found,
@@ -124,8 +126,6 @@ def _empty_claim(claim: str) -> bool:
 _NOTE_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:NOTE|SUGGESTION)\s*:\s*(?P<text>.+)$", re.IGNORECASE)
 _COVERAGE_LINE = re.compile(r"\s*COVERAGE\s*:\s*(?P<state>COMPLETE|PARTIAL)\b\s*[-:,]?\s*(?P<why>.*)$",
                             re.IGNORECASE)
-_SUFFICIENCY_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?P<oid>O-?\d+)\s*:\s*"
-                               r"(?P<state>SUFFICIENT|INSUFFICIENT)\b\s*[-:,]?\s*(?P<why>.*)$", re.IGNORECASE)
 #: What counts as a checkable reference in an INVALIDATED line: a
 #: requirement, finding, obligation or receipt id, a test function, a file
 #: path with an extension, or a quoted command. Prose alone is not evidence.
@@ -189,7 +189,7 @@ class RecheckReading:
 def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
     """Read a recheck reply one finding at a time.
 
-    Every expected id gets exactly one verdict. A line ``F3: RESOLVED why``
+    Every expected id gets exactly one verdict. A line ``F3: RESOLVED - why``
     at the start of a line is the only form read; a marker inside prose is
     narration. Any UNRESOLVED (or NOT RESOLVED) line for an id makes it
     UNRESOLVED, whatever else was said. Otherwise exactly one RESOLVED line
@@ -201,25 +201,44 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
     is a new finding; a ``NOTE:`` or ``SUGGESTION:`` line settles nothing;
     an id that was never expected is reported as foreign and applied to
     nothing.
+
+    Each line is read by ``quadratus.verdicts`` (conformance review,
+    2026-11-12). RESOLVED or INVALIDATED accepts only when the word ends the
+    line or is followed at once by the separator and a reason; "RESOLVED
+    once fixed", "RESOLVED? No" and "RESOLVED or UNRESOLVED" are INVALID
+    for that id. Formatting hides no line: a heading mark, backticks or a
+    bullet in front of an id line, NEW or BLOCKING is removed first. A bare
+    ``UNRESOLVED: <what>`` line beside id lines is never dropped: with one
+    expected finding it is that finding's verdict, with several it is a new
+    finding.
     """
     wanted = {fid.upper(): fid for fid in expected}
     lines: Dict[str, list] = {}
     new, foreign, notes, coverages = [], [], [], []
+    bare = []
     for raw in (text or "").splitlines():
-        line = raw.replace("**", "").strip()
+        line = verdicts.unmarked(raw)
         if not line:
             continue
-        hit = _ID_LINE.match(line)
-        if hit:
-            fid = hit.group("fid").upper()
-            state = re.sub(r"\s+", " ", hit.group("state").upper())
-            state = "UNRESOLVED" if state == "NOT RESOLVED" else state
+        read = verdicts.recheck_line(raw)
+        if read:
+            fid = read[0].upper()
             if fid in wanted:
-                lines.setdefault(fid, []).append((state, hit.group("why").strip()))
-            elif not _SUFFICIENCY_LINE.match(line):
-                foreign.append(hit.group("fid"))
+                lines.setdefault(fid, []).append((read[1], read[2]))
+            elif not verdicts.row_line(raw):
+                foreign.append(read[0])
             continue
-        hit = _NEW_LINE.match(line)
+        named = verdicts.names_id(raw, wanted, "RESOLVED|INVALIDATED")
+        if named:
+            # The id with wording the reader takes no verdict from ("NOT YET
+            # RESOLVED"): an unread line, so a RESOLVED beside it is not alone.
+            lines.setdefault(named, []).append(("", f"a line names it with no verdict the reader takes: {line[:120]}"))
+            continue
+        said = verdicts.unresolved_line(raw)
+        if said is not None:
+            bare.append(said)
+            continue
+        hit = _NEW_LINE.match(line) or _NEW_LINE.match(verdicts.unstyled(raw))
         if hit:
             claim = hit.group("claim").strip()
             if claim and not _empty_claim(claim):
@@ -234,15 +253,22 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
             coverages.append((hit.group("state").lower(), hit.group("why").strip()))
     if len(wanted) == 1 and not lines:
         # The single-finding form: one standalone verdict line for the one
-        # finding asked about, read by the rule recheck_state always applied.
+        # finding asked about, read by recheck_state (verdicts.py's rule).
         (key, fid), = wanted.items()
-        bare = recheck_state(text)
-        if bare == RESOLVED:
+        state = recheck_state(text)
+        if state == RESOLVED:
             lines[key] = [("RESOLVED", "")]
-        elif bare == UNRESOLVED:
-            why = next((ln.split(":", 1)[1].strip() for ln in (text or "").splitlines()
-                        if _UNRESOLVED.search(ln) and ":" in ln), "")
+        elif state == UNRESOLVED:
+            why = bare[0] if bare else next((ln.split(":", 1)[1].strip() for ln in (text or "").splitlines()
+                                             if _UNRESOLVED.search(ln) and ":" in ln), "")
             lines[key] = [("UNRESOLVED", why)]
+    elif len(wanted) == 1 and bare:
+        # Beside an id line, a bare UNRESOLVED: line is about the one finding
+        # asked: it contradicts a RESOLVED on the id line, and wins.
+        lines[next(iter(wanted))].append(("UNRESOLVED", bare[0]))
+    elif bare:
+        # Asked about several, it cannot be pinned to one: a new finding.
+        new.extend(NewFinding(said) for said in bare)
     dispositions: Dict[str, Verdict] = {}
     for key, fid in wanted.items():
         read = lines.get(key, [])
@@ -253,6 +279,8 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
             dispositions[fid] = Verdict(INVALID, "no line judged it")
         elif len(read) > 1:
             dispositions[fid] = Verdict(INVALID, f"{len(read)} lines judged it; a duplicate settles nothing")
+        elif not read[0][0]:
+            dispositions[fid] = Verdict(INVALID, read[0][1])
         elif read[0][0] == "RESOLVED":
             dispositions[fid] = Verdict(RESOLVED, read[0][1])
         elif checkable_reference(read[0][1]):
@@ -270,8 +298,8 @@ def recheck_verdicts(text: str, expected: Sequence[str]) -> RecheckReading:
 
 
 def sufficiency_reading(text: str, expected: Sequence[str]) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, str]]:
-    """``O3: SUFFICIENT why`` / ``O3: INSUFFICIENT why`` lines for the
-    expected obligation ids. Returns ``(verdicts, conflicts)``: exactly one
+    """``O3: SUFFICIENT - why`` / ``O3: INSUFFICIENT why`` lines for the
+    expected obligation ids, each read by ``verdicts.row_line``. Returns ``(verdicts, conflicts)``: exactly one
     line per id is its verdict; two or more lines for an id (a duplicate or
     a contradiction) are a conflict, no verdict, and the id is named in
     ``conflicts`` with why, so a caller never falls back to a positive
@@ -279,14 +307,23 @@ def sufficiency_reading(text: str, expected: Sequence[str]) -> Tuple[Dict[str, T
     wanted = {oid.upper(): oid for oid in expected}
     seen: Dict[str, list] = {}
     for raw in (text or "").splitlines():
-        hit = _SUFFICIENCY_LINE.match(raw.replace("**", "").strip())
-        if hit and hit.group("oid").upper() in wanted:
-            seen.setdefault(hit.group("oid").upper(), []).append((hit.group("state").lower(),
-                                                                   hit.group("why").strip()))
-    verdicts = {wanted[key]: rows[0] for key, rows in seen.items() if len(rows) == 1}
-    conflicts = {wanted[key]: f"{len(rows)} sufficiency lines ({', '.join(r[0] for r in rows)}); no verdict"
-                 for key, rows in seen.items() if len(rows) > 1}
-    return verdicts, conflicts
+        row = verdicts.row_line(raw)
+        if row and row[0].upper() in wanted:
+            seen.setdefault(row[0].upper(), []).append((row[1], row[2]))
+            continue
+        named = None if row else verdicts.names_id(raw, wanted, "SUFFICIENT")
+        if named:
+            # The id with no verdict word the reader takes: an unread line.
+            seen.setdefault(named, []).append(("", "a line names it with no SUFFICIENT or INSUFFICIENT verdict: "
+                                                   + verdicts.unstyled(raw)[:120]))
+    # A SUFFICIENT that is not a plain acceptance ("SUFFICIENT? No",
+    # "SUFFICIENT only if ...") has an empty state: no verdict, named in
+    # conflicts with the reader's reason, like two lines for one id.
+    read = {wanted[key]: rows[0] for key, rows in seen.items() if len(rows) == 1 and rows[0][0]}
+    conflicts = {wanted[key]: (f"{len(rows)} sufficiency lines ({', '.join(r[0] or 'no verdict' for r in rows)}); "
+                               "no verdict" if len(rows) > 1 else rows[0][1])
+                 for key, rows in seen.items() if len(rows) > 1 or not rows[0][0]}
+    return read, conflicts
 
 
 def sufficiency_verdicts(text: str, expected: Sequence[str]) -> Dict[str, Tuple[str, str]]:

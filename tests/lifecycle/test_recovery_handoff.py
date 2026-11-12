@@ -96,7 +96,7 @@ def _script(second_revision, *, orchestrator, writes_partial=True):
     def recheck(call, replay):
         source = Path(call.cwd, "app.py")
         if source.exists() and "TypeError" in source.read_text():
-            return replies.recheck_reply(call.prompt, default="RESOLVED app.py now rejects a non-number")
+            return replies.recheck_reply(call.prompt, default="RESOLVED - app.py now rejects a non-number")
         return replies.recheck_reply(call.prompt, default="UNRESOLVED add still accepts a non-number")
 
     script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
@@ -279,7 +279,7 @@ def _batch_script(second_revision):
     def recheck(call, replay):
         readme = Path(call.cwd, "README.md")
         if readme.exists() and "returns the sum" in readme.read_text():
-            return replies.recheck_reply(call.prompt, default="RESOLVED the README states what add returns")
+            return replies.recheck_reply(call.prompt, default="RESOLVED - the README states what add returns")
         return replies.recheck_reply(call.prompt, default="UNRESOLVED the README still does not state the result")
 
     script = Script(orchestrator=_plan(BATCH, CONTINUE_README), lead=lead, collaborator=collaborator,

@@ -345,3 +345,63 @@ def test_the_contest_judge_is_told_the_rule_its_reply_is_read_by():
     assert contest.decide_tied(real, nothing, None) == ("routed", "default")
     source = inspect.getsource(S.Session._ask_judge)
     assert "rules.judge_prompt(" in source and "rules.read_winner(reply)" in source
+
+
+# -- one line per id: the accepting word (conformance audit, 2026-11-12) ---------------
+
+def test_the_plain_acceptance_rule_states_what_the_line_readers_refuse():
+    """quadratus.verdicts.plain_acceptance reads RESOLVED, INVALIDATED,
+    SUFFICIENT, MET and READ; each example the rule gives is one it refuses,
+    and the form it gives is one it accepts."""
+    from quadratus import judgment, verdicts
+    rule = S._PLAIN_VERDICT_RULE
+    for word in ("RESOLVED", "INVALIDATED", "SUFFICIENT", "MET", "READ"):
+        assert word in rule
+    assert "followed at once by ' - ' and the reason" in rule and "no verdict for that id" in rule
+    assert "'RESOLVED once ...'" in rule and "'SUFFICIENT - only if ...'" in rule and "'MET, but ...'" in rule
+    assert verdicts.recheck_line("F1: RESOLVED once the check is added")[1] == ""
+    assert verdicts.row_line("O1: SUFFICIENT - only if the float case runs")[1] == ""
+    assert verdicts.requirement_line("R1: MET, but only partly")[1] is None
+    assert verdicts.recheck_line("F1: RESOLVED - the check is added")[1] == "RESOLVED"
+    assert judgment.recheck_verdicts("F1: RESOLVED - fine, UNRESOLVED for floats", ["F1"]).dispositions[
+        "F1"].state == judgment.INVALID, "the rejecting word in capitals inside the reason"
+
+
+def test_every_prompt_that_asks_for_an_accepting_line_states_the_separator_form_and_the_rule(tmp_path):
+    import inspect
+    import re
+    from pathlib import Path
+    session = _session(tmp_path)
+    recheck = session._recheck_instructions(["F1", "F2"])
+    assert "'<id>: RESOLVED - <how the revision addresses it>'" in recheck
+    assert "'<id>: INVALIDATED - <the test, file, receipt or command" in recheck
+    assert S._PLAIN_VERDICT_RULE in recheck and "A line that opens 'UNRESOLVED:' with no id" in recheck
+    # No prompt offers the old form, where a reason and a condition look alike.
+    root = Path(S.__file__).parent
+    for path in sorted(root.glob("session*.py")):
+        old = re.findall(r"(?<![A-Z])(?:SUFFICIENT|RESOLVED|INVALIDATED) (?:\"\n\s*f?\")?<", path.read_text(encoding="utf-8"))
+        assert not old, f"{path.name} offers an accepting word with no separator: {old}"
+    for builder in (Session._audit_requirements, Session._final_design_review, Session._restated_review_block,
+                    Session._restatement_judgment_prompt, Session._reassess, Session._recheck_instructions,
+                    Session._not_run_block):
+        assert "_PLAIN_VERDICT_RULE" in inspect.getsource(builder), builder.__name__
+
+
+def test_the_reviewer_is_told_the_rule_its_requirement_lines_are_read_by():
+    import inspect
+    source = inspect.getsource(Session._goal_authority)
+    assert "'R<n>: MET - <file>:<line>'" in source and "_AUDIT_LINE_RULE" in source
+    assert "'MET, but only partly'" in S._AUDIT_LINE_RULE
+    assert S._requirement_verdicts("R1: MET, but only partly") == {}
+    assert S._requirement_verdicts("R1: MET by the tests") == {}
+
+
+def test_the_comparison_and_inspection_prompts_state_what_voids_an_acceptance():
+    import inspect
+    compare = inspect.getsource(Session._judge_test_repairs)
+    assert "voids every" in compare and "TEST INTACT line in it" in compare and "_has_prefixed_finding(reply)" in compare
+    note = inspect.getsource(Session._inspection_note)
+    assert "'READ <id> - <what the files show for this" in note and "read only some of them" in note
+    assert "records nothing" in note
+    from quadratus import verdicts
+    assert verdicts.inspection_lines("READ IG-0123456789 not yet")[0][0] == ""

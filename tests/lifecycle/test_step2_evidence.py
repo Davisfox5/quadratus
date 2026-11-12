@@ -79,7 +79,7 @@ def _add_reassessment(prompt: str) -> str:
     own basis (the project check ran add(1, 2) == 3 on this source and the
     proof adds the negative case). Authored for that obligation alone; any
     other obligation in the prompt is left unjudged."""
-    judged = {o["oid"]: "SUFFICIENT the project check ran add(1, 2) == 3 on this source and the shown proof "
+    judged = {o["oid"]: "SUFFICIENT - the project check ran add(1, 2) == 3 on this source and the shown proof "
                         "executed the negative case; together they show the sum"
               for o in requested_obligations(prompt)
               if o["behavior"] == _ADD_OBLIGATION and o["execution"] == "ran"}
@@ -145,7 +145,7 @@ def _run(tmp_path, monkeypatch, *, source=FIXED, body="asserts", wrong=True, lim
 
     return H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead, collaborator=collaborator,
-        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision shows negative sums"),
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED - the revision shows negative sums"),
         auditor=_auditor(wrong, reassessment=reassessment), **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=3, record_complete=False, limits=limits)
 
@@ -445,7 +445,7 @@ def _ratio_reassessment(prompt: str) -> str:
     sufficient on that basis alone (the proof executed exactly its
     behavior on this source). Only that obligation; the irrelevant proof
     never reaches here (the auditor keeps its finding)."""
-    judged = {o["oid"]: (f"SUFFICIENT {o['oid']} (P1) is shown executed: the evidence file "
+    judged = {o["oid"]: (f"SUFFICIENT - {o['oid']} (P1) is shown executed: the evidence file "
                          "tests/test_ratio_evidence.py::test_zero_divisor divided by zero on this source and passed, "
                          "which is exactly the scenario's zero-divisor expectation")
               for o in requested_obligations(prompt)
@@ -497,7 +497,7 @@ def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False,
 
     return H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead, collaborator=collaborator,
-        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision returns None for zero"),
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED - the revision returns None for zero"),
         auditor=auditor, **{"requirements-review": lambda c, r: "COMPLETE"}),
         files={**FILES, "app.py": FIXED, "ratio.py": "def safe_ratio(a, b):\n    return a / b\n"},
         max_tasks=1, record_complete=False, limits=limits)
@@ -833,7 +833,7 @@ def test_every_judge_and_writer_after_the_draft_is_given_the_order_of_authority(
     (tmp_path / "revision").mkdir()
     revised = H.run(tmp_path / "revision", monkeypatch, Script(
         orchestrator=_plan_once(DECLARED), lead=lead, collaborator=collaborator,
-        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision shows negative sums"),
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED - the revision shows negative sums"),
         auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
         files=FILES, max_tasks=2, record_complete=False)
     revisions = revised.of("revision")
@@ -893,7 +893,7 @@ def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as
     tmp_path.mkdir(parents=True, exist_ok=True)
     replay = H.run(tmp_path, monkeypatch, Script(
         orchestrator=orchestrator, lead=lead, collaborator=collaborator,
-        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision returns None for zero"),
+        recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED - the revision returns None for zero"),
         auditor=lambda c, r: "R1: MET - ratio.py:4", **{"requirements-review": lambda c, r: "COMPLETE"}),
         files={**FILES, "app.py": FIXED, "ratio.py": "def safe_ratio(a, b):\n    return a / b\n"},
         max_tasks=3 if two else 2, record_complete=False, limits=_ROOT_LIMITS)
@@ -1054,7 +1054,7 @@ def test_a_positive_reassessment_without_a_sufficiency_judgment_keeps_the_requir
     reads honestly as unjudged, an explicit INSUFFICIENT as insufficient."""
     def reply(prompt):
         judged = {o["oid"]: {"insufficient": "INSUFFICIENT the proof shows one case only",
-                             "conflicting": "SUFFICIENT shown\n{oid}: INSUFFICIENT not shown"}.get(shape, "")
+                             "conflicting": "SUFFICIENT - shown\n{oid}: INSUFFICIENT not shown"}.get(shape, "")
                   for o in requested_obligations(prompt) if o["behavior"] == _ADD_OBLIGATION}
         judged = {oid: text.replace("{oid}", oid) for oid, text in judged.items() if text}
         return audit_reply(prompt, {"R1": "MET - app.py:2"}, judged)

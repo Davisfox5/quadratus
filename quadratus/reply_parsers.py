@@ -22,6 +22,7 @@ from pathlib import PurePosixPath
 from typing import Dict, List, Optional, Tuple
 
 from . import judgment
+from . import verdicts as _verdicts
 from .session_types import Complexity, _needs_lines, _scope_path
 from .task_kinds import ROUTING, TaskKind
 from .taskmeta import AmbiguousMetadata, TaskMetadata, lead_request, parse_metadata
@@ -161,12 +162,19 @@ _MAX_ORIENT_NOTE_CHARS = 180
 _ROW_LINE = re.compile(r"^\s*O\d+\s*:\s*(?:SUFFICIENT|INSUFFICIENT)\b", re.IGNORECASE)
 
 
+def _row_verdict(line: str) -> bool:
+    """A row line with a verdict on it, as verdicts.row_line reads it."""
+    return bool((_verdicts.row_line(line) or ("", ""))[1])
+
+
 def _design_approved(verdict: str) -> bool:
     """APPROVED as the only verdict line: alone, or followed by nothing but
     per-obligation sufficiency lines (a design review judging the capture
     rows it was shown). Any other text is no approval."""
     lines = [line.strip() for line in (verdict or "").splitlines() if line.strip()]
-    return bool(lines) and lines[0] == "APPROVED" and all(_ROW_LINE.match(line) for line in lines[1:])
+    # A row line counts only as verdicts.py reads it: "O1: SUFFICIENT? No"
+    # is other text, so the reply is no approval.
+    return bool(lines) and lines[0] == "APPROVED" and all(_row_verdict(line) for line in lines[1:])
 
 
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
@@ -480,8 +488,9 @@ def _split_item_reason(text: str) -> Tuple[str, str]:
     return text, ""
 
 
-#: Kept because the development line's readers and one of its tests still
-#: name it. New code reads audit lines through quadratus.verdicts.audit_lines.
+#: Kept because one of the development line's tests still names it. Nothing
+#: in the engine reads it: audit lines go through quadratus.verdicts.audit_lines
+#: and a reviewer's requirement lines through verdicts.requirement_line.
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 #: The id a reply line answers: its leading '<id>:' (a bullet, a number and
 #: backticks allowed), for the audit's required-line list (cycle05).
@@ -1150,20 +1159,30 @@ def _proof_cases(proof: dict) -> set:
 
 
 def _met_lines(text: str) -> Dict[str, str]:
-    """rid -> the rest of its MET line, for lines that say MET (not NOT MET)."""
+    """rid -> the rest of its MET line, for lines that say MET (not NOT MET).
+    Read by the reader that reads the verdict (verdicts.requirement_line),
+    so a bulleted or bold MET line is seen here too."""
     out: Dict[str, str] = {}
-    for m in _AUDIT_LINE.finditer(text or ""):
-        if m.group(2).upper() == "MET":
-            out.setdefault(m.group(1).upper(), m.group(3).strip())
+    for raw in (text or "").splitlines():
+        read = _verdicts.requirement_line(raw)
+        if read and read[1] is True:
+            out.setdefault(read[0], read[2])
     return out
 
 
 def _review_judgments(text: str) -> Dict[str, "judgment.Judgment"]:
     """A reviewer's per-requirement lines, combined by the shared strict rule
     (quadratus.judgment): NOT MET wins in either order (root review of
-    5cfc841), and duplicate MET lines approve nothing."""
-    return judgment.combine((rid, not verdict.upper().startswith("NOT"), "")
-                            for rid, verdict in _REQUIREMENT_VERDICT.findall(text or ""))
+    5cfc841), and duplicate MET lines approve nothing. Each line is read by
+    verdicts.requirement_line: a MET with a condition or other text after it
+    ("R1: MET, but only partly") is no verdict for that requirement, held
+    here like a duplicate so it is missing wherever a verdict is required."""
+    read = [r for r in map(_verdicts.requirement_line, (text or "").splitlines()) if r]
+    out = judgment.combine((rid, met, "") for rid, met, _ in read if met is not None)
+    for rid, met, why in read:
+        if met is None and (rid not in out or out[rid].state != judgment.NOT_MET):
+            out[rid] = judgment.Judgment(judgment.DUPLICATE, why, out[rid].lines + 1 if rid in out else 1)
+    return out
 
 
 def _requirement_verdicts(text: str) -> Dict[str, bool]:
@@ -1186,7 +1205,10 @@ def _clean_goal_review(text: str, rids) -> bool:
         return False
     # An optional 'BOUNDARY R<n>:' note is an observation the prompt offers,
     # never text that makes a clean review unfinished (cycle12).
-    return all(_REQUIREMENT_VERDICT.match(line) or _INSPECTION_VERDICT.match(line) or _ROW_LINE.match(line)
+    # A requirement or row line passes only as the strict reader read it,
+    # never by its prefix: "R9: MET, but only partly" is other text.
+    return all((_verdicts.requirement_line(line) or (None, None))[1] is not None
+               or _INSPECTION_VERDICT.match(line) or _row_verdict(line)
                or _BOUNDARY_NOTE.match(line)
                or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE for line in lines[1:])
 

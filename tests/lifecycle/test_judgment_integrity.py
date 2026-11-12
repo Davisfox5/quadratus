@@ -93,7 +93,7 @@ def test_a_contradictory_or_duplicate_audit_reply_never_approves(tmp_path, monke
     no verdict: the run is not complete."""
     script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
     script.overrides["auditor"] = judging(lambda call, replay: reply + "\nR2: MET - README.md",
-                                          reading="SUFFICIENT README.md names add(a, b) and its result, which is all R2 asks")
+                                          reading="SUFFICIENT - README.md names add(a, b) and its result, which is all R2 asks")
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False,
                    limits=_limits())
     audit = H.result_json(replay)["requirements"]["audits"][-1]

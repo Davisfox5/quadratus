@@ -18,6 +18,7 @@ from typing import List, Optional
 from .registry import resolve
 from .reply_parsers import _behavioural_error, _finding_id, boundary_note
 from .session_prompts import (
+    _AUDIT_LINE_RULE,
     _AUTHORITY_ORDER,
     _BOUNDARY_NOTE_RULE,
     _CONTRACT_BOUNDARY_RULE,
@@ -31,6 +32,7 @@ from .session_prompts import (
     _EXECUTED_ERROR_RULE,
     _FINDING_SHAPE,
     _NO_REQUESTS_IN_FIX,
+    _PLAIN_VERDICT_RULE,
     _PROBE_RULE,
     _PROTOCOL_RULE,
     _TEST_COMMAND_RULE,
@@ -311,7 +313,7 @@ class SeatPromptsMixin:
                    "where the source meets every condition of it, including what it says must happen "
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
                    "finding. A review that leaves a covered requirement without such a line is recorded "
-                   "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
+                   "as unfinished. " + _AUDIT_LINE_RULE + " With nothing to change, reply NO FINDINGS on the first line followed "
                    "only by those lines. " + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE if covered else "")
                 + (" " + _BOUNDARY_NOTE_RULE if any(_behavioural_error(t) for _, t in covered) else "")
                 + (" " + _TEST_COMMAND_RULE if any(self._test_command_requirement(r) for r, _ in covered) else "")
@@ -409,10 +411,11 @@ class SeatPromptsMixin:
         spec = spec if spec is not None else getattr(self, "_active_spec", None)
         return (self._proof_rows(spec) + self._restated_review_block(spec) + "\n\n" if spec is not None else "") + (
                 "Check only your BLOCKING findings against the revision, one line per finding and nothing "
-                "else about them: '<id>: RESOLVED <how the revision addresses it>', '<id>: UNRESOLVED "
-                "<what specifically remains>', or '<id>: INVALIDATED <the test, file, receipt or "
+                "else about them: '<id>: RESOLVED - <how the revision addresses it>', '<id>: UNRESOLVED "
+                "<what specifically remains>', or '<id>: INVALIDATED - <the test, file, receipt or "
                 "command showing the finding never held>'. A missing, duplicated or contradictory "
-                "line settles nothing. A finding that is a defect of a declared proof scenario's own text, "
+                "line settles nothing. " + _PLAIN_VERDICT_RULE + " A line that opens 'UNRESOLVED:' with no id "
+                "is read as a finding that stands. A finding that is a defect of a declared proof scenario's own text, "
                 "or a bound case the harness has not shown executed, is restated in full on its line: "
                 "'<id>: UNRESOLVED SCENARIO P<n> - <the contradiction> | proposal: <operation|state|expect>: "
                 "<the corrected text>' or '<id>: UNRESOLVED EVIDENCE P<n> - <what is not shown>'; the harness "

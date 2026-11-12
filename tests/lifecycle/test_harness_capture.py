@@ -70,8 +70,8 @@ FIT_SCOPE = dict(REPAIR_SCOPE, proofs=FIT_PROOFS)
 #: reviewer that was shown the renders: one concrete observation per covered
 #: requirement, addressed to the capture rows the prompt lists and no other.
 FIT_OBSERVED = {
-    "R1": "SUFFICIENT the 390 px and desktop renders show the toolbar inside the viewport with no horizontal overflow",
-    "R2": "SUFFICIENT both renders show the toolbar's Import button labelled 'Import' beside the tools text",
+    "R1": "SUFFICIENT - the 390 px and desktop renders show the toolbar inside the viewport with no horizontal overflow",
+    "R2": "SUFFICIENT - both renders show the toolbar's Import button labelled 'Import' beside the tools text",
 }
 AUDIT = _decl("KIND: frontend standard", dict(AUDIT_SCOPE, capture=CAPTURE), "Audit the import page.")
 REPAIR = _decl("KIND: frontend standard", dict(FIT_SCOPE, capture=CAPTURE), "Fix the mobile overflow.")
@@ -107,7 +107,7 @@ def _profile(tmp_path, preview=None):
 
 #: This file's own explicit judgment of a review-only task's legacy acceptance row:
 #: what the capture shows, said per obligation id.
-LEGACY_JUDGED = "SUFFICIENT the capture of templates/index.html shows the page at the measured width"
+LEGACY_JUDGED = "SUFFICIENT - the capture of templates/index.html shows the page at the measured width"
 
 
 def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True, max_tasks=6,
@@ -374,8 +374,8 @@ TABLE_PROOFS = [
          location="templates/index.html", evidence="capture"),
 ]
 TABLE_OBSERVED = {
-    "R1": "SUFFICIENT after the upload both renders show the preview table inside the viewport with no overflow",
-    "R2": "SUFFICIENT both renders show the Import button labelled 'Import' and the uploaded row 'a,b 1,2' in the table",
+    "R1": "SUFFICIENT - after the upload both renders show the preview table inside the viewport with no overflow",
+    "R2": "SUFFICIENT - both renders show the Import button labelled 'Import' and the uploaded row 'a,b 1,2' in the table",
 }
 
 

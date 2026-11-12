@@ -106,7 +106,7 @@ def test_an_explicit_resolves_the_reviewer_keeps_open_is_the_findings_unresolved
     H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     script = _script(GROK_CAP, orchestrator=_plan(REQS + TASK, RESOLVE))
     review, recheck = script.overrides["collaborator"], script.overrides["recheck"]
-    script.overrides["collaborator"] = lambda c, r: ("RFT1-1: RESOLVED fixed by this task\n" + review(c, r)
+    script.overrides["collaborator"] = lambda c, r: ("RFT1-1: RESOLVED - fixed by this task\n" + review(c, r)
                                                      if c.task == "t2" else review(c, r))
     script.overrides["recheck"] = lambda c, r: (replies.recheck_reply(c.prompt, default="UNRESOLVED still wrong")
                                                 if "named it in RESOLVES" in c.prompt else recheck(c, r))
@@ -256,7 +256,7 @@ def test_a_long_corrected_field_the_declaration_accepts_is_applied(tmp_path, mon
         return _proof_plan(_scope(proofs=_proofs("R1"))) if len(replay.of("orchestrator")) == 1 else "DONE"
     replay = H.run(_at(tmp_path, "long"), monkeypatch,
                    _repair_script(seen, orchestrator=orchestrator, collaborator=lambda c, r: finding + MET,
-                                  recheck=lambda c, r: "RFT1-1: RESOLVED the corrected scenario holds"),
+                                  recheck=lambda c, r: "RFT1-1: RESOLVED - the corrected scenario holds"),
                    files=FILES, max_tasks=1, record_complete=False)
     record = H.result_json(replay)
     corrections = record["scenario_corrections"]

@@ -73,7 +73,7 @@ def test_finding_basis_needs_a_reference_unless_none():
 
 def test_fixed_findings_close_while_the_new_one_opens_with_its_basis_and_impact():
     findings = (_finding("RF1"), _finding("RF2"), _finding("RF3"))
-    after = _apply(findings, "RF1: RESOLVED fixed in store.py\nRF2: RESOLVED\nRF3: RESOLVED\n"
+    after = _apply(findings, "RF1: RESOLVED - fixed in store.py\nRF2: RESOLVED\nRF3: RESOLVED\n"
                              "NEW: dispatch parses 1_0 as 10 | basis: R10 | impact: correctness\n"
                              "NEW: lock held across the CLI call | impact: data-loss\nNOTE: rename helper")
     assert [f.state for f in after[:3]] == [RESOLVED, RESOLVED, RESOLVED]
@@ -87,7 +87,7 @@ def test_fixed_findings_close_while_the_new_one_opens_with_its_basis_and_impact(
 def test_unresolved_wins_duplicates_and_missing_settle_nothing_foreign_ignored():
     findings = (_finding("RF1"), _finding("RF2"), _finding("RF3"), _finding("RF4"))
     reading = recheck_verdicts(
-        "RF1: RESOLVED\nRF1: UNRESOLVED still fails on bool\nRF2: RESOLVED\nRF2: RESOLVED again\n"
+        "RF1: RESOLVED\nRF1: UNRESOLVED still fails on bool\nRF2: RESOLVED\nRF2: RESOLVED - again\n"
         "RF9: RESOLVED\nI think RF4 is RESOLVED now.", ["RF1", "RF2", "RF3", "RF4"])
     assert reading.foreign == ("RF9",)
     after = D.apply_reading(findings, reading, author="claude:opus", role="recheck", binding=B1, judged_binding=B1)
@@ -99,7 +99,7 @@ def test_unresolved_wins_duplicates_and_missing_settle_nothing_foreign_ignored()
 
 
 def test_resolved_needs_no_source_change_but_is_bound_to_what_the_judge_saw():
-    after = _apply((_finding("RF1"),), "RF1: RESOLVED the setup was wrong, the test passes unchanged", source=SRC_A)
+    after = _apply((_finding("RF1"),), "RF1: RESOLVED - the setup was wrong, the test passes unchanged", source=SRC_A)
     assert after[0].state == RESOLVED and after[0].history[-1].binding == B1
     drifted = _apply((_finding("RF1"),), "RF1: RESOLVED", binding=B2, judged=B1)
     assert drifted[0].state == "open" and "bound identity changed" in drifted[0].history[-1].why
@@ -112,17 +112,17 @@ def test_only_the_designated_judge_settles_a_finding():
     as_lead_role = _apply((independent,), "RF1: RESOLVED", author="claude:opus", role="lead")
     assert as_lead_role[0].state == "open" and "not a judging role" in as_lead_role[0].history[-1].why
     carried = _finding("RF2", basis=("none", ""), impact="other")
-    by_audit = _apply((carried,), "RF2: INVALIDATED tests/test_app.py covers the path", author="openai:sol",
+    by_audit = _apply((carried,), "RF2: INVALIDATED - tests/test_app.py covers the path", author="openai:sol",
                       role="audit")
     assert by_audit[0].state == "invalidated"
-    not_carried = _apply((independent,), "RF1: INVALIDATED tests/test_app.py", author="openai:sol",
+    not_carried = _apply((independent,), "RF1: INVALIDATED - tests/test_app.py", author="openai:sol",
                          role="audit")
     assert not_carried[0].state == "open" and "not carried to the audit" in not_carried[0].history[-1].why
 
 
 def test_invalidated_needs_checkable_evidence_and_then_closes():
     findings = (_finding("RF1"), _finding("RF2"))
-    reading = recheck_verdicts("RF1: INVALIDATED it is fine really\nRF2: INVALIDATED test_cycle covers it, run 3 passed",
+    reading = recheck_verdicts("RF1: INVALIDATED - it is fine really\nRF2: INVALIDATED - test_cycle covers it, run 3 passed",
                                ["RF1", "RF2"])
     assert reading.dispositions["RF1"].state == INVALID
     after = D.apply_reading(findings, reading, author="claude:opus", role="recheck", binding=B1, judged_binding=B1,
@@ -131,7 +131,7 @@ def test_invalidated_needs_checkable_evidence_and_then_closes():
     # The reference must be on the record: a token that merely looks like one
     # (root's finding on f4fe5b7: ``UTF8``, a backticked word) closes nothing,
     # and with no resolver at all nothing is invalidated.
-    looks = recheck_verdicts("RF1: INVALIDATED `UTF8` handling covers it", ["RF1"])
+    looks = recheck_verdicts("RF1: INVALIDATED - `UTF8` handling covers it", ["RF1"])
     assert looks.dispositions["RF1"].state == INVALIDATED
     unresolved = D.apply_reading(findings[:1], looks, author="claude:opus", role="recheck", binding=B1,
                                  judged_binding=B1, resolve=_resolves)

@@ -113,16 +113,16 @@ def test_refresh_stales_an_execution_on_gate_or_environment_drift():
 
 
 def test_a_conflicting_sufficiency_reading_is_no_verdict_and_names_the_conflict():
-    verdicts, conflicts = judgment.sufficiency_reading("O1: SUFFICIENT covers it\nO1: INSUFFICIENT misses the error "
+    verdicts, conflicts = judgment.sufficiency_reading("O1: SUFFICIENT - covers it\nO1: INSUFFICIENT misses the error "
                                                        "path\nO2: INSUFFICIENT no run", ["O1", "O2"])
     assert verdicts == {"O2": ("insufficient", "no run")}
     assert set(conflicts) == {"O1"} and "2 sufficiency lines" in conflicts["O1"]
-    assert judgment.sufficiency_verdicts("O1: SUFFICIENT ok", ["O1"]) == {"O1": ("sufficient", "ok")}
+    assert judgment.sufficiency_verdicts("O1: SUFFICIENT - ok", ["O1"]) == {"O1": ("sufficient", "ok")}
 
 
 def test_the_audit_invalidates_or_keeps_a_carried_finding_and_never_resolves_it():
     carried = _finding("RF2", basis=("none", ""), impact="other")
-    reading = judgment.recheck_verdicts("RF2: RESOLVED the revision fixed it", ["RF2"])
+    reading = judgment.recheck_verdicts("RF2: RESOLVED - the revision fixed it", ["RF2"])
     after = D.apply_reading((carried,), reading, author="openai:sol", role="audit", binding=B, judged_binding=B,
                             resolve=lambda why: True)
     assert after[0].state == "open" and "does not resolve" in after[0].history[-1].why
@@ -221,7 +221,7 @@ def test_a_conflicting_sufficiency_line_leaves_the_obligation_unjudged_in_the_se
                                                                     output="# pass 3\n# fail 0\n# skipped 0\n",
                                                                     command=f"node {SCENARIO}")]))
     session._refresh_obligations()
-    session._judge_obligations("openai:sol", "O1: SUFFICIENT fine\nO1: INSUFFICIENT not fine",
+    session._judge_obligations("openai:sol", "O1: SUFFICIENT - fine\nO1: INSUFFICIENT not fine",
                                {"R5": (True, UNIT)})
     typed = session.evidence_obligations[0]
     assert typed["sufficiency"] == "unjudged" and "2 sufficiency lines" in typed["sufficiency_note"]

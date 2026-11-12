@@ -34,7 +34,7 @@ pytestmark = pytest.mark.requirements_ledger
 
 def test_the_recheck_is_shown_the_leads_declaration_its_provenance_and_the_harness_run(tmp_path, monkeypatch):
     seen, calls, replay = _binding_run(tmp_path, monkeypatch, "declared", binding_reply=f"PROVES: P1 - {CASE}",
-                                       recheck=lambda c, r: "RFT1-1: RESOLVED observed-1 shows test_add ran")
+                                       recheck=lambda c, r: "RFT1-1: RESOLVED - observed-1 shows test_add ran")
     (prompt,) = seen.prompts["recheck"]
     facts = prompt.split("Harness routing facts for your findings:", 1)[1].split("The revised work:", 1)[0]
     assert f"'PROVES: P1 - {CASE}'" in facts and "read-only declaration call on this exact source" in facts

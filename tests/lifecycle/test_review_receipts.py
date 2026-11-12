@@ -219,8 +219,8 @@ def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp
         return (proven if call.task == "t1" and gate_changes != "unbound" else plain)(call, replay)
     script = Script(lead=lead, orchestrator=lambda c, r: plan.pop(0) if plan else "DONE",
                     auditor=judging(lambda c, r: "R1: MET - app.py\nR2: MET - README.md",
-                                    reading="SUFFICIENT README.md names add(a, b) and its result, which is all R2 asks",
-                                    legacy="SUFFICIENT README.md names add(a, b), checked against app.py"))
+                                    reading="SUFFICIENT - README.md names add(a, b) and its result, which is all R2 asks",
+                                    legacy="SUFFICIENT - README.md names add(a, b), checked against app.py"))
     replay = _run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4, forbid=forbid)
     requirements = H.result_json(replay)["requirements"]
     if gate_changes == "forbidden":

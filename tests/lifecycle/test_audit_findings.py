@@ -29,7 +29,7 @@ REPAIR_SCOPE = dict(DESIGN, max_lines=40, proofs=H.proofs_for("R1, R2", "templat
                                                                  state="the toolbar wraps", expect="the page fits and the Import button is labelled"))
 #: This file's own explicit judgment of a capture scenario, written per
 #: obligation id by the scripted design reviewer that was shown the renders.
-CAPTURE_JUDGED = "SUFFICIENT the mobile and desktop renders show the import toolbar inside the viewport with the Import button labelled"
+CAPTURE_JUDGED = "SUFFICIENT - the mobile and desktop renders show the import toolbar inside the viewport with the Import button labelled"
 REQS = "REQUIREMENTS:\nR1: the import page works on a phone\nR2: the import button is labelled\n"
 AUDIT = "KIND: frontend standard\nSCOPE: " + json.dumps(AUDIT_SCOPE) + "\nAudit the import page.\nCOVERS: R1, R2"
 REPAIR = "KIND: frontend standard\nSCOPE: " + json.dumps(REPAIR_SCOPE) + "\nFix the mobile overflow.\nCOVERS: R1, R2"
@@ -39,7 +39,7 @@ DOCS = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, proofs=H.proofs_for("
 MET = "R1: MET - templates/index.html\nR2: MET - templates/index.html"
 #: This file's own explicit judgment of a review-only task's legacy acceptance
 #: row (mapping unknown): what the capture shows, said per obligation id.
-LEGACY_JUDGED = "SUFFICIENT the capture of templates/index.html shows the Import button at the measured width"
+LEGACY_JUDGED = "SUFFICIENT - the capture of templates/index.html shows the Import button at the measured width"
 WIDE = {"mobile": 450}
 NO_EDIT = "Nothing to change after review.\nCHANGED: []"
 

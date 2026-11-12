@@ -564,7 +564,7 @@ def test_inherited_defect_and_owed_review_each_settle_by_their_own_judge(tmp_pat
 
     def recheck(call, replay):
         fid = "RFT2-1"
-        return f"{fid}: RESOLVED the README now shows add(1, 2)" if call.task == "t3" else f"{fid}: UNRESOLVED"
+        return f"{fid}: RESOLVED - the README now shows add(1, 2)" if call.task == "t3" else f"{fid}: UNRESOLVED"
 
     def auditor(call, replay):
         return _auditor({"R1": "MET - app.py", "R2": "MET - README.md"})(call, replay)
@@ -701,7 +701,7 @@ def test_a_recheck_with_no_verdict_is_not_handed_to_the_audit_and_its_author_is_
         return "I believe it is fine now."
 
     def auditor(call, replay):
-        return _auditor({"R1": "MET - app.py"})(call, replay) + "\nRFT1-1: INVALIDATED tests/test_app.py::test_add passes"
+        return _auditor({"R1": "MET - app.py"})(call, replay) + "\nRFT1-1: INVALIDATED - tests/test_app.py::test_add passes"
 
     script = Script(orchestrator=_plan(R1 + T1), lead=lead, collaborator=collab, recheck=recheck, auditor=auditor,
                     **{"requirements-review": lambda c, r: "COMPLETE"})
@@ -819,7 +819,7 @@ def test_a_post_merge_recheck_without_a_verdict_stays_its_authors_and_no_auditor
 
     def auditor(call, replay):
         return (_auditor({"R1": "MET - app.py", "R2": "MET - README.md"})(call, replay)
-                + "\nRFT1-1: INVALIDATED tests/test_app.py::test_add passes")
+                + "\nRFT1-1: INVALIDATED - tests/test_app.py::test_add passes")
 
     script = Script(orchestrator=_plan(BATCH), lead=lead2, collaborator=collab, recheck=recheck, auditor=auditor,
                     **{"requirements-review": lambda c, r: "COMPLETE"})

@@ -95,7 +95,7 @@ def audit_reply(prompt: str, requirements: Dict[str, str], obligations: Optional
     """An auditor's reply: ``requirements`` maps each requirement id to its
     verdict text ('MET - <citation>' or 'NOT MET - <what is missing>');
     ``obligations`` maps an obligation id the prompt listed to the case's
-    own sufficiency judgment ('SUFFICIENT <why>' or 'INSUFFICIENT <what it
+    own sufficiency judgment ('SUFFICIENT - <why>' or 'INSUFFICIENT <what it
     does not establish>'). An obligation the prompt did not list cannot be
     judged here (AssertionError): the case authored a judgment about
     nothing."""
@@ -110,8 +110,8 @@ def audit_reply(prompt: str, requirements: Dict[str, str], obligations: Optional
 def recheck_reply(prompt: str, dispositions: Optional[Dict[str, str]] = None, *,
                   default: Optional[str] = None) -> str:
     """A reviewer's recheck or reassessment reply: one line per expected
-    finding id, '<id>: RESOLVED <how>', '<id>: UNRESOLVED <what remains>'
-    or '<id>: INVALIDATED <reference>'. ``dispositions`` names ids the case
+    finding id, '<id>: RESOLVED - <how>', '<id>: UNRESOLVED <what remains>'
+    or '<id>: INVALIDATED - <reference>'. ``dispositions`` names ids the case
     judges itself; ``default`` is the disposition for every other expected
     id. A named id the prompt did not expect is an error; a prompt that
     expects no typed id (the legacy single-finding form) gets the default
@@ -158,7 +158,7 @@ def judged(prompt: str, requirements: Dict[str, str], *, approve: Optional[Dict[
                     # Nothing executed, nothing the case can call shown: the
                     # row is left as it is (the engine would refuse the line).
                     continue
-                obligations[row["oid"]] = f"{word} {text}"
+                obligations[row["oid"]] = f"{word} - {text}" if word == "SUFFICIENT" else f"{word} {text}"
     return audit_reply(prompt, requirements, obligations)
 
 
@@ -193,7 +193,7 @@ def judging_scenarios(base, *proofs, basis: str):
             if (row["behavior"] in texts and row["execution"] == "ran" and row["modality"] == "test"
                     and row["oid"] not in spoken and row["oid"] not in seen):
                 seen.add(row["oid"])
-                lines.append(f"{row['oid']}: SUFFICIENT {basis}")
+                lines.append(f"{row['oid']}: SUFFICIENT - {basis}")
         return reply + ("\n" + "\n".join(lines) if lines else "")
     return auditor
 

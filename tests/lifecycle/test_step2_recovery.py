@@ -493,7 +493,7 @@ _TYPED = ("def add(a, b):\n"
 
 
 #: This file's own explicit judgment of a README documentation scenario (a reading row).
-DOCS_JUDGED = "SUFFICIENT README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
+DOCS_JUDGED = "SUFFICIENT - README.md names add(a, b) and states that it returns the sum, which is all R2 asks"
 
 
 def _simple(path, text, covers):

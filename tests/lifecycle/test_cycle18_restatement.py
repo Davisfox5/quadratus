@@ -180,7 +180,7 @@ def test_a_line_about_an_item_that_was_not_asked_is_never_applied(tmp_path):
     other = dict(RESTATED, oid="O3", item="cli.py",
                  restatements=[dict(RESTATED["restatements"][0], author="openai:luna")])
     session, calls = _a2(tmp_path, entries=[RESTATED, other],
-                         reply=lambda p: "O2: SUFFICIENT drives it\nO3: INSUFFICIENT injected about an unasked item")
+                         reply=lambda p: "O2: SUFFICIENT - drives it\nO3: INSUFFICIENT injected about an unasked item")
     (record,) = session._judge_restatements("done")
     assert record["oids"] == ["O2"], "the auditor judges O3 itself; it was never asked here"
     assert "O3" not in calls[0][1]
@@ -190,7 +190,7 @@ def test_a_line_about_an_item_that_was_not_asked_is_never_applied(tmp_path):
 
 def test_a_completion_reads_only_the_ids_the_first_reply_lacked(tmp_path):
     second = dict(RESTATED, oid="O3", item="cli.py")
-    replies = iter(["O2: SUFFICIENT drives it", "O2: INSUFFICIENT second thoughts\nO3: SUFFICIENT drives the CLI"])
+    replies = iter(["O2: SUFFICIENT - drives it", "O2: INSUFFICIENT second thoughts\nO3: SUFFICIENT - drives the CLI"])
     session, calls = _a2(tmp_path, entries=[RESTATED, second], reply=lambda p: next(replies))
     (record,) = session._judge_restatements("done")
     assert len(calls) == 2 and record["completion"]["asked"] == ["O3"]
@@ -198,7 +198,7 @@ def test_a_completion_reads_only_the_ids_the_first_reply_lacked(tmp_path):
     assert session.unexecuted_acceptance[1]["restated_judgment"]["verdict"] == "sufficient"
     assert record["sufficient"] == ["O2", "O3"]
     (spent,) = session.judgment_completions
-    assert spent["claimed"] and session.store.get(spent["raw_artifact"]) == "O2: SUFFICIENT drives it"
+    assert spent["claimed"] and session.store.get(spent["raw_artifact"]) == "O2: SUFFICIENT - drives it"
 
 
 def test_the_decision_includes_author_gate_and_environment(tmp_path):
@@ -281,7 +281,7 @@ def test_a_mutation_check_restated_as_ordinary_cases_stays_held_unless_an_indepe
     assert record["insufficient"] == ["O66"] and not session._restated_judged(entry)
     assert session._discharging_check(entry) is None, "held: nothing credits ordinary passing cases by itself"
     session, _ = _a2(tmp_path / "injected", entries=[dict(MUTATION, cases=["tests/test_app.py::test_broken_add"])],
-                     reply=lambda p: "O66: SUFFICIENT the case patches add to a broken body and asserts failure")
+                     reply=lambda p: "O66: SUFFICIENT - the case patches add to a broken body and asserts failure")
     session._judge_restatements("done")
     assert session._restated_judged(session.unexecuted_acceptance[0])
 
@@ -363,7 +363,7 @@ def test_the_audit_is_shown_its_own_restatements_apart_and_its_line_on_them_is_n
         audits.append(call)
         oid = re.search(r"reported NOT RUN: app\.py.*?; restated by", call.prompt)
         assert oid
-        return _answering(call, replay) + "\nO2: SUFFICIENT the auditor would accept its own restatement"
+        return _answering(call, replay) + "\nO2: SUFFICIENT - the auditor would accept its own restatement"
     script = _script(Seen(), collaborator=lambda c, r: CLEAN, orchestrator=_then_done(), lead=_lead(),
                      recheck=_judge(GAP), auditor=auditor)
     script.overrides["proof-binding"] = _declaring()
@@ -389,7 +389,7 @@ def test_the_audit_reads_restatement_lines_for_its_required_ids_only(tmp_path):
     other = dict(RESTATED, oid="O3", item="cli.py")
     other["restatements"] = [dict(RESTATED["restatements"][0], author="claude:opus")]
     session.unexecuted_acceptance.append(other)
-    session._judge_restated("openai:sol", "O2: SUFFICIENT read\nO3: SUFFICIENT not asked", oids=["O2"])
+    session._judge_restated("openai:sol", "O2: SUFFICIENT - read\nO3: SUFFICIENT - not asked", oids=["O2"])
     assert session.unexecuted_acceptance[0]["restated_judgment"]["verdict"] == "sufficient"
     assert not session.unexecuted_acceptance[1].get("restated_judgment")
     import inspect

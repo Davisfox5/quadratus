@@ -310,6 +310,7 @@ from .reply_parsers import (  # noqa: F401
     _resolves_tokens,
     _review_disposition,
     _review_judgments,
+    _row_verdict,
     _scenario_text_problem,
     _settle_directives,
     _split_explanation,
@@ -429,6 +430,7 @@ from .session_prompts import (  # noqa: F401
     _OWED_SETTLEMENT_ATTEMPTS,
     _PACKET_NARROW_TEXT,
     _PARALLEL_REQUEST,
+    _PLAIN_VERDICT_RULE,
     _PLAN_NOTE_CHARS,
     _PROBE_RULE,
     _PROTOCOL_RULE,
@@ -3654,7 +3656,11 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                     self._note(f"task {spec.task_id}: review by {peer} gave no verdict; held as owned review debt")
                 elif rv is not None and rv.get("result") == "pending":
                     self._recovery_result(rv, "recovered: the same seat completed its review with a valid verdict")
-                if _review_complete(note) or _clean_goal_review(note, [r for r, _ in self._covered_texts()]):
+                # A review held as unfinished for a covered requirement it gave
+                # no verdict on is not a complete review, whatever line ends it.
+                if (not getattr(self, "_goal_review_owed", False)
+                        and (_review_complete(note)
+                             or _clean_goal_review(note, [r for r, _ in self._covered_texts()]))):
                     reviewed.add(peer)
                     self._attest_inspections(spec.task_id, peer, "review", note)
             task.record("assistant", f"[{labels[peer]}] {note}")
@@ -8096,7 +8102,9 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                          + (f" - {g['why'][:120]}" if g.get("why") else "") + ")" for g in gaps)
         return ("\n\nAn editing call reported it could not read these files. They are in your copy: read them and "
                 "judge the work with them. For each, write one line 'READ <id> - <what the files show for this "
-                "work>' once you have read every file it lists, or 'UNREAD <id> - <why>' if you could not. These "
+                "work>' once you have read every file it lists, or 'UNREAD <id> - <why>' if you could not, or "
+                "read only some of them. A READ line without the ' - ' and what the files show, or with a "
+                "condition after it, records nothing. These "
                 "lines do not change your verdict form. Only a READ line in a completed reply records the reading, "
                 "of exactly the files as they are in your copy; without it the reading stays open and holds the "
                 "requirements of the task that reported it.\n" + rows)
@@ -9748,14 +9756,20 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
             + (f"\n\n{len(waiting)} more changed file(s) are judged in a following call." if waiting else "")
             + "\n\nReply with exactly one line per file shown, naming the path exactly: 'TEST INTACT <path> - <why>' "
             "or 'TEST WEAKENED <path> - <what it no longer checks>'. A removed test is weakened unless another test "
-            "now checks the same thing; name it."
+            "now checks the same thing; name it. A BLOCKING: or UNRESOLVED: line anywhere in your reply voids every "
+            "TEST INTACT line in it: a test that lost a check is TEST WEAKENED."
             + self._review_turn_budget_note(owner))
         if not shown and not any(not e["complete"] for e in pending):
             return False
         verdicts: Dict[str, tuple] = {}
+        contradicted: List[str] = []
 
         def take(reply: str) -> None:
             artifact = self.store.put(reply, kind="test-comparison", author=owner).id
+            # An approval beside a blocking line is a rejection: a reply that
+            # also raises a finding certifies no test as intact.
+            if _has_prefixed_finding(reply):
+                contradicted.append(artifact)
             if task is not None:
                 task.keep(reply, kind="test-comparison", author=owner)
             for fid, got in self._read_test_verdicts(reply, pending).items():
@@ -9793,6 +9807,10 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                 entry["why"] = "no single valid TEST INTACT or TEST WEAKENED line for its exact path"
                 continue
             kind, line, why, artifact = got
+            if kind == "INTACT" and contradicted:
+                entry["why"] = ("TEST INTACT beside a BLOCKING or UNRESOLVED line in the comparison reply is no "
+                                f"verdict (artifact {contradicted[0]})")
+                continue
             if kind == "INTACT" and entry["id"] not in shown_ids:
                 entry["why"] = f"INTACT cannot certify changes not shown whole ({entry['incomplete_why']})"
                 continue

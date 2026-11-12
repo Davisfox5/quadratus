@@ -30,7 +30,7 @@ def _declaration(text, *, capture=None, expect="the Import button is visible"):
 
 def _audit(call, replay):
     return audit_reply(call.prompt, {"R1": "MET - templates/index.html"}, {
-        row["oid"]: "SUFFICIENT templates/index.html contains the Import button shown by the approved renders"
+        row["oid"]: "SUFFICIENT - templates/index.html contains the Import button shown by the approved renders"
         for row in requested_obligations(call.prompt) if row["modality"] == "legacy"})
 
 
@@ -60,7 +60,7 @@ def test_a_capped_self_capture_task_can_only_finish_through_its_real_continuatio
                     collaborator=lambda c, r: "NO FINDINGS\nR1: MET - templates/index.html\nREVIEW: COMPLETE",
                     auditor=_audit, **{"requirements-review": lambda c, r: "COMPLETE",
                                       "design-review": judging(lambda c, r: "APPROVED", capture=(
-                                          "SUFFICIENT the mobile and desktop renders show the Import button"))})
+                                          "SUFFICIENT - the mobile and desktop renders show the Import button"))})
     replay = H.run(tmp_path, monkeypatch, script, files=_design_files(), max_tasks=3,
                    settings=Settings(backend="cli", lead_max_turns=14), goal=GOAL)
     if case == "foreign task":

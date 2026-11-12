@@ -80,7 +80,7 @@ def _script(seen, *, orchestrator=None, lead=None, collaborator=None, revision=N
 
     def recheck_(call, replay):
         seen.keep("recheck", call)
-        return (recheck or (lambda c, r: "RFT1-1: RESOLVED shown now"))(call, replay)
+        return (recheck or (lambda c, r: "RFT1-1: RESOLVED - shown now"))(call, replay)
 
     def revision_(call, replay):
         seen.keep("revision", call)
@@ -128,7 +128,7 @@ def test_after_a_revision_the_recheck_reads_a_fresh_receipt_on_the_revised_sourc
 
     def recheck(call, replay):
         sources["recheck"] = _rows(call.prompt)
-        return "RFT1-1: RESOLVED the negative case is bound and ran"
+        return "RFT1-1: RESOLVED - the negative case is bound and ran"
     replay = H.run(_at(tmp_path, "revised"), monkeypatch,
                    _script(seen, collaborator=lambda c, r: CODE_FINDING + MET, revision=revision, recheck=recheck),
                    files=FILES, max_tasks=1, record_complete=False)
@@ -197,7 +197,7 @@ def test_mixed_scenario_and_code_findings_split_between_planner_and_editor_and_b
                 f"CHANGED: {json.dumps(['tests/test_app.py'])}")
 
     def recheck(call, replay):
-        return "RFT1-1: RESOLVED the scenario now starts from nothing stored\nRFT1-2: RESOLVED the negative case ran"
+        return "RFT1-1: RESOLVED - the scenario now starts from nothing stored\nRFT1-2: RESOLVED - the negative case ran"
     replay = H.run(_at(tmp_path, "mixed"), monkeypatch,
                    _script(seen, orchestrator=orchestrator, revision=revision, recheck=recheck,
                            collaborator=lambda c, r: SCENARIO_FINDING + "\n" + CODE_FINDING + MET),
@@ -253,7 +253,7 @@ def test_a_scenario_only_round_makes_no_editing_call(tmp_path, monkeypatch):
         return _plan(_scope(proofs=_proofs("R1"))) if len(replay.of("orchestrator")) == 1 else "DONE"
     replay = H.run(_at(tmp_path, "planonly"), monkeypatch,
                    _script(seen, orchestrator=orchestrator, collaborator=lambda c, r: SCENARIO_FINDING + MET,
-                           recheck=lambda c, r: "RFT1-1: RESOLVED corrected"),
+                           recheck=lambda c, r: "RFT1-1: RESOLVED - corrected"),
                    files=FILES, max_tasks=1, record_complete=False)
     assert "revision" not in _roles(replay) and _roles(replay)["recheck"] == 1
     record = H.result_json(replay)
@@ -360,7 +360,7 @@ def test_an_evidence_finding_takes_no_editor_call_and_is_rechecked_against_the_h
     seen = Seen()
     replay = H.run(_at(tmp_path, "evidence"), monkeypatch,
                    _script(seen, collaborator=lambda c, r: EVIDENCE_FINDING + MET,
-                           recheck=lambda c, r: "RFT1-1: RESOLVED observed-1 shows test_add ran on this source"),
+                           recheck=lambda c, r: "RFT1-1: RESOLVED - observed-1 shows test_add ran on this source"),
                    files=FILES, max_tasks=1, record_complete=False)
     assert "revision" not in _roles(replay) and _roles(replay)["recheck"] == 1
     rows = _rows(seen.prompts["recheck"][0])
@@ -420,12 +420,12 @@ def test_a_parallel_child_holds_an_evidence_finding_for_the_post_merge_recheck_w
 
     def recheck(call, replay):
         seen.keep("recheck", call)
-        return "RFT1-1: RESOLVED the merge gate's receipt shows test_add ran on the merged source"
+        return "RFT1-1: RESOLVED - the merge gate's receipt shows test_add ran on the merged source"
 
     def auditor(call, replay):
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
-                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
+                + "".join(f"\n{o}: SUFFICIENT - README.md names add(a, b) and its result" for o in docs))
     script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
                     auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE"})
@@ -511,7 +511,7 @@ def test_the_planner_is_shown_the_requirement_nobody_took_on_and_done_is_refused
     def auditor(call, replay):
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
-                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
+                + "".join(f"\n{o}: SUFFICIENT - README.md names add(a, b) and its result" for o in docs))
     replay = H.run(_at(tmp_path, "covered"), monkeypatch,
                    _script(seen, orchestrator=orchestrator, lead=lead,
                            auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
@@ -650,12 +650,12 @@ def test_a_parallel_child_scenario_correction_carries_the_verbatim_requirement(t
 
     def recheck(call, replay):
         seen.keep("recheck", call)
-        return "RFT1-1: RESOLVED the scenario now starts from nothing stored"
+        return "RFT1-1: RESOLVED - the scenario now starts from nothing stored"
 
     def auditor(call, replay):
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
-                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result" for o in docs))
+                + "".join(f"\n{o}: SUFFICIENT - README.md names add(a, b) and its result" for o in docs))
     script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
                     auditor=judging_scenarios(auditor, PROOF_R1, PROOF_R1_CORRECTED, basis=SHOWN),
                     **{"requirements-review": lambda c, r: "COMPLETE"})

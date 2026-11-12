@@ -44,6 +44,7 @@ from .session_prompts import (
     _EVIDENCE_AUTHORITY,
     _EVIDENCE_CHANNEL,
     _EXECUTED_ERROR_RULE,
+    _PLAIN_VERDICT_RULE,
     _SCENARIO_RENDER_MAX_CHARS,
     _TYPED_FINDING_FORMS,
     _display_item,
@@ -967,14 +968,15 @@ class EvidenceMixin:
                           + ("" if not any(o.get("execution") == "ran" and delivery.purpose_of(o) == "acceptance"
                                            for o in bound) else
                              " Each executed acceptance obligation listed above needs its own line, "
-                             "'<O-id>: SUFFICIENT <why>' or '<O-id>: INSUFFICIENT <what it does not establish>'; "
+                             "'<O-id>: SUFFICIENT - <why>' or '<O-id>: INSUFFICIENT <what it does not establish>'; "
                              "your verdict on the requirement never judges a row it binds, and an obligation "
                              "left unjudged or judged insufficient keeps the requirement not met. An "
                              "execution-debt row is not judged; a line about one is applied to nothing.")
                           + ("" if not any(o.get("modality") in ("legacy", "reading") for o in bound) else
                              " Each legacy acceptance or reading row listed above needs its own '<O-id>: "
-                             "SUFFICIENT <evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; "
-                             "it is never judged by your verdict on its requirement."))
+                             "SUFFICIENT - <evidence read, citing the file>' or '<O-id>: INSUFFICIENT <gap>' line; "
+                             "it is never judged by your verdict on its requirement.")
+                          + ("" if not bound else " " + _PLAIN_VERDICT_RULE))
                 self._active_spec = None
                 with invocation("audit", "auditor"):
                     reply = self._invoke_model(reviewer, prompt)

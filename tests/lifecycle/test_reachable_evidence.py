@@ -62,7 +62,7 @@ def _restating(case=CASE):
     return revision
 
 
-def _auditor(verdict="SUFFICIENT test_add drives add through the path the item named and asserts its result"):
+def _auditor(verdict="SUFFICIENT - test_add drives add through the path the item named and asserts its result"):
     """The default scenario judgment plus the audit's own line on every
     restated item the prompt asks it to judge."""
     base = judging_scenarios(lambda c, r: f"R1: MET - {CASE}", PROOF_R1, basis=SHOWN)
@@ -77,7 +77,7 @@ REVIEW_JUDGE = re.compile(r"^- (O\d+) \(reported by t\d+\): NOT RUN: .*; restate
                           re.MULTILINE)
 
 
-def _judging(base, verdict="SUFFICIENT test_add drives add through the path the item named and asserts its result"):
+def _judging(base, verdict="SUFFICIENT - test_add drives add through the path the item named and asserts its result"):
     """A reviewer's reply plus its own line on every restated item it is
     handed; ``verdict`` None writes none."""
     def reviewer(call, replay):
@@ -101,7 +101,7 @@ def test_a_production_path_item_restated_as_cases_settles_on_the_audits_judgment
     was read by nothing, the item stayed held and the audit lowered R1."""
     seen = Seen()
     script = _script(seen, lead=_lead(), collaborator=lambda c, r: CODE + MET, revision=_restating(),
-                     recheck=_judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED handled")),
+                     recheck=_judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED - handled")),
                      auditor=judging_scenarios(lambda c, r: f"R1: MET - {CASE}", PROOF_R1, basis=SHOWN))
     replay = H.run(_at(tmp_path, "restated"), monkeypatch, script, files=FILES, max_tasks=1, record_complete=False)
     entry = _item(replay)
@@ -126,7 +126,7 @@ def test_a_restated_item_without_a_sufficient_judgment_stays_held(tmp_path, monk
     seen = Seen()
     auditor = _auditor(verdict) if verdict else judging_scenarios(lambda c, r: f"R1: MET - {CASE}", PROOF_R1, basis=SHOWN)
     script = _script(seen, lead=_lead(), collaborator=lambda c, r: CODE + MET, revision=_restating(),
-                     recheck=_judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED handled"), verdict),
+                     recheck=_judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED - handled"), verdict),
                      auditor=auditor)
     replay = H.run(_at(tmp_path, name), monkeypatch, script, files=FILES, max_tasks=1, record_complete=False)
     entry = _item(replay)
@@ -177,9 +177,9 @@ def test_a_restatement_by_another_task_or_judged_by_its_author_counts_for_nothin
     assert any("not a NOT RUN item this task" in p["problem"] for p in session.proof_binding_problems)
     entry.update(restatements=[dict(task="t1", author="claude:opus", cases=[CASE])], cases=[CASE],
                  binding=dict(kind="case", cases=[CASE]))
-    session._judge_restated("claude:opus", f"O2: SUFFICIENT {CASE} exercises it")
+    session._judge_restated("claude:opus", f"O2: SUFFICIENT - {CASE} exercises it")
     assert entry.get("restated_judgment") is None, "the restatement's author cannot judge it"
-    session._judge_restated("openai:sol", f"O2: SUFFICIENT {CASE} exercises it")
+    session._judge_restated("openai:sol", f"O2: SUFFICIENT - {CASE} exercises it")
     assert session._restated_judged(entry)
     session._source_fingerprint = lambda: "T"
     assert not session._restated_judged(entry), "a judgment of another source is stale"
@@ -462,7 +462,7 @@ def _two_task(tmp_path, monkeypatch, name, *, second_lead, second_review=None, m
             return CODE + MET
         return (second_review or (lambda c, r: "NO FINDINGS" + MET))(call, replay)
     script = _script(seen, orchestrator=orchestrator, lead=lead, collaborator=review, revision=_restating(NEGATIVE),
-                     recheck=_judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED handled")),
+                     recheck=_judging(lambda c, r: recheck_reply(c.prompt, default="RESOLVED - handled")),
                      auditor=judging_scenarios(lambda c, r: f"R1: MET - {CASE}", PROOF_R1, basis=SHOWN))
     return H.run(_at(tmp_path, name), monkeypatch, script, files=FILES, max_tasks=max_tasks, record_complete=False)
 

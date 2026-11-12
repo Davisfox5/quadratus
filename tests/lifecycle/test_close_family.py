@@ -129,7 +129,7 @@ def test_a_scenario_claim_with_any_normal_separator_reaches_the_planner_not_the_
         return _plan(_scope(proofs=_proofs("R1"))) if len(replay.of("orchestrator")) == 1 else "DONE"
     replay = H.run(_at(tmp_path, sep), monkeypatch,
                    _script(seen, orchestrator=orchestrator, collaborator=lambda c, r: finding + MET,
-                           recheck=lambda c, r: "RFT1-1: RESOLVED the corrected scenario holds"),
+                           recheck=lambda c, r: "RFT1-1: RESOLVED - the corrected scenario holds"),
                    files=FILES, max_tasks=1, record_complete=False)
     assert len([c for c in replay.calls if CORRECTION_HEAD in c.prompt]) == 1
     assert "revision" not in _roles(replay)
@@ -157,7 +157,7 @@ def test_a_blank_typed_claim_is_held_and_its_full_restatement_at_the_recheck_is_
         return _plan(_scope(proofs=_proofs("R1"))) if len(replay.of("orchestrator")) == 1 else "DONE"
 
     def recheck(call, replay):
-        return restated if len(replay.of("recheck")) == 1 else "RFT1-1: RESOLVED shown now"
+        return restated if len(replay.of("recheck")) == 1 else "RFT1-1: RESOLVED - shown now"
     replay = H.run(_at(tmp_path, kind), monkeypatch,
                    _script(seen, orchestrator=orchestrator, collaborator=lambda c, r: blank + MET, recheck=recheck),
                    files=FILES, max_tasks=1, record_complete=False)
@@ -211,7 +211,7 @@ def test_unresolved_prose_on_a_held_id_stays_held_while_a_new_line_takes_the_edi
         if n == 1:
             return ("RFT1-1: UNRESOLVED the scenario is still wrong in prose\n"
                     f"NEW: {NEW_CLAIMS[claim]} | basis: R1 | impact: correctness")
-        return "RFT1-1: UNRESOLVED still prose\nRFT1-2: RESOLVED a negative case now exists"
+        return "RFT1-1: UNRESOLVED still prose\nRFT1-2: RESOLVED - a negative case now exists"
     replay = H.run(_at(tmp_path, claim), monkeypatch,
                    _script(seen, collaborator=lambda c, r: blank + MET, recheck=recheck, revision=revision),
                    files=FILES, max_tasks=1, record_complete=False)
@@ -246,7 +246,7 @@ def test_conflicting_correction_lines_change_nothing_and_repeated_ones_are_one_l
         return _plan(_scope(proofs=_proofs("R1"))) if len(replay.of("orchestrator")) == 1 else "DONE"
     replay = H.run(_at(tmp_path, status[:8]), monkeypatch,
                    _script(seen, orchestrator=orchestrator, collaborator=lambda c, r: SCENARIO_FINDING + MET,
-                           recheck=lambda c, r: ("RFT1-1: RESOLVED corrected" if state == "nothing is stored"
+                           recheck=lambda c, r: ("RFT1-1: RESOLVED - corrected" if state == "nothing is stored"
                                                  else "RFT1-1: UNRESOLVED still contradicts itself")),
                    files=FILES, max_tasks=1, record_complete=False)
     record = H.result_json(replay)
@@ -281,7 +281,7 @@ def test_each_scenario_gets_one_correction_and_a_repeat_on_a_corrected_one_is_he
     def recheck(call, replay):
         n = len(replay.of("recheck"))
         if n == 1:
-            return (f"RFT1-1: RESOLVED corrected\nNEW: SCENARIO P2 - {CONTRADICTION} | {PROPOSAL} | basis: R2 "
+            return (f"RFT1-1: RESOLVED - corrected\nNEW: SCENARIO P2 - {CONTRADICTION} | {PROPOSAL} | basis: R2 "
                     "| impact: contract")
         if n == 2:
             return f"RFT1-2: UNRESOLVED SCENARIO P2 - still the same contradiction | {PROPOSAL}"
@@ -309,7 +309,7 @@ DOCS = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(
 NOTES = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(
     permitted_paths=["NOTES.md"], intended_result="NOTES explains add", acceptance=["NOTES names add"],
     max_lines=20, proofs=H.proofs_for("R3", "NOTES.md", evidence="reading"))) + "\nWrite NOTES.md.\nCOVERS: R3")
-DOCS_JUDGED = "SUFFICIENT the file names add(a, b) and states that it returns the sum"
+DOCS_JUDGED = "SUFFICIENT - the file names add(a, b) and states that it returns the sum"
 
 
 def _debt_script(seen, orchestrator):

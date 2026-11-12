@@ -255,8 +255,8 @@ def test_rechecks_never_widen_scope(store):
     reopens nothing else. A genuine new defect is not discarded for arriving
     on a recheck (blueprint section 4): it is recorded as its own finding
     with its own id, and the expected findings' dispositions stand as read."""
-    rec = BlockingRecorder(["RFT1-1: RESOLVED escaped now\nNEW: the parser accepts malformed numbers | "
-                            "basis: tests/test_numbers.py | impact: correctness", "RFT1-2: RESOLVED fixed"])
+    rec = BlockingRecorder(["RFT1-1: RESOLVED - escaped now\nNEW: the parser accepts malformed numbers | "
+                            "basis: tests/test_numbers.py | impact: correctness", "RFT1-2: RESOLVED - fixed"])
     s = _session(store, rec)
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
     recheck = next(c["prompt"] for c in rec.calls

@@ -47,7 +47,7 @@ pytestmark = pytest.mark.requirements_ledger
 #: restatement can be judged independently.
 PLAN1 = _plan(_scope(proofs=_proofs("R1"))).replace("KIND: backend simple", "KIND: backend complex")
 DECLARED = re.compile(r"^- (O\d+): app\.py", re.MULTILINE)
-SUFFICIENT = "SUFFICIENT test_add drives add through the path the item named and asserts its result"
+SUFFICIENT = "SUFFICIENT - test_add drives add through the path the item named and asserts its result"
 ADVERSE = "R1: NOT MET - add drops negative operands; at app.py add; example: add(-1, -2) returns 3"
 
 

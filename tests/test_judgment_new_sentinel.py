@@ -30,5 +30,5 @@ def test_negative_language_that_says_something_is_a_finding(claim):
 @pytest.mark.parametrize("claim", SENTINELS)
 def test_the_standalone_sentinel_is_no_finding(claim):
     assert _empty_claim(claim)
-    reading = judgment.recheck_verdicts(f"F1: RESOLVED shown\nNEW: {claim}", ["F1"])
+    reading = judgment.recheck_verdicts(f"F1: RESOLVED - shown\nNEW: {claim}", ["F1"])
     assert reading.new == ()

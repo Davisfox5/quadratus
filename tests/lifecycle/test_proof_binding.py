@@ -157,7 +157,7 @@ def test_a_parallel_batch_block_without_proof_scenarios_is_sent_back_the_same_wa
     def auditor(call, replay):
         docs = H.obligation_ids(call.prompt, modality="reading", requirement="R2")
         return (f"R1: MET - {CASE}\nR2: MET - README.md"
-                + "".join(f"\n{o}: SUFFICIENT README.md names add(a, b) and its result, which is all R2 asks" for o in docs))
+                + "".join(f"\n{o}: SUFFICIENT - README.md names add(a, b) and its result, which is all R2 asks" for o in docs))
     script = _script(None, lead, auditor=judging_scenarios(auditor, PROOF_R1, basis=SHOWN),
                      collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py\nR2: MET - README.md")
     script.overrides["orchestrator"] = orchestrator
@@ -224,7 +224,7 @@ def test_a_legacy_acceptance_string_on_an_explicit_task_stays_unknown_and_is_nev
     assert audit["acceptance"]["R1"]["met"] is False
     assert "legacy acceptance (mapping unknown) judged unjudged" in " ".join(audit["acceptance"]["R1"]["reasons"])
 
-    script = _script(None, _lead(proves=()), auditor=lambda c, r: f"R1: MET - {CASE}\nO1: SUFFICIENT app.py returns a + b and test_add passed")
+    script = _script(None, _lead(proves=()), auditor=lambda c, r: f"R1: MET - {CASE}\nO1: SUFFICIENT - app.py returns a + b and test_add passed")
     script.overrides["orchestrator"] = lambda c, r: plan
     judged = H.run(_at(tmp_path, "judged"), monkeypatch, script, files=FILES, max_tasks=1, record_complete=False,
                    tasks=[plan])
@@ -297,7 +297,7 @@ def test_a_later_valid_declaration_restores_a_binding_and_two_lines_bind_two_cas
     script = _script(_plan(_scope(proofs=_proofs("R1"))), _lead(lines=["PROVES: P1 - add works"]),
                      collaborator=lambda c, r: "BLOCKING: no negative case | basis: R1 | impact: correctness\nR1: MET - app.py")
     script.overrides["revision"] = revision
-    script.overrides["recheck"] = lambda c, r: "RFT1-1: RESOLVED test_negative added"
+    script.overrides["recheck"] = lambda c, r: "RFT1-1: RESOLVED - test_negative added"
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False)
     assert replay.result.completed, replay.result.error
     row = _acceptance(replay)[0]
@@ -379,7 +379,7 @@ def test_a_reading_claim_counts_only_on_an_explicit_per_obligation_judgment_citi
     check run, stays unproved on a bare MET."""
     judged = H.run(_at(tmp_path, "judged"), monkeypatch,
                    _script(_docs_plan(), _docs_lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
-                           auditor=_docs_auditor("SUFFICIENT reading README.md shows the one sentence R1 asks for: "
+                           auditor=_docs_auditor("SUFFICIENT - reading README.md shows the one sentence R1 asks for: "
                                                  "add(a, b) returns the sum")),
                    files=FILES_OK, max_tasks=1, record_complete=False)
     assert judged.result.completed, judged.result.error
@@ -404,7 +404,7 @@ def test_a_reading_claim_counts_only_on_an_explicit_per_obligation_judgment_citi
 
     uncited = H.run(_at(tmp_path, "uncited"), monkeypatch,
                     _script(_docs_plan(), _docs_lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - README.md",
-                            auditor=_docs_auditor("SUFFICIENT the documentation covers it")),
+                            auditor=_docs_auditor("SUFFICIENT - the documentation covers it")),
                     files=FILES_OK, max_tasks=1, record_complete=False)
     row = _acceptance(uncited)[0]
     assert row["sufficiency"] == "unjudged" and "did not cite README.md" in row.get("sufficiency_note", "")
@@ -486,7 +486,7 @@ def test_rebinding_on_the_same_source_resets_execution_and_binds_the_new_case_se
     script = _script(_plan(_scope(proofs=_proofs("R1"))), lead,
                      collaborator=lambda c, r: "BLOCKING: no negative case | basis: R1 | impact: correctness\nR1: MET - app.py")
     script.overrides["revision"] = revision
-    script.overrides["recheck"] = lambda c, r: "RFT1-1: RESOLVED test_negative added"
+    script.overrides["recheck"] = lambda c, r: "RFT1-1: RESOLVED - test_negative added"
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=1, record_complete=False)
     assert replay.result.completed, replay.result.error
     row = _acceptance(replay)[0]
@@ -747,7 +747,7 @@ def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_
     assert session._capture_measurement(row) == (None, "no design evidence recorded for the task")
     snapshot = list(session._capture_state("t1"))
     source = session._source_fingerprint()
-    delivered = dict(reviewer="codex:gpt", verdict="APPROVED\nO1: SUFFICIENT shows it", approved=True, blocking=[])
+    delivered = dict(reviewer="codex:gpt", verdict="APPROVED\nO1: SUFFICIENT - shows it", approved=True, blocking=[])
     hashes = {"templates/index.html": hashlib.sha256((project / "templates" / "index.html").read_bytes()).hexdigest()}
 
     context = dict(goal=session.memory.goal.strip(), requirements={"R1": [1, "the import page works on a phone"]},
@@ -786,7 +786,7 @@ def test_a_capture_claim_is_measured_only_by_verified_delivered_design_evidence_
     assert not unmeasured["R1"].met and "capture claim not measured" in " ".join(unmeasured["R1"].reasons)
     # The requirements audit may reject a capture row and never approves one.
     session.evidence_obligations = [dict(row, execution="ran", source_digest=source, receipts=["capture:t1:x"])]
-    session._judge_obligations("auditor", "O1: SUFFICIENT fine", {"R1": (True, "x")})
+    session._judge_obligations("auditor", "O1: SUFFICIENT - fine", {"R1": (True, "x")})
     assert session.evidence_obligations[0]["sufficiency"] == "unjudged"
     session._judge_obligations("auditor", "O1: INSUFFICIENT the page overflows", {"R1": (True, "x")})
     assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
@@ -844,7 +844,7 @@ def test_a_capture_scenario_is_measured_delivered_reviewed_and_accepted_through_
         own = H.obligation_ids(call.prompt, modality="capture", task="t3")
         other = [o for o in H.obligation_ids(call.prompt, modality="capture") if o not in own]
         if call.task == "t3":
-            lines = [f"{o}: {CAPTURE_JUDGED}" for o in own] + ["O2: SUFFICIENT the first repair looked fine too"]
+            lines = [f"{o}: {CAPTURE_JUDGED}" for o in own] + ["O2: SUFFICIENT - the first repair looked fine too"]
             return "APPROVED\n" + "\n".join(lines)
         assert not other
         return "APPROVED"
@@ -1100,13 +1100,13 @@ def test_the_audit_is_shown_the_whole_canonical_scenario_or_told_it_is_not_shown
     # still accepts; and an approval the scenario can no longer be shown
     # for is dropped on refresh.
     session.evidence_obligations = [dict(huge)]
-    session._judge_obligations("auditor", "R1: MET - README.md\nO1: SUFFICIENT README.md shows it", {"R1": (True, "README.md")})
+    session._judge_obligations("auditor", "R1: MET - README.md\nO1: SUFFICIENT - README.md shows it", {"R1": (True, "README.md")})
     gated = session.evidence_obligations[0]
     assert gated["sufficiency"] == "unjudged" and "not shown whole" in gated["sufficiency_note"]
     session._judge_obligations("auditor", "O1: INSUFFICIENT the README does not say what add returns", {"R1": (True, "README.md")})
     assert session.evidence_obligations[0]["sufficiency"] == "insufficient"
     session.evidence_obligations = [dict(row)]
-    session._judge_obligations("auditor", "R1: MET - README.md\nO1: SUFFICIENT README.md shows it", {"R1": (True, "README.md")})
+    session._judge_obligations("auditor", "R1: MET - README.md\nO1: SUFFICIENT - README.md shows it", {"R1": (True, "README.md")})
     assert session.evidence_obligations[0]["sufficiency"] == "sufficient" and session.evidence_obligations[0]["judged_by"]
     executed = dict(row, modality="test", location="tests/test_app.py", runner="gate", execution="ran",
                     cases=["tests/test_app.py::test_add"],
