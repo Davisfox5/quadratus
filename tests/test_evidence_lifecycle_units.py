@@ -277,7 +277,7 @@ def test_the_lead_is_told_the_identity_forms_the_harness_can_discharge(tmp_path)
     assert "'P<n>' for a declared scenario of this task" in NOT_RUN_RULE
     assert "'<file>::[<Class>::]<test>' for a case, '<file>::<Class>' for a whole test class" in NOT_RUN_RULE
     assert "A report naming none of these" in NOT_RUN_RULE
-    assert "is kept as written, holds the requirements it serves and nothing can discharge it" in NOT_RUN_RULE
+    assert "is kept as written, holds the requirements it serves and no check can discharge it as written" in NOT_RUN_RULE
 
 
 # -- 2. sufficiency is read from the auditor's own verdicts and a prior judgment stands ----------------

@@ -239,3 +239,32 @@ def test_the_failure_class_and_the_typed_window_fact_read_one_rule():
     text = "unexpected status 503 Service Unavailable: usage limit service down"
     assert failure_facts(503, text) == {"status": 503, "failure_class": "unavailable"}
     assert "window_exhausted" not in _own_error_facts(text, 503)
+
+
+# -- check of leftovers:2: the neighbours of the "stuck" sentence ----------------------
+
+def test_a_restated_item_judged_insufficient_is_told_its_discharges_route_not_never_another_task(tmp_path):
+    session = _session(tmp_path)
+    entry = dict(task="t2", item="the browser scenario", why="", requirements=["R5"], kind="not_run", oid="O4",
+                 cases=["tests/test_a.py::test_x"], executable=False,
+                 restatements=[dict(task="t2", author="claude:opus")])
+    session._standing_not_run = lambda: [entry]
+    session._discharge_record = lambda e: dict(check=1)
+    session._restatement_status = lambda e, **kw: "O4: judged INSUFFICIENT; Route: a task naming 'DISCHARGES: O4'"
+    text, stuck = session._not_run_remedy(["R5"])
+    assert "DISCHARGES: O4" in text and "never by another task" not in text and stuck == []
+
+
+def test_an_id_two_items_hold_is_no_restatement_route(tmp_path):
+    session = _session(tmp_path)
+    twins = [dict(task=t, item="the whole suite", why="", requirements=["R1"], kind="not_run", oid="O2",
+                  cases=[], executable=False) for t in ("t1", "t2")]
+    session.unexecuted_acceptance = twins
+    session._standing_not_run = lambda: twins
+    text, stuck = session._not_run_remedy(["R1"])
+    assert stuck == ["R1"] and "DISCHARGES: O2" not in text
+
+
+def test_the_not_run_rule_does_not_call_a_restatable_report_undischargeable():
+    assert "nothing can discharge it" not in S.NOT_RUN_RULE
+    assert "no check can discharge it as written" in S.NOT_RUN_RULE
