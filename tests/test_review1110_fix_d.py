@@ -101,7 +101,8 @@ def test_canary_a_pass_that_rests_on_an_unmeasured_text_file_is_never_verified(t
     The measured source alone fails its own tests, so the judge outside the
     engine must not say verified. With the file-type rule it did."""
     from tests.lifecycle import harness as H
-    from tests.lifecycle.test_lifecycle_matrix import FILES, T1, Script
+    from tests.lifecycle.replies import judging_scenarios
+    from tests.lifecycle.test_lifecycle_matrix import ADD_PROOF, ADD_SHOWN, FILES, T1, Script
 
     plan = ["REQUIREMENTS:\nR1: add(1, 2) returns 3\nKIND: architect complex\nSCOPE: " + json.dumps(T1)
             + "\nImplement add in app.py.\nCOVERS: R1"]
@@ -110,11 +111,16 @@ def test_canary_a_pass_that_rests_on_an_unmeasured_text_file_is_never_verified(t
         H.write(call, {"app.py": "import pathlib\nexec((pathlib.Path(__file__).parent / 'build' / "
                                  "'helper.txt').read_text())\n",
                        "build/helper.txt": "def add(a, b):\n    return a + b\n"})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        # The delivery binds the declared proof scenario to its test case,
+        # which a covering task owes since the merge.
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
+    # The auditor accepts, in the form an accepting audit takes since the
+    # merge: its MET line and its judgment of the one declared scenario.
     script = Script(orchestrator=lambda call, replay: plan.pop(0) if plan else "DONE", lead=lead,
                     **{"requirements-review": lambda call, replay: "COMPLETE",
-                       "auditor": lambda call, replay: "R1: MET - app.py"})
+                       "auditor": judging_scenarios(lambda call, replay: "R1: MET - app.py", ADD_PROOF,
+                                                    basis=ADD_SHOWN)})
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3)
     assert replay.result.completed, replay.result.error
     record = json.loads((Path(replay.result.run_dir) / "result.json").read_text())
