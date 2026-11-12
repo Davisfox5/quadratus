@@ -28966,7 +28966,7 @@ def _unserved_consult(body: str) -> bool:
 def _member_matches(name: str, keys) -> List[str]:
     """The roster keys among ``keys`` that a consult's member name could mean.
 
-    Leads say 'Sol' or 'GPT-5.6 Sol' or a full key; all resolve. An exact
+    Leads say 'Sol' or 'GPT Sol' or a full key; all resolve. An exact
     key, alias or label names that member alone. Otherwise the name must
     stand in a label as whole words and hold a word of two letters or more.
     The old test was a substring one, so "5" or a single letter resolved to
