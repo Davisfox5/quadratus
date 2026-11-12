@@ -272,7 +272,7 @@ The remaining options (`quadratus --help` has the full text):
 | `--capture-profile JSON` | how to start the app, so the harness captures UI renders itself |
 | `--readiness JSON` | probes run once before any model call; a failing probe stops the run |
 | `--survey-recovery N` | continue through failures, spending at most N recovery tasks, and report them apart from acceptance |
-| `--direct-tier` | let a small, local task run with no collaborator review and no model close-out; checks are unchanged |
+| `--direct-tier` | let a small, local task run with no collaborator review; checks are unchanged, and the harness writes the close-out on every tier |
 | `--decider-labels all` | with `--decider jev`: the decider routes every planned task (default `unstated`: only labels left out) |
 | `--rulings FILE` | answers you give in advance to questions the planner may ask |
 | `--repair-test PATH` | an existing test file this run may repair; repeatable |
@@ -341,9 +341,8 @@ section caps one run: model calls, total reported tokens, time, parallel
 workers and extra recovery tasks after failures, with a preset that fills the
 fields. The run shows the effective numbers before any call and saves them as
 `run-limits.json` beside its report. Token limits count what the CLIs report
-after each call returns, so they are not a hard ceiling. A one-turn summary
-call reserves less than an ordinary call, and a per-call threshold also sets a
-lead turn cap unless you set one yourself; the summary names both. Left off, a
+after each call returns, so they are not a hard ceiling. A per-call threshold
+also sets a lead turn cap unless you set one yourself; the summary names it. Left off, a
 run has no shared allowance, as before. A "Contests" choice stands for
 `--compete`, and a collapsed "Trust" section holds the four trust choices
 under the names of their flags; opening a project clears it. The
@@ -601,7 +600,7 @@ quadratus/
   # --- session engine (what --project and --session run) ---
   session.py          # The run loop: orchestrator → lead → workers → close-out
   session_types.py    # Stops a run raises, TaskSpec, the questions asked of a task
-  reply_parsers.py    # Readers of directive lines, captures, fixtures, close-outs
+  reply_parsers.py    # Readers of directive lines, captures and fixtures
   session_prompts.py  # Standing prompt text and the functions that format it
   check_facts.py      # Readers of recorded check receipts and test-file text
   session_checks.py, session_design.py, session_audit.py,

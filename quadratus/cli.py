@@ -13,7 +13,7 @@ from .config import Settings
 from .orchestrator import CollaborationResult, Orchestrator
 from .providers import ProviderError
 from .registry import MODE_ROSTERS, mode_audit_gap
-from .run_budget import MIN_LEAD_TURNS, SUMMARY_CALL_RESERVE_TOKENS, RunLimits
+from .run_budget import MIN_LEAD_TURNS, RunLimits
 
 try:
     import colorama
@@ -927,8 +927,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Enable the direct execution tier: the orchestrator may label a small, local task "
             "TIER: direct; a deterministic admission decides, and an admitted task runs with no "
-            "collaborator review and no model close-out. Checks, capture, design review and "
-            "every stop are unchanged."
+            "collaborator review. The harness writes the close-out on every tier. Checks, "
+            "capture, design review and every stop are unchanged."
         ),
     )
     flag(
@@ -1073,8 +1073,7 @@ def build_parser() -> argparse.ArgumentParser:
          help=f"How many worker errands may run at once (default {RunLimits.max_concurrent_workers}).")
     flag(limits, "--reserve-tokens-per-call", needs="project", metavar="N",
          help="A call starts only while at least N tokens of the total remain, after what the "
-              "calls still running were started on (default 0: no pre-call check). A one-turn "
-              f"summary call on Claude or Grok needs at most {SUMMARY_CALL_RESERVE_TOKENS:,}.")
+              "calls still running were started on (default 0: no pre-call check).")
     flag(limits, "--max-tokens-per-call", needs="project", metavar="N",
          help="Stop the run after a single call reports more than N tokens; it cannot cut that "
               "call short (default 0: none). Without --lead-max-turns it also derives a lead "

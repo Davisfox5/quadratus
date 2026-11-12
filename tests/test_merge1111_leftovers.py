@@ -125,3 +125,19 @@ def test_the_development_lines_own_diff_block_and_its_unread_capture_are_gone(tm
     assert "_review_before" not in _text("quadratus/session.py")
     # The block review seats do get.
     assert callable(Session._review_diff) and callable(Session._recheck_diff)
+
+
+# -- leftovers:6: operator text promises no summary call and no model close-out --------
+
+def test_the_limits_text_the_cli_help_and_the_readme_promise_no_summary_call():
+    from quadratus.cli import build_parser
+    from quadratus.run_budget import RunLimits, describe_limits
+    text = describe_limits(RunLimits(max_reported_tokens=5_000_000, reserve_tokens_per_call=250_000))
+    assert "An ordinary call starts only while at least 250,000 tokens of the total remain." in text
+    assert "summary call" not in text and "64,000" not in text
+    helped = " ".join(build_parser().format_help().split())
+    assert "summary call" not in helped and "no model close-out" not in helped
+    assert "The harness writes the close-out on every tier" in helped
+    readme = _text("README.md")
+    assert "one-turn summary" not in readme.lower() and "no model close-out" not in readme
+    assert "the harness writes the close-out on every tier" in readme
