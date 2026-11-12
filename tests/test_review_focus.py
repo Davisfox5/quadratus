@@ -15,7 +15,6 @@ from quadratus import session as S
 from quadratus.artifacts import ArtifactStore
 from quadratus.session import Session, SessionConfig, TaskSpec
 
-
 #: What the review batch's block calls each change (Session._review_diff,
 #: Session._recheck_diff).
 WHOLE = "this task's whole change, against the source it started from"
