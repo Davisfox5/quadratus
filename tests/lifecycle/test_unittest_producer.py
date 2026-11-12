@@ -331,7 +331,7 @@ _SUBCASES = {
                   dict(passed=0, failed=0, errors=0, skipped=1), None),
     "fail-and-skip": ("for v in (0, 2):\n    with self.subTest(v=v):\n        if v == 2:\n"
                       "            self.skipTest('no')\n        self.assertTrue(v)",
-                      dict(passed=0, failed=1, errors=0, skipped=0), dict(pytest=True, unittest=False)),
+                      dict(passed=0, failed=1, errors=0, skipped=0), dict(pytest=True, unittest=True)),
 }
 
 
@@ -352,8 +352,10 @@ def test_a_skipped_subcase_is_never_counted_as_its_test_passing(tmp_path, runner
     assert skipped_count(receipt) == counts["skipped"]
     if product is not None:
         # unittest's own summary for fail-and-skip is "Ran 1 test ... (failures=1,
-        # skipped=1)", which the unchanged runner count reads as zero executed:
-        # the receipt fails closed as unattributable, as it did before this fix.
+        # skipped=1)", which read as text gives zero executed. The executed
+        # count is the parsed report's when it saw cases (review 2026-11-10,
+        # checks 15), and the report counts the one failure: the failure is
+        # attributable under both producers.
         assert attribute(result)["product"] is product[runner], attribute(result)
 
 
