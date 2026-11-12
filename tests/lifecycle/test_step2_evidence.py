@@ -305,7 +305,7 @@ def test_a_held_review_finding_is_tested_and_rechecked_once_by_its_own_reviewer(
         # reads it; the finding stays held through the fix cycles and is
         # judged only on the shown passing proof.
         word, _, why = verdict.partition(": ")
-        return recheck_reply(call.prompt, default=(f"{word} {why or 'the executed test shows negative sums'}"
+        return recheck_reply(call.prompt, default=(f"{word} - {why or 'the executed test shows negative sums'}"
                                                    if "Result: passed" in call.prompt
                                                    else "UNRESOLVED negative sums are not shown"))
 
