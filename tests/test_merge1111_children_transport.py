@@ -121,6 +121,24 @@ def test_a_permission_block_alone_is_still_the_typed_denial(tmp_path, monkeypatc
     assert fleet.available(GROK)
 
 
+@pytest.mark.parametrize("stdout", ["", "print('done')\n"], ids=["no envelope", "bare exit"])
+def test_limit_wording_inside_the_blocked_target_does_not_mark_the_seat(tmp_path, monkeypatch, stdout):
+    """The approval line quotes the target, which the model chose. With no
+    envelope stderr is read for the typed facts, and that line is left out."""
+    line = ("permission required: Fetch: https://example.com/docs/usage limit reached was not run, "
+            "as a headless run cannot ask for approval")
+    assert CP._extract_grok_permission_block(line)
+    script, _ = T._fake_cli(tmp_path, "grok", stdout + f"sys.stderr.write({line!r} + '\\n')\nsys.exit(1)\n")
+    fleet, _ = T._fleet(monkeypatch, "grok", script)
+    with pytest.raises(Exception) as caught:
+        fleet.invoke(GROK, "hello")
+    assert not isinstance(caught.value, WindowExhausted)
+    assert getattr(caught.value, "window_exhausted", None) is not True
+    assert fleet.available(GROK) and GROK not in fleet.exhausted
+    if not stdout:
+        assert isinstance(caught.value, PermissionBlocked)
+
+
 # -- transport:3: a status stated as a field is a typed fact ------------------
 
 def _turn_failed(error):

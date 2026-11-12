@@ -3761,9 +3761,13 @@ class CLIProvider(LLMProvider):
                 # sign-in do: replaced by the block, the typed fact was lost
                 # and the seat stayed routable. The block stays on the
                 # diagnostics. With no envelope, stderr is the CLI's voice.
+                # The approval line itself is left out of that reading: it
+                # quotes the target, which the model chose, and a target
+                # spelled with limit wording must not mark the seat spent.
                 spent = getattr(parsed, "window_exhausted", False) is True or (
                     getattr(parsed, "no_envelope", False)
-                    and _own_error_facts(_own_stderr(proc.stderr)).get("window_exhausted") is True)
+                    and _own_error_facts(self._stderr_beside_block(proc.stderr, blocked)
+                                         ).get("window_exhausted") is True)
                 if blocked and not spent:
                     raise self._permission_blocked(parsed, blocked) from parsed
                 if not getattr(parsed, "exit_report", False):
@@ -3784,7 +3788,7 @@ class CLIProvider(LLMProvider):
                             # exit below. An envelope that did report (a
                             # cancelled turn and its narration, an error
                             # field) is never overruled from stderr.
-                            _mark_transport(wrapped, _own_stderr(proc.stderr))
+                            _mark_transport(wrapped, self._stderr_beside_block(proc.stderr, blocked))
                         raise wrapped from parsed
                     raise
             except Exception:  # noqa: BLE001 -- unparseable is the normal case
@@ -3798,7 +3802,7 @@ class CLIProvider(LLMProvider):
                 raise failure
             # Classified from stderr alone, which is the CLI's own voice.
             # stdout may be a model's text and is only quoted above.
-            raise _mark_transport(failure, _own_stderr(proc.stderr))
+            raise _mark_transport(failure, self._stderr_beside_block(proc.stderr, blocked))
 
         try:
             return self._extract(proc.stdout)
@@ -3813,6 +3817,23 @@ class CLIProvider(LLMProvider):
                     and getattr(failure, "window_exhausted", False) is not True):
                 raise self._permission_blocked(failure, blocked) from failure
             raise
+
+    def _stderr_beside_block(self, stderr, blocked) -> str:
+        """The two ends of stderr without the CLI's approval lines, when the
+        call carries a permission block; otherwise the two ends as they are."""
+        own = _own_stderr(stderr)
+        reader = self.spec.extract_permission_block
+        if not blocked or reader is None:
+            return own
+        kept = []
+        for line in own.splitlines():
+            try:
+                quoted = reader(line) is not None
+            except Exception:  # noqa: BLE001 -- unreadable: leave the line out
+                quoted = True
+            if not quoted:
+                kept.append(line)
+        return "\n".join(kept)
 
     def _permission_blocked(self, failure: ProviderError, blocked: Dict[str, object]) -> PermissionBlocked:
         """The typed denial for a failed turn whose stderr carries the CLI's

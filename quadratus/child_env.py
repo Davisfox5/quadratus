@@ -41,7 +41,7 @@ import threading
 from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 __all__ = ["CREDENTIAL_WORDS", "NEVER_FOR_A_VENDOR_CLI", "PASS_VARIABLE", "VENDOR_LOGIN", "check_env",
-           "credential_shaped", "moves_transport", "vendor_env", "withheld", "withheld_names",
+           "credential_shaped", "moves_transport", "query_env", "vendor_env", "withheld", "withheld_names",
            "withheld_notice"]
 
 log = logging.getLogger(__name__)
