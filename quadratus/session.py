@@ -4700,6 +4700,11 @@ class Session:
         #: or recheck judges, or a capped task left: evidence for the seats,
         #: never a task check (Session._observe_checks).
         self.review_checks: List[dict] = []
+        #: The reports of this session's observations as their runs wrote
+        #: them, each beside its record. A record keeps counts and no case
+        #: names, so the names a proof row settles on are held here, in
+        #: memory only, never written (Session._observation_named).
+        self._observed_names: List[tuple] = []
         #: One record per contest considered (quadratus.contest): each draft's
         #: measured facts, the winner and what decided it, or why none formed.
         self.contests: List[dict] = []
@@ -11728,8 +11733,32 @@ class Session:
             # A run the tree moved under shows nothing about any one source.
             "source": None if moved else consumed["source"],
         })
+        # The record above names no passed case and nothing writes one to a
+        # file. A proof row still settles its bound case on this run, so the
+        # reports as the run wrote them stay in memory beside the record
+        # (_observation_named). An earlier source's stay as well: when the
+        # bytes come back, that source's run is not repeated (the skip
+        # above), so its own names are all that can show a row's case ran
+        # on them. Each run's names are bounded where the gate reads them.
+        kept = getattr(self, "_observed_names", None)
+        if kept is not None and not moved:
+            kept.append((self.review_checks[-1], result.report, [r.report for r in result.receipts]))
         self._note(f"task {spec.task_id}: harness ran the checks on the source before {stage}: "
                    + ("passed" if result.passed and not moved else "did not pass"))
+
+    def _observation_named(self, seen: dict) -> dict:
+        """Observation ``seen`` with the passed-case names its run reported,
+        for the readers that settle a bound or cited case on it. The record
+        keeps counts only, so result.json stays inside its bound; the names
+        are this session's memory of the run. A record this session did not
+        make itself (a resumed run's) comes back as it is, and so names
+        nothing. Which source, gate and revisions a record is evidence of
+        stays the reader's own check, as for any check record."""
+        for record, report, receipts in getattr(self, "_observed_names", ()):
+            if record is seen and len(receipts) == len(seen.get("receipts") or ()):
+                return dict(seen, report=report, receipts=[
+                    dict(r, report=full) for r, full in zip(seen.get("receipts") or (), receipts, strict=True)])
+        return seen
 
     def _harness_facts(self, *, current_only=False, excerpt=False) -> str:
         """The latest project check and renders as harness records: per
@@ -18371,7 +18400,7 @@ class Session:
         import posixpath
         current = self._source_fingerprint()
         root = Path(self.project)
-        records = [c for c in list(self.checks) + list(self.review_checks)
+        records = [c for c in list(self.checks) + [self._observation_named(c) for c in self.review_checks]
                    if current and c.get("source") == current]
         executed = set()
         for record in records:
@@ -18606,7 +18635,7 @@ class Session:
                     or (seen.get("gate") or "") != (record.get("gate") or "")
                     or (seen.get("environment") or "") != (environment or "") or not binds(seen)):
                 continue
-            if set(cases) <= self._check_passed_cases(seen):
+            if set(cases) <= self._check_passed_cases(self._observation_named(seen)):
                 return dict(id=f"observed-{index + 1}", source=seen.get("source"), gate=seen.get("gate"),
                             runner="gate", provenance=f"harness run of the task's checks on this source before "
                                                       f"{seen.get('stage')}",
