@@ -231,3 +231,63 @@ def test_the_judge_makes_no_native_delegation(monkeypatch, tmp_path):
     with invocation("t1", JUDGE_ROLE):
         assert fleet.invoke(OPUS, "p") == "ok"
     assert views[0].native_fanout_off is True and views[0].max_turns == 20
+
+
+# -- 5. the development line's rules for a single lead hold for an entrant ---------------------
+
+def _long(lines, name="x"):
+    """A sub() body well past 1.5 times the task's 40-line estimate."""
+    return "\n".join(f"    {name}{i} = a - b" for i in range(lines)) + "\n    return a - b"
+
+
+def test_a_draft_past_the_size_estimate_is_usable_as_a_single_leads_is(tmp_path):
+    """Size is advisory on the merged engine (operator directive, 2026-10-20):
+    a single lead's draft past the estimate goes on to review. The contest
+    still read it as out of scope, so two such drafts left none usable and
+    the run stopped, saying the routed lead's copy could not be measured and
+    was not merged while its files were in the project."""
+    alone = arena.Script([arena._task(), "DONE"], {OPUS: arena._sub(_long(80))})
+    single, _ = arena._session(tmp_path / "alone", alone)
+    single.run(max_tasks=3)
+    assert single.completed and single.scope_reports[-1].oversized, "with one lead the oversized draft carries on"
+    script = arena.Script([arena._task(), "DONE"], {OPUS: arena._sub(_long(80)), SOL: arena._sub(_long(81, "y"))})
+    session, project = arena._session(tmp_path / "both", script, compete="complex")
+    session.run(max_tasks=3)
+    record = arena._held(session)
+    assert all(d["completed"] and d["in_scope"] and d["usable"] for d in record["drafts"])
+    assert all(d["changed_lines"] > 60 for d in record["drafts"]), "both past 1.5 times the estimate"
+    assert record["decided_by"] == "size" and record["winner_model"] == OPUS and record["stopped"] == ""
+    assert session.scope_reports[-1].oversized and not session.scope_reports[-1].blocking
+    assert "x79 = a - b" in (project / "calc.py").read_text() and session.completed
+    # The routed lead's oversized draft beside a challenger that did not
+    # deliver: it wins as the only usable draft, as it would stand alone.
+    capped = arena.Script([arena._task(), "DONE"], {OPUS: arena._sub(_long(80)), SOL: arena._capped})
+    session, project = arena._session(tmp_path / "capped", capped, compete="complex")
+    session.run(max_tasks=3)
+    record = arena._held(session)
+    assert record["decided_by"] == "completed" and record["winner_model"] == OPUS and record["stopped"] == ""
+    assert "x79 = a - b" in (project / "calc.py").read_text() and session.completed
+
+
+@pytest.mark.requirements_ledger
+def test_an_entrant_builds_its_packet_at_the_allowance_the_task_was_granted(tmp_path, monkeypatch):
+    """A task whose role packet needs more than the default runs under the
+    allowance the orchestrator granted it at intake (Davis, 2026-11-09). An
+    entrant's own session held no grant, built its packet at the default and
+    ended on PacketTooLarge, which stopped a run its routed lead alone drafts."""
+    from tests.lifecycle import test_packet_extension as px
+    builds = px._builds(monkeypatch)
+    task = px._task(px._oversized()).replace("KIND: backend standard", "KIND: backend complex")
+    monkeypatch.setattr(H, "run_project", functools.partial(run_project, compete="complex"))
+    replay = H.run(tmp_path, monkeypatch, px._script(px.FIRST_REQ + task, px._grant(task)), files=px.FILES,
+                   max_tasks=2, record_complete=False)
+    (request,) = px._requests(replay)
+    assert request["state"] == "granted" and request["origin"] == "intake"
+    (held,) = H.result_json(replay)["contests"]
+    assert held["formed"] and held["stopped"] == "" and all(d["completed"] for d in held["drafts"])
+    leads = replay.of("lead")
+    assert sorted(c.vendor for c in leads) == ["claude", "codex"]
+    assert all(Path(c.cwd).resolve() != replay.project.resolve() for c in leads), "both drafts in private copies"
+    assert all(px.TAIL in c.prompt and "## Role packet" in c.prompt for c in leads), "each carried the whole packet"
+    assert {limit for role, mine, limit in builds if mine and role == "lead"} == {request["granted"]}
+    assert "PacketTooLarge" not in (replay.result.error or "")

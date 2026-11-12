@@ -8565,8 +8565,12 @@ class Session:
         entry.update(after=after, diff=diff, changed_lines=count_change_lines(diff),
                      changed=sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p)))
         if report is not None:
-            entry.update(in_scope=not (report.blocking or report.oversized), in_paths=not report.blocking,
-                         scope_report=report)
+            # Paths are the grant and size is advisory (operator directive,
+            # 2026-10-20): a single lead's draft past the estimate goes on to
+            # review, so here it is a usable draft too. Read as out of scope,
+            # two such drafts left none usable and the run stopped on a draft
+            # the routed lead alone would have carried through.
+            entry.update(in_scope=not report.blocking, in_paths=not report.blocking, scope_report=report)
 
     def _contest_gates(self, spec: TaskSpec, entries: dict, children: dict) -> Optional[BaseException]:
         """Run the task's own gate on each usable copy, one after the other,
@@ -8732,6 +8736,12 @@ class Session:
                 invoke, close = self.config.fork(root)
                 stack.callback(close)
                 children[role] = self._contest_child(root, invoke, f"{spec.task_id} draft {labels[role]}")
+                # The role packet allowance the orchestrator granted this
+                # task, the same records, as a batch child gets: without it
+                # an entrant built its packet at the default, and a task its
+                # lead alone would have drafted stopped the run on its size.
+                children[role].packet_requests = [r for r in self.packet_requests
+                                                  if r.get("task") == spec.task_id and r.get("state") == "granted"]
         except BaseException as exc:
             stack.close()
             if not isinstance(exc, Exception) or classify(exc) == "budget":
