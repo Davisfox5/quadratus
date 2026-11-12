@@ -5,6 +5,8 @@ Each test names the audit finding it closes. All of them run offline:
 scripted replies, a fake CLI, a temporary folder, never a model.
 """
 
+import json
+
 import pytest
 
 import tests.test_review1110_compete as arena
@@ -173,3 +175,26 @@ def test_a_stale_client_is_said_in_words_and_any_other_fault_keeps_its_traceback
     cli = _cli_with_runner(monkeypatch, runner, RuntimeError("a fault"))
     with pytest.raises(RuntimeError, match="a fault"):
         cli.main(["goal", "--project", str(tmp_path), *flags])
+
+
+# -- intake:7: a baseline runs under a project run's client preflight ----------------------
+
+from tests.test_review1110_baseline import env  # noqa: E402, F401 -- fixture
+
+
+def test_a_baseline_refuses_a_stale_client_before_any_call_and_records_the_release(env, monkeypatch):  # noqa: F811
+    import tests.test_review1110_baseline as B
+
+    project, _, trace = env
+    result = B.run(env)
+    assert result.error == "" and len(B.calls(trace)) == 1
+    resolved = B.record(result)["model_resolution"]
+    assert isinstance(resolved, dict) and "claude:opus" in json.dumps(resolved), "the release the key ran as"
+
+    # The same client, now older than the version the engine qualified.
+    monkeypatch.setattr("quadratus.cli_providers.client_version", lambda path, args: "2.1.296")
+    monkeypatch.setattr("quadratus.cli_providers._CLIENT_VERSIONS", {}, raising=False)
+    result = B.run(env)
+    assert result.error.startswith("StaleClient: claude: installed client 2.1.296")
+    assert "openai:" not in result.error and "grok:" not in result.error, "another vendor's client is not this baseline's"
+    assert len(B.calls(trace)) == 1, "no call was made"

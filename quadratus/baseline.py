@@ -260,6 +260,28 @@ def run_baseline(goal, project, settings, *, model, check='', extra_checks=(), g
                          declared_checks=declared_checks, probes=probes)
 
 
+def _stale_client(fleet, model: str) -> str:
+    """The Fleet's stale-client lines for ``model``'s own vendor, joined;
+    empty when its client is current, unreadable, or the fleet is a fake
+    without the preflight. Another vendor's client is never called here."""
+    try:
+        lines = list(fleet.stale_clients())
+    except AttributeError:
+        return ''
+    vendor = model.partition(':')[0]
+    return '; '.join(line for line in lines if line.startswith(f'{vendor}:'))
+
+
+def _model_resolution(fleet) -> dict:
+    """The Fleet's resolution record, or {}. Never raises: a record is
+    never lost over an observation."""
+    try:
+        record = fleet.resolution_record()
+    except Exception:  # noqa: BLE001 -- a fake fleet without resolutions (tests)
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
 def _stop_cause(exc) -> str:
     """What stopped the baseline, from typed facts and never from wording."""
     from .deptree import DependencyIdentityUnavailable, DependencyTreeChanged
@@ -474,6 +496,14 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
     try:
         if preview['blocked']:
             raise ValueError('; '.join(preview['blocked']))
+        # A project run refuses a client older than the one the engine
+        # qualified before any call (project_run._run). The baseline is the
+        # arm it is compared with, so its one model's client is held to the
+        # same floor: a recorded stop, no call made.
+        stale = _stale_client(fleet, model)
+        if stale:
+            from .cli_providers import StaleClient
+            raise StaleClient(stale)
         # A project run binds an approved policy's command checks to every
         # task (policy.task_gate). The baseline runs the same ones, or its
         # gate result would mean less than the policy plan it writes says
@@ -551,6 +581,9 @@ def _baseline(goal, project, settings, *, model, state, check, extras, gates, ru
         'completed': False, 'completion': COMPLETION,
         'allow_writes': True, 'error': error,
         'model': model, 'models': [model],
+        # Which release the floating key ran as, as a project run's
+        # ``models`` says it; tools/compare_runs.py cannot tell otherwise.
+        'model_resolution': _model_resolution(fleet),
         'baseline': dict(
             model=model, fix_rounds=fix_rounds, fix_rounds_used=state_.fixes,
             editing_calls=len(calls), calls=len(invoked),
