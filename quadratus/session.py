@@ -28647,8 +28647,9 @@ def _operator_limit_note(limit, scope, listed=()) -> str:
     """An operator limit over a task, as what it adds to the task's own scope.
 
     Its path limits always; an exclusion only when ``listed`` (what the
-    prompt has already named) does not hold it; a size only when it lowers
-    the stop the task scope stated. Nothing binding is dropped: an exclusion
+    prompt has already named) does not hold it; a size only when the task
+    declared none, since the operator's figure is then the estimate the
+    change is measured against. Nothing binding is dropped: an exclusion
     left out here is one the scope block in the same prompt already names.
     Returns "" when the limit adds nothing.
     """
@@ -28664,13 +28665,13 @@ def _operator_limit_note(limit, scope, listed=()) -> str:
         lines.append("Also finished only when:\n" + "\n".join(f"  - {a}" for a in limit.acceptance))
     if limit.review_only and not scope.review_only:
         lines.append("No source edits: report findings; do not change project source.")
-    if limit.max_lines:
-        # The stop _measure_scope applies: the lower size and the lower ratio.
-        size = min(limit.max_lines, scope.max_lines or limit.max_lines)
-        stop = int(size * min(limit.overrun_ratio, scope.overrun_ratio))
-        told = int(scope.max_lines * TaskScope().overrun_ratio) if scope.max_lines else None
-        if told is None or stop < told:
-            lines.append(f"Size: under the operator's limits the task stops past {stop} changed lines.")
+    if limit.max_lines and not scope.max_lines:
+        # The figure _measure_scope reports against: the task's own estimate
+        # when it declared one, else this one. Size is advisory (owner
+        # directive 2026-10-20), so this used to state a stop that no longer
+        # exists; a task with its own estimate is told nothing more.
+        lines.append(f"Size: the operator's limits put the estimate at about {limit.max_lines} changed lines; "
+                     "it is measured and reported, and stops nothing.")
     if not lines:
         return ""
     return "Operator limits (also binding):\n" + "\n".join(lines)
