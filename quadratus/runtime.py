@@ -268,8 +268,8 @@ JUDGE_ROLE = "judge"
 #: them unattributed auxiliary usage, and stopped the job on the per-call
 #: ceiling. The only sanctioned delegation is the WorkerBridge a lead call
 #: carries; leads keep the vendor default (and lose it under granted checks).
-NO_NATIVE_DELEGATION_ROLES = frozenset({"orchestrator", "auditor", "requirements-review", "consultant"}
-                                       | REVIEW_CAPPED_ROLES)
+NO_NATIVE_DELEGATION_ROLES = frozenset({"orchestrator", "auditor", "requirements-review", "consultant",
+                                        JUDGE_ROLE} | REVIEW_CAPPED_ROLES)
 
 
 class Fleet:
