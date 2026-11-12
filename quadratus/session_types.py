@@ -17,7 +17,7 @@ from pathlib import PurePosixPath
 from typing import List, Optional
 
 from .delegation import invocation
-from .providers import ProviderError, ProviderRefusal
+from .providers import PermissionBlocked, ProviderError, ProviderRefusal
 from .routing import WorkClass
 from .scope import TaskScope
 from .task_kinds import KNOWN_NEEDS, TaskKind, needs_from_text, normalise_needs
@@ -491,11 +491,13 @@ def _stops_the_run(exc: BaseException) -> bool:
 
 def _never_replaced(exc) -> bool:
     """Whether a contest's routed lead ended on a stop a single-lead run
-    never replaces the lead for: a policy refusal or a denied capability.
+    never replaces the lead for: a policy refusal, a denied capability or
+    a permission block.
 
-    Both are among the stops no re-plan repairs, and a refusal is never
-    rerouted. Before this a refused routed lead lost on completion and the
-    challenger's draft was merged, so turning contests on was a quiet way
-    around a refusal the run would otherwise have stopped on. Only the
-    routed lead: a challenger's refusal is that draft losing, as before."""
-    return isinstance(exc, (ProviderRefusal, CapabilityUnavailable))
+    All three are among the stops no re-plan repairs, and none is ever
+    handed to another model. Before this a refused routed lead lost on
+    completion and the challenger's draft was merged, so turning contests
+    on was a quiet way around a refusal the run would otherwise have
+    stopped on; a permission block took the same road until 2026-11-12.
+    Only the routed lead: a challenger's stop is that draft losing."""
+    return isinstance(exc, (ProviderRefusal, CapabilityUnavailable, PermissionBlocked))

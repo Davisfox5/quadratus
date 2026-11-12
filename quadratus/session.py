@@ -4240,8 +4240,8 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         whoever met it, after the work it would lose is kept.
 
         One stop is the routed lead's alone (``_never_replaced``): its policy
-        refusal or denied capability stops the run exactly as it does with a
-        single lead, whatever the challenger delivered. The challenger's
+        refusal, denied capability or permission block stops the run exactly
+        as it does with a single lead, whatever the challenger delivered. The challenger's
         draft is not merged in its place and stays on record as an artifact.
         A challenger's refusal only loses the contest, and a routed lead that
         failed in an ordinary way (a cap, a transport failure) can still be
