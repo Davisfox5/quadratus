@@ -578,8 +578,9 @@ class DispatchMixin:
         replies, parallel blocks, unlabelled or unscoped texts, an empty
         description, a bad NEEDS line, and, with the ledger on, a first text
         without a REQUIREMENTS block or any text without a COVERS line naming
-        listed ids. Deterministic and call-free; the loop's own checks still
-        run."""
+        listed ids; also a SCOPE path that differs only in letter case from an
+        existing one and a role packet over the policy's default.
+        Deterministic and call-free; the loop's own checks still run."""
         problems: List[tuple] = []
         requirements: Dict[str, str] = {}
         for index, text in enumerate(listed, 1):
@@ -603,6 +604,15 @@ class DispatchMixin:
                     unknown = [r for r in covers if r not in requirements]
                     if unknown:
                         problems.append((index, f"COVERS names requirements that do not exist: {', '.join(unknown)}"))
+            # The loop's two send-backs that are decided from the text, the
+            # policy and the project alone: a path spelled in another letter
+            # case, and a role packet over the default (a listed task has no
+            # orchestrator to grant more, so no lead is asked). Found here,
+            # or a later text ends the run after earlier listed tasks ran.
+            for check in (self._path_case_problem, self._packet_problem):
+                problem = check(spec)
+                if problem:
+                    problems.append((index, problem))
         return problems
 
     def _explicit_list_spent(self) -> bool:

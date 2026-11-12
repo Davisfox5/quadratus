@@ -243,6 +243,23 @@ class PacketsMixin:
                     f"more bytes on each of {turns} rounds of {_PACKET_CARRYING_CALLS} calls) do not fit")
         return ""
 
+    def _packet_request_id(self, task_id) -> str:
+        """The next request id of a task: one past every request the run
+        holds for it. A batch child or a contest entrant is handed only its
+        task's granted requests, so it also counts the ones its parent kept
+        back (``_packet_requests_withheld``); numbered from its own short
+        list, its lead's request repeated the id of a granted one and the
+        orchestrator's decision was applied to the wrong record."""
+        held = sum(1 for r in self.packet_requests if r.get("task") == task_id)
+        return f"PX-{task_id}-{held + int(getattr(self, '_packet_requests_withheld', 0) or 0) + 1}"
+
+    def _packet_requests_for_child(self, child, task_id) -> None:
+        """Hand ``child`` its task's granted requests, the same records,
+        and the count of the task's other requests, for its numbering."""
+        mine = [r for r in self.packet_requests if r.get("task") == task_id]
+        child.packet_requests = [r for r in mine if r.get("state") == "granted"]
+        child._packet_requests_withheld = len(mine) - len(child.packet_requests)
+
     def _packet_lead(self, spec) -> str:
         """The lead asked to justify: the one dispatch will use (picked once
         and held for this task id, as the capture check does)."""
@@ -262,7 +279,7 @@ class PacketsMixin:
         packet: the lead is not working, cannot edit (a source copy, the
         declaration round cap) and its reply grants nothing. Asked once per
         task and scope; any failure is a request not made, never a stop."""
-        rid = f"PX-{spec.task_id}-{sum(1 for r in self.packet_requests if r.get('task') == spec.task_id) + 1}"
+        rid = self._packet_request_id(spec.task_id)
         request = dict(id=rid, task=spec.task_id, origin="intake", fingerprint=fingerprint, role=role,
                        roles=list(self._packet_roles(prepared)), needed=needed, default=default, ceiling=ceiling,
                        ceiling_basis=basis, components=dict(components), lead=None, state=None, requested=None,

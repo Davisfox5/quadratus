@@ -889,6 +889,9 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         #: and state, and the orchestrator's decision lines on it. A granted
         #: one is the task's allowance (``_packet_allowance``).
         self.packet_requests: List[dict] = []
+        #: In a batch child or contest entrant: how many of its task's
+        #: requests the parent holds and did not hand over (request ids).
+        self._packet_requests_withheld = 0
         #: Decision lines that named no request the harness issued.
         self.packet_decisions_rejected: List[dict] = []
         #: Mandatory judgments that ended without a valid verdict and were not
@@ -2824,7 +2827,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         needed = max(policy.packet_needed(current_spec.scope, r) for r in self._packet_roles(current_spec))
         ceiling, basis = self._packet_ceiling()
         fingerprint = self._packet_fingerprint(current_spec)
-        rid = f"PX-{spec.task_id}-{sum(1 for r in self.packet_requests if r.get('task') == spec.task_id) + 1}"
+        rid = self._packet_request_id(spec.task_id)
         request = dict(id=rid, task=spec.task_id, origin="lead", fingerprint=fingerprint, role="lead",
                        roles=list(self._packet_roles(current_spec)), needed=needed, default=default, current=current,
                        ceiling=ceiling, ceiling_basis=basis, lead=lead, state=None, requested=None, decisions=[],
@@ -4269,8 +4272,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                 # task, the same records, as a batch child gets: without it
                 # an entrant built its packet at the default, and a task its
                 # lead alone would have drafted stopped the run on its size.
-                children[role].packet_requests = [r for r in self.packet_requests
-                                                  if r.get("task") == spec.task_id and r.get("state") == "granted"]
+                self._packet_requests_for_child(children[role], spec.task_id)
                 # The sizing note on the codebase map is the task's, written
                 # once by this session from the merged change. An entrant's
                 # copy is not the project, and the losing draft's size was
@@ -6626,8 +6628,13 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
             self._done_refusal = (f"\n\n--- BATCH NOT STARTED ---\nThe batch cannot be paid from what is left: "
                                   f"{short}. Reply DONE, or name a smaller task.")
             self._release_renewal([s.task_id for s, _ in parsed], "the parallel batch was not started")
-            # Nothing was dispatched: no id is spent, and the next reply is
-            # compared with nothing.
+            # Nothing was dispatched, but the not-started records above are
+            # keyed by these ids, so the ids are spent as a serial task's is
+            # when it is not started: a batch named later under the same ids
+            # read as the one not started. The next reply is compared with
+            # nothing.
+            for spec, _ in parsed:
+                self._issue_task_id(spec.task_id)
             self._named_last = ()
             return False
         # From here the wave is admitted work: its slots are charged by the
@@ -6695,8 +6702,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                     # Its own task's granted allowance and nothing else: the
                     # same records, so a correction it applies is the
                     # parent's record too (no batch sibling can read it).
-                    child.packet_requests = [r for r in self.packet_requests
-                                             if r.get("task") == mine.task_id and r.get("state") == "granted"]
+                    self._packet_requests_for_child(child, mine.task_id)
                     child._current_covers = list(covers)
                     child._requirement_texts = dict(self.memory.ledger.requirements)
                     # The parent's approved commands, for the scratch

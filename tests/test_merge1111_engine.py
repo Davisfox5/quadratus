@@ -198,3 +198,100 @@ def test_a_baseline_refuses_a_stale_client_before_any_call_and_records_the_relea
     assert result.error.startswith("StaleClient: claude: installed client 2.1.296")
     assert "openai:" not in result.error and "grok:" not in result.error, "another vendor's client is not this baseline's"
     assert len(B.calls(trace)) == 1, "no call was made"
+
+
+# -- intake:3: a listed task the intake would refuse is found before any listed task runs --
+
+
+def _listed_run(tmp_path, monkeypatch, second):
+    from tests.lifecycle import test_explicit_tasks as X
+
+    replay = X._run(tmp_path, monkeypatch, [X.FAVICON_TASK, second], record_complete=False)
+    return replay, json.loads((replay.result.run_dir / "result.json").read_text())["explicit_tasks"]
+
+
+def test_a_listed_path_in_another_letter_case_is_refused_before_the_first_listed_task_runs(tmp_path, monkeypatch):
+    from tests.lifecycle import test_explicit_tasks as X
+
+    scope = dict(X.README_T2, permitted_paths=["readme.md"])
+    replay, record = _listed_run(tmp_path, monkeypatch,
+                                 "KIND: docs simple\nSCOPE: " + json.dumps(scope) + "\nDocument add in readme.md.")
+    assert replay.calls == [], "no model call: the whole list is read first"
+    assert "TaskListInvalid" in replay.result.error and "listed task 2: SCOPE paths are exact" in replay.result.error
+    assert record["ran"] == [] and record["invalid"]["index"] == 2
+
+
+def test_a_listed_role_packet_over_the_default_is_refused_before_the_first_listed_task_runs(tmp_path, monkeypatch):
+    from tests.lifecycle import test_explicit_tasks as X
+
+    scope = dict(X.README_T2, acceptance=[f"README names add, case {n}: " + "x" * 200 for n in range(70)])
+    replay, record = _listed_run(tmp_path, monkeypatch,
+                                 "KIND: docs simple\nSCOPE: " + json.dumps(scope) + "\nDocument add in README.md.")
+    assert replay.calls == []
+    assert "listed task 2: The lead role packet for this task would be" in replay.result.error
+    assert "A listed task has no orchestrator to grant a larger allowance" in replay.result.error
+    assert record["ran"] == []
+
+
+# -- intake:6: a child numbers a packet request past every request its parent holds --------
+
+
+def test_a_child_numbers_its_packet_request_past_the_requests_its_parent_kept_back():
+    """The child is handed only its task's granted requests. Numbered from
+    that list, its lead's request repeated the granted request's id."""
+    from types import SimpleNamespace
+
+    from quadratus.session import Session
+
+    narrowed = dict(id="PX-t2-1", task="t2", state="narrow")
+    granted = dict(id="PX-t2-2", task="t2", state="granted")
+    parent = SimpleNamespace(packet_requests=[narrowed, granted, dict(id="PX-t3-1", task="t3", state="granted")])
+    child = SimpleNamespace(packet_requests=[])
+    Session._packet_requests_for_child(parent, child, "t2")
+    assert child.packet_requests == [granted] and child.packet_requests[0] is granted, "the same record"
+    first = Session._packet_request_id(child, "t2")
+    assert first == "PX-t2-3" and first not in {r["id"] for r in parent.packet_requests}
+    child.packet_requests.append(dict(id=first, task="t2", state="requested"))
+    assert Session._packet_request_id(child, "t2") == "PX-t2-4"
+    # The parent's own numbering is the count it always was.
+    assert Session._packet_request_id(parent, "t2") == "PX-t2-3"
+    assert Session._packet_request_id(parent, "t9") == "PX-t9-1"
+
+
+def test_no_packet_request_id_is_built_from_a_list_outside_the_one_numbering():
+    """Both request sites and both child hand-overs go through the two
+    methods above, so the count and the hand-over cannot drift apart."""
+    import inspect
+
+    from quadratus import session, session_packets
+
+    text = inspect.getsource(session) + inspect.getsource(session_packets)
+    assert text.count('f"PX-{') == 1 and text.count("_packet_requests_withheld = len(") == 1
+    assert text.count("self._packet_requests_for_child(") == 2 and text.count("self._packet_request_id(") == 2
+
+
+# -- intake:8: a batch that was not started spends its ids ---------------------------------
+
+
+@pytest.mark.requirements_ledger
+def test_a_batch_named_after_one_that_was_not_started_does_not_read_as_not_started(tmp_path, monkeypatch):
+    """The not-started records are keyed by task id. While those ids were
+    issued again, a later batch that was only sent back read as not started."""
+    from quadratus.session import Session
+    from tests.lifecycle import harness as H
+    from tests.lifecycle import test_cycle21_dispatch_intake as intake
+
+    admit, asked = Session._admit_batch, []
+
+    def short_once(self, parsed):
+        asked.append([spec.task_id for spec, *_ in parsed])
+        return "2 calls are left and the batch needs 6" if len(asked) == 1 else admit(self, parsed)
+    monkeypatch.setattr(Session, "_admit_batch", short_once)
+    unpaid = intake.REQS + "PARALLEL\n" + intake._task(intake._narrow()) + "\n---\n" + intake._readme()
+    oversized = "PARALLEL\n" + intake._task(intake._oversized()) + "\n---\n" + intake._readme()
+    replay = H.run(tmp_path, monkeypatch, intake._script(unpaid, oversized, "DONE"), files=intake.FILES,
+                   max_tasks=3, record_complete=False)
+    assert asked == [["t1", "t2"]], "the second batch was sent back at intake, before admission"
+    events = [(e["event"], e["tasks"]) for e in intake._ledger(replay) if e["event"] in ("not_started", "sent_back")]
+    assert events[0] == ("not_started", ["t1", "t2"])
+    assert events[1] == ("sent_back", ["t3", "t4"]), "its own ids, and its own reason"
