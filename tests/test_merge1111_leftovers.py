@@ -159,3 +159,83 @@ def test_the_docs_say_no_judge_can_be_seated_on_a_two_vendor_trust_and_what_deci
     assert "so the tie goes to the smaller diff, then the routed lead" in helped
     readme = _text("README.md")
     assert "so no judge is asked" in readme and "the tie goes to the smaller diff, then to the routed lead" in readme
+
+
+# -- leftovers:12: the policy docstring does not promise a size bound ------------------
+
+def test_the_policy_module_does_not_say_a_project_policy_narrows_task_size():
+    from quadratus import policy
+    doc = " ".join(policy.__doc__.split())
+    assert "a smaller scope" not in doc
+    assert "size is advisory and stops nothing" in doc
+
+
+# -- leftovers:9, 10, 11: CLAUDE.md says what the merged code does ---------------------
+
+def _claude_entry(title: str) -> str:
+    text = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    start = text.index(title)
+    ends = [end for end in (text.find("\n- **", start), text.find("\n## ", start)) if end != -1]
+    return text[start: min(ends)]
+
+
+#: The entries added on 2026-11-12, by their opening words.
+MERGE_ENTRIES = (
+    "- **The two lines were merged on Davis's instruction",
+    "- **After the merge, prompts and operator text say one thing**",
+    "- **A vendor binary asked for its version or its model listing",
+    "- **Transport failures keep their typed facts**",
+    "- **A run folder's own state goes through safe_io too**",
+    "- **A resume holds the parent run to the record the run wrote itself**",
+    "- **The watch lists an ended run's committed state",
+)
+
+
+def test_the_merge_entries_are_dated_short_and_sit_before_the_split_entry():
+    text = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    places = [text.index(title) for title in MERGE_ENTRIES]
+    assert places == sorted(places) and places[-1] < text.index("- **session.py was split by moving code")
+    assert places[0] > text.index("- **The repo's statements about itself are tested**")
+    for title in MERGE_ENTRIES:
+        entry = _claude_entry(title)
+        assert "2026-11-12" in entry or "same audit" in entry, title
+        assert "\u2014" not in entry and len(entry.rstrip().splitlines()) <= 10, title
+    merged = " ".join(_claude_entry(MERGE_ENTRIES[0]).split())
+    for rule in ("task size is advisory", "no model writes a close-out", "a slot is charged at dispatch",
+                 "roster keys name a family", "a recheck is one line per finding", "one verdict reader",
+                 "the typed retry", "the stop on a refused reserve", "one measured diff block",
+                 "send-back corrections counted per kind"):
+        assert rule in merged, rule
+
+
+def test_each_statement_the_merge_made_false_carries_a_dated_correction():
+    from quadratus import integration, runtime
+    flat = _text("CLAUDE.md")
+    # The history stays; the correction sits beside it.
+    for kept, corrected in (
+            ("amended from close-outs.", "since 2026-10-21 no close-out amends the map"),
+            ("the engine never retries a capacity 429 itself", "so a bare 429 is retried"),
+            ("no outer retry, override or retry system was added", "Corrected 2026-11-12 (merge ruling 9), for this"),
+            ("nothing else is** (cycle06", "The 529 is not the only re-sent failure"),
+            ("`quadratus-pytest/6`", "a `/6` or `/7` report is foreign"),
+            ("`quadratus-pytest/7`", "says `quadratus-pytest/5`, with both lines' fields"),
+            ("inline up to `REVIEW_DIFF_CHARS`, 24,000 characters", "review seats get one diff block"),
+            ("a one-turn summary call reserves", "no run makes a summary call"),
+            ("The cap, the size ceiling and the completion gates", "size is advisory since 2026-10-20, so there is no"),
+            ("one judge from the third vendor", "the trust has two vendors, so no judge is seated"),
+            ("NOTES parser are deleted", "it was removed again on 2026-11-12"),
+    ):
+        assert kept in flat and corrected in flat, kept
+    # The facts the corrections state.
+    assert integration.PRODUCER == "quadratus-pytest/5"
+    assert runtime._looks_exhausted(type("E", (Exception,), {"window_exhausted": True})()) is True
+    assert runtime._looks_exhausted(Exception("usage limit reached")) is False
+
+
+def test_the_failure_class_and_the_typed_window_fact_read_one_rule():
+    """leftovers:10, already so at the start commit: pinned here so the two
+    cannot drift apart again."""
+    from quadratus.cli_providers import _own_error_facts, failure_facts
+    text = "unexpected status 503 Service Unavailable: usage limit service down"
+    assert failure_facts(503, text) == {"status": 503, "failure_class": "unavailable"}
+    assert "window_exhausted" not in _own_error_facts(text, 503)
