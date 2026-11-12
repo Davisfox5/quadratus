@@ -1007,8 +1007,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Contests (default off). With 'complex', each task routed at complex difficulty is "
             "drafted twice, by two models from different vendors that cannot see each other's work, "
             "each in its own private copy of the project; measured facts pick the draft that is "
-            "merged (finished, inside its scope, your checks), and a third model is asked once only "
-            "when they tie. Costs about one extra draft per contested task, and needs --allow-writes. "
+            "merged (finished, inside its scope, your checks). When they tie, a model from a third "
+            "vendor is asked once if the brain trust has one; today it has two vendors, so the tie "
+            "goes to the smaller diff, then the routed lead. Costs about one extra draft per contested task, and needs --allow-writes. "
             "The routed lead's own refusal still stops the run."
         ),
     )

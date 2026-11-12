@@ -390,8 +390,11 @@ as `unknown`.
 by two models from different vendors that cannot see each other's work, each
 in a private copy of your project. The harness measures both drafts (did it
 finish, did it stay inside the task's scope, does it pass your checks) and
-merges the better one; on a tie, or when one draft changed nothing, a third
-model is asked once to pick between the two diffs. The task then goes through
+merges the better one. On a tie, or when one draft changed nothing, a model
+from a third vendor is asked once to pick between the two diffs, when the
+brain trust has one. Today it has two vendors and both are drafting, so no
+judge is asked: the record says so, and the tie goes to the smaller diff, then
+to the routed lead. The task then goes through
 the usual review and checks. A contest costs about one extra draft, needs
 `--project` and `--allow-writes`, and is off by default. The drafts are made
 in copies without installed dependencies (`node_modules`, a virtualenv), so a

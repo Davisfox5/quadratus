@@ -141,3 +141,21 @@ def test_the_limits_text_the_cli_help_and_the_readme_promise_no_summary_call():
     readme = _text("README.md")
     assert "one-turn summary" not in readme.lower() and "no model close-out" not in readme
     assert "the harness writes the close-out on every tier" in readme
+
+
+# -- leftovers:7: the contest's judge on a two-vendor brain trust ----------------------
+
+def test_the_docs_say_no_judge_can_be_seated_on_a_two_vendor_trust_and_what_decides_then():
+    from quadratus import contest
+    from quadratus.cli import build_parser
+    from quadratus.registry import MODE_ROSTERS
+    vendors = {key.partition(":")[0] for roster in MODE_ROSTERS.values() for key in roster["peers"]}
+    assert vendors == {"claude", "openai"}, "a third vendor on the trust makes the texts below false: update them"
+    # With no verdict the rules that follow the judge decide, in this order.
+    assert contest.RULES[contest.RULES.index("judge") + 1:] == ("size", "default")
+    doc = " ".join(contest.__doc__.split())
+    assert "no judge can be seated today" in doc and "the tie goes to the smaller diff, then the routed lead" in doc
+    helped = " ".join(build_parser().format_help().split())
+    assert "so the tie goes to the smaller diff, then the routed lead" in helped
+    readme = _text("README.md")
+    assert "so no judge is asked" in readme and "the tie goes to the smaller diff, then to the routed lead" in readme
