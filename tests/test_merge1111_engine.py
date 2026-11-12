@@ -140,3 +140,36 @@ def test_a_lead_picked_for_a_sent_back_task_is_not_kept_for_a_different_task_und
     led = {call.model for call in replay.of("lead")}
     asked = {call.model for call in replay.of("packet-justification")}
     assert picks[0][2] != picks[1][2] and led and led != asked, "the simple task has its own routed lead"
+
+
+# -- intake:5: a refused resume is the command line's error, not a traceback ---------------
+
+
+def _cli_with_runner(monkeypatch, name, raised):
+    from quadratus import baseline, cli, project_run
+
+    def run(*args, **kwargs):
+        raise raised
+    monkeypatch.setattr(project_run if name == "run_project" else baseline, name, run)
+    return cli
+
+
+def test_a_refused_resume_is_said_in_words_with_exit_1(tmp_path, monkeypatch, capsys):
+    from quadratus.checkpoint import CheckpointRefused
+
+    cli = _cli_with_runner(monkeypatch, "run_project", CheckpointRefused("the run is sealed"))
+    assert cli.main(["goal", "--project", str(tmp_path), "--resume", "20261112T000000Z-aaaaaaaa"]) == 1
+    assert "Error: resume refused: the run is sealed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("flags, runner", [((), "run_project"), (("--baseline", "openai:sol"), "run_baseline")])
+def test_a_stale_client_is_said_in_words_and_any_other_fault_keeps_its_traceback(
+        tmp_path, monkeypatch, capsys, flags, runner):
+    from quadratus.cli_providers import StaleClient
+
+    cli = _cli_with_runner(monkeypatch, runner, StaleClient("codex 0.1 is older than 0.9"))
+    assert cli.main(["goal", "--project", str(tmp_path), *flags]) == 1
+    assert "Error: codex 0.1 is older than 0.9" in capsys.readouterr().out
+    cli = _cli_with_runner(monkeypatch, runner, RuntimeError("a fault"))
+    with pytest.raises(RuntimeError, match="a fault"):
+        cli.main(["goal", "--project", str(tmp_path), *flags])

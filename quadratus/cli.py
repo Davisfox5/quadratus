@@ -151,6 +151,15 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         except (ValueError, ProviderError, OSError) as exc:
             print(f"Error: {exc}")
             return 1
+        except RuntimeError as exc:
+            # A refused --resume and a client older than the qualified
+            # minimum are refusals in words like the others; any other
+            # RuntimeError is a fault and keeps its traceback.
+            said = _refusal_line(exc)
+            if said is None:
+                raise
+            print(said)
+            return 1
         except KeyboardInterrupt as exc:
             return _interrupted(exc)
         print(result.report)
@@ -223,6 +232,18 @@ def _baseline_status(result) -> tuple:
                if not configured else "No check result was recorded. The goal was not judged.")
 
 
+def _refusal_line(exc: BaseException) -> Optional[str]:
+    """The error line for a refusal the development line raises as its own
+    RuntimeError type, or None when ``exc`` is not one."""
+    from .checkpoint import CheckpointRefused
+    from .cli_providers import StaleClient
+    if isinstance(exc, CheckpointRefused):
+        return f"Error: resume refused: {exc}"
+    if isinstance(exc, StaleClient):
+        return f"Error: {exc}"
+    return None
+
+
 def _run_baseline(goal: str, args: argparse.Namespace, settings: Settings) -> int:
     """One model alone on the project (``quadratus.baseline``): the
     measurement arm beside a project run, under the same checks, limits and
@@ -244,6 +265,12 @@ def _run_baseline(goal: str, args: argparse.Namespace, settings: Settings) -> in
         )
     except (ValueError, ProviderError, OSError) as exc:
         print(f"Error: {exc}")
+        return 1
+    except RuntimeError as exc:
+        said = _refusal_line(exc)
+        if said is None:
+            raise
+        print(said)
         return 1
     except KeyboardInterrupt as exc:
         return _interrupted(exc)
