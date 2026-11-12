@@ -849,7 +849,8 @@ def guidance_for(kind: str) -> List[str]:
     Returned as text to be pasted into the lead's prompt rather than enforced
     in code, because these are judgements about the work product that only the
     model doing the work is positioned to apply. What *is* enforced in code is
-    the routing above and the size ceiling at decomposition.
+    the routing above. Task size is advisory since 2026-10-20: nothing
+    is enforced for size.
     """
     policy = policy_for(kind)
     out: List[str] = []

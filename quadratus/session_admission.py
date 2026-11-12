@@ -200,8 +200,8 @@ class AdmissionMixin:
         slots left, counting the task about to be named, and the requirements
         no task has covered yet (Step 2 medium job on 3e59970: the planner was
         never told the cap of 3, spent it on storage and HTTP, and the CLI and
-        docs requirements were never planned). Facts only: the cap, the size
-        ceiling and the completion gates are unchanged."""
+        docs requirements were never planned). Facts only: the cap and the
+        completion gates are unchanged, and size stays advisory."""
         total = getattr(self, "_max_tasks", None)
         if not total or self._explicit_tasks is not None:
             return ""
@@ -226,8 +226,10 @@ class AdmissionMixin:
                         if not str(status.get(rid, "")).startswith(("covered", "met"))]
             if open_ids:
                 text += (f" Requirements no task has covered yet: {', '.join(open_ids)}. Plan so the "
-                         "remaining slots can reach every one of them within the size ceiling; if they "
-                         "cannot, say which will be left open rather than spend the slots unaware.")
+                         "remaining slots can reach every one of them, declaring a task at its real "
+                         "size where that is what covers them (the size figure is a guide and stops "
+                         "nothing); if they cannot, say which will be left open rather than spend the "
+                         "slots unaware.")
         return text
 
     def _allowance_note(self) -> str:

@@ -420,25 +420,47 @@ class ChecksMixin:
         The lowering rule is unchanged. This is its signpost: the refusal used
         to say only "name a task that fixes them", and a task that covers the
         requirement again never lifts a report, so the reopen allowance went
-        on tasks that could not clear it. An item that names no file path
-        (``_item_paths``) cannot be matched to any check: it stands for the
-        rest of the run, and the orchestrator is told not to plan for it."""
+        on tasks that could not clear it. Each line states the route the
+        engine really has for that item (2026-11-12, merge): its bound cases
+        or its file executed whole, or, for an item no check can run as
+        written, a restatement with RUNS lines by its own lead or by a task
+        naming DISCHARGES. Only an item with no obligation id has no route:
+        it stands for the rest of the run and the orchestrator is told not
+        to plan for it."""
         lines, stuck = [], []
         for entry in self._standing_not_run():
             hit = [r for r in entry["requirements"] if r in rids]
             if not hit:
                 continue
             head = f"- {', '.join(hit)}: task {entry['task']} reported NOT RUN: {entry['item'][:160]}. "
-            paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
-            if entry.get("kind") == "skipped":
+            skipped = entry.get("kind") == "skipped"
+            runnable = not skipped and self._not_run_runnable(entry)
+            cases = [str(c) for c in (entry.get("cases") or ())]
+            paths = _item_paths(entry["item"]) if runnable and not cases else []
+            oid = entry.get("oid")
+            if skipped:
                 lines.append(head + f"Lifted when a later run of required check {entry['receipt']} passes "
                              "with those cases executed and none skipped.")
+            elif entry.get("restatements") and self._discharge_record(entry) is not None:
+                lines.append(head + f"Restated as {', '.join(cases)[:160]} and executed on this source; lifted "
+                             "when an independent seat judges those cases sufficient, never by another task.")
+            elif runnable and cases:
+                lines.append(head + "Lifted only when a later required check passes with "
+                             f"{', '.join(cases)[:160]} executed and passed, with no filter and nothing skipped.")
             elif paths:
                 lines.append(head + "Lifted only when a later required check passes while naming "
                              f"{', '.join(paths)[:160]} as a whole file, with no filter and nothing skipped.")
+            elif oid:
+                # No check runs it as written, but it is not stuck: the
+                # restatement route clears it (the same route _evidence_route
+                # names), so the orchestrator is not told to leave it.
+                lines.append(head + "No check runs it as written. It is lifted when its own task's lead, or the "
+                             f"lead of a later task naming 'DISCHARGES: {oid}', restates it with 'RUNS: {oid} - "
+                             "file::[Class::]test_case' lines, a complete passing run executes those cases, and an "
+                             "independent seat judges them sufficient.")
             else:
-                lines.append(head + "A report is lifted only by a later required check that names its "
-                             "file, and this one names none: it stands for the rest of this run.")
+                lines.append(head + "It names nothing a check can run and has no obligation id to restate it "
+                             "under: it stands for the rest of this run.")
                 stuck += [r for r in hit if r not in stuck]
         if not lines:
             return "", []
