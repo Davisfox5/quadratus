@@ -8,6 +8,7 @@ reads are kept in the session's memory beside the record and written
 nowhere."""
 import json
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +18,7 @@ from quadratus.integration import GateCommand, GateReceipt, GateResult, GateSuit
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import FILES
 from tests.lifecycle.test_proof_binding import CASE, _acceptance, _at
-from tests.lifecycle.test_workflow_repair import Seen, _rows, _script
+from tests.lifecycle.test_workflow_repair import CODE_FINDING, MET, NEG_TESTS, Seen, _rows, _script
 
 
 @pytest.mark.requirements_ledger
@@ -33,6 +34,43 @@ def test_a_proof_row_settles_on_an_observation_whose_record_names_no_case(tmp_pa
     reports = [r["report"] for r in observed["receipts"]] or [observed["report"]]
     assert observed["passed"] and CASE not in json.dumps(observed)
     assert all("passed_cases" not in r and r["passed_cases_omitted"] == r["counts"]["passed"] >= 1 for r in reports)
+
+
+@pytest.mark.requirements_ledger
+def test_when_a_revision_returns_the_bytes_the_recheck_reads_the_run_already_made_on_them(tmp_path, monkeypatch):
+    """A second revision undoes the first, so the source is again the one the
+    harness ran before the review. That run is not repeated (once per source
+    and gate), so only its own names can show the row's case ran on these
+    bytes. With an earlier source's names let go, the second recheck read
+    "execution stale (executed on another source)" here."""
+    seen = Seen()
+    rows, drafted = [], {}
+
+    def revision(call, replay):
+        if not drafted:
+            drafted["tests"] = (Path(call.cwd) / "tests" / "test_app.py").read_text()
+            H.write(call, {"tests/test_app.py": NEG_TESTS})
+            return f"Added the negative case.\nPROVES: P1 - {CASE}\nCHANGED: {json.dumps(['tests/test_app.py'])}"
+        H.write(call, {"tests/test_app.py": drafted["tests"]})
+        return f"Took the negative case out again.\nPROVES: P1 - {CASE}\nCHANGED: {json.dumps(['tests/test_app.py'])}"
+
+    def recheck(call, replay):
+        rows.append(_rows(call.prompt))
+        return ("RFT1-1: UNRESOLVED the negative case does not belong in this task; take it out" if len(rows) == 1
+                else "RFT1-1: RESOLVED")
+    replay = H.run(_at(tmp_path, "back"), monkeypatch,
+                   _script(seen, collaborator=lambda c, r: CODE_FINDING + MET, revision=revision, recheck=recheck),
+                   files=FILES, max_tasks=1, record_complete=False)
+    assert [c.role for c in replay.calls].count("revision") == 2 and len(rows) == 2
+    record = H.result_json(replay)
+    # Two sources, two runs: the bytes that came back were not run a second time.
+    first, second = record["review_checks"]
+    assert [first["stage"], second["stage"]] == ["review", "recheck"]
+    assert first["source"] == record["source_fingerprint"] != second["source"]
+    assert f"binding bound: {CASE}; execution ran (receipt observed-2)" in rows[0]
+    assert f"binding bound: {CASE}; execution ran (receipt observed-1)" in rows[1]
+    assert CASE not in json.dumps(record["review_checks"]), "and neither record names a case"
+    assert replay.result.completed, replay.result.error
 
 
 def _report(names):
@@ -65,7 +103,7 @@ def _observer(project, names, source):
                                                environment="env"))
 
 
-def test_the_names_are_given_only_to_the_record_this_session_made_of_the_current_bytes(tmp_path):
+def test_the_names_are_given_only_to_the_record_this_session_made_each_its_own(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     (project / "app.py").write_text("X = 1\n")
@@ -81,10 +119,19 @@ def test_the_names_are_given_only_to_the_record_this_session_made_of_the_current
     # What a resumed run holds is an equal record, not this one: it names nothing.
     restored = json.loads(json.dumps(first))
     assert restored == first and session.Session._observation_named(stub, restored) is restored
-    # The bytes move and are observed again: the earlier run's names are let go.
-    source[0] = "second"
+    # The bytes move and are observed again, with another case list: each
+    # record is given the names of its own run, never another's.
+    source[0], earlier = "second", list(names)
+    names[:] = ["tests/test_b.py::test_other"]
     session.Session._observe_checks(stub, SimpleNamespace(task_id="t1"), "recheck")
     second = stub.review_checks[1]
-    assert [kept[0] for kept in stub._observed_names] == [second]
-    assert session.Session._observation_named(stub, first) is first
     assert session.Session._observation_named(stub, second)["receipts"][0]["report"]["passed_cases"] == names
+    assert session.Session._observation_named(stub, first)["receipts"][0]["report"]["passed_cases"] == earlier
+    # The bytes come back. That source was observed under this gate, so there
+    # is no third run, and the first run's names are still the ones held for it.
+    source[0] = "first"
+    session.Session._observe_checks(stub, SimpleNamespace(task_id="t1"), "recheck")
+    assert stub.review_checks == [first, second]
+    again = session.Session._observation_named(stub, first)
+    assert again["source"] == "first" and again["receipts"][0]["report"]["passed_cases"] == earlier
+    assert earlier[3] not in json.dumps(stub.review_checks) and names[0] not in json.dumps(stub.review_checks)
