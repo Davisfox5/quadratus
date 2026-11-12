@@ -252,6 +252,15 @@ def check_env(base: Optional[Mapping[str, str]] = None) -> Tuple[Dict[str, str],
     return _build("checks, previews and probes", (), base)
 
 
+def query_env(vendor: str = "", base: Optional[Mapping[str, str]] = None) -> Tuple[Dict[str, str], List[str]]:
+    """The environment for a vendor binary asked for its version or its model
+    listing, and the names left out. It is the vendor's own program, so the
+    vendor limit holds (no billed key and no vendor's sign-in variable, even
+    when ``QUADRATUS_ENV_PASS`` names one), and no sign-in is kept: a version
+    or a listing is not a model call. Sign-in files under HOME still apply."""
+    return _build(f"{vendor or 'vendor'} CLI version and catalogue queries", (), base, vendor_call=True)
+
+
 def withheld_names(base: Optional[Mapping[str, str]] = None) -> List[str]:
     """The names in the environment that a check would not inherit, for a
     status display. Reads only; logs nothing."""

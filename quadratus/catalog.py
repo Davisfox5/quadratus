@@ -357,8 +357,13 @@ def grok_catalog(binary: str, *, args: Sequence[str] = ("models",), timeout: flo
     status with the reason; nothing is retried."""
     argv = [str(binary), *args]
     runner = run or subprocess.run
+    # The listing is the vendor's own binary: it gets no billed key, no
+    # vendor sign-in variable and no other credential-shaped name.
+    from .child_env import query_env
+    env, _ = query_env("grok")
     try:
-        done = runner(argv, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, check=False)
+        done = runner(argv, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, check=False,
+                      env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return GrokCatalog("unavailable", reason=f"{type(exc).__name__}: {str(exc)[:160]}", command=tuple(argv))
     if done.returncode != 0:
