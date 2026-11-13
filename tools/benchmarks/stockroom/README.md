@@ -35,3 +35,17 @@ The third run spent, by role: revisions 2.2M, lead drafts 1.8M, reviews 1.7M,
 rechecks 1.2M, planning 1.1M, the audit 0.7M. Its audit findings were edge
 cases the graders do not test. One was probed afterwards: a timestamp of
 10**400 raises OverflowError in that build and in both baseline builds.
+
+## The lean shape, 2026-11-13
+
+One listed task covering every requirement (`--tasks`, no planner): Opus
+builds, GPT Sol reviews, one fix round, then the audit.
+
+| Run | Graders | Calls | Reported tokens | Outcome |
+| --- | --- | --- | --- | --- |
+| lean, 1.2M per call | 116 of 116 | 2 | about 1,320,000 | stopped: the draft reported 1,266,498 tokens against the 1,200,000 ceiling |
+| lean, 2.5M per call | 116 of 116 | 4 | about 5,220,000 | stopped: the revision reported 2,505,850 tokens against the 2,500,000 ceiling; no recheck or audit ran |
+
+In the second run the draft was 1.42M, the review 1.25M and the revision
+2.51M. The same model built the same job alone for 0.77M.
+
