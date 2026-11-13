@@ -275,7 +275,9 @@ def test_the_text_says_when_the_minimum_lead_cap_plans_more_than_the_threshold()
     assert f"never below {MIN_LEAD_TURNS} rounds" in text and f"threshold of at least {planned:,} tokens" in text
 
 
-@pytest.mark.parametrize("ceiling", [480_000, 600_000, 1_500_000])
+# 480,000 left this list on 2026-11-13: the cap fits it with no headroom, and
+# that case now has its own sentence (tests/test_merge1111_cap_headroom.py).
+@pytest.mark.parametrize("ceiling", [600_000, 1_500_000])
 def test_a_threshold_the_cap_fits_in_gets_no_such_sentence(ceiling):
     limits = RunLimits(max_reported_tokens=5_000_000, max_tokens_per_call=ceiling)
     text = describe_limits(limits, None, 5, *effective_lead_turns(None, limits))

@@ -332,6 +332,22 @@ def lead_cap_overrun(lead_turns, limits):
     return planned if planned > ceiling else None
 
 
+def lead_cap_tight(lead_turns, limits):
+    """The tokens ``lead_turns`` rounds plan for one call when that fits the
+    per-call threshold but leaves less headroom than TURN_CAP_MARGIN keeps,
+    else None.
+
+    The stockroom benchmark of 2026-11-12: under a 500,000 threshold the
+    8-round floor plans 480,000, a revision's rounds ran a little over the
+    average, the call reported 511,672 and the run stopped. The arithmetic
+    is left alone; this only lets the text say so before the first call."""
+    ceiling = getattr(limits, 'max_tokens_per_call', None) if limits is not None else None
+    if not lead_turns or not ceiling:
+        return None
+    planned = int(lead_turns) * TURN_CONTEXT_TOKENS
+    return planned if ceiling * TURN_CAP_MARGIN < planned <= ceiling else None
+
+
 def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_source=None) -> str:
     """The selected allowance in plain words, one wording for the GUI form,
     the progress stream and the saved record (Codex GUI plan on #35,
@@ -375,6 +391,15 @@ def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_s
                 + (f' A derived cap is never below {MIN_LEAD_TURNS} rounds, which fit only in a '
                    f'threshold of at least {MIN_LEAD_TURNS * TURN_CONTEXT_TOKENS:,} tokens.'
                    if lead_source != OPERATOR_LEAD_SOURCE else ''))
+        tight = lead_cap_tight(lead_turns, limits)
+        if tight:
+            roomy = int(int(lead_turns) * TURN_CONTEXT_TOKENS / TURN_CAP_MARGIN)
+            parts.append(
+                f'At about {TURN_CONTEXT_TOKENS:,} tokens a round, {lead_turns} rounds plan about '
+                f'{tight:,} tokens for one call, close to the {limits.max_tokens_per_call:,}-token '
+                'per-call threshold: a call whose rounds run over the average can pass it and stop '
+                f'the run. A threshold of at least {roomy:,} tokens, or fewer rounds, leaves the '
+                'usual headroom.')
     if survey is not None:
         parts.append(f'Recovery: up to {survey.recovery_tasks} extra continuation or repair task(s) '
                      'after failures.')
