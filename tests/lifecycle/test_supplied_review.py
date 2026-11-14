@@ -44,3 +44,25 @@ def test_off_is_the_run_made_before(tmp_path, monkeypatch):
     for call in replay.of("collaborator"):
         assert HEAD not in call.prompt and "fresh source copy" in call.prompt + " ".join(call.argv)
     assert "supplied_reviews" not in H.result_json(replay)
+
+
+def test_a_reviewer_that_asks_for_files_is_given_the_project_and_the_run_completes(tmp_path, monkeypatch):
+    from tests.lifecycle.test_lifecycle_matrix import covered_met
+
+    def collaborator(call, replay):
+        if len(replay.of("collaborator")) == 1:
+            return "NEED FILES: tests/test_app.py"
+        return "No blocking findings.\n" + covered_met(call.prompt) + "REVIEW: COMPLETE"
+
+    script = Script(orchestrator=_plan(REQS + IMPLEMENT), lead=_fixes, collaborator=collaborator,
+                    **{"requirements-review": lambda call, replay: "COMPLETE",
+                       "auditor": judging_scenarios(lambda call, replay: MET, ADD_PROOF, basis=ADD_SHOWN)})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4,
+                   session_options={"supplied_review": True})
+    assert replay.result.completed, replay.result.error
+    first, second = replay.of("collaborator")
+    assert HEAD in first.prompt and HEAD not in second.prompt
+    assert "fresh source copy" in second.prompt + " ".join(second.argv)
+    rows = H.result_json(replay)["supplied_reviews"]
+    assert [r["mode"] for r in rows] == ["supplied", "copy"]
+    assert "asked for files it was not shown: tests/test_app.py" in rows[1]["why"]

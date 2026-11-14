@@ -5183,7 +5183,12 @@ Key design decisions already settled:
   (`Fleet._supplied_judgment`, the summary view's controls, 600 s). Nothing
   is cut: files that do not fit one message (128,000 bytes), a changed file
   that is not text, or design evidence send that review to a source copy.
-  No scratch demonstration is asked for. Its effect on cost is unmeasured.
+  Unchanged files the prompt names are handed over first, because a re-check
+  of an earlier task's finding is about a file this task may not have
+  touched. A seat that still lacks a file answers `NEED FILES: <path>` as
+  its first line and is asked again, once, with a copy (`_needs_files`). No
+  scratch demonstration is asked for. Measured on stockroom: a review fell
+  from about 280k reported tokens to about 45k, a re-check from 148k to 40k.
 - **session.py was split by moving code, and two rules keep it split**
   (2026-11-11, redone 2026-11-12 after the development line was merged;
   `tests/test_review1110_split.py`). It went from 29,386 lines to 10,238

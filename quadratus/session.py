@@ -276,6 +276,7 @@ from .reply_parsers import (  # noqa: F401
     _inspection_attested,
     _int_conversion_limit,
     _met_lines,
+    _needs_files,
     _packet_allowance_record,
     _packet_bytes,
     _packet_reason_problem,
@@ -413,6 +414,7 @@ from .session_prompts import (  # noqa: F401
     _KIND_VOCABULARY,
     _MEASURED_DIFF_BODY,
     _MISSING_SCENARIO_RULE,
+    _NEED_FILES_RULE,
     _NEEDS_REQUEST,
     _NO_REQUESTS_IN_FIX,
     _NOT_RUN_REMEDY_LINES,
@@ -1554,6 +1556,21 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         return reply
 
     def _invoke_model_call(self, key, prompt, *, allow_writes=False):
+        """One model call. A supplied review whose seat answers that it needs
+        a file it was not shown (``NEED FILES:`` as its first line) is asked
+        again, once, with a source copy to read: the evidence the harness
+        chose was not enough, and that is not a verdict."""
+        self._last_supplied = False
+        reply = self._invoke_model_call_once(key, prompt, allow_writes=allow_writes)
+        if self._last_supplied and _needs_files(reply):
+            context = invocation_context.get() or {}
+            self._note_supplied_review(key, {k: v for k, v in context.items() if k != "supplied_review"},
+                                       "the seat asked for files it was not shown: "
+                                       + _needs_files(reply)[:200])
+            reply = self._invoke_model_call_once(key, prompt, allow_writes=allow_writes, supplied=False)
+        return reply
+
+    def _invoke_model_call_once(self, key, prompt, *, allow_writes=False, supplied=True):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
         # Renders are stale once source changes, not once a write-enabled call
         # happens (Codex, Run 16: a revision and a design-fix that changed
@@ -1632,16 +1649,17 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
             facts = self._harness_facts(current_only=True, excerpt=True)
             if facts:
                 context = dict(context, harness_checks=facts)
-        if (self.config.supplied_review and self.project and not blind_source and not allow_writes
+        if (supplied and self.config.supplied_review and self.project and not blind_source and not allow_writes
                 and context.get("origin") != "worker" and context.get("role") in ("collaborator", "recheck")):
             # A review of handed evidence (SessionConfig.supplied_review):
             # the diff is in the prompt already; the changed files go in
             # whole, and the seat answers in one turn with no tools. What
             # does not fit one message is reviewed in a source copy as before.
-            supplied, why = self._supplied_evidence(prompt, context)
-            if supplied:
-                prompt += supplied
+            block, why = self._supplied_evidence(prompt, context)
+            if block:
+                prompt += block
                 context = dict(context, supplied_review=True)
+                self._last_supplied = True
             self._note_supplied_review(key, context, why)
         if (not blind_source and not allow_writes and context.get("role") == "collaborator"
                 and self._covered_texts() and not context.get("supplied_review")):
@@ -6756,6 +6774,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                 self.unresolved_reviews.extend(child.unresolved_reviews)
                 self.review_notes.extend(child.review_notes)
                 self.scratch_proofs.extend(child.scratch_proofs)
+                self.supplied_reviews.extend(child.supplied_reviews)
                 self.finish_refusals.extend(child.finish_refusals)
                 self.judgment_completions.extend(child.judgment_completions)
                 self.judgment_gaps.extend(child.judgment_gaps)
@@ -9442,17 +9461,25 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                     return "", "the changed files do not fit one message"
                 parts.append(part)
                 shown.append(name)
-            others = sorted((name for name in now if name not in changed
-                             and len(now[name]) <= self._SUPPLIED_CONTEXT_FILE_BYTES),
-                            key=lambda name: (len(now[name]), name))
+            # Unchanged files, for context: first the ones the prompt names
+            # (a finding under re-check cites the file it is about, which an
+            # earlier task may have written), whatever their size; then the
+            # small ones, smallest first. One that does not fit is left out
+            # and named, never cut.
+            named = sorted(name for name in now if name not in changed and len(name) >= 5 and name in prompt)
+            small = sorted((name for name in now if name not in changed and name not in named
+                            and len(now[name]) <= self._SUPPLIED_CONTEXT_FILE_BYTES),
+                           key=lambda name: (len(now[name]), name))
             context_shown = []
-            for name in others:
+            for name in named + small:
                 try:
                     part = entry(name)
                 except UnicodeDecodeError:
                     continue
                 size = len(part.encode("utf-8"))
                 if size > room:
+                    if name in named:
+                        continue
                     break
                 room -= size
                 parts.append(part)
@@ -9467,8 +9494,8 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                 + (f"Unchanged, shown whole for context: {', '.join(context_shown)}.\n" if context_shown else "")
                 + (f"Unchanged and not shown: {', '.join(hidden[:60])}"
                    + (f" and {len(hidden) - 60} more" if len(hidden) > 60 else "") + ". "
-                   "Where a judgment depends on one of these, say which file and what you could not "
-                   "see; do not assume its contents.\n" if hidden else "")
+                   "Do not assume their contents.\n" if hidden else "")
+                + _NEED_FILES_RULE + "\n"
                 + "Cite files by these project-relative paths.\n\n")
             return head + "".join(parts), (f"{len(shown)} changed and {len(context_shown)} unchanged "
                                            f"file(s) handed over")

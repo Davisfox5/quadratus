@@ -292,3 +292,86 @@ def test_a_denied_write_outside_the_project_is_the_grant_working_not_a_lost_gran
     assert judged(unknown) == ["Write"]
     # With no project named, the rule is the one it was.
     assert _relevant_denials([mistyped], (), writes_granted=True) == [f"Write {mistyped['path']}"]
+
+
+# --- when the handed files are not enough (benchmark run, 2026-11-14) ----------
+# A re-check of a finding about a test file an earlier task wrote was handed
+# only the current task's files; the reviewer answered that the file "is not
+# shown", which was read as the finding still standing, and the run stopped.
+
+def test_a_file_the_prompt_names_is_handed_over_whatever_its_size(tmp_path):
+    big = "def test_close():\n    assert True\n" + "# pad\n" * 6_000  # over the context-file size
+    session, root = _session(tmp_path, {"app.py": "old\n", "tests/test_api.py": big, "other.py": "x = 1\n"})
+    (root / "app.py").write_text("new\n")
+    assert len(big) > session._SUPPLIED_CONTEXT_FILE_BYTES
+    block, _ = session._supplied_evidence("RFT3-11: tests/test_api.py::test_close is not shown to pass", {})
+    assert "=== FILE tests/test_api.py (" in block and "def test_close():" in block
+    assert "Unchanged, shown whole for context: tests/test_api.py, other.py." in block
+    unnamed, _ = session._supplied_evidence("PROMPT", {})
+    assert "=== FILE tests/test_api.py" not in unnamed and "Unchanged and not shown: tests/test_api.py." in unnamed
+
+
+def test_a_named_file_that_does_not_fit_is_left_out_and_named_never_cut(tmp_path):
+    session, root = _session(tmp_path, {"app.py": "old\n", "tests/test_api.py": "y = 1\n" * 30_000,
+                                        "other.py": "x = 1\n"})
+    (root / "app.py").write_text("new\n")
+    block, _ = session._supplied_evidence("about tests/test_api.py", {})
+    assert "=== FILE tests/test_api.py" not in block and "=== FILE other.py" in block
+    assert "Unchanged and not shown: tests/test_api.py." in block
+
+
+def test_the_block_tells_the_seat_what_to_reply_when_a_file_is_missing(tmp_path):
+    from quadratus.session_prompts import _NEED_FILES_RULE
+    session, root = _session(tmp_path, {"app.py": "old\n"})
+    (root / "app.py").write_text("new\n")
+    assert _NEED_FILES_RULE in session._supplied_evidence("PROMPT", {})[0]
+    assert "`NEED FILES: <path>[, <path>]`" in _NEED_FILES_RULE
+
+
+@pytest.mark.parametrize("reply, asked", [
+    ("NEED FILES: tests/test_api.py", "tests/test_api.py"),
+    ("\n  NEED FILES: a.py, b.py\nI could not judge RFT1-1.", "a.py, b.py"),
+    ("NEED FILES:", "(none named)"),
+    ("RFT1-1: UNRESOLVED - tests/test_api.py is not shown\nNEED FILES: tests/test_api.py", ""),
+    ("need files: a.py", ""),
+    ("NO FINDINGS", ""),
+    (None, ""),
+])
+def test_only_a_first_line_request_asks_for_files(reply, asked):
+    from quadratus.reply_parsers import _needs_files
+    assert _needs_files(reply) == asked
+
+
+def test_a_seat_that_asks_for_files_is_asked_again_once_with_a_copy(tmp_path, monkeypatch):
+    session, root = _session(tmp_path, {"app.py": "old\n"})
+    (root / "app.py").write_text("new\n")
+    notes, calls = [], []
+    session.config.progress = notes.append
+    replies = iter(["NEED FILES: tests/test_api.py", "RFT1-1: RESOLVED - tests/test_api.py::test_close passes"])
+
+    def once(key, prompt, *, allow_writes=False, supplied=True):
+        calls.append(supplied)
+        session._last_supplied = supplied
+        return next(replies)
+
+    monkeypatch.setattr(session, "_invoke_model_call_once", once)
+    with invocation("t1", "recheck"):
+        assert session._invoke_model_call("openai:sol", "Re-check RFT1-1.").startswith("RFT1-1: RESOLVED")
+    assert calls == [True, False], "one supplied attempt, then one with a copy"
+    assert session.supplied_reviews[-1]["mode"] == "copy"
+    assert "asked for files it was not shown: tests/test_api.py" in session.supplied_reviews[-1]["why"]
+
+
+def test_a_copy_review_that_says_need_files_is_not_asked_again(tmp_path, monkeypatch):
+    session, _ = _session(tmp_path, {"app.py": "old\n"})
+    calls = []
+
+    def once(key, prompt, *, allow_writes=False, supplied=True):
+        calls.append(supplied)
+        session._last_supplied = False  # the evidence did not fit: this one read a copy
+        return "NEED FILES: x.py"
+
+    monkeypatch.setattr(session, "_invoke_model_call_once", once)
+    with invocation("t1", "collaborator"):
+        assert session._invoke_model_call("openai:sol", "Review.") == "NEED FILES: x.py"
+    assert calls == [True]

@@ -1279,6 +1279,19 @@ def _review_disposition(note: str, capped: bool, rids) -> str:
 _FETCH_REQUEST = re.compile(r"^\s*FETCH\s*:\s*(?P<id>\S+?)(?:\s+FROM\s+(?P<offset>[0-9]+))?\s*$", re.IGNORECASE)
 
 
+def _needs_files(reply) -> str:
+    """The paths a supplied review asked for, as written, when its reply's
+    first line is ``NEED FILES: ...``; else "". Only that position counts: a
+    review that gives a verdict and mentions the phrase further down has
+    judged (``session_prompts._NEED_FILES_RULE``)."""
+    if not isinstance(reply, str):
+        return ""
+    first = next((line.strip() for line in reply.splitlines() if line.strip()), "")
+    if not first.startswith("NEED FILES:"):
+        return ""
+    return first[len("NEED FILES:"):].strip() or "(none named)"
+
+
 def _parse_fetch(reply: str) -> Optional[str]:
     """An artifact request: the whole reply is ``FETCH: <artifact-id>`` or
     ``FETCH: <artifact-id> FROM <character offset>`` (the next window of a

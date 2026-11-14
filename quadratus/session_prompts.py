@@ -72,6 +72,11 @@ _PLAN_NOTE_CHARS = 4_000
 #: How much of a task's measured diff a review seat is handed in its prompt:
 #: the close-out's own figure for the same diff.
 _REVIEW_DIFF_BYTES = 12_000
+#: What a supplied review does when the handed files are not enough
+#: (``Session._supplied_evidence``; read by ``reply_parsers._needs_files``).
+_NEED_FILES_RULE = ("Where you cannot judge without a file that is not shown, reply with exactly one line, "
+                    "`NEED FILES: <path>[, <path>]`, and nothing else: the harness then gives you the "
+                    "project to read and asks again.")
 #: Below this much room a file's diff is left out by name, not cut to a stub.
 _REVIEW_DIFF_MIN_CUT = 1_000
 #: How many changed paths the index of an over-long diff names.
