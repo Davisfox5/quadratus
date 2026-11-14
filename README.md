@@ -285,6 +285,7 @@ The remaining options (`quadratus --help` has the full text):
 | `--lead-max-turns N` | round limit for each lead or reviewer call; outranks the cap derived from `--max-tokens-per-call`; also works with `--session` |
 | `--recent-entries N`, `--max-fix-cycles N`, `--max-consults N` | ledger entries shown in each prompt (default all), lead revisions per task (default 2), `CONSULT` questions per task (default 2) |
 | `--max-parallel-tasks N`, `--no-spread-leads`, `--no-design-cross-check` | tasks at once (default 3; needs `--allow-writes`); keep each task on the lead the ladder names; drop the design reviewer from another vendor |
+| `--supplied-review` | hand each task's reviewer and re-check the changed files in the message and have them answer in one turn with no tools, in an empty folder; a review whose files do not fit one message reads a source copy as before |
 | `--compete complex` | draft each complex task twice and merge the better draft (default `off`; see Competing drafts) |
 | `--baseline MODEL`, `--fix-rounds N` | run one model alone on the goal (see Measuring against one model alone) |
 | `--trust-project-policy SHA256`, `--allow-project-agent-config`, `--no-declared-checks`, `--accept-watched-paths` | trust choices for one project (see Security model) |

@@ -30,6 +30,7 @@ SESSION_KNOBS = {
     "max_parallel_tasks": 1,
     "spread_leads": None,
     "design_cross_check": None,
+    "supplied_review": None,
 }
 
 

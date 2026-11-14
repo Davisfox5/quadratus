@@ -1185,6 +1185,11 @@ class EvidenceMixin:
         the child's gate is None)."""
         if not (self.project and _seat_takes_scratch(key)):
             return []
+        if self.config.supplied_review:
+            # A supplied review has no copy to add a scratch test to, and the
+            # prompt is written before the harness knows whether the evidence
+            # fits one message, so the demonstration is not asked for at all.
+            return []
         return self._discovering_checks()
 
     def _record_deferred(self, spec, peer: str, note: str) -> None:

@@ -683,6 +683,8 @@ def _session_options(args) -> dict:
         chosen["spread_leads"] = False
     if getattr(args, "no_design_cross_check", False):
         chosen["design_cross_check"] = False
+    if getattr(args, "supplied_review", False):
+        chosen["supplied_review"] = True
     return chosen
 
 
@@ -1149,6 +1151,10 @@ def build_parser() -> argparse.ArgumentParser:
          help="Drop the reviewer from another vendor that design and UI tasks otherwise get. "
               "The rendered evidence and its checks are still required; only the independent "
               "design review goes.")
+    flag(knobs, "--supplied-review", needs="engine", action="store_true",
+         help="Hand each task's reviewer and re-check the measured diff and the changed files in "
+              "the message, and have them answer in one turn with no tools, in an empty folder. "
+              "A review whose evidence does not fit one message reads a source copy as before.")
 
     watch = parser.add_argument_group(
         "monitor",

@@ -5172,6 +5172,18 @@ Key design decisions already settled:
   unnamed test files, contests and reviewer records are carried across a
   resume, so a two-episode job reads like the same job in one. The resume
   identity covers `--compete` and the session settings, each only when set.
+- **A review may judge handed files in one turn** (Davis, 2026-11-14;
+  `--supplied-review`, `SessionConfig.supplied_review`, off by default). The
+  stockroom benchmark measured one review of a finished job at 1.25M reported
+  tokens, as much as building it: a review seat was a full agent session
+  that read the project again. With the setting on, the session appends the
+  task's changed files, whole, to the reviewer's and re-check's prompt
+  (`Session._supplied_evidence`), with small unchanged files while room is
+  left, and Fleet runs the seat in an empty folder for one turn
+  (`Fleet._supplied_judgment`, the summary view's controls, 600 s). Nothing
+  is cut: files that do not fit one message (128,000 bytes), a changed file
+  that is not text, or design evidence send that review to a source copy.
+  No scratch demonstration is asked for. Its effect on cost is unmeasured.
 - **session.py was split by moving code, and two rules keep it split**
   (2026-11-11, redone 2026-11-12 after the development line was merged;
   `tests/test_review1110_split.py`). It went from 29,386 lines to 10,238

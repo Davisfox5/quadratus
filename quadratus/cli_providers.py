@@ -2533,6 +2533,9 @@ CODEX_SPEC = CLISpec(
 #: prompt bound (``runtime.Fleet._supplied_context``), the largest prompt a
 #: restricted call is handed on purpose.
 MAX_ARGV_PROMPT = 128_000
+#: The longest a supplied judgment (a one-turn review of handed evidence,
+#: ``Fleet._supplied_judgment``) may take, in seconds.
+SUPPLIED_JUDGMENT_TIMEOUT = 600.0
 
 #: How much of a CLI's stderr survives into the ledger per attempt. Enough to
 #: hold a sandbox refusal or an auth failure verbatim; not a transcript.
@@ -3415,7 +3418,10 @@ class CLIProvider(LLMProvider):
             timeout = self.timeout
             # Supplied research analysis preserves its existing call timeout
             # and model effort. Ordinary closeout keeps the 60 s bound.
-            timeout_limit = 180 if getattr(self, 'supplied_analysis', False) else 60
+            # A supplied judgment reads a whole task's files and reasons
+            # about them in its one turn, so it gets longer.
+            timeout_limit = (SUPPLIED_JUDGMENT_TIMEOUT if getattr(self, 'supplied_judgment', False)
+                             else 180 if getattr(self, 'supplied_analysis', False) else 60)
             if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                     or not math.isfinite(timeout) or timeout <= 0 or timeout > timeout_limit):
                 # nan compares false against everything, so "not > 60" is not

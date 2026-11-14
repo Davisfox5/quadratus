@@ -188,14 +188,15 @@ SCRATCH_MAX_AGE_SECONDS = 24 * 60 * 60
 #: other things in, is never cleared on the strength of a name.
 SCRATCH_MARKER = ".quadratus-scratch"
 #: What the harness makes there, exactly as it names it: a source copy
-#: (review, original-tests), a summary folder (analysis, closeout), a
+#: (review, original-tests), a summary folder (analysis, closeout, supplied), a
 #: provider's own folder (by provider name) and the worker bridge's socket
 #: folder, each with the eight characters ``tempfile`` adds; and a prompt
 #: file. Final review, 2026-11-11: any name starting ``quadratus-`` or
 #: ``qw-`` went, and in a scratch folder the operator chose that took
 #: ``quadratus-main``, a checkout, with it. A test holds these to the
 #: prefixes the package passes to ``tempfile``.
-SCRATCH_FOLDER_KINDS = ("review", "analysis", "closeout", "original-tests", "claude", "openai", "grok")
+SCRATCH_FOLDER_KINDS = ("review", "analysis", "closeout", "supplied", "original-tests", "claude", "openai",
+                        "grok")
 _SCRATCH_FOLDER = re.compile(rf"(?:quadratus-(?:{'|'.join(SCRATCH_FOLDER_KINDS)})-|qw-)[a-z0-9_]{{8}}")
 _SCRATCH_FILE = re.compile(r"quadratus-prompt-[a-z0-9_]{8}\.txt")
 _unmarked_noted = False

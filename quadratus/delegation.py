@@ -119,7 +119,7 @@ def record_invocation(ledger, event):
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
                evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None, authority=None,
-               effort_inputs=None, review_source=None):
+               effort_inputs=None, review_source=None, supplied_review=False):
     context = dict(task=task, role=role, origin=origin)
     if review_source is not None:
         # The task-start bytes for an independent audit's first read. This
@@ -161,6 +161,10 @@ def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None
         # to the project) Fleet runs itself in the copy when the call left a
         # new test file there (runtime._scratch_proof).
         context["probe_checks"] = tuple(probe_checks)
+    if supplied_review is True:
+        # The session put the task's files in the prompt; Fleet runs this
+        # review seat in an empty folder for one turn (Fleet._supplied_judgment).
+        context["supplied_review"] = True
     token = invocation_context.set(context)
     try:
         yield
