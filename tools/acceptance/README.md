@@ -1,9 +1,16 @@
 # Isolated acceptance image
 
-Build from this directory with `docker build -t quadratus-blind-preflight tools/acceptance`.
+Build from the repository root with
+`docker build --build-arg GROK_SHA256=<sha256> -t quadratus-blind-preflight tools/acceptance`.
+The Grok download is checked against that digest before it is installed, and
+the build stops without it. No digest is recorded in this repository: take it
+from a copy of `grok-1.0.30-linux-aarch64` you trust (`sha256sum <file>`) and
+record it beside the image ID.
 This recipe is Linux arm64-specific (the Grok artifact is aarch64).
 The image contains no repository source, credentials or examiner inputs. Vendor
-CLI versions and Node are pinned; Python/OS dependencies resolve at build time.
+CLI versions, Node and the Python packages in `constraints.txt` (the recorded
+freeze of the acceptance image) are pinned; the base image tag, OS packages
+and jsonschema's own dependencies resolve at build time.
 Before a trial, record `docker image inspect`'s immutable image ID, installed
 versions and `pip freeze`. The recipe alone is not a frozen dependency set.
 

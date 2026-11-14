@@ -77,7 +77,8 @@ def _run(store, rec, **config):
 
 
 def test_the_capped_sets_are_disjoint_and_name_every_review_seat():
-    assert REVIEW_CAPPED_ROLES == {"collaborator", "recheck", "design-review", "verifier", "auditor"}
+    assert REVIEW_CAPPED_ROLES == {"collaborator", "recheck", "design-review", "verifier", "auditor",
+                                   "test-comparison"}  # root review of b49a0cb, R4
     assert not (REVIEW_CAPPED_ROLES & LEAD_CAPPED_ROLES)
 
 
@@ -145,14 +146,19 @@ def test_a_review_copy_without_checks_or_a_worker_errand_gets_no_check_block(mon
 
 
 def test_a_capped_collaborator_is_recorded_as_unverified_and_its_narration_is_not_a_finding(store):
+    # Recovery lifecycle (2026-10-31): the cap is owned review debt held
+    # under its own id for the capped seat, never a bare string; the one
+    # bounded completion is the same seat, and it capped too here.
     rec = CappedSeat("collaborator")
     session, summary = _run(store, rec)
-    assert rec.capped >= 1
+    assert rec.capped == 2, "the first review and its one bounded completion"
     assert not any("Check only your BLOCKING" in c["prompt"] for c in rec.calls), \
         "narration at the cap is never read as a BLOCKING finding"
-    unverified = [f for f in session.open_findings if "did not finish within its turn cap" in f]
-    assert unverified and "no verdict" in unverified[0]
-    assert any("surrogate" not in f for f in session.open_findings)
+    owed = [f for f in session.open_findings if "UNREVIEWED: the review of t1 by claude:opus" in f]
+    assert owed and "stopped at 20 rounds with no verdict" in owed[0]
+    assert not any("I was about to" in f for f in session.open_findings)
+    record = next(r for r in session.review_findings if r["fid"] in owed[0])
+    assert record["kind"] == "unreviewed" and record["author"] == "claude:opus" and not record["closed"]
     assert summary is not None
 
 
@@ -164,17 +170,19 @@ def test_a_capped_review_alone_buys_no_revision_round(store):
 
 def test_a_capped_recheck_buys_no_fix_round_and_keeps_the_named_blocker(store):
     rec = CappedSeat("recheck")
-    session, _ = _run(store, rec)
-    assert rec.capped == 1
+    session, got = _run(store, rec)
+    assert rec.capped == 2, "the recheck and its one bounded completion"
     fixes = [c for c in rec.calls if "blocking findings remain unresolved" in c["prompt"].lower()]
     assert fixes == []
-    assert any("recheck by" in f and "did not finish within its turn cap" in f for f in session.open_findings)
     # Codex review of 0983dac: the reviewer's own finding is the unresolved
-    # defect; the cap fact alone would retire it from the record.
-    assert any("not re-checked" in f and "BLOCKING: the escaping drops surrogate pairs" in f
-               for f in session.open_findings)
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "not re-checked against the revision" in closeout and "surrogate pairs" in closeout
+    # defect; the cap fact alone would retire it from the record. It is held
+    # under its own id for its author (recovery lifecycle, 2026-10-31).
+    assert any(f.startswith("RFT1-1: UNRESOLVED (no verdict at its recheck by claude:opus")
+               and "BLOCKING: the escaping drops surrogate pairs" in f for f in session.open_findings)
+    # The harness record carries the open finding to the planner (no model
+    # close-out since 2026-10-21): the named blocker, not only the cap fact.
+    assert "no verdict at its recheck" in got.summary and "surrogate pairs" in got.summary
+    assert not any("The task is finished" in c["prompt"] for c in rec.calls)
 
 
 class WordyReviewer(Recorder):
@@ -209,8 +217,8 @@ def test_a_reply_with_no_verdict_is_an_unfinished_review_not_a_cap(store):
     rec = WordyReviewer("UNFINISHED: did not reach a verdict")
     session, _ = _run(store, rec)
     assert any("Revise your work" in c["prompt"] for c in rec.calls)
-    assert any("ended without a verdict" in f and "unfinished review" in f for f in session.open_findings)
-    assert not any("turn cap" in f for f in session.open_findings)
+    assert any("ended without a verdict" in f and "UNREVIEWED: the review of t1" in f for f in session.open_findings)
+    assert not any("turn cap" in f or "rounds with no verdict" in f for f in session.open_findings)
 
 
 @pytest.mark.parametrize("review", ["NO FINDINGS", "No findings.",
@@ -236,7 +244,7 @@ def test_a_capped_recheck_keeps_multiline_and_mixed_format_findings(store):
                                        "Reproduce with a non-BMP character.\n"
                                        "- **BLOCKING:** the parser accepts malformed numbers")
     session, _ = _run(store, rec)
-    kept = [f for f in session.open_findings if "not re-checked" in f]
+    kept = [f for f in session.open_findings if "no verdict at its recheck" in f]
     assert kept and "non-BMP character" in kept[0] and "malformed numbers" in kept[0]
 
 
@@ -263,7 +271,7 @@ def test_reviewers_are_told_their_round_budget_only_where_a_cap_applies(store):
 
 def test_the_round_budget_is_silent_for_a_cli_without_a_turn_flag(store):
     session = Session("goal", store, lambda *a, **k: "", config=SessionConfig(lead_max_turns=20))
-    assert session._review_turn_budget_note("openai:gpt-5.6-sol") == ""
+    assert session._review_turn_budget_note("openai:sol") == ""
     assert "at most 20 tool rounds" in session._review_turn_budget_note("claude:opus")
 
 
@@ -284,8 +292,8 @@ def test_a_capped_design_review_is_a_review_with_no_verdict(tmp_path, monkeypatc
     record = session.design_checks[-1]
     assert record["final_review"]["verdict"].startswith("UNFINISHED: the design review stopped at 20 rounds")
     joined = " ".join(session.open_findings)
-    assert "did not finish within its turn cap" in joined
-    assert "gave no verdict" in joined
+    assert "UNREVIEWED: the design review of t6 by claude:opus" in joined
+    assert "stopped at 20 rounds with no verdict" in joined
     assert "the header" not in joined, "the capped reviewer's narration is not a finding"
 
 
@@ -316,13 +324,14 @@ def test_a_capped_design_review_still_records_the_delivery(tmp_path, monkeypatch
 # -- the lead is told what the harness measures ---------------------------------
 
 
-def test_the_scope_block_states_the_measured_rule_and_the_stop_line():
+def test_the_scope_block_states_the_measured_rule_as_advisory():
     from quadratus.scope import TaskScope
     text = TaskScope(permitted_paths=["app.py", "tests/test_app.py"], max_lines=100).render()
-    assert "tests in full" in text
-    assert "stops the task past 150 changed lines" in text
-    assert "compact named cases" in text
-    assert "Expected size: about 100 changed lines" in text
+    assert "tests in full" in text and "Expected size: about 100 changed lines" in text
+    # Advisory since 2026-10-20: measured and reported, never a stop; tests never squeezed to fit.
+    assert "This is the planner's estimate, not a limit" in text and "stops nothing for size alone" in text
+    assert "leave a test out to fit a number" in text and "length alone is not a finding" in text
+    assert "stops the task past" not in text and "say so and stop" not in text
     assert "Expected size" not in TaskScope(permitted_paths=["app.py"]).render()
 
 
@@ -344,3 +353,112 @@ def test_a_declaration_role_gets_the_small_cap_never_above_the_lead_cap(monkeypa
         fleet.invoke("grok:default", "p")
     assert views[0].max_turns == expected
     assert DECLARATION_MAX_TURNS < 20
+
+
+def _owed_design_session(tmp_path, invoke):
+    """A design session whose artifact store is outside the project, as in
+    production (the store lives under the excluded .quadratus), so storing a
+    review does not move the source the review is bound to."""
+    import dataclasses
+
+    project = tmp_path / "project"
+    project.mkdir()
+    session = Session("goal", ArtifactStore(tmp_path / "store"), invoke, config=SessionConfig())
+    session.project = project
+    session.config = dataclasses.replace(session.config, allow_writes=True)
+    session._last_edit_started = 0
+    return session, project
+
+
+def test_an_owed_design_review_is_settled_only_by_the_same_owners_completed_design_review(tmp_path, monkeypatch):
+    """Recovery lifecycle (2026-10-31): a capped design review is owed
+    review debt held for its seat. Another seat's verdict does not touch it,
+    nor does a reply with no verdict (itself owed, never a bare string), nor
+    a verdict the harness wrote because the renders never reached the
+    reviewer; the same seat's own completed design review of renders still
+    current closes it."""
+    from quadratus.memory import TaskMemory
+    from tests.test_preferences_in_product import _fake_evidence, _ui
+
+    replies = iter([TurnLimitReached("capped", partial_text="BLOCKING: the header", turns=20),
+                    "I looked at both screenshots and need more time.", "APPROVED"])
+
+    def invoke(model, prompt, **k):
+        role = (invocation_context.get() or {}).get("role")
+        if role == "design-review":
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        return "tried"
+
+    session, project = _owed_design_session(tmp_path, invoke)
+    monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: False)
+    memory = TaskMemory("t6", "grok:default", session.store)
+    _fake_evidence(project)
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    (owed,) = [r for r in session.review_findings if r.get("kind") == "unreviewed"]
+    assert owed["owed_kind"] == "design review" and owed["author"] == "claude:opus" and not owed["closed"]
+    # Another seat's completed design review settles nothing it does not own.
+    assert session._settle_owed_by_judgment(_ui(), "openai:sol", "design review") == []
+    # A reply with neither APPROVED nor BLOCKING is no judgment: still owed,
+    # recorded as an occurrence, and no bare "gave no verdict" string.
+    _fake_evidence(project)
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    assert not owed["closed"]
+    assert [r["outcome_class"] for r in session.recoveries] == ["design_review_capped", "review_unfinished"]
+    assert not [f for f in session.open_findings if "gave no verdict" in f and "UNREVIEWED" not in f]
+    # A verdict the harness wrote (the renders could not be handed over) is
+    # no judgment by the owner and makes no call.
+    monkeypatch.setattr(Session, "_evidence_refusals", lambda self, spec, files: [("set", "missing")])
+    _fake_evidence(project)
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    assert not owed["closed"]
+    monkeypatch.undo()
+    monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: False)
+    _fake_evidence(project)  # a fresh capture of the source as it now stands
+    session._check_design(_ui(), "grok:default", ["claude:opus"], memory)
+    assert session.design_checks[-1]["final_review"]["approved"] and not session.design_checks[-1]["review_stale"]
+    assert owed["closed"] and owed["history"][-1]["author"] == "claude:opus"
+    assert not [f for f in session.open_findings if owed["fid"] in f]
+
+
+class VerifierSeat(CappedSeat):
+    """The verifier caps once, then answers each later verification with the
+    next scripted reply."""
+
+    def __init__(self, replies):
+        super().__init__("verifier", times=1)
+        self.replies = list(replies)
+
+    def __call__(self, model, prompt, system=None):
+        role = (invocation_context.get() or {}).get("role")
+        if role == "verifier" and self.capped >= self.times and self.replies:
+            self.calls.append({"model": model, "prompt": prompt, "role": role})
+            return self.replies.pop(0)
+        return super().__call__(model, prompt, system)
+
+
+def test_a_capped_text_verification_is_owed_by_its_verifier_and_only_its_verdict_settles_it(store):
+    """Recovery lifecycle (2026-10-31): a capped security verifier gives no
+    verdict, so the edge stays unset and the verification is owed review
+    debt for that verifier. Narration from the same verifier on the same
+    work settles nothing (root's review of a7f9c6c, R2); its own VERDICT
+    line does."""
+    from quadratus.task_kinds import TaskKind
+    rec = VerifierSeat(["I still need to inspect the authorization paths before giving a verdict.",
+                        "Checked the token handling against the report.\nVERDICT: ACCEPT"])
+    session = Session("Build a JSON parser", store, rec)
+    spec = TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY)
+    session.run_task(spec)
+    (owed,) = [r for r in session.review_findings if r.get("kind") == "unreviewed"]
+    assert owed["owed_kind"] == "verification" and owed["role"] == "verifier" and not owed["closed"]
+    verifier = owed["author"]
+    rv = next(r for r in session.recoveries if r["outcome_class"] == "verification_capped")
+    assert rv["seat"] == verifier and rv["debt"] == [owed["fid"]]
+    assert session._settle_owed_by_judgment(spec, "grok:default", "verification") == [], "another seat settles nothing"
+    session.run_task(spec)  # the same work again: the verifier narrates and gives no verdict
+    assert not owed["closed"], "narration is not a completed verification"
+    session.run_task(spec)  # and again: this time its VERDICT line
+    assert owed["closed"] and owed["history"][-1]["author"] == verifier
+    assert rv["result"].startswith("recovered")

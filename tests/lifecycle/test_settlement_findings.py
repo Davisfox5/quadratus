@@ -14,13 +14,15 @@ import pytest
 from quadratus.session import Session
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_audit_findings import AUDIT, REPAIR, REQS, WIDE, _capture, _repair, _run
+from tests.lifecycle.test_lifecycle_matrix import covered_met
 
 pytestmark = pytest.mark.requirements_ledger
 
 
 def _blocked_review(tmp_path, monkeypatch):
     roles = {"collaborator": lambda call, replay: ("BLOCKING: the toolbar gap is inconsistent" if call.task == "t2"
-                                                   else "No blocking findings.\nREVIEW: COMPLETE"),
+                                                   else "No blocking findings.\n" + covered_met(call.prompt)
+                                                   + "REVIEW: COMPLETE"),
              "recheck": lambda call, replay: "STILL BLOCKING: the gap is still inconsistent"}
     return _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
                 {"t1": _capture(measured=WIDE), "t2": _repair()}, roles=roles)

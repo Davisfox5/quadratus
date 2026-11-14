@@ -16,6 +16,7 @@ import json
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
 
 pytestmark = pytest.mark.requirements_ledger
@@ -28,31 +29,52 @@ FAVICON = dict(
     capture={"path": "/", "steps": []})
 
 
-def _decl(scope=FAVICON, tier="direct", extra=""):
-    return ("KIND: frontend simple\nSCOPE: " + json.dumps(scope) + "\nAdd a favicon route and link.\nCOVERS: R1"
-            + (f"\nTIER: {tier}" if tier else "") + extra)
+#: The scenario _decl declares for its favicon task (proofs_for below), for
+#: this file's scripted auditor to judge by name, with the authored basis.
+FAVICON_PROOF = H.proofs_for("R1", "tests/test_basic.py")[0]
+FAVICON_SHOWN = ("the project check executed tests/test_basic.py::test_favicon_file on the delivered source, which "
+                 "reads the favicon file this scenario is about")
+
+
+def _decl(scope=FAVICON, tier="direct", extra="", covers="R1"):
+    if covers and "proofs" not in scope:
+        scope = dict(scope, proofs=H.proofs_for(covers, "tests/test_basic.py"))
+    return ("KIND: frontend simple\nSCOPE: " + json.dumps(scope) + "\nAdd a favicon route and link."
+            + (f"\nCOVERS: {covers}" if covers else "") + (f"\nTIER: {tier}" if tier else "") + extra)
+
+
+def _non_goal(monkeypatch):
+    """Direct work that covers no goal requirement: the ledger is off, so the
+    task names no COVERS. Work that covers requirements is refused the direct
+    tier (root review of 1a58853) and is pinned in test_step2_recovery."""
+    monkeypatch.setenv("QUADRATUS_REQUIREMENTS_LEDGER", "0")
+    return _decl(covers="")
 
 
 def _files():
     return {**FILES, "app.py": FIXED, "templates/index.html": "<html><head></head></html>\n",
-            "static/favicon.svg": ""}
+            "static/favicon.svg": "",
+            "tests/test_basic.py": ("from pathlib import Path\n\n\ndef test_favicon_file():\n"
+                                    "    assert Path('static/favicon.svg').read_text().strip()\n")}
 
 
 def _lead(call, replay):
     H.write(call, {"static/favicon.svg": "<svg/>\n",
                    "templates/index.html": '<html><head><link rel="icon" href="/favicon.ico"></head></html>\n'})
     H.evidence(replay.project if False else __import__("pathlib").Path(call.cwd), call.task, age=H.FRESH)
-    return 'Added the favicon.\nCHANGED: ["static/favicon.svg", "templates/index.html"]'
+    return ('Added the favicon.\nPROVES: P1 - tests/test_basic.py::test_favicon_file\n'
+            'CHANGED: ["static/favicon.svg", "templates/index.html"]')
 
 
 def _run(tmp_path, monkeypatch, decl, *, direct=True, lead=_lead, roles=None, **kw):
-    plan = [REQS + decl]
+    plan = [(REQS if "COVERS:" in decl else "") + decl]
 
     def orchestrator(call, replay):
         return plan.pop(0) if plan else "DONE"
     overrides = dict(orchestrator=orchestrator, lead=lead,
                      **{"requirements-review": lambda c, r: "COMPLETE",
-                        "auditor": lambda c, r: "R1: MET - static/favicon.svg",
+                        "auditor": judging_scenarios(lambda c, r: "R1: MET - static/favicon.svg", FAVICON_PROOF,
+                                                     basis=FAVICON_SHOWN),
                         "design-review": lambda c, r: "APPROVED",
                         "collaborator": lambda c, r: "BLOCKING: the link tag has no type attribute"},
                      **(roles or {}))
@@ -70,7 +92,7 @@ def _roles(replay, tid="t1"):
 
 
 def test_the_favicon_task_on_the_direct_tier_drops_review_and_closeout_only(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, _decl())
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch))
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "direct" and t1["contract"]["required"]["tier_refused"] == ""
     assert t1["contract"]["required"]["design_collaboration_applicable"] is False
@@ -91,7 +113,7 @@ def test_the_same_task_on_the_normal_tier_keeps_the_full_call_graph(tmp_path, mo
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "normal"
     roles = _roles(replay)
-    assert roles["collaborator"] >= 1 and roles["revision"] == 1 and roles["closeout"] == 1
+    assert roles["collaborator"] >= 1 and roles["revision"] == 1 and roles.get("closeout", 0) == 0
     assert roles["design-review"] == 1 and "review" in t1["stages"]
     assert replay.result.completed, replay.result.error
 
@@ -124,7 +146,7 @@ def test_without_the_flag_a_label_is_refused_and_recorded(tmp_path, monkeypatch)
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "normal"
     assert t1["contract"]["required"]["tier_refused"] == "the direct tier is not enabled on this run"
-    assert _roles(replay)["closeout"] == 1
+    assert _roles(replay).get("closeout", 0) == 0 and replay.artifacts("factual-closeout")
 
 
 def _unit_session(tmp_path, **config):
@@ -170,7 +192,7 @@ def test_a_direct_task_that_overruns_its_scope_still_fails_the_task(tmp_path, mo
     def lead(call, replay):
         H.write(call, {"static/favicon.svg": "<svg/>\n", "README.md": "# rewritten\n"})
         return 'Did both.\nCHANGED: ["README.md", "static/favicon.svg"]'
-    replay = _run(tmp_path, monkeypatch, _decl(), lead=lead, record_complete=False)
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch), lead=lead, record_complete=False)
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "direct" and t1["closed_as"] == "failed"
     assert _roles(replay).get("closeout", 0) == 0
@@ -186,13 +208,15 @@ def test_a_direct_task_whose_check_fails_still_gets_its_fix_round(tmp_path, monk
     def gate_fix(call, replay):
         H.write(call, {"app.py": FIXED})
         return 'Fixed add.\nCHANGED: ["app.py"]'
-    replay = _run(tmp_path, monkeypatch, _decl(), lead=lead, roles={"gate-fix": gate_fix})
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch), lead=lead, roles={"gate-fix": gate_fix})
     roles = _roles(replay)
     assert roles["gate-fix"] == 1 and roles.get("collaborator", 0) == 0
     assert H.gate_results(replay)[-1] == "PASSED"
 
 
 def test_a_refused_direct_lead_is_still_the_refusal_stop(tmp_path, monkeypatch):
+    from quadratus.session import Session
+    monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "claude:opus")  # the refusal injected is Claude's
     replay = _run(tmp_path, monkeypatch, _decl(), lead=lambda c, r: H.claude_refusal("cyber"),
                   record_complete=False)
     assert replay.result.error.startswith("Provider") and not replay.result.completed

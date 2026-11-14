@@ -1,4 +1,5 @@
 """Offline contracts and dispatch checks. No vendor CLI or network calls."""
+import hashlib
 import json
 import shutil
 import subprocess
@@ -34,6 +35,12 @@ def write_policy(root, doc=None, text=None):
     path.parent.mkdir(exist_ok=True)
     path.write_text(text if text is not None else json.dumps(doc or document()))
     return path
+
+
+def approval(root):
+    """The operator's approval of the policy file as written: its sha256. A
+    project's own policy runs a command gate only with it."""
+    return hashlib.sha256((root / '.quadratus/policy.json').read_bytes()).hexdigest()
 
 
 def test_installed_library_identity_and_cards():
@@ -128,16 +135,19 @@ def test_composition_and_gate_binding_are_explicit(tmp_path):
                          'required': True, 'minimum_tests': 1})
     doc['gate_bindings']['unit-tests'] = {'gate': 'pytest'}
     write_policy(tmp_path, doc)
-    plan = preview_policy(tmp_path, ['tests/new.py', 'src/api/new.py'])
+    plan = preview_policy(tmp_path, ['tests/new.py', 'src/api/new.py'],
+                          trust_project_policy=approval(tmp_path))
     assert plan['families'] == ['scoped-endpoint', 'test-author']
     assert plan['primary_family'] == 'scoped-endpoint'
     assert plan['overlays'] == ['tenant-isolation', 'test-quality']
     assert [g['id'] for g in plan['gates']] == ['scope', 'pytest']
     assert not plan['blocked']
-    assert plan == preview_policy(tmp_path, ['src/api/new.py', 'tests/new.py'])
+    assert plan == preview_policy(tmp_path, ['src/api/new.py', 'tests/new.py'],
+                                  trust_project_policy=approval(tmp_path))
     doc['gate_bindings']['unit-tests'] = {'absent': True, 'because': 'Changed ruling'}
     write_policy(tmp_path, doc)
-    assert plan['hash'] != preview_policy(tmp_path, ['tests/new.py', 'src/api/new.py'])['hash']
+    assert plan['hash'] != preview_policy(tmp_path, ['tests/new.py', 'src/api/new.py'],
+                                          trust_project_policy=approval(tmp_path))['hash']
 
 
 def test_incompatible_overlay_is_blocked_before_invocation(tmp_path):
@@ -167,10 +177,15 @@ def test_forbid_sensitive_alias_and_bounds(tmp_path):
     assert policy.resolve(['keep.py'], writing=True)['blocked']
     assert not policy.resolve(['keep.py'], writing=False)['blocked']
     scope = policy.scope(TaskScope(['*'], max_lines=80))
-    assert scope.max_lines == 50 and scope.overrun_ratio == 1.1
+    # The task's declared estimate is kept as declared (advisory); the
+    # policy figure is the default for a task that declares none, and
+    # the stricter overrun ratio still marks the telemetry.
+    assert scope.max_lines == 80 and scope.overrun_ratio == 1.1
+    assert policy.scope(TaskScope(['*'])).max_lines == 50
     assert not scope.permits('keep.py')
     assert not scope.permits('auth/new.py')
-    assert scope.assess('--- a/a.py\n+++ b/a.py\n' + '+x\n' * 56).oversized
+    assert scope.assess('--- a/a.py\n+++ b/a.py\n' + '+x\n' * 90).oversized
+    assert not scope.assess('--- a/a.py\n+++ b/a.py\n' + '+x\n' * 56).oversized
 
 
 def test_gate_runner_never_silently_uses_legacy_for_policy(tmp_path):
@@ -179,7 +194,7 @@ def test_gate_runner_never_silently_uses_legacy_for_policy(tmp_path):
                          'required': True, 'minimum_tests': 1})
     doc['gate_bindings'] = {}
     write_policy(tmp_path, doc)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_project_policy=approval(tmp_path))
     from quadratus import integration
     if not hasattr(integration, 'GateSuite'):
         with pytest.raises(PolicyError, match='require Q3'):
@@ -297,7 +312,7 @@ def test_policy_gate_executes_and_preserves_operator_check(tmp_path):
                          'required': True, 'minimum_tests': 1})
     doc['gate_bindings'] = {}
     write_policy(tmp_path, doc)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_project_policy=approval(tmp_path))
     operator = IntegrationGate([sys.executable, '-B', '-c', 'raise SystemExit(1)'], cwd=tmp_path)
     gate = task_gate(policy, policy.resolve(['a.py']), operator)
     result = gate.run()

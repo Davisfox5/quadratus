@@ -14,43 +14,93 @@ from pathlib import Path
 
 from .delegation import NativeChild
 
+#: Most bytes of one journal line that are read. A codex rollout's first
+#: record carries the session's instructions, so it is not small; a longer
+#: first line is not read as anyone's identity, and a longer later line is
+#: passed over.
+FIRST_RECORD_BYTES = 1024 * 1024
+
+
+def bounded_lines(path, limit: int = FIRST_RECORD_BYTES):
+    """The lines of a journal, none held past ``limit`` bytes.
+
+    A journal records tool output, which a model can make as long as it
+    likes, and a plain line-by-line read holds each line whole. A line past
+    the bound is skipped to its end, never kept: the records read from these
+    files (token counts, turn context) are short.
+    """
+    with open(path, "rb") as stream:
+        while True:
+            line = stream.readline(limit + 1)
+            if not line:
+                return
+            if len(line) > limit:
+                while line and not line.endswith(b"\n"):
+                    line = stream.readline(limit + 1)
+                continue
+            yield line.decode("utf-8", errors="replace")
+
 
 def _events(path):
-    with path.open(encoding="utf-8") as stream:
-        for line in stream:
-            try:
-                event = json.loads(line)
-                if isinstance(event, dict):
-                    yield event
-            except ValueError:
-                continue
+    for line in bounded_lines(path):
+        try:
+            event = json.loads(line)
+            if isinstance(event, dict):
+                yield event
+        except ValueError:
+            continue
+
+
+def first_record(path, limit: int = FIRST_RECORD_BYTES):
+    """A journal's first line as parsed JSON, read with a byte bound.
+
+    The vendor's session folder is not ours, and a journal whose first line
+    never ends would otherwise be read whole into memory. Raises ValueError
+    for a line past the bound or one that is not JSON, and OSError for a file
+    that cannot be read; callers treat both as "not provably this journal".
+    """
+    with open(path, "rb") as stream:
+        line = stream.readline(limit + 1)
+    if len(line) > limit:
+        raise ValueError("the journal's first record is longer than the read bound")
+    return json.loads(line.decode("utf-8", errors="replace"))
 
 
 def _metadata(path):
     # Child files contain inherited parent metadata later. Only the initial
     # record describes the file's own identity.
-    with path.open(encoding="utf-8") as stream:
-        event = json.loads(stream.readline())
-    return event.get("payload", {}) if event.get("type") == "session_meta" else {}
+    event = first_record(path)
+    if not isinstance(event, dict) or event.get("type") != "session_meta":
+        return {}
+    payload = event.get("payload")
+    return payload if isinstance(payload, dict) else {}
 
 
 def codex_children(root: Path, parent_id: str, cwd: str, *, ended=None):
     if not re.fullmatch(r"[a-f0-9-]{36}", parent_id):
         return []
-    parents = list(root.glob(f"*/*/*/rollout-*-{parent_id}.jsonl"))
-    if len(parents) != 1:
+    try:
+        parents = list(root.glob(f"*/*/*/rollout-*-{parent_id}.jsonl"))
+        if len(parents) != 1:
+            return []
+        parent = parents[0]
+        meta = _metadata(parent)
+        if (meta.get("id") != parent_id or not meta.get("cwd")
+                or Path(str(meta["cwd"])).resolve() != Path(cwd).resolve()):
+            return []
+        started = datetime.fromisoformat(str(meta.get("timestamp") or "").replace("Z", "+00:00"))
+        ended = ended or datetime.fromtimestamp(parent.stat().st_mtime, timezone.utc)
+        # Filename clocks may use local time. Translate using this exact parent's
+        # timestamp rather than assuming the host timezone matches old records.
+        label_start = parent.name[8:27]
+        label_clock = datetime.strptime(label_start, "%Y-%m-%dT%H-%M-%S")
+        label_end = (label_clock + (ended - started)).strftime("%Y-%m-%dT%H-%M-%S")
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, OverflowError):
+        # A parent journal that cannot be read as this call's own (no
+        # timestamp, a clock with no zone, a first record that is not an
+        # object) links no children. Raising here used to abort the rest of
+        # the caller's accounting for the call.
         return []
-    parent = parents[0]
-    meta = _metadata(parent)
-    if meta.get("id") != parent_id or Path(meta.get("cwd", "")).resolve() != Path(cwd).resolve():
-        return []
-    started = datetime.fromisoformat(meta["timestamp"].replace("Z", "+00:00"))
-    ended = ended or datetime.fromtimestamp(parent.stat().st_mtime, timezone.utc)
-    # Filename clocks may use local time. Translate using this exact parent's
-    # timestamp rather than assuming the host timezone matches old records.
-    label_start = parent.name[8:27]
-    label_clock = datetime.strptime(label_start, "%Y-%m-%dT%H-%M-%S")
-    label_end = (label_clock + (ended - started)).strftime("%Y-%m-%dT%H-%M-%S")
     children = []
     for candidate in parent.parent.glob("rollout-*.jsonl"):
         if candidate == parent or not label_start <= candidate.name[8:27] <= label_end:

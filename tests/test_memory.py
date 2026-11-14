@@ -264,9 +264,9 @@ def test_the_worker_tree_not_vendor_loyalty_picks_the_default(store, pool):
 def test_budgets_are_tracked_per_task_not_globally(store):
     pool = WorkerPool(store=store, run=lambda m, p: "ok", budget=WorkerBudget(max_per_task=1))
     t1 = TaskMemory("t1", "claude:opus", store)
-    t2 = TaskMemory("t2", "openai:gpt-5.6-sol", store)
+    t2 = TaskMemory("t2", "openai:sol", store)
     pool.commission(task=t1, parent_key="claude:opus", prompt="go", label="a")
-    pool.commission(task=t2, parent_key="openai:gpt-5.6-sol", prompt="go", label="b")
+    pool.commission(task=t2, parent_key="openai:sol", prompt="go", label="b")
     assert pool.remaining("t1") == 0 and pool.remaining("t2") == 0
 
 

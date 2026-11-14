@@ -9,21 +9,30 @@ model is not "high" or "low", it has a shape. Here each model declares a
 capability profile, and roles request capabilities. Adding next month's model
 is a new row; no role definition changes.
 
+That is the design, not yet the routing. Seats are named by roster key in
+:mod:`quadratus.task_kinds` and :mod:`quadratus.workers`. Outside this
+module the capability tags are read only by :mod:`quadratus.browser_pilot`
+(CHEAP and CODE), and :data:`REFUSAL_CHAIN` and :data:`CONTROL_PLANE` have
+no caller yet.
+
 What is and is not trustworthy here
 -----------------------------------
 * ``context`` and ``latency`` come from vendor documentation. Anthropic's
-  figures were verified first-hand against platform.claude.com; the OpenAI,
-  Google and xAI figures are second-hand, because those vendors' domains were
-  unreachable when this was compiled.
+  figures were verified first-hand against platform.claude.com; the OpenAI
+  and xAI figures (and the retired Google rows) are second-hand, because
+  those vendors' domains were unreachable when this was compiled.
 * ``alias`` is what the vendor CLI is expected to accept, and is the least
-  reliable field in the table. Only the Claude aliases have been checked
-  against a live binary. Run ``quadratus probe`` to replace these with what
-  your CLIs actually resolve.
+  reliable field in the table. The Claude aliases opus, sonnet and haiku
+  were the first checked against a live binary; the comments above each
+  vendor's rows in :data:`ROSTER` say what has been called since. Run
+  ``quadratus --probe`` to replace these with what your CLIs actually
+  resolve.
 * Capability tags are deliberately coarse and describe *shape*, not a quality
   ranking. Where a tag encodes a measured claim, the source is named in
-  ``notes``. Quality ordering within a capability is what the run scoreboard
-  is for -- it should not be hardcoded from benchmarks, which are vendor-run,
-  churn monthly, and in the review case do not exist at all.
+  ``notes``. Quality ordering within a capability is what a run scoreboard
+  would be for (none is built yet) -- it should not be hardcoded from
+  benchmarks, which are vendor-run, churn monthly, and in the review case do
+  not exist at all.
 
 A caution that keeps being relevant: a large ``context`` value is a claim
 about capacity, not evidence of recall at depth. Independent testing found
@@ -58,8 +67,8 @@ by :func:`assert_floating_orchestrators`. The orchestrator is the one seat
 that persists for a whole session and the one nobody re-picks mid-run; a
 pinned alias there is how a run quietly keeps using last quarter's model
 months after its successor shipped. :mod:`quadratus.latest` does the actual
-resolution -- an operator override, then what ``quadratus probe`` last saw a
-CLI accept, then the seed below.
+resolution -- an operator override, then what ``quadratus --probe`` last saw
+a CLI accept, then the seed below.
 """
 
 from __future__ import annotations
@@ -82,6 +91,10 @@ __all__ = [
     "ControlPlaneRole",
     "control_plane_model",
     "assert_floating_orchestrators",
+    "assert_senior_seats_unrestricted",
+    "cross_vendor_peers",
+    "mode_audit_gap",
+    "canonical_key",
 ]
 
 
@@ -109,11 +122,11 @@ class Capability:
     AGENTIC = "agentic"
     #: Native multi-agent / step-by-step decomposition variants.
     MULTI_AGENT = "multi-agent"
-    #: Fit to run the orchestrator: interview the operator, author the run
-    #: policy, and hold the end goal across a long, messy debate. This is a
-    #: different axis from per-call judgement quality -- it is about coherence
-    #: over a whole session, which is why the strongest reviewer is not
-    #: automatically the strongest orchestrator.
+    #: Fit to run the orchestrator: name and size the tasks, put to the
+    #: operator what only they can answer, and hold the end goal across a
+    #: long, messy session. This is a different axis from per-call judgement
+    #: quality -- it is about coherence over a whole session, which is why the
+    #: strongest reviewer is not automatically the strongest orchestrator.
     ORCHESTRATE = "orchestrate"
 
 
@@ -126,7 +139,8 @@ class ModelSpec:
     latency: str  # fastest | fast | moderate | slow
     caps: FrozenSet[str]
     notes: str = ""
-    #: True when the alias has been checked against a live CLI.
+    #: True when the alias has been checked against a live CLI. A note for
+    #: readers: no code reads it, and later live calls did not update it.
     verified: bool = False
     #: True when ``alias`` names a model line the vendor CLI resolves to its
     #: current release, rather than one frozen iteration. Required of every
@@ -134,7 +148,7 @@ class ModelSpec:
     floating: bool = False
     #: Further aliases to try, newest first, when the first does not resolve.
     #: Only meaningful for floating entries whose vendor may not accept a bare
-    #: line name -- ``quadratus probe`` walks this chain and caches the winner.
+    #: line name -- ``quadratus --probe`` walks this chain and caches the winner.
     alias_fallbacks: Tuple[str, ...] = ()
     #: True when the right way to address this model is to name no model at
     #: all and take whatever the CLI currently defaults to. The strongest form
@@ -151,6 +165,14 @@ class ModelSpec:
     #: agent loop. The same weights serve both; on a subscription the
     #: difference between them is most of what a run spends.
     restricted: bool = False
+    #: The family name as the vendor's own catalogue spells it (``sol`` in
+    #: ``gpt-6.1-sol``), for rows whose release is read from that catalogue
+    #: at resolution (quadratus.latest). Empty where the alias is the family.
+    family: str = ""
+    #: Keys this row answered to before it was named by family
+    #: (``openai:gpt-5.6-sol``), kept so histories, receipts and operator
+    #: inputs written against them still resolve. Never a wire string.
+    legacy_keys: Tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
@@ -177,16 +199,16 @@ class ModelSpec:
 
 def _spec(provider, alias, label, context, latency, caps, notes="", verified=False,
           floating=False, alias_fallbacks=(), vendor_default=False, effort="",
-          restricted=False):
+          restricted=False, family="", legacy_keys=()):
     return ModelSpec(
         provider, alias, label, context, latency, frozenset(caps), notes, verified,
-        floating, tuple(alias_fallbacks), vendor_default, effort, restricted,
+        floating, tuple(alias_fallbacks), vendor_default, effort, restricted, family, tuple(legacy_keys),
     )
 
 
-#: The vendors in today's lineup. One subscription each: Claude Max, ChatGPT
-#: Pro, SuperGrok. Google was dropped on 2026-09-12 -- see the module
-#: docstring and :data:`RETIRED_ROSTER`.
+#: The vendors in today's lineup. One subscription each: Claude Pro/Max,
+#: ChatGPT Plus/Pro, SuperGrok. Google was dropped on 2026-09-12 -- see the
+#: module docstring and :data:`RETIRED_ROSTER`.
 VENDORS: Tuple[str, ...] = ("claude", "openai", "grok")
 
 
@@ -195,6 +217,8 @@ K = 1024
 ROSTER: List[ModelSpec] = [
     # -- Anthropic. Specs verified against platform.claude.com; aliases
     #    verified against claude 2.1.228 (opus/sonnet/haiku resolved live).
+    #    Fable was not in that check, so its row carries no verified flag;
+    #    recorded runs on claude 2.1.269 have since resolved it.
     _spec(
         "claude", "fable", "Claude Fable", 1000 * K, "slow",
         [Capability.REASON, Capability.CODE, Capability.AGENTIC,
@@ -254,7 +278,7 @@ ROSTER: List[ModelSpec] = [
         "literally, especially at low effort. Measured on Sonnet 5.",
         verified=True,
         floating=True,
-        # Bounded worker call, not an agent loop: an escalation target and the supervised interviewer, never a base worker.
+        # Bounded worker call, not an agent loop: an escalation target and, once the interview is built, its supervised voice; never a base worker.
         effort="high",
         restricted=True,
     ),
@@ -274,9 +298,15 @@ ROSTER: List[ModelSpec] = [
         restricted=True,
     ),
 
-    # -- OpenAI. Second-hand specs; aliases unverified.
+    # -- OpenAI. Second-hand specs. The rows carry no verified flag, from
+    #    when no codex binary was to hand. Recorded runs on codex-cli 0.154.0
+    #    have since called Astra, Sol and Luna; Terra has no recorded call.
+    # -- OpenAI. Family rows (2026-10-24): the release each answers to is the
+    #    latest visible one in the installed codex client's own catalogue
+    #    (~/.codex/models_cache.json: Sol 6.1, Astra 6, Luna 6, Terra 5.6 on
+    #    the Mac that day), read at resolution, never compiled in here.
     _spec(
-        "openai", "gpt-6-astra", "GPT-6 Astra", 1100 * K, "slow",
+        "openai", "astra", "GPT Astra", 1100 * K, "slow",
         [Capability.REASON, Capability.CODE, Capability.AGENTIC,
          Capability.ORCHESTRATE],
         "The orchestrator's only fallback, by operator directive, and the "
@@ -294,10 +324,11 @@ ROSTER: List[ModelSpec] = [
         "check even the alias. Run `quadratus --probe` before a run depends "
         "on this seat: a fallback that has never been exercised is a guess.",
         floating=True,
-        alias_fallbacks=("gpt-6",),
+        family="astra",
+        legacy_keys=("openai:gpt-6-astra",),
     ),
     _spec(
-        "openai", "gpt-5.6-sol", "GPT-5.6 Sol", 1100 * K, "moderate",
+        "openai", "sol", "GPT Sol", 1100 * K, "moderate",
         [Capability.CODE, Capability.REVIEW, Capability.REASON,
          Capability.LONG_CONTEXT, Capability.AGENTIC],
         "Review is recall-leaning: ~70% of known issues caught but only ~32% "
@@ -308,17 +339,25 @@ ROSTER: List[ModelSpec] = [
         "(deleting infrastructure, fabricating results) and presenting "
         "unverified work as complete in a way CoT monitoring misses: never "
         "grant it writes outside a sandbox.",
+        floating=True,
+        family="sol",
+        legacy_keys=("openai:gpt-5.6-sol", "openai:gpt-6-sol", "openai:gpt-6.1-sol"),
     ),
     _spec(
-        "openai", "gpt-5.6-terra", "GPT-5.6 Terra", 1100 * K, "moderate",
+        "openai", "terra", "GPT Terra", 1100 * K, "moderate",
         [Capability.CODE, Capability.AGENTIC],
-        "The everyday mid-tier. Sits ~1 point behind Sol on SWE-bench Pro.",
+        "The everyday mid-tier. Sits ~1 point behind Sol on SWE-bench Pro "
+        "(measured on 5.6; the installed catalogue's latest Terra is still "
+        "5.6 on 2026-10-24, and no 6 is invented for it).",
         # Bounded worker call, not an agent loop: an escalation target only.
         effort="high",
         restricted=True,
+        floating=True,
+        family="terra",
+        legacy_keys=("openai:gpt-5.6-terra",),
     ),
     _spec(
-        "openai", "gpt-5.6-luna", "GPT-5.6 Luna", 1100 * K, "fast",
+        "openai", "luna", "GPT Luna", 1100 * K, "fast",
         [Capability.CODE, Capability.CHEAP],
         "The tier spread across 5.6 is small on coding (~1.9 pts SWE-bench Pro "
         "Sol->Luna) for roughly 5x the price, so Luna is a defensible default "
@@ -326,9 +365,14 @@ ROSTER: List[ModelSpec] = [
         # Bounded worker call, not an agent loop: the worker tier's base for read, format and draft errands.
         effort="low",
         restricted=True,
+        floating=True,
+        family="luna",
+        legacy_keys=("openai:gpt-5.6-luna",),
     ),
 
-    # -- xAI. Second-hand specs; aliases unverified.
+    # -- xAI. Second-hand specs. Every row here is vendor_default, so no
+    #    alias is sent and there is none to verify; the calls themselves were
+    #    confirmed signed in on grok 1.0.30.
     _spec(
         "grok", "default", "Grok", 500 * K, "moderate",
         [Capability.CODE, Capability.AGENTIC, Capability.RETRIEVAL],
@@ -346,8 +390,11 @@ ROSTER: List[ModelSpec] = [
         "than the weights -- which is why RETRIEVAL is also exposed as a "
         "consultant function.",
         vendor_default=True,
-        # The brain-trust seat is the one place the agent loop earns its
-        # keep: a peer that can read the tree forms an opinion worth having.
+        # Not seated since 2026-11-01 (operator directive): off the brain
+        # trust, the planners, the refusal chain and the difficulty ladder,
+        # so no routing path makes it a peer or a lead. The row stays so the
+        # key still resolves for old records, pricing and the probe, and so
+        # restoring the seat is a roster edit, not a re-derivation.
         effort="high",
     ),
     _spec(
@@ -471,6 +518,17 @@ RETIRED_ROSTER: List[ModelSpec] = [
 ]
 
 _BY_KEY: Dict[str, ModelSpec] = {m.key: m for m in ROSTER}
+#: Legacy version keys -> the family row that now answers for them.
+_LEGACY: Dict[str, ModelSpec] = {legacy: m for m in ROSTER for legacy in m.legacy_keys}
+if set(_LEGACY) & set(_BY_KEY):  # pragma: no cover - a table edit, not a runtime path
+    raise ValueError(f"legacy keys collide with live keys: {sorted(set(_LEGACY) & set(_BY_KEY))}")
+
+
+def canonical_key(key: str) -> str:
+    """The family key a legacy version key names today; any other key as
+    given. ``openai:gpt-5.6-sol`` -> ``openai:sol``."""
+    spec = _LEGACY.get(key)
+    return spec.key if spec is not None else key
 
 _unknown_vendors = {m.provider for m in ROSTER} - set(VENDORS)
 if _unknown_vendors:  # pragma: no cover - a table edit, not a runtime path
@@ -490,8 +548,8 @@ def models_for(
     """Every roster model offering ``capability``, optionally filtered.
 
     Ordering is roster order, which is deliberately not a quality ranking:
-    callers that want the strongest candidate should consult scoreboard data
-    rather than trusting position here.
+    position here says nothing about which candidate is strongest, and no
+    scoreboard exists yet to say it instead.
     """
     out = [m for m in ROSTER if capability in m.caps and m.context >= min_context]
     if providers is not None:
@@ -523,45 +581,58 @@ def best_for(capability: str, **kwargs) -> Optional[ModelSpec]:
 #: Exploit generation and penetration testing are gated regardless of routing
 #: and need Anthropic's Cyber Verification Program; rerouting will not open
 #: them, and this chain is not a mechanism for evading a correct refusal.
+#:
+#: Nothing reads this chain yet. In the session engine a refusal is kept on
+#: the record and stops the run; it is never re-sent to another model.
+#:
+#: ``grok:default`` left the chain on 2026-11-01 with its brain-trust seat
+#: (operator directive): re-routing declined work hands a full agent the
+#: task, which is exactly the leadership the seat was taken off.
 REFUSAL_CHAIN: List[str] = [
     "claude:opus",
-    "openai:gpt-5.6-sol",
-    "grok:default",
+    "openai:sol",
 ]
 
 
 #: Which models participate per mode. Kept explicit because an
-#: all-models-participate default across a twelve-model roster is ruinous:
+#: all-models-participate default across an eleven-model roster is ruinous:
 #: every added peer costs another review pass and fattens every synthesis
 #: prompt.
 MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
     "adversarial": {
-        # The brain trust: one model per vendor, which is the point.
-        # Independent reads are the whole reason this system exists rather
-        # than a single strong model in a loop, so the rule is one seat per
-        # subscription and the size of the trust follows from how many
-        # vendors are in the lineup -- three, since Google left. Nobody was
-        # displaced to get here: the seat went with the vendor. Grok 4.6
-        # earns its seat on independence and on turn efficiency -- roughly 53
-        # turns and 0.5B tokens against ~103 and 2.0B for the strongest coder
-        # on comparable work -- not on peak quality, where it is the weakest
-        # of the three.
-        "peers": ["claude:opus", "openai:gpt-5.6-sol", "grok:default"],
+        # The brain trust: at most one model per vendor, because independent
+        # reads are the whole reason this system exists rather than a single
+        # strong model in a loop. Two seats since 2026-11-01: Davis took
+        # grok:default off the trust ("Turn Grok off as a brain trust member
+        # for now. Keep it as a worker.") after two admitted runs in which
+        # the Grok lead spent the whole 900 s deadline on its task with no
+        # edit or reply (P16 and grok-reliability-01). xAI stays in the
+        # lineup as grok:worker on the rote rung and the lookup errand, with
+        # grok:expert as its in-family escalation. Restoring the seat is
+        # adding the key back here, to ``planners``, to REFUSAL_CHAIN and to
+        # the difficulty ladder (task_kinds.DIFFICULTY_LADDER).
+        "peers": ["claude:opus", "openai:sol"],
         # A subset, not a shortfall. Review is the one role with measured
         # data, and it pins the two models that fail in opposite directions:
         # ~70% recall / ~32% precision against ~39% precision / ~55% recall.
         # Adding a third reviewer with no measured profile would cost an
         # invocation to dilute a pairing chosen precisely for its shape.
-        "reviewers": ["openai:gpt-5.6-sol", "claude:opus"],
+        "reviewers": ["openai:sol", "claude:opus"],
         # Planning runs once per run, so it is the cheapest place to be
         # inclusive. It happens to equal the brain trust today; that is a
         # coincidence of the roster size, not a constraint worth enforcing.
-        "planners": ["claude:opus", "openai:gpt-5.6-sol", "grok:default"],
+        # grok:default left with its trust seat (2026-11-01).
+        "planners": ["claude:opus", "openai:sol"],
     },
     "collaborative": {
-        "peers": ["claude:opus", "openai:gpt-5.6-terra"],
+        # Two vendors, both full peers. Terra sat here until 2026-11-10; it
+        # is a bounded worker row (restricted, an escalation target only),
+        # so as a lead it could only hand back a patch and as a peer it
+        # could not run anything (task_kinds.seat_capabilities). Sol is the
+        # unrestricted OpenAI peer the roster defines.
+        "peers": ["claude:opus", "openai:sol"],
         "reviewers": ["claude:opus"],
-        "planners": ["claude:opus", "openai:gpt-5.6-terra"],
+        "planners": ["claude:opus", "openai:sol"],
     },
     "solo": {
         "peers": ["claude:opus"],
@@ -574,11 +645,13 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
 #:
 #: Fable 5 leads because the job is holding a goal coherent across a long
 #: session, which is what the vendor built it for -- a different axis from
-#: per-call judgement, where Opus 5 is stronger. Opus 5 backs it up because
-#: the orchestrator is a single point of coordination and Fable is, in
+#: per-call judgement, where Opus 5 is stronger. The seat has a fallback
+#: because the orchestrator is a single point of coordination and Fable is, in
 #: practice, the model most likely to become unavailable: it costs twice as
 #: much against the same subscription window, and it has already been
 #: withdrawn once for 19 days. A stalled orchestrator stalls everything.
+#: Opus 5 was that fallback in an earlier chain; it is GPT-6 Astra alone now,
+#: for the reasons given below.
 #:
 #: Fall back on any of: the subscription window for Fable being exhausted,
 #: the model being unavailable, or the project being classified
@@ -623,7 +696,7 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
 #: someone noticed the run was still using last quarter's model.
 ORCHESTRATOR_CHAIN: List[str] = [
     "claude:fable",
-    "openai:gpt-6-astra",
+    "openai:astra",
 ]
 
 
@@ -652,6 +725,76 @@ def assert_floating_orchestrators(chain: Optional[Sequence[str]] = None) -> None
 
 
 assert_floating_orchestrators()
+
+
+def assert_senior_seats_unrestricted(
+    rosters: Optional[Dict[str, Dict[str, List[str]]]] = None,
+    chain: Optional[Sequence[str]] = None,
+) -> None:
+    """Fail loudly if a mode or the orchestrator chain seats a bounded row.
+
+    Called at import. A ``restricted`` row is a worker call: read-only, no
+    agent loop, no direct writes. Seated as a peer, lead or planner it still
+    answers, so nothing errors; the lead can only hand back a patch and the
+    reviewer cannot run anything. Collaborative mode carried Terra that way,
+    and the one test of the rule looked at adversarial mode alone.
+    """
+    seats = [(f"mode {mode!r} {role}", key)
+             for mode, roles in (MODE_ROSTERS if rosters is None else rosters).items()
+             for role, keys in roles.items() for key in keys]
+    seats += [("the orchestrator chain", key)
+              for key in (ORCHESTRATOR_CHAIN if chain is None else chain)]
+    for where, key in seats:
+        spec = _BY_KEY.get(key)
+        if spec is None:
+            raise ValueError(f"{where} names an unknown model: {key}")
+        if spec.restricted:
+            raise ValueError(
+                f"{where} seats {key}, a restricted worker row; senior seats "
+                f"(orchestrators, leads, peers, planners) are never restricted"
+            )
+
+
+assert_senior_seats_unrestricted()
+
+
+def cross_vendor_peers(mode: str, orchestrator: str) -> List[str]:
+    """Peers of ``mode`` from a vendor other than ``orchestrator``'s.
+
+    These are the only seats that may review the requirement list or audit
+    the result: a check that shares the planner's vendor is not independent.
+    ``Session._auditor`` takes the first available one.
+    """
+    vendor = orchestrator.partition(":")[0]
+    return [p for p in MODE_ROSTERS[mode]["peers"] if p.partition(":")[0] != vendor]
+
+
+def mode_audit_gap(mode: str) -> str:
+    """Why ``mode`` cannot pass the requirements audit, or "" when it can.
+
+    Judged against the primary orchestrator, the seat a run expects to hold.
+    Solo mode seats one peer from that seat's own vendor, so with the
+    requirements ledger on nobody may review the list or audit the result:
+    every requirement is recorded not met and DONE is sent back until the
+    run stops. Callers refuse such a run before any call rather than relax
+    the cross-vendor rule. A mode the table does not know is not judged
+    here; whoever seats it reports that.
+    """
+    seat = ORCHESTRATOR_CHAIN[0]
+    if mode not in MODE_ROSTERS or cross_vendor_peers(mode, seat):
+        return ""
+    peers = ", ".join(MODE_ROSTERS[mode]["peers"]) or "no peer"
+    usable = sorted(m for m in MODE_ROSTERS if cross_vendor_peers(m, seat))
+    return (
+        f"mode '{mode}' seats only {peers}, the same vendor as the orchestrator "
+        f"({seat}). The requirements ledger needs a peer from another vendor to "
+        f"review the requirement list and to audit the result, so every "
+        f"requirement would be recorded not met and the run could not finish. "
+        f"Use mode {' or '.join(repr(m) for m in usable)}, which seat a second "
+        f"vendor. The other way out is QUADRATUS_REQUIREMENTS_LEDGER=0, which "
+        f"turns the ledger off and with it the audit."
+    )
+
 
 def peers_for(mode: str, orchestrator: str) -> List[str]:
     """Brain-trust peers for ``mode``.
@@ -721,6 +864,9 @@ class ControlPlaneRole:
 #: Control-plane roles. Cheap by task shape, not by importance: convergence
 #: judging is load-bearing and still checklist work. Haiku was verified
 #: returning a correct, well-calibrated structured verdict on a seeded defect.
+#:
+#: None of these roles is implemented yet and nothing reads this table: it
+#: records who would hold each role, and on what terms, for whoever builds it.
 CONTROL_PLANE: Dict[str, ControlPlaneRole] = {
     # Operator directive, 2026-09-12: Sonnet may hold the interview, never on
     # its own. It is worker-tier, and the interview is the one control-plane
@@ -753,5 +899,6 @@ def control_plane_model(role: str) -> Optional[str]:
 
 
 def resolve(key: str) -> Optional[ModelSpec]:
-    """Look up a roster entry by ``provider:alias``."""
-    return _BY_KEY.get(key)
+    """Look up a roster entry by ``provider:alias``, or by a legacy version
+    key it answers for (``openai:gpt-5.6-sol`` -> the ``openai:sol`` row)."""
+    return _BY_KEY.get(key) or _LEGACY.get(key)

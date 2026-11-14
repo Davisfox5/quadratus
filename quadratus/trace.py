@@ -21,7 +21,15 @@ inspection. So does ``trace-detail.jsonl``, which keeps command text, the
 reasoning around an unserved request and injected rule text. The shareable
 ``trace.jsonl`` and the report carry names, outcomes, paths, exit codes and
 hashes only (Codex review of #25): an argument or a sentence of reasoning can
-hold source or a secret, and a file path rarely does.
+hold source or a secret, and a file path rarely does. What counts as a path
+is decided in one place for each kind of target (whole-repo review,
+2026-11-10). A read's target, and the path kept on a tool call, must be an
+absolute path (``_shareable_path``): a search with no folder stored its
+pattern as a file read, and a pattern is free text. A written file may be
+relative, since a patch names files that way, but it must be one line that
+does not open like JSON (``_written_path``): arguments that did not parse
+come back as their raw text. A command is kept as its program's name only,
+past any ``NAME=value`` words in front of it, which can hold a key.
 """
 
 from __future__ import annotations
@@ -33,11 +41,28 @@ import re
 import shlex
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+from .safe_io import write_private
 
 #: A harness request written somewhere other than as the whole reply.
 PROTOCOL = re.compile(r"(?<![A-Za-z])(WORKER\s*\{|FETCH:\s*\S|CONSULT\s+[A-Za-z]|ASK:\s*\S)")
 _SAFE_ID = re.compile(r"[A-Za-z0-9._-]{6,120}")
+#: A codex session id. Its transcript is found by a pattern over every
+#: session the CLI has kept, so the id must be one no other file name holds
+#: by accident: "2026-1" passed the old check and, as a substring, matched
+#: every session of three months; six characters of any id matched whatever
+#: other ids contained them.
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+#: The most of a transcript's first record that is read to identify it.
+_META_BYTES = 1_048_576
+_ABSENT = "unavailable in this environment"
+#: A word that sets a variable for the command after it.
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+#: Text that is not one file name: a control character (a line break
+#: included), or the punctuation that opens a JSON object or a quoted
+#: string. A bracket is left alone: "[id]/page.tsx" is a real path.
+_NOT_A_PATH = re.compile(r"[\x00-\x1f\x7f]|^\s*[{\"']")
 _ABS_PATH = re.compile(r"(?<![\w.*-])(/(?:[\w.@%+-]+/)*[\w.@%+-]+)")
 _SYSTEM_PREFIXES = ("/usr/", "/bin/", "/sbin/", "/opt/homebrew/", "/System/", "/Library/",
                     "/dev/", "/etc/", "/proc/")
@@ -63,24 +88,70 @@ def session_roots(env=None) -> Dict[str, Path]:
     }
 
 
-def locate(vendor: Optional[str], session_id: Optional[str], roots: Dict[str, Path]) -> Optional[Path]:
-    """The transcript for one call, or None. Session ids are validated before
-    they are used in a glob, so a hostile id cannot widen the search."""
+def _codex_is_this_call(path: Path, session_id: str, cwd) -> bool:
+    """Whether a codex transcript says it is this call's: its first record is
+    a ``session_meta`` naming the same session id and the same working
+    directory. A file name alone proves nothing (the test
+    ``cli_providers._codex_journal`` applies before it reads a journal)."""
+    if not cwd:
+        return False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            first = json.loads(handle.readline(_META_BYTES))
+        meta = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
+        if not isinstance(meta, dict) or meta.get("id") != session_id:
+            return False
+        said = meta.get("cwd")
+        return isinstance(said, str) and bool(said) and Path(said).resolve() == Path(str(cwd)).resolve()
+    except (OSError, ValueError, TypeError, RecursionError, RuntimeError):
+        # RecursionError: a first record nested deeper than the parser will
+        # follow. One unreadable transcript must not cost the run its trace.
+        return False
+
+
+def _locate(vendor: Optional[str], session_id: Optional[str], roots: Dict[str, Path],
+            cwd=None) -> Tuple[Optional[Path], str]:
+    """``(transcript, "")``, or ``(None, why)`` with the reason in words."""
     if not vendor or not session_id or not _SAFE_ID.fullmatch(session_id):
-        return None
+        return None, _ABSENT
+    if vendor == "codex" and not _UUID.fullmatch(session_id):
+        return None, "not looked for: the recorded codex session id is not shaped like one"
     root = roots.get(vendor)
     if root is None or not root.is_dir():
-        return None
+        return None, _ABSENT
     try:
         if vendor == "claude":
             hits = sorted(root.glob(f"*/{session_id}.jsonl"))
         elif vendor == "codex":
-            hits = sorted(root.rglob(f"rollout-*{session_id}*.jsonl"))
+            named = sorted(root.rglob(f"rollout-*-{session_id}.jsonl"))
+            if named and not cwd:
+                # Said apart from a mismatch: here the transcript was never
+                # read, and the record should not suggest it disagreed.
+                return None, ("not copied: the ledger row for this call does not record its working "
+                              "directory, so the transcript cannot be held to it")
+            hits = [p for p in named if _codex_is_this_call(p, session_id, cwd)]
+            if named and not hits:
+                return None, ("not copied: the transcript named for this session does not state this "
+                              "call's session id and working directory")
         else:
             hits = sorted(p for p in root.glob(f"*/{session_id}") if p.is_dir())
     except OSError:
-        return None
-    return hits[0] if hits else None
+        return None, _ABSENT
+    return (hits[0], "") if hits else (None, _ABSENT)
+
+
+def locate(vendor: Optional[str], session_id: Optional[str], roots: Dict[str, Path],
+           cwd=None) -> Optional[Path]:
+    """The transcript for one call, or None. Session ids are validated before
+    they are used in a glob, so a hostile id cannot widen the search.
+
+    A codex transcript is found by a pattern across every session the CLI
+    has kept, so it is returned only when the id is UUID-shaped and the
+    transcript's own first record names that id and ``cwd``, the directory
+    the call ran in. Without ``cwd`` there is nothing to hold it to, and the
+    answer is None.
+    """
+    return _locate(vendor, session_id, roots, cwd)[0]
 
 
 def _private_copy(source: Path, dest: Path) -> Path:
@@ -329,11 +400,33 @@ _FILE_TOOLS = _READ_TOOLS | _WRITE_TOOLS
 
 
 def _program(command: str) -> str:
+    """The name of the program a command runs. Words of the form
+    ``NAME=value`` in front of it set its environment and are skipped: the
+    name goes into the shareable record, and such a word can hold a key."""
     try:
         words = shlex.split(command or "")
     except ValueError:
         words = (command or "").split()
-    return os.path.basename(words[0]) if words else ""
+    for word in words:
+        if not _ASSIGNMENT.match(word):
+            return os.path.basename(word)
+    return ""
+
+
+def _shareable_path(value) -> bool:
+    """Whether a call's target may be kept as a path in the shareable
+    record: an absolute path and nothing else. A search pattern, a bare word
+    or any other text could hold anything."""
+    return isinstance(value, str) and bool(_ABS_PATH.fullmatch(value))
+
+
+def _written_path(value) -> bool:
+    """Whether a write's target may be kept in the shareable record. Looser
+    than ``_shareable_path``: a patch header is a relative path, and a real
+    file name can hold spaces or brackets. What it refuses is what unparsed
+    arguments leave behind, their raw text: more than one line, or text that
+    opens like JSON or a quoted string."""
+    return isinstance(value, str) and 0 < len(value) <= 300 and not _NOT_A_PATH.search(value)
 
 
 def shareable(record: dict) -> dict:
@@ -341,10 +434,22 @@ def shareable(record: dict) -> dict:
     reasoning snippets and rule text stay in the owner-only detail file."""
     out = {k: v for k, v in record.items()
            if k not in ("tool_calls", "commands", "protocol_attempts", "injected_rules")}
+    if "error" in record:
+        # A transcript that could not be parsed: the exception's type says
+        # what kind of failure it was. Its message is free text (a parser
+        # quotes the line it choked on), so it stays in the detail file.
+        kind = str(record.get("error") or "").split(":", 1)[0].strip()
+        out["error"] = kind if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,80}", kind) else "error"
+    if "files_read" in record:
+        # A Grep or Glob with no folder has its pattern as its target.
+        out["files_read"] = [f for f in record.get("files_read") or [] if _shareable_path(f)]
+    for key in ("files_written", "files_not_written"):
+        if key in record:
+            out[key] = [f for f in record.get(key) or [] if _written_path(f)]
     if "tool_calls" in record:
         out["tool_calls"] = [dict(name=c.get("name"), outcome=c.get("outcome"),
                                   **({"path": c["target"]} if c.get("name") in _FILE_TOOLS
-                                     and c.get("target") and _ABS_PATH.fullmatch(c["target"]) else {}),
+                                     and _shareable_path(c.get("target")) else {}),
                                   # An opaque vendor call id, never free text.
                                   **({"id": c["id"]} if isinstance(c.get("id"), str)
                                      and re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", c["id"]) else {}))
@@ -355,13 +460,6 @@ def shareable(record: dict) -> dict:
         out["injected_rules"] = [dict(source=r.get("source"), sha256=r.get("sha256"))
                                  for r in record.get("injected_rules") or []]
     return out
-
-
-def _write_private(path: Path, text: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    os.chmod(path, 0o600)
 
 
 def build_traces(run_dir, invocations_path, project_root=None, roots=None) -> List[dict]:
@@ -393,10 +491,9 @@ def build_traces(run_dir, invocations_path, project_root=None, roots=None) -> Li
                       cached_input_tokens=row.get("cached_input_tokens"),
                       output_tokens=row.get("output_tokens"), model_turns=row.get("model_turns"),
                       prompt_artifact=row.get("prompt_artifact"))
-        source = locate(vendor, sid, roots)
+        source, why = _locate(vendor, sid, roots, row.get("cwd"))
         if source is None:
-            record["transcript"] = ("unavailable in this environment" if sid
-                                    else "no session id recorded")
+            record["transcript"] = why if sid else "no session id recorded"
         else:
             try:
                 copied = _private_copy(source, run_dir / "native-private" / vendor / source.name)
@@ -407,8 +504,8 @@ def build_traces(run_dir, invocations_path, project_root=None, roots=None) -> Li
         records.append(record)
     shared = [shareable(r) for r in records]
     try:
-        _write_private(private / "trace-detail.jsonl", "".join(json.dumps(r) + "\n" for r in records))
-        _write_private(run_dir / "trace.jsonl", "".join(json.dumps(r) + "\n" for r in shared))
+        write_private(private / "trace-detail.jsonl", "".join(json.dumps(r) + "\n" for r in records))
+        write_private(run_dir / "trace.jsonl", "".join(json.dumps(r) + "\n" for r in shared))
     except OSError:
         pass
     return shared

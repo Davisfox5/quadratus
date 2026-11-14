@@ -1172,8 +1172,12 @@ def test_confirm_steps_parse_validate_and_render_like_the_others(tmp_path):
     profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
     argv = capture_argv(profile, "t1", capture)
     assert argv[-5:] == ["--confirm", ".delete-btn", "Delete project Alpha Cup?", "--wait", "#projects-empty"]
-    assert capture_argv(profile, "t1", capture, "mobile", "abcdef0123456789")[-4:] == [
-        "--view", "mobile", "--attempt", "abcdef0123456789"]
+    # The harness's options come before the first step, never after it
+    # (review 2026-11-10, checks 16).
+    one_view = capture_argv(profile, "t1", capture, "mobile", "abcdef0123456789")
+    at = one_view.index("--confirm")
+    assert one_view[at - 4:at] == ["--view", "mobile", "--attempt", "abcdef0123456789"]
+    assert one_view[at:] == argv[-5:]
     with pytest.raises(ValueError):
         parse_steps(["p.html", "t1", "--confirm", ".delete-btn"])
     for bad in (dict(action="confirm", selector=".d"), dict(action="confirm", selector=".d", message="  "),
@@ -1240,11 +1244,11 @@ def test_a_single_view_capture_combines_only_siblings_of_the_same_attempt(tmp_pa
         evidence.steps[0] = dict(evidence.steps[0], ok=False, error="no dialog opened")
         return evidence
     monkeypatch.setattr(browser, "render_page", failing)
-    assert de.main([page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"],
-                    "--wait", "#projects-empty", "--view", "mobile", "--attempt", "ee" * 8]) == 1
+    assert de.main([page, "t1", str(root), "--view", "mobile", "--attempt", "ee" * 8,
+                    "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]) == 1
     monkeypatch.setattr(browser, "render_page", _fake_render(root))
-    assert de.main([page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"],
-                    "--wait", "#projects-empty", "--view", "desktop", "--attempt", "ee" * 8]) == 0, \
+    assert de.main([page, "t1", str(root), "--view", "desktop", "--attempt", "ee" * 8,
+                    "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]) == 0, \
         "a stale failed sibling never fails the next render"
     assert set(_read_summary(root)["views"]) == {"desktop"}, "and it is not kept as a sibling either"
     with pytest.raises(ValueError):
@@ -1623,22 +1627,27 @@ def test_the_capture_command_carries_and_checks_the_measurement(tmp_path, monkey
     capture_decl = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
     argv = capture_argv(profile, "t1", capture_decl, "mobile", "ab" * 8,
                         measured={"desktop": {"page.png": "0" * 64, "evidence.json": "1" * 64}})
-    tail = argv[-12:]
+    # Options sit between the positionals and the first step (review
+    # 2026-11-10, checks 16): the measurements, the view, the attempt.
+    first = argv.index("--confirm")
+    tail = argv[first - 12:first]
     assert tail[:8] == ["--measured", "desktop", "evidence.json", "1" * 64, "--measured", "desktop", "page.png", "0" * 64]
     assert tail[8:] == ["--view", "mobile", "--attempt", "ab" * 8]
     root = _project(tmp_path)
     monkeypatch.setattr(browser, "render_page", _fake_render(root))
     page = str(root / "index.html")
-    base = [page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
-    assert de.main(base + ["--view", "desktop", "--attempt", "cd" * 8]) == 0
+    base = [page, "t1", str(root)]
+    declared = ["--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
+    assert de.main(base + ["--view", "desktop", "--attempt", "cd" * 8] + declared) == 0
     taken = view_receipt(root, "t1", "desktop")
     assert de.main(base + ["--measured", "desktop", "page.png", taken["page.png"], "--measured", "desktop",
-                           "evidence.json", taken["evidence.json"], "--view", "mobile", "--attempt", "cd" * 8]) == 0
+                           "evidence.json", taken["evidence.json"], "--view", "mobile", "--attempt", "cd" * 8]
+                   + declared) == 0
     assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}
-    assert de.main(base + ["--measured", "desktop", "page.png", "nothex", "--view", "mobile"]) == 2
-    assert de.main(base + ["--measured", "tablet", "page.png", "0" * 64, "--view", "mobile"]) == 2
-    assert de.main(base + ["--measured", "desktop", "other.txt", "0" * 64, "--view", "mobile"]) == 2
-    assert de.main(base + ["--measured", "desktop", "page.png"]) == 2
+    assert de.main(base + ["--measured", "desktop", "page.png", "nothex", "--view", "mobile"] + declared) == 2
+    assert de.main(base + ["--measured", "tablet", "page.png", "0" * 64, "--view", "mobile"] + declared) == 2
+    assert de.main(base + ["--measured", "desktop", "other.txt", "0" * 64, "--view", "mobile"] + declared) == 2
+    assert de.main(base + ["--measured", "desktop", "page.png"] + declared) == 2
 
 
 def test_capture_task_hands_each_view_the_measurement_of_the_earlier_ones(tmp_path, monkeypatch):
@@ -1717,15 +1726,18 @@ def test_an_unreadable_measurement_is_carried_as_missing_never_dropped(tmp_path,
     capture_decl = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
     argv = capture_argv(profile, "t1", capture_decl, "mobile", "ab" * 8,
                         measured={"desktop": {"page.png": None, "evidence.json": None}})
-    assert argv[-12:-4] == ["--measured", "desktop", "evidence.json", MISSING_DIGEST,
-                            "--measured", "desktop", "page.png", MISSING_DIGEST]
+    at = argv.index("--measured")
+    assert argv[at:at + 8] == ["--measured", "desktop", "evidence.json", MISSING_DIGEST,
+                               "--measured", "desktop", "page.png", MISSING_DIGEST]
+    assert at < argv.index("--confirm"), "before the first step (review 2026-11-10, checks 16)"
     root = _project(tmp_path)
     monkeypatch.setattr(browser, "render_page", _fake_render(root))
     page = str(root / "index.html")
-    base = [page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
-    assert de.main(base + ["--view", "desktop", "--attempt", "ef" * 8]) == 0
+    base = [page, "t1", str(root)]
+    declared = ["--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
+    assert de.main(base + ["--view", "desktop", "--attempt", "ef" * 8] + declared) == 0
     assert de.main(base + ["--measured", "desktop", "page.png", "missing", "--measured", "desktop",
-                           "evidence.json", "missing", "--view", "mobile", "--attempt", "ef" * 8]) == 0
+                           "evidence.json", "missing", "--view", "mobile", "--attempt", "ef" * 8] + declared) == 0
     summary = _read_summary(root)
     assert set(summary["views"]) == {"mobile"}, "a missing measurement refuses reuse, as an empty one does"
     assert summary["not_kept"]["desktop"]["mismatch"] is False

@@ -6,7 +6,9 @@ import re
 
 import pytest
 
+from quadratus import checkpoint, project_run
 from quadratus.artifacts import ArtifactStore
+from quadratus.config import Settings
 from quadratus.project import Project
 from quadratus.session import Session, SessionConfig
 from tools import truth_check
@@ -219,3 +221,28 @@ def test_js_comments_and_strings_do_not_create_ambiguous_case_declarations(tmp_p
     assert valid and not problems
 
 
+@pytest.mark.parametrize("authority", [None, [], ()])
+def test_default_resume_workflow_digest_keeps_the_legacy_no_authority_identity(tmp_path, monkeypatch, authority):
+    root = _project(tmp_path, PY_PATH, OLD)
+    (root / ".quadratus/runs/previous").mkdir(parents=True)
+    original_identity = checkpoint.workflow_identity
+    observed = {}
+
+    class ValidatedBeforeCalls(Exception):
+        pass
+
+    def identity(**config):
+        assert "test_changes" not in config
+        observed["legacy"] = original_identity(**config)
+        return observed["legacy"]
+
+    def validate(parent, body, identities):
+        assert identities["workflow"] == observed["legacy"]
+        raise ValidatedBeforeCalls
+
+    monkeypatch.setattr(checkpoint, "workflow_identity", identity)
+    monkeypatch.setattr(checkpoint, "load", lambda *a: {})
+    monkeypatch.setattr(checkpoint, "validate", validate)
+    with pytest.raises(ValidatedBeforeCalls):
+        project_run.run_project(GOAL, root, Settings(), test_changes=authority, resume_from="previous")
+    assert observed["legacy"]

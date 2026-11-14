@@ -12,13 +12,14 @@ How the confidence field is meant to be used
 Every policy carries a confidence and the evidence behind it, and the two
 control behaviour rather than merely documenting it:
 
-* **High and medium confidence pin a model.** There is a measured reason to
-  prefer one, so rotation is overridden.
-* **Low confidence deliberately does not.** The lead rotates as normal, which
-  spreads the work across separate subscription windows *and* accumulates the
-  head-to-head data that would let this entry be upgraded later. Pinning on a
-  hunch would freeze the hunch in place and destroy the only evidence that
-  could correct it.
+* **A high or medium confidence row with a ``prefer`` list pins a model.**
+  There is a measured reason to prefer one, so the pin is tried before the
+  difficulty ladder.
+* **Low confidence deliberately does not.** The kind rides the difficulty
+  ladder (:data:`DIFFICULTY_LADDER`), which spreads the work across separate
+  subscription windows. Pinning on a hunch would freeze the hunch in place.
+  The session's rotated pick is only the last resort, used when no rung
+  fits or no difficulty was given.
 
 So an empty ``prefer`` is a positive statement -- "no credible basis to choose"
 -- and not an oversight.
@@ -31,8 +32,10 @@ they outrank nearly every per-model preference below:
 1. **Size dominates model choice for review.** Review F1 measured 0.657 on
    diffs under 10 lines and 0.043 on diffs over 150. That spread is far wider
    than any gap between frontier reviewers, which is why
-   :data:`MAX_TASK_LINES` exists and why it is enforced at decomposition time
-   rather than left to a model's discretion.
+   :data:`TASK_SIZE_GUIDE` exists and is stated at decomposition time. It is
+   a guide, not a limit (operator directive 2026-10-20): a task is sized for
+   what correctness and its proofs need, the measured size reaches every
+   reviewer, and a reviewer judges whether it was necessary.
 2. **Precision and recall split across vendors.** No single reviewer is good;
    two with opposite failure modes are. This is why REVIEW pins *both* rather
    than choosing.
@@ -62,7 +65,7 @@ __all__ = [
     "KindPolicy",
     "ROUTING",
     "DIFFICULTY_LADDER",
-    "MAX_TASK_LINES",
+    "TASK_SIZE_GUIDE",
     "policy_for",
     "route",
     "guidance_for",
@@ -77,21 +80,25 @@ __all__ = [
 ]
 
 
-#: The size ceiling handed to the orchestrator at decomposition time.
+#: The size the orchestrator is asked to aim for at decomposition time.
 #:
 #: Not a style preference. Review quality collapses with diff size -- roughly
 #: an order of magnitude of F1 between a sub-10-line change and a 150-line one
-#: -- so a task that produces a large diff has already lost most of the review
-#: that was supposed to catch its defects. Splitting the task is the only
-#: intervention that recovers it; no reviewer choice comes close.
-MAX_TASK_LINES = 100
+#: -- so a task that produces a large diff has lost most of the review that
+#: was supposed to catch its defects, and splitting is what recovers it. A
+#: guide, not a limit (operator directive 2026-10-20, replacing the ceiling
+#: that stopped tasks and refused plans): a requirement is never split from
+#: the tests that prove it, tests are never omitted or compressed to fit a
+#: number, a plan above this figure is not refused, and the measured size
+#: reaches the reviewers, who judge whether it was necessary.
+TASK_SIZE_GUIDE = 100
 
 
 class Confidence:
     """How much evidence stands behind a routing policy.
 
     LOW is not a placeholder awaiting a better guess -- see the module
-    docstring. It routes by rotation on purpose.
+    docstring. It rides the difficulty ladder on purpose.
     """
 
     HIGH = "high"
@@ -113,7 +120,7 @@ class TaskKind:
 
     #: Turning an operator's request into a stated goal and constraints.
     SCOPE = "scope"
-    #: Breaking a goal into tasks. Where MAX_TASK_LINES is applied.
+    #: Breaking a goal into tasks. Where TASK_SIZE_GUIDE is stated.
     DECOMPOSE = "decompose"
     #: Open-ended structural judgement, before code exists.
     ARCHITECT = "architect"
@@ -144,7 +151,7 @@ class TaskKind:
     #: Schema, query, and migration work.
     DATA = "data"
 
-    #: Anything unclassified. Rotates.
+    #: Anything unclassified. Rides the difficulty ladder.
     GENERAL = "general"
 
 
@@ -153,9 +160,10 @@ class KindPolicy:
     """What to do with one kind of task.
 
     Attributes:
-        prefer: Models to use, in order. Empty means rotate -- see the module
-            docstring; this is a deliberate value, not a missing one.
-        exclude: Models that must not lead this kind regardless of rotation.
+        prefer: Models to use, in order. Empty means ride the difficulty
+            ladder -- see the module docstring; this is a deliberate value,
+            not a missing one.
+        exclude: Models that must not lead this kind, whatever else picks.
             Reserved for measured deficits, not impressions.
         confidence: How much the ``prefer`` list should be trusted.
         evidence: What ``prefer`` and ``exclude`` rest on, in one line. Present
@@ -187,10 +195,12 @@ class KindPolicy:
 
 
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
-LUNA = "openai:gpt-5.6-luna"
+SOL = "openai:sol"            # the family; its release is the installed client's latest
+# LUNA and SONNET are on no pin and no rung today: both pins were retired
+# (see the GLUE and DOCS rows). Kept as names for those rows' history.
+LUNA = "openai:luna"
 SONNET = "claude:sonnet"
-GROK = "grok:default"          # xAI's current default, whatever it is
+GROK = "grok:default"          # xAI's full agent; off the ladder and the trust since 2026-11-01
 GROK_WORKER = "grok:worker"   # same line, bounded call, low effort
 FABLE = "claude:fable"
 
@@ -208,12 +218,12 @@ FABLE = "claude:fable"
 #: The rungs, per the operator's read of current capability:
 #: * COMPLEX -- many logical steps, high stakes -> Opus, top of the pack.
 #: * STANDARD -- real judgement, not the hardest -> GPT-5.6 Sol.
-#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok, addressed as
-#:   the CLI's current default rather than as an iteration; capable at this
-#:   grade and cheap against its own window.
+#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Sol since
+#:   2026-11-01; Grok held it until then (see below).
 #: * ROTE -- mechanical work -> Grok, called as a bounded worker.
 #:
-#: Four rungs across three vendors means one vendor takes two, and xAI is the
+#: The history of the split, kept because it explains the ROTE seat:
+#: four rungs across three vendors meant one vendor took two, and xAI was the
 #: one that should: Anthropic already carries the orchestrator seat and every
 #: COMPLEX task, and OpenAI carries STANDARD plus the security, testing and
 #: review pins plus the fallback orchestrator seat. xAI was left holding a
@@ -230,15 +240,27 @@ FABLE = "claude:fable"
 #:
 #: A rung that is unavailable or excluded escalates upward (a stronger model
 #: can always do easier work) before it degrades downward.
+#:
+#: **SIMPLE moved off Grok on 2026-11-01** (operator directive: "Turn Grok off
+#: as a brain trust member for now. Keep it as a worker. We will see if it
+#: can at least do rote tasks"). In two admitted runs the grok:default lead
+#: spent its whole 900 s deadline with no edit or reply. The SIMPLE rung now
+#: names Sol, which is where the ladder's own upward rule already sent a
+#: simple task whenever the Grok rung was out; spreading still alternates
+#: simple and standard leads across the two remaining trust vendors.
+#: grok:default is off ``_LADDER_ORDER`` too, so nothing escalates into it:
+#: a rote task the restricted worker cannot serve (it must run something)
+#: climbs straight to Sol. ROTE stays grok:worker, which is the trial Davis
+#: asked for. Restoring is putting GROK back on SIMPLE and in the order.
 DIFFICULTY_LADDER: Dict[str, str] = {
     "complex": OPUS,
     "standard": SOL,
-    "simple": GROK,
+    "simple": SOL,
     "rote": GROK_WORKER,
 }
 
 #: Least to most capable, for escalation.
-_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, GROK, SOL, OPUS)
+_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, SOL, OPUS)
 
 
 def _available_always(_key: str) -> bool:
@@ -498,11 +520,14 @@ ROUTING: Dict[str, KindPolicy] = {
         confidence=Confidence.HIGH,
         evidence=(
             "Same structural reason as SCOPE. The load-bearing part is not who "
-            f"decomposes but the {MAX_TASK_LINES}-line ceiling it must respect."
+            f"decomposes but the ~{TASK_SIZE_GUIDE}-line size guide it works to: "
+            "small diffs are the ones reviews catch defects in."
         ),
         gate=(
-            f"No task may be sized to produce more than ~{MAX_TASK_LINES} lines "
-            "of diff. Split it instead."
+            f"Aim for tasks of about ~{TASK_SIZE_GUIDE} lines of diff and split where a split "
+            "keeps each piece reviewable on its own; never split a requirement from the tests "
+            "that prove it, and never size a task below what its correctness needs. The figure "
+            "is a guide the reviewers see, not a limit the harness enforces."
         ),
     ),
     TaskKind.ARCHITECT: KindPolicy(
@@ -510,7 +535,9 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Independent proposals beat any single model's, and the harness "
             "around the debate mattered more than which models were in it. "
-            "Rotation is correct here: the diversity is the product."
+            "No model is pinned for that reason. The session engine runs no "
+            "independent-proposal round yet, so this kind rides the "
+            "difficulty ladder to one lead."
         ),
     ),
 
@@ -602,7 +629,13 @@ ROUTING: Dict[str, KindPolicy] = {
         gate=(
             "Concurrent code is not accepted on inspection. Add a test that "
             "actually interleaves -- stress, fuzz, or a deterministic scheduler "
-            "-- and show it failing before the fix and passing after."
+            "-- and runs in an approved check. When the task corrects a "
+            "demonstrated defect, show that test failing on the code before "
+            "the fix and passing after. When it proves behaviour that should "
+            "already hold, do not invent a defect to fix: the test must drive "
+            "the invariant adversarially, with enough concurrent operations "
+            "that a race would show, and pass on the delivered code; if it "
+            "fails, that failure is the defect, and the first rule applies."
         ),
         human_check=True,
     ),
@@ -674,8 +707,8 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Rides the ladder as ROTE, which lands it on the least-loaded "
             "window. The earlier Sonnet pin spent the same Anthropic window "
-            "the orchestrator needs most -- and needs more now that two of "
-            "the three orchestrator seats are Anthropic."
+            "the orchestrator needs most: the primary orchestrator seat "
+            "is Anthropic's."
         ),
     ),
     TaskKind.PERF: KindPolicy(
@@ -696,14 +729,14 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Deliberately unrouted. The public leaderboards here are not usable "
             "-- one widely-cited text-to-SQL set was found to have a 62.8% "
-            "annotation error rate -- so rotation plus the scoreboard is a "
+            "annotation error rate -- so riding the difficulty ladder is a "
             "better basis than any published ranking."
         ),
     ),
 
     TaskKind.GENERAL: KindPolicy(
         confidence=Confidence.LOW,
-        evidence="Unclassified work rotates, which is also how the scoreboard fills.",
+        evidence="Unclassified work rides the difficulty ladder, like every unpinned kind.",
     ),
 }
 
@@ -711,9 +744,9 @@ ROUTING: Dict[str, KindPolicy] = {
 def policy_for(kind: str) -> KindPolicy:
     """The policy for ``kind``, falling back to GENERAL for anything unknown.
 
-    Unknown kinds rotate rather than raise: a task the classifier could not
-    label is a normal occurrence, and refusing to run it would be a worse
-    answer than running it without a preference.
+    Unknown kinds route as GENERAL rather than raise: a task the classifier
+    could not label is a normal occurrence, and refusing to run it would be a
+    worse answer than running it without a preference.
     """
     return ROUTING.get(kind, ROUTING[TaskKind.GENERAL])
 
@@ -816,7 +849,8 @@ def guidance_for(kind: str) -> List[str]:
     Returned as text to be pasted into the lead's prompt rather than enforced
     in code, because these are judgements about the work product that only the
     model doing the work is positioned to apply. What *is* enforced in code is
-    the routing above and the size ceiling at decomposition.
+    the routing above. Task size is advisory since 2026-10-20: nothing
+    is enforced for size.
     """
     policy = policy_for(kind)
     out: List[str] = []

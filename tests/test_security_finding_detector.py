@@ -54,9 +54,13 @@ ACCEPTING_REPORT = (
     ("**VERDICT:** REJECT", False),
     ("- VERDICT: reject\n", False),
     ("VERDICT: ACCEPT\nsecond thoughts\nVERDICT: REJECT", False),   # the last line wins
-    ("Verdict: accept the code change", True),
+    # Whole-repo review, 2026-11-10: an ACCEPT with words after it is not an
+    # acceptance (the same shape as "VERDICT: ACCEPT once fixed"). Ruling 10:
+    # a VERDICT line that is not a plain ACCEPT is a rejection, never a
+    # hand-off to the marker scan.
+    ("Verdict: accept the code change", False),
     ("The verdict is positive.", None),
-    ("VERDICT: maybe", None),
+    ("VERDICT: maybe", False),
 ])
 def test_the_verdict_line_is_read_as_written(text, expected):
     assert _security_verdict_line(text) is expected

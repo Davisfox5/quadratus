@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.lifecycle.test_explicit_tasks import README_TASK, _run, _script
+from tests.lifecycle.replies import audit_draws
+from tests.lifecycle.test_explicit_tasks import READING_JUDGED, README_TASK, _run, _script
+from tests.lifecycle.test_lifecycle_matrix import judging
 
 
 @pytest.mark.requirements_ledger
@@ -13,7 +15,7 @@ def test_ambiguity_is_scoped_to_explicit_claims(tmp_path, monkeypatch, rid, comp
         ['REQUIREMENTS:\nR1: README documents add\nR2: unrelated CSV quoting behavior\n' + README_TASK + '\nCOVERS: R1'],
         max_tasks=1, record_complete=False,
         script=_script(**{'requirements-review': lambda c,r: f'AMBIGUOUS: {rid} - two incompatible readings',
-                         'auditor': lambda c,r: 'R1: MET - README.md'}))
+                         'auditor': judging(lambda c, r: 'R1: MET - README.md', reading=READING_JUDGED)}))
     assert replay.of('orchestrator') == []
     assert replay.result.completed is complete, replay.result.error
     if complete:
@@ -47,4 +49,4 @@ def test_failed_claim_is_not_reclassified_as_unclaimed(tmp_path, monkeypatch):
     record = json.loads((Path(replay.result.run_dir) / 'result.json').read_text())['explicit_tasks']
     assert record['requirements_claimed'] == ['R1']
     assert record['requirements_unclaimed'] == ['R2']
-    assert len(replay.of('auditor')) == 1
+    assert len(audit_draws(replay)) == 1, 'one audit draw; a completion of omitted ids is not one'

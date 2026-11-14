@@ -10,6 +10,10 @@ complete. The cross-vendor design reviewer is pointed at the same files.
     python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root]
         [--click SELECTOR] [--wait SELECTOR] [--upload SELECTOR project/fixture.csv] ...
 
+The page, the task and the root come first, then any harness option, then
+the steps. After the first step flag every argument belongs to a step, so a
+selector or a message can never be read as an option.
+
 Steps reach the state the task changed before the screenshot (Codex review
 of #25, Run 13: a dialog and its results appear only after a click and a
 file choice, so a render at load proves nothing about them). They run in the
@@ -26,7 +30,6 @@ a selector with ``[`` must use ``--upload``, since its ``=`` is ambiguous.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import json
 import os
 import re
@@ -38,10 +41,24 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from .integration import (
+    UnsafeWritePath,
+    _open_regular,
+    _read_capped,
+    remove_bound,
+    sha256_capped,
+    write_bound,
+)
 from .project_files import SECRET_NAMES
 
 VIEWPORTS = {"desktop": {"width": 1280, "height": 800}, "mobile": {"width": 390, "height": 844}}
 EVIDENCE_DIR = Path(".quadratus") / "design-evidence"
+#: Bounds on the evidence files a check reads back: the summary, and each
+#: render file it hashes. Every read is of a regular file, never blocks and
+#: never takes more than this (review 2026-11-10, checks 11: a FIFO at
+#: page.png hung the harness, and summary.json was read whole).
+MAX_SUMMARY_BYTES = 2_000_000
+MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
 
 
 def evidence_dir(root, task_id: str) -> Path:
@@ -65,13 +82,17 @@ EXCLUDES_FILE = Path(".quadratus") / "source-excludes.json"
 
 
 def write_source_excludes(root, excludes) -> None:
-    """Record ``excludes`` (absolute paths) that fall inside ``root``."""
+    """Record ``excludes`` (absolute paths) that fall inside ``root``.
+
+    Written through folder handles (``integration.write_bound``): a linked
+    ``.quadratus`` is refused before any write (``UnsafeWritePath``, an
+    ``OSError``), and a link standing at the file is replaced, never written
+    through (review 2026-11-10, checks 5: a committed link here had its
+    target outside the project overwritten)."""
     root = Path(root).resolve()
     inside = sorted({Path(e).resolve().relative_to(root).as_posix() for e in excludes
                      if Path(e).resolve().is_relative_to(root) and Path(e).resolve() != root})
-    path = root / EXCLUDES_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(inside))
+    write_bound(root, EXCLUDES_FILE.parts, json.dumps(inside).encode("utf-8"))
 
 
 MAX_EXCLUDES_BYTES = 64_000
@@ -110,13 +131,14 @@ def _source_excludes(root: Path) -> List[Path]:
         current = current / part
         if current.is_symlink():
             raise ExcludesError("the recorded source exclusions go through a symlink")
-    if not path.exists():
+    if not os.path.lexists(path):
         return []
-    if not path.is_file() or path.stat().st_size > MAX_EXCLUDES_BYTES:
+    raw, problem = _read_capped(path, MAX_EXCLUDES_BYTES)
+    if problem:
         raise ExcludesError("the recorded source exclusions are not a small regular file")
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        entries = json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
         raise ExcludesError("the recorded source exclusions cannot be read") from exc
     if not isinstance(entries, list) or len(entries) > MAX_EXCLUDES:
         raise ExcludesError("the recorded source exclusions are malformed or too many")
@@ -141,11 +163,10 @@ def source_fingerprint(root) -> Optional[str]:
         return None
 
 
-def _digest(path: Path) -> Optional[str]:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
+def _digest(path: Path, limit: int = MAX_EVIDENCE_BYTES) -> Optional[str]:
+    """The SHA256 of a regular file of at most ``limit`` bytes; None for
+    anything else, a link, a FIFO or a device included."""
+    return sha256_capped(path, limit)
 
 
 def fixture_dir(root, task_id: str) -> Path:
@@ -312,7 +333,7 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
 
 def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None, *,
             pinned: bool = False, views: Optional[List[str]] = None, attempt: Optional[str] = None,
-            measured: Optional[dict] = None) -> dict:
+            measured: Optional[dict] = None, shared_workers: bool = False) -> dict:
     """Render ``target`` at each width into the task's evidence folder.
 
     With ``steps``, each width runs them on a fresh page before its
@@ -335,27 +356,41 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     against something outside the mutable summary (Codex review of
     2e57e94). The returned dict holds only the views rendered now; a run
     that raises part-way still leaves nothing standing.
+
+    Every file is written through folder handles from ``root`` down
+    (``integration.write_bound``): a symlink at ``.quadratus``, at the
+    evidence folders or at a view folder is refused before any write
+    (``UnsafeWritePath``), so a capture never writes outside the project.
+    ``shared_workers`` is the operator's escape for a pinned capture, which
+    otherwise runs without them (``browser.render_page``).
     """
     from .browser import render_page
+    root = Path(root)
     folder = evidence_dir(root, task_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    wanted = {name: VIEWPORTS[name] for name in (views or VIEWPORTS) if name in VIEWPORTS}
-    if views and set(views) - set(VIEWPORTS):
-        raise ValueError(f"unknown view(s) {sorted(set(views) - set(VIEWPORTS))}; the views are {list(VIEWPORTS)}")
+    home = (*EVIDENCE_DIR.parts, task_id)
     previous = _read_summary(folder) if views else None
     # Invalidate before anything can fail: a capture that raises part-way
     # must never leave an earlier, successful summary and screenshots standing
-    # as this attempt's evidence (Codex review of c222d62).
-    _write_summary(folder, dict(target=target, views={}, capture_in_progress=True))
+    # as this attempt's evidence (Codex review of c222d62). This is also the
+    # first write, so a linked folder is refused here with nothing written.
+    _write_summary(root, task_id, dict(target=target, views={}, capture_in_progress=True))
+    unknown = sorted(set(views or ()) - set(VIEWPORTS))
+    if unknown:
+        # After the invalidation, not before it (review 2026-11-10, checks
+        # 16: this refusal left the previous summary standing).
+        problem = f"unknown view(s) {unknown}; the views are {list(VIEWPORTS)}"
+        _record_failure(root, task_id, dict(target=target, views={}, capture_failed=problem))
+        raise ValueError(problem)
+    wanted = {name: VIEWPORTS[name] for name in (views or VIEWPORTS)}
     for name in wanted:
-        for leftover in ("page.png", "evidence.json"):
-            (folder / name / leftover).unlink(missing_ok=True)
+        for leftover in VIEW_FILES:
+            remove_bound(root, (*home, name, leftover))
     try:
         checked, allowed = validate_steps(list(steps or []), target, root, task_id)
         if pinned and allowed is None:
-            allowed = _navigation_rule(target, Path(root))
+            allowed = _navigation_rule(target, root)
     except ValueError as exc:
-        _write_summary(folder, dict(target=target, views={}, steps_refused=str(exc)))
+        _record_failure(root, task_id, dict(target=target, views={}, steps_refused=str(exc)))
         raise
     deadline = time.monotonic() + CAPTURE_SECONDS if checked else None
     out = {}
@@ -366,7 +401,7 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     kept, not_kept = (_kept_views(folder, previous, set(VIEWPORTS) - set(wanted), target=target, attempt=attempt,
                                   source=source, declared=declared, measured=measured) if views else ({}, {}))
     try:
-        _source_excludes(Path(root))
+        _source_excludes(root)
         identity_error = None
     except ExcludesError as exc:
         identity_error = str(exc)
@@ -375,13 +410,16 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
             for item in checked:
                 if item["action"] == "file" and _digest(Path(item["path"])) != item["sha256"]:
                     raise ValueError(f"fixture {item['label']} changed or vanished during the capture")
-            evidence = render_page(target, out_dir=folder / name, viewport=viewport, steps=checked,
-                                   pin_requests=pinned,
+            evidence = render_page(target, out_dir=folder / name, bound_to=root, viewport=viewport, steps=checked,
+                                   pin_requests=pinned, shared_workers=shared_workers,
                                    allow_navigation=allowed, step_timeout_ms=STEP_TIMEOUT_MS, deadline=deadline)
             out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
                              console_errors=evidence.console_errors[:10],
                              failed_requests=evidence.failed_requests[:10],
                              document_width=evidence.document_width, overflow=evidence.overflow[:5])
+            if evidence.observations:
+                # What the harness noticed that is not a fault of the page.
+                out[name]["observations"] = evidence.observations[:10]
             if checked:
                 out[name]["steps"] = evidence.steps
             # The bytes this render produced, bound to its entry: a retained
@@ -390,8 +428,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
             # size was kept as a sibling and accepted).
             out[name]["files"] = {leaf: _digest(folder / name / leaf) for leaf in VIEW_FILES}
     except BaseException as exc:
-        _write_summary(folder, dict(target=target, views={}, rendered=sorted(out),
-                                    capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
+        _record_failure(root, task_id, dict(target=target, views={}, rendered=sorted(out),
+                                            capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
         raise
     summary = dict(target=target, views={**kept, **out},
                    source_fingerprint=source if source and source == source_fingerprint(root) else None)
@@ -403,7 +441,7 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
         summary["source_identity_error"] = identity_error
     if checked:
         summary["steps"] = declared
-    (folder / "summary.json").write_text(json.dumps(summary, indent=2))
+    _write_summary(root, task_id, summary)
     return out
 
 
@@ -440,14 +478,33 @@ def _fixture_problem(root, step: dict, task_id: str) -> Optional[str]:
     return _FIXTURE_CHANGED if now != recorded else None
 
 
-def _write_summary(folder: Path, summary: dict) -> None:
-    (folder / "summary.json").write_text(json.dumps(summary, indent=2))
+def _write_summary(root, task_id: str, summary: dict) -> None:
+    """The task's summary.json, written through folder handles from ``root``
+    (``integration.write_bound``): refused, with nothing written, when a
+    folder on the way is a symlink."""
+    write_bound(root, (*EVIDENCE_DIR.parts, task_id, "summary.json"),
+                json.dumps(summary, indent=2).encode("utf-8"))
+
+
+def _record_failure(root, task_id: str, summary: dict) -> None:
+    """Record why a capture stopped, without hiding the failure being
+    raised: when even this write is refused, the in-progress marker written
+    first already keeps any earlier render from standing."""
+    try:
+        _write_summary(root, task_id, summary)
+    except OSError:
+        pass
 
 
 def _read_summary(folder: Path):
+    """The folder's summary.json as a dict, or None: a regular file of at
+    most ``MAX_SUMMARY_BYTES``, read without blocking or following a link."""
+    raw, problem = _read_capped(folder / "summary.json", MAX_SUMMARY_BYTES)
+    if problem:
+        return None
     try:
-        data = json.loads((folder / "summary.json").read_text())
-    except (OSError, ValueError):
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -641,11 +698,17 @@ def _final_wait_problem(view: str, requested, done) -> Optional[str]:
 
 
 def _png_width(path: Path) -> Optional[int]:
+    # A regular file only, opened without blocking: a FIFO planted at
+    # page.png must not hang the check (review 2026-11-10, checks 11).
+    fd, problem = _open_regular(path)
+    if problem:
+        return None
     try:
-        with open(path, "rb") as handle:
-            head = handle.read(24)
+        head = os.read(fd, 24)
     except OSError:
         return None
+    finally:
+        os.close(fd)
     if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
         return None
     return struct.unpack(">I", head[16:20])[0]
@@ -706,10 +769,7 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
 
     def fail(message):
         return False, message, [], [dict(kind="integrity", message=message)]
-    try:
-        summary = json.loads((folder / "summary.json").read_text())
-    except (OSError, ValueError):
-        summary = None
+    summary = _read_summary(folder)
     if isinstance(summary, dict) and summary.get("capture_failed"):
         return fail(f"the last capture failed: {str(summary['capture_failed'])[:200]}")
     if isinstance(summary, dict) and summary.get("capture_in_progress"):
@@ -736,9 +796,13 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         if not view.get("clean"):
             errors = "; ".join(str(e)[:120] for e in (view.get("console_errors") or [])[:3])
             failed = "; ".join(str(f)[:120] for f in (view.get("failed_requests") or [])[:3])
+            # What the harness itself did to the page (a feature it switched
+            # off), so the reader is not sent to fix source that is sound.
+            noted = "; ".join(str(o)[:240] for o in (view.get("observations") or [])[:2])
             add("page.unclean", f"the {name} render is not clean"
                             + (f" (console: {errors})" if errors else "")
-                            + (f" (failed requests: {failed})" if failed else ""), view=name)
+                            + (f" (failed requests: {failed})" if failed else "")
+                            + (f" (harness: {noted})" if noted else ""), view=name)
     # Required, not optional: a render with no record of the source it shows
     # is not evidence for any particular tree (Codex review of 9a31aac).
     recorded = summary.get("source_fingerprint", "missing")
@@ -855,57 +919,103 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
     return not problems, "; ".join(problems), shots, records
 
 
+_STEP_FLAGS = ("--click", "--wait", "--file", "--upload", "--confirm")
+_USAGE = ("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
+          "[--view desktop|mobile] [--attempt HEX] [--measured VIEW FILE SHA256 ...] "
+          "[--click SEL] [--wait SEL] [--confirm SEL MESSAGE] [--upload SEL path] [--file SEL=path]; "
+          "the page, the task and every option come before the first step")
+
+
+def _parse_command(argv: List[str]) -> dict:
+    """The capture command, read left to right, or ValueError.
+
+    Harness options (``--pinned``, ``--view``, ``--measured``,
+    ``--attempt``, ``--shared-workers``) are read only before the first step
+    flag; from that flag on every argument belongs to a step. The options
+    used to be searched for anywhere in argv, positions holding a declared
+    selector or message included, so a step ``wait --view`` renamed the
+    view and a confirm step could replace the harness's attempt token
+    (review 2026-11-10, checks 16)."""
+    first = next((i for i, a in enumerate(argv) if a in _STEP_FLAGS), len(argv))
+    items, tail = list(argv[:first]), list(argv[first:])
+    out = dict(positional=[], pinned=False, views=None, measured=None, attempt=None, shared_workers=False)
+    while items:
+        item = items.pop(0)
+        if item == "--pinned":
+            out["pinned"] = True
+        elif item == "--shared-workers":
+            out["shared_workers"] = True
+        elif item == "--view":
+            if not items:
+                raise ValueError("--view needs a name")
+            out["views"] = (out["views"] or []) + [items.pop(0)]
+        elif item == "--measured":
+            if len(items) < 3:
+                raise ValueError("--measured needs VIEW FILE SHA256")
+            name, leaf, digest = items.pop(0), items.pop(0), items.pop(0)
+            if (name not in VIEWPORTS or leaf not in VIEW_FILES
+                    or not (digest == "missing" or re.fullmatch(r"[0-9a-f]{64}", digest))):
+                raise ValueError(f"--measured takes a view ({'|'.join(VIEWPORTS)}), a file "
+                                 f"({'|'.join(VIEW_FILES)}) and a sha256 or 'missing'")
+            out["measured"] = out["measured"] or {}
+            # "missing" is a measurement that could not be read: present, so the
+            # held-measurement rule applies, and never equal to any digest.
+            out["measured"].setdefault(name, {})[leaf] = None if digest == "missing" else digest
+        elif item == "--attempt":
+            if not items or not re.fullmatch(r"[0-9a-f]{8,64}", items[0]):
+                raise ValueError("--attempt needs a hex token")
+            out["attempt"] = items.pop(0)
+        elif item.startswith("--"):
+            raise ValueError(f"unknown option {item[:40]!r}")
+        else:
+            out["positional"].append(item)
+    stray, out["steps"] = parse_steps(tail)
+    if stray:
+        raise ValueError(f"unexpected argument after the steps: {stray[0][:60]!r}; the page, the task and "
+                         "every option come before the first step")
+    return out
+
+
+def _invalidate(argv: List[str], reason: str) -> None:
+    """Mark the named task's evidence invalid when the command is refused
+    before a capture starts, so an earlier summary never stands for this
+    attempt. The task is known when the command opens with its page, task
+    and optional root, as the harness and the documented command write it;
+    otherwise there is nothing to mark. Best effort: a refused write leaves
+    nothing behind."""
+    leading = []
+    for item in argv:
+        if item.startswith("--"):
+            break
+        leading.append(item)
+    if len(leading) not in (2, 3):
+        return
+    _record_failure(leading[2] if len(leading) == 3 else ".", leading[1],
+                    dict(target=leading[0], views={}, capture_failed=f"the capture command was refused: "
+                                                                    f"{reason[:300]}"))
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    pinned = "--pinned" in argv
-    argv = [a for a in argv if a != "--pinned"]
-    views = None
-    while "--view" in argv:
-        at = argv.index("--view")
-        if at + 1 >= len(argv):
-            print("error: --view needs a name", file=sys.stderr)
-            return 2
-        views = (views or []) + [argv[at + 1]]
-        del argv[at:at + 2]
-    measured = None
-    while "--measured" in argv:
-        at = argv.index("--measured")
-        if len(argv) < at + 4:
-            print("error: --measured needs VIEW FILE SHA256", file=sys.stderr)
-            return 2
-        name, leaf, digest = argv[at + 1:at + 4]
-        if (name not in VIEWPORTS or leaf not in VIEW_FILES
-                or not (digest == "missing" or re.fullmatch(r"[0-9a-f]{64}", digest))):
-            print(f"error: --measured takes a view ({'|'.join(VIEWPORTS)}), a file ({'|'.join(VIEW_FILES)}) "
-                  "and a sha256 or 'missing'", file=sys.stderr)
-            return 2
-        measured = measured or {}
-        # "missing" is a measurement that could not be read: present, so the
-        # held-measurement rule applies, and never equal to any digest.
-        measured.setdefault(name, {})[leaf] = None if digest == "missing" else digest
-        del argv[at:at + 4]
-    attempt = None
-    if "--attempt" in argv:
-        at = argv.index("--attempt")
-        if at + 1 >= len(argv) or not re.fullmatch(r"[0-9a-f]{8,64}", argv[at + 1]):
-            print("error: --attempt needs a hex token", file=sys.stderr)
-            return 2
-        attempt = argv[at + 1]
-        del argv[at:at + 2]
     try:
-        positional, steps = parse_steps(argv)
+        command = _parse_command(argv)
+        if len(command["positional"]) not in (2, 3):
+            raise ValueError(_USAGE)
     except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        # The previous summary is invalidated before this exit, as it is
+        # before every other failure (checks 16).
+        _invalidate(argv, str(exc))
+        print(str(exc) if str(exc).startswith("usage:") else f"error: {exc}", file=sys.stderr)
         return 2
-    if len(positional) not in (2, 3):
-        print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
-              "[--click SEL] [--wait SEL] [--confirm SEL MESSAGE] [--upload SEL path] [--file SEL=path] "
-              "[--view desktop|mobile] [--attempt HEX] [--measured VIEW FILE SHA256 ...]", file=sys.stderr)
-        return 2
+    positional = command["positional"]
     try:
-        out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps,
-                      pinned=pinned, views=views, attempt=attempt, measured=measured)
-    except ValueError as exc:
+        out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".",
+                      command["steps"], pinned=command["pinned"], views=command["views"],
+                      attempt=command["attempt"], measured=command["measured"],
+                      shared_workers=command["shared_workers"])
+    except (ValueError, UnsafeWritePath) as exc:
+        # Refused: bad steps, an unknown view, or an evidence path that goes
+        # through a symlink (nothing was written through it).
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001 -- a crash is its own exit code, never a failed step

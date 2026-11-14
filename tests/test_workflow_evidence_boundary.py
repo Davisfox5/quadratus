@@ -198,7 +198,8 @@ def test_the_recorded_delivery_is_the_bytes_the_reviewer_read_and_the_bytes_kept
     t1 = _task(replay, "t1")
     assert replay.result.completed, replay.result.error
     reviewer = replay.of("design-review")[0]
-    assert t1["delivery"]["reviewer"].endswith(reviewer.model) and reviewer.vendor != "claude"
+    resolved = H.result_json(replay)["models"]["resolutions"][t1["delivery"]["reviewer"]]["wire"]
+    assert resolved == reviewer.model and reviewer.vendor != "claude"
     assert sorted(seen) == EVIDENCE, "every mandatory file reached the reviewer"
     assert t1["delivery"]["files"] == seen, "the record names exactly what the reviewer read"
     assert {rel: _sha(replay.project / rel) for rel in EVIDENCE} == seen, "and what the project keeps"
@@ -246,19 +247,20 @@ def _lose_environment(monkeypatch):
     monkeypatch.setenv("PYTEST_ADDOPTS", "--quadratus-environment-lost")
 
 
-def _handed_off(replay, task_id="t1"):
+def _unresolved_after_its_bounded_repair(replay, task_id="t1"):
+    """PR73 6693873055: a runner the environment broke (pytest usage error,
+    no report) is no longer handed off untried. The task's one bounded
+    repair is spent, the check still fails, the cause stays unestablished
+    (attribution not product, primary operator), and nothing completes."""
     task = _task(replay, task_id)
-    assert replay.result.error.startswith("CheckUnattributable:"), replay.result.error
-    assert "check: structured report missing" in replay.result.error
-    assert "No repair call was made" in replay.result.error
-    assert _stop(replay)["kind"] == "operator" and _stop(replay)["legacy"] == "CheckUnattributable"
-    assert task["closed_as"] == "stopped:CheckUnattributable" and task["primary"] == "operator"
+    assert replay.result.error.startswith("CheckFailing:"), replay.result.error
     assert task["checks"][-1]["attribution"]["product"] is False
+    assert task["checks"][-1]["repair_route"]["repairable"] is True
     assert task["edges"]["checks"] is False and not replay.result.completed
     return task
 
 
-def test_a_runner_lost_after_the_design_fix_gets_no_gate_fix_and_no_review(tmp_path, monkeypatch):
+def test_a_runner_lost_after_the_design_fix_spends_one_gate_fix_and_completes_nothing(tmp_path, monkeypatch):
     def design_fix(call, replay):
         H.write(call, {"static/style.css": "#import { padding: 10px; }\n"})
         H.evidence(Path(call.cwd), "t1", age=H.FRESH)
@@ -269,28 +271,29 @@ def test_a_runner_lost_after_the_design_fix_gets_no_gate_fix_and_no_review(tmp_p
     script = _design_script("unused")
     script.overrides.update({"orchestrator": _then_done(DECL_DESIGN), "design-fix": design_fix})
     replay = H.run(tmp_path, monkeypatch, script, files=_design_files(), max_tasks=3)
-    t1 = _handed_off(replay)
+    t1 = _unresolved_after_its_bounded_repair(replay)
     assert t1["checks"][0]["passed"] is True, "the task's own gate passed before the environment went"
-    assert not replay.of("gate-fix") and len(replay.of("design-fix")) == 1
-    assert not replay.of("design-review"), "no approval is sought over an unproven tree"
+    assert len(replay.of("gate-fix")) == 1 and len(replay.of("design-fix")) == 1, "bounded: one each"
+    assert t1["primary"] == "operator"
     assert "padding: 10px" in (replay.project / "static/style.css").read_text(), "work preserved"
 
 
-def test_a_runner_lost_after_a_gate_fix_is_the_operators_not_a_product_failure(tmp_path, monkeypatch):
+def test_a_runner_lost_after_a_gate_fix_stays_unestablished_never_a_product_failure(tmp_path, monkeypatch):
     def gate_fix(call, replay):
         _lose_environment(monkeypatch)
         return "Looked; the failure is not obvious.\nCHANGED: []"
     script = Script(orchestrator=_then_done(DECL_T1), lead=lambda call, replay: "Looked; left it.\nCHANGED: []",
                     **{"gate-fix": gate_fix})
     replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3)
-    t1 = _handed_off(replay)
-    assert len(replay.of("gate-fix")) == 1, "the one attributable failure bought one fix; the crash buys none"
+    t1 = _unresolved_after_its_bounded_repair(replay)
+    assert len(replay.of("gate-fix")) == 1, "the allowance is one fix, whatever the failure"
     first, last = t1["checks"][0], t1["checks"][-1]
     assert first["attribution"]["product"] is True and last["attribution"]["product"] is False
+    assert t1["primary"] == "operator"
     assert (replay.project / "app.py").read_text() == FILES["app.py"]
 
 
-def test_a_runner_lost_after_a_security_fix_gets_no_further_repair_or_verdict(tmp_path, monkeypatch):
+def test_a_runner_lost_after_a_security_fix_buys_no_gate_fix_and_no_acceptance(tmp_path, monkeypatch):
     from quadratus import project_run
     from tests.lifecycle.test_workflow_contract import SECURITY, _structured
     real = project_run.SessionConfig
@@ -302,9 +305,8 @@ def test_a_runner_lost_after_a_security_fix_gets_no_further_repair_or_verdict(tm
                     lead=lambda call, replay: "add only adds; no input reaches a shell.\nCHANGED: []",
                     verifier=_structured("reject", None), **{"security-fix": security_fix})
     replay = H.run(tmp_path, monkeypatch, script, files=FILES_OK, max_tasks=3)
-    _handed_off(replay)
-    assert len(replay.of("security-fix")) == 1 and len(replay.of("verifier")) == 1
-    assert not replay.of("gate-fix")
+    assert replay.result.error.startswith("CheckFailing:") and not replay.result.completed
+    assert len(replay.of("security-fix")) == 1 and not replay.of("gate-fix")
 
 
 def _dead_preview_run(tmp_path, monkeypatch):

@@ -3,7 +3,7 @@ must never pass the exact-file admission. Reproducer kept verbatim."""
 from pathlib import Path
 
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_direct_tier import FAVICON, _decl, _run, _task
+from tests.lifecycle.test_direct_tier import FAVICON, _decl, _non_goal, _run, _task
 
 
 def test_directory_prefix_is_not_an_exact_file_grant(tmp_path, monkeypatch):
@@ -44,7 +44,9 @@ def test_a_declared_file_turned_directory_is_out_of_scope_on_the_direct_tier(tmp
         H.write(call, {'static/favicon.svg/icon.svg': '<svg/>\n'})
         return 'Made the path a directory.\nCHANGED: ["static/favicon.svg/icon.svg"]'
 
-    replay = _run(tmp_path, monkeypatch, _decl(), lead=lead, record_complete=False)
+    # Non-goal direct work: a task that covers requirements is refused the
+    # direct tier (root review of 1a58853), so the boundary is pinned here.
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch), lead=lead, record_complete=False)
     task = _task(replay)
     assert task['contract']['required']['tier'] == 'direct'
     assert task['contract']['scope']['exact'] is True

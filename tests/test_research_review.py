@@ -197,8 +197,17 @@ def test_outer_cleanup_stops_detached_vendor_group(tmp_path):
         inbox.stop_engine_tree(child, grace=.05)
         assert child.poll() is not None
         # A dead grandchild may briefly remain a zombie until the OS reaps it.
-        state = subprocess.run(["ps", "-o", "stat=", "-p", str(vendor)],
-                               capture_output=True, text=True).stdout.strip()
+        # SIGKILL is delivered asynchronously, so on a loaded machine ps can
+        # still show the process running for a moment after the call returns
+        # (seen once in a full run on a 4-CPU machine at load 20). The claim
+        # is that it dies, so the state is read until it shows that, bounded.
+        deadline = time.monotonic() + 5
+        while True:
+            state = subprocess.run(["ps", "-o", "stat=", "-p", str(vendor)],
+                                   capture_output=True, text=True).stdout.strip()
+            if not state or state.startswith("Z") or time.monotonic() >= deadline:
+                break
+            time.sleep(.02)
         assert not state or state.startswith("Z")
     finally:
         for pid in (vendor, child.pid):

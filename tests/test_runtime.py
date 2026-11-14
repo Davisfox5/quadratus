@@ -18,7 +18,7 @@ from quadratus.usage import UsageMeter
 
 FABLE = "claude:fable"
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 GROK = "grok:default"
 
 
@@ -56,6 +56,15 @@ class FakeCLIProvider(LLMProvider):
         self.cleaned = True
 
 
+def spent_window(message):
+    """The failure a provider raises when the CLI's own envelope reports a
+    spent window: the wording is for people, the typed fact is what the
+    fleet reads (``providers.TRANSPORT_FACTS``)."""
+    error = ProviderError(message)
+    error.window_exhausted = True
+    return error
+
+
 @pytest.fixture
 def built(monkeypatch):
     """Every vendor present and healthy, plus a handle on what was built."""
@@ -89,14 +98,22 @@ def test_one_provider_serves_every_model_from_its_vendor(fleet, built):
 
 def test_each_call_is_bound_to_the_alias_the_key_resolves_to(fleet, built):
     fleet.invoke(SOL, "hello")
-    assert built["openai"].calls[0]["model"] == "gpt-5.6-sol"
+    # The family's latest release in the installed client's catalogue (the
+    # fixture catalogue lists Sol 6.1 above 6 and 5.6), never a compiled-in edition.
+    assert built["openai"].calls[0]["model"] == "gpt-6.1-sol"
 
 
-def test_api_roster_models_do_not_collapse_to_one_provider_model(built):
+def test_api_roster_models_do_not_collapse_to_one_provider_model(built, monkeypatch):
+    """An API takes dated ids: the configured OpenAI model stands for Sol,
+    every other family needs its own explicit id (as the Claude seats do)."""
+    monkeypatch.setenv("QUADRATUS_API_MODEL_OPENAI_LUNA", "luna-api-id")
     fleet = Fleet(Settings(backend='api'))
-    fleet.invoke('openai:gpt-5.6-sol', 'hello')
-    fleet.invoke('openai:gpt-5.6-luna', 'hello')
-    assert [c['model'] for c in built['openai'].calls] == ['gpt-5.6-sol', 'gpt-5.6-luna']
+    fleet.invoke('openai:sol', 'hello')
+    fleet.invoke('openai:luna', 'hello')
+    assert [c['model'] for c in built['openai'].calls] == ['gpt-5.6-sol', 'luna-api-id']
+    monkeypatch.delenv("QUADRATUS_API_MODEL_OPENAI_LUNA")
+    with pytest.raises(UnknownModel):
+        Fleet(Settings(backend='api')).invoke('openai:terra', 'hello')
 
 
 def test_api_claude_seats_require_explicit_ids_except_configured_opus(built, monkeypatch):
@@ -156,7 +173,7 @@ def test_an_exhausted_window_is_reported_as_such_not_as_a_transport_error(monkey
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
         lambda name, settings, **kw: FakeCLIProvider(
-            name, raises=ProviderError("Claude usage limit reached; resets at 4pm")
+            name, raises=spent_window("Claude usage limit reached; resets at 4pm")
         ),
     )
     fleet = Fleet(Settings(backend="cli"))
@@ -170,7 +187,7 @@ def test_an_exhausted_model_is_routed_around_for_the_rest_of_the_run(monkeypatch
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
         lambda name, settings, **kw: FakeCLIProvider(
-            name, raises=ProviderError("weekly limit reached")
+            name, raises=spent_window("weekly limit reached")
         ),
     )
     fleet = Fleet(Settings(backend="cli"))
@@ -190,7 +207,7 @@ def test_one_model_running_out_does_not_take_its_vendor_with_it(monkeypatch):
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
         lambda name, settings, **kw: FakeCLIProvider(
-            name, raises=ProviderError("You've reached your Fable limit.")
+            name, raises=spent_window("You've reached your Fable limit.")
         ),
     )
     fleet = Fleet(Settings(backend="cli"))
@@ -203,16 +220,25 @@ def test_one_model_running_out_does_not_take_its_vendor_with_it(monkeypatch):
 
 def test_the_real_claude_limit_wording_is_recognised(monkeypatch):
     """The patterns written from imagination missed the one the CLI actually
-    sends, so a spent window looked like a generic transport error."""
+    sends, so a spent window looked like a generic transport error.
+
+    The wording is read where the claude envelope is parsed, and the fleet
+    reads the typed fact that parse sets, so this goes through the real
+    extractor on the envelope the CLI sent (an error envelope at status 429).
+    """
+    import json
+
+    from quadratus.cli_providers import _extract_claude_result
+
+    envelope = json.dumps({
+        "type": "result", "is_error": True, "api_error_status": 429,
+        "result": "You've reached your Fable limit. Switch to another model, "
+                  "or manage usage credits at claude.ai"})
+    with pytest.raises(ProviderError) as parsed:
+        _extract_claude_result(envelope)
     monkeypatch.setattr(
         "quadratus.runtime.build_provider",
-        lambda name, settings, **kw: FakeCLIProvider(
-            name,
-            raises=ProviderError(
-                "claude reported an error: You've reached your Fable limit. "
-                "Switch to another model, or manage usage credits at claude.ai"
-            ),
-        ),
+        lambda name, settings, **kw: FakeCLIProvider(name, raises=parsed.value),
     )
     fleet = Fleet(Settings(backend="cli"))
     with pytest.raises(WindowExhausted):
@@ -338,7 +364,7 @@ def test_new_session_reads_liveness_from_the_fleet(monkeypatch, tmp_path):
     seat = session.seat()
     # A missing binary takes the whole vendor out, which is the one failure
     # the same-vendor deputy cannot cover -- so the seat crosses vendors.
-    assert seat.key == "openai:gpt-6-astra"
+    assert seat.key == "openai:astra"
     assert seat.reason == SeatReason.FALLBACK_UNAVAILABLE
 
 

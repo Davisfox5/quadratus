@@ -7,8 +7,10 @@ that. Three steps make it an icon on a phone that is always up.
 
 ## 1. Start it at login (Mac)
 
-Edit the two paths in `com.quadratus.monitor.plist` (the `quadratus`
-binary in your venv, and the series or project to watch by default), then:
+Edit `com.quadratus.monitor.plist`: the `quadratus` binary in your venv,
+the series or project to watch, the log path (launchd wants it in full; it
+does not expand `~`), and the host name under `EnvironmentVariables` (see
+"What the page answers to" below). Then:
 
 ```
 cp tools/monitor/com.quadratus.monitor.plist ~/Library/LaunchAgents/
@@ -16,9 +18,55 @@ launchctl load ~/Library/LaunchAgents/com.quadratus.monitor.plist
 ```
 
 `launchctl unload` the same path stops it. The log is
-`/tmp/quadratus-monitor.log`. The page takes `?project=` and `?series=`
-and has a form for both, so the defaults in the plist are a starting
-point, not a restart every series.
+`~/Library/Logs/quadratus-monitor.log`, in your own folder and not `/tmp`,
+where another user of the Mac could put a link under that name first.
+
+The committed plist and `cloudflared-config.yml` carry one operator's own
+paths and domain. They are a working example: replace every value with
+yours.
+
+## What the page answers to
+
+Binding to loopback keeps other machines out, but not a web page in your
+own browser that points its name at `127.0.0.1`. So the server checks two
+things on every request.
+
+**The host name.** It answers to `127.0.0.1` and `localhost` on its own
+port. Any other name gets a one-line `421` that names the flag and the
+setting below and nothing else. A phone reaches the page by another name
+(the Tailscale or tunnel address), so admit that name when the monitor
+starts, with the flag or with the environment setting:
+
+```
+quadratus --monitor --serve --project DIR --allow-host mac.example.ts.net
+QUADRATUS_MONITOR_ALLOW_HOST=mac.example.ts.net quadratus --monitor --serve --project DIR
+```
+
+Repeat `--allow-host` for several names; in the environment setting they
+are comma separated, and the two add up. A name alone admits any port;
+`name:8443` admits that port only. Give the name alone, without `https://`
+or a path: anything else stops the monitor at start with the reason and
+the flag or setting it came from. Under launchd the setting goes in the
+plist's `EnvironmentVariables`, as the committed example shows (or add
+`--allow-host` and the name to its `ProgramArguments`). If the phone shows
+the refusal, the name it prints is the one to admit.
+
+**The project and series.** `?project=` and `?series=` are honoured for the
+values the monitor was started with. To switch between folders from the
+page without a restart, admit them at start:
+
+```
+quadratus --monitor --serve --project DIR --allow-project /abs/project-a --allow-project /abs/project-b
+QUADRATUS_MONITOR_ALLOW_PROJECT=/abs/project-a,/abs/project-b
+```
+
+The page then shows a small form offering those folders. Any other path
+gets one fixed refusal, the same whether or not the path exists, and
+nothing is read for it. A folder with a comma in its name cannot be given
+in the environment setting; `--allow-project` takes it.
+
+Both flags need `--serve`: the one-screen `--monitor` status checks no host
+name and takes no folder from a request, so it refuses them.
 
 ## 2. Reach it from your own devices only
 
@@ -31,7 +79,8 @@ tailscale serve --bg 7861
 This prints an `https://<mac>.<tailnet>.ts.net` address that only devices
 on your tailnet can open, with a real certificate. The server itself stays
 on loopback; Tailscale is the only way in. `tailscale serve --bg off`
-removes it.
+removes it. Admit that address's host name with `--allow-host` or
+`QUADRATUS_MONITOR_ALLOW_HOST` as above.
 
 ## 3. Make it an app
 
@@ -77,7 +126,11 @@ once its records are copied over, which Cloudflare does on import.
    With the monitor running (step 1 above), open
    `https://monitor.dfconsulting.tech` on the phone. It should ask for the
    email code, then show the page. If it shows the page without asking,
-   stop the tunnel: Access isn't in front of it yet.
+   stop the tunnel: Access isn't in front of it yet. If it shows a line
+   saying the monitor does not answer to that host name, the monitor was
+   started without `--allow-host monitor.dfconsulting.tech` or
+   `QUADRATUS_MONITOR_ALLOW_HOST=monitor.dfconsulting.tech` (the committed
+   plist sets the second).
 
 4. Keep it up across restarts:
 
@@ -93,14 +146,19 @@ once its records are copied over, which Cloudflare does on import.
 
 What passes through Cloudflare: task text, file paths, model names, stop
 reasons, token counts. Nothing that can act on a run. Anyone past the
-Access policy can read it, so keep the policy to your own address.
+Access policy can read it, so keep the policy to your own address. The
+monitor has no sign-in of its own: the host name check stops a hostile web
+page, not a person the tunnel lets through.
 
 ## Why not share the Gradio GUI the same way
 
 The GUI's Project tab can read local files and run check commands. That
 is the reason `resolve_share` refuses to enable Gradio sharing, and it is
 just as true over a tailnet. The monitor page exists so the thing that is
-exposed has nothing on it that can act.
+exposed has nothing on it that can act. The GUI answers only to
+`127.0.0.1` and `localhost` on its own port, with no setting to admit
+another name, and asks for the access token in the address it prints at
+launch.
 
 
 ## Following a run in the desktop GUI

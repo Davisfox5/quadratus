@@ -4,6 +4,8 @@ import json
 import threading
 from datetime import datetime, timezone
 
+from .safe_io import append_private
+
 
 class RunActivity:
     def __init__(self, run_dir, callback=None):
@@ -14,8 +16,9 @@ class RunActivity:
     def record(self, kind, **fields):
         event = dict(fields, kind=kind, at=datetime.now(timezone.utc).isoformat())
         try:
-            with self.lock, self.path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(event) + "\n")
+            with self.lock:
+                # Owner-only from creation: the first line holds the goal.
+                append_private(self.path, json.dumps(event) + "\n")
         except Exception:  # reporting must not change execution
             pass
 

@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import random
+import re
+import stat
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Sequence
 
 log = logging.getLogger(__name__)
@@ -60,10 +65,57 @@ class PartialWorkSuspected(ProviderError):
     to know which kind of stop it was.
     """
 
-    def __init__(self, message: str, *, cause: Optional[Exception] = None) -> None:
+    def __init__(self, message: str, *, cause: Optional[Exception] = None,
+                 interrupted: bool = True, retryable: bool = False) -> None:
         super().__init__(message)
         #: The transport-level exception underneath -- a TimeoutError, usually.
         self.cause = cause
+        #: The call was stopped from outside (a timeout, an output cap) and
+        #: did not fail on its own, so what it had done by then is unknown.
+        #: True unless whoever raises this knows otherwise: the careful
+        #: reading is the default.
+        self.interrupted = interrupted
+        #: The failure underneath carried the typed ``retryable`` fact. The
+        #: provider still does not replay it: only a caller that has measured
+        #: the project unchanged may (``runtime.Fleet``).
+        self.retryable = retryable
+
+
+class TransientOverload(ProviderError):
+    """The vendor said it was overloaded and did not answer: a typed status
+    (Anthropic's 529 overloaded_error, as the Claude CLI's error envelope
+    reports it) on a call whose usage the envelope settled. Retried a
+    bounded number of times by ``_generate_once``, only where a replay
+    cannot be a second edit (cycle06 run 20261108T075040Z-4454b282: the
+    read-only planner's 529 ended a run with 32 calls and 2.36M tokens
+    left). Never matched from a model's prose."""
+
+    def __init__(self, message: str, *, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+#: How many times one call is re-sent after a TransientOverload, each one a
+#: separately admitted attempt (``_observed_call``): budget, finish hold and
+#: ledger as for any attempt.
+MAX_TRANSIENT_RETRIES = 2
+
+
+class PermissionBlocked(ProviderError):
+    """A headless CLI call stopped on a tool call it needed approval for and
+    could not ask for (cycle15; cycle14 t5: grok's restricted seat opened
+    README.md through Fetch on a file:// URL and the turn came back
+    cancelled). Raised only from the CLI's own exact headless-approval line,
+    never from model text. A denial, not a transport failure: never retried,
+    never handed to another model or tool, never a failed task to continue.
+
+    ``permission_block`` is bounded metadata: the tool, the target's scheme
+    ("file", "https", ... or "path") and a digest of the target; the raw
+    target stays only in the private stderr evidence."""
+
+    def __init__(self, message: str, *, permission_block: Optional[dict] = None) -> None:
+        super().__init__(message)
+        self.permission_block = dict(permission_block or {})
 
 
 class ProviderRefusal(ProviderError):
@@ -94,6 +146,249 @@ class ProviderRefusal(ProviderError):
         #: "bio", "reasoning_extraction". None is a valid, permanent state.
         self.category = category
         self.explanation = explanation
+
+
+#: The typed facts a failed call may carry, as attributes on its exception.
+#: They are set where a provider reads the vendor's own envelope or exit
+#: shape (an HTTP status in the CLI's JSON, a line of its stderr), never from
+#: text a model wrote, and they are the only thing retry, replay and
+#: window-exhaustion decisions read. The message of an exception may quote
+#: model narration for a person to read; no decision is made from it.
+#:
+#: ``window_exhausted``: the subscription window is spent. ``retryable``: a
+#: failure that passes (a rate limit, a server error, a dropped connection).
+#: ``auth_invalid``: the sign-in was rejected. ``transport_status``: the HTTP
+#: status the envelope stated, for the record.
+TRANSPORT_FACTS = ("window_exhausted", "retryable", "auth_invalid", "transport_status")
+
+
+def carry_transport_facts(target: BaseException, source: Optional[BaseException]) -> BaseException:
+    """Copy the typed facts from ``source`` onto the error that wraps it.
+
+    A wrapper keeps the message for people and would otherwise drop the facts
+    the decisions read, which is how classification drifted onto the message.
+    """
+    for name in TRANSPORT_FACTS:
+        value = getattr(source, name, None)
+        if value is None or value is False:
+            continue
+        try:
+            setattr(target, name, value)
+        except Exception:  # noqa: BLE001 -- an exception that refuses attributes keeps its own
+            pass
+    return target
+
+
+_scratch_noted = False
+
+#: How old a leftover under the scratch root must be before a run removes it.
+SCRATCH_MAX_AGE_SECONDS = 24 * 60 * 60
+#: The file the harness leaves in a scratch folder it made. Only a folder
+#: that carries it is ever swept: a folder the operator made, and may keep
+#: other things in, is never cleared on the strength of a name.
+SCRATCH_MARKER = ".quadratus-scratch"
+#: What the harness makes there, exactly as it names it: a source copy
+#: (review, original-tests), a summary folder (analysis, closeout, supplied), a
+#: provider's own folder (by provider name) and the worker bridge's socket
+#: folder, each with the eight characters ``tempfile`` adds; and a prompt
+#: file. Final review, 2026-11-11: any name starting ``quadratus-`` or
+#: ``qw-`` went, and in a scratch folder the operator chose that took
+#: ``quadratus-main``, a checkout, with it. A test holds these to the
+#: prefixes the package passes to ``tempfile``.
+SCRATCH_FOLDER_KINDS = ("review", "analysis", "closeout", "supplied", "original-tests", "claude", "openai",
+                        "grok")
+_SCRATCH_FOLDER = re.compile(rf"(?:quadratus-(?:{'|'.join(SCRATCH_FOLDER_KINDS)})-|qw-)[a-z0-9_]{{8}}")
+_SCRATCH_FILE = re.compile(r"quadratus-prompt-[a-z0-9_]{8}\.txt")
+_unmarked_noted = False
+
+
+def _mark_scratch(root) -> None:
+    """Leave the marker in a scratch folder the harness made. Never raises:
+    a folder that cannot be marked is simply never swept."""
+    try:
+        fd = os.open(os.path.join(root, SCRATCH_MARKER),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError:
+        return
+    try:
+        os.write(fd, b"Quadratus made this folder for its scratch copies. A run removes what earlier runs\n"
+                     b"left here after a day, and nothing from a folder without this file.\n")
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def scratch_marked(root) -> bool:
+    """Whether ``root`` carries the harness's own marker: a regular file
+    this user owns, never a link."""
+    try:
+        info = os.lstat(os.path.join(root, SCRATCH_MARKER))
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and (os.name != "posix" or info.st_uid == os.getuid())
+
+
+def scratch_root_path() -> Path:
+    """Where :func:`scratch_root` is, without creating or checking it:
+    ``QUADRATUS_SCRATCH_DIR`` when set, else ``~/.cache/quadratus/scratch``."""
+    raw = os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip()
+    return Path(os.path.abspath(Path(raw).expanduser() if raw else Path.home() / ".cache" / "quadratus" / "scratch"))
+
+
+def scratch_inside(folder) -> str:
+    """Why the scratch root may not be used with a project at ``folder``,
+    or "" when it may.
+
+    A scratch root inside the project puts every source copy the harness
+    makes into the tree it measures: the copies are diffed, reviewed and
+    copied again as project source. Asked before the root is created, so a
+    refusal leaves nothing behind in the project.
+    """
+    try:
+        root, project = scratch_root_path(), Path(folder)
+        resolved, inside = Path(os.path.realpath(root)), Path(os.path.realpath(project))
+    except (OSError, RuntimeError, ValueError):
+        return ""  # scratch_root itself reports a root it cannot place
+    if resolved != inside and inside not in resolved.parents:
+        return ""
+    # The default itself is inside a project that is the home folder or
+    # ~/.cache: "unset it" would then lead straight back here.
+    chosen = bool(os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip())
+    return (f"The scratch folder {root} is inside the project {project}. The harness makes its "
+            "source copies there, and inside the project they would be measured, diffed and "
+            "reviewed as project source. Set QUADRATUS_SCRATCH_DIR to a folder outside the "
+            "project that only you can read and write"
+            + (", or unset it to use ~/.cache/quadratus/scratch." if chosen else
+               " (the default, ~/.cache/quadratus/scratch, is inside this project)."))
+
+
+def sweep_scratch(max_age: float = SCRATCH_MAX_AGE_SECONDS, *, now: Optional[float] = None) -> List[str]:
+    """Remove what earlier runs left under the scratch root; return the names.
+
+    A hard kill leaves source copies behind, and nothing clears a folder
+    under the home directory the way the system clears its temp folder.
+
+    Two conditions, both required. The root carries the marker the harness
+    wrote when it made the folder (``SCRATCH_MARKER``): a root without it is
+    never swept, whatever is in it. And only a direct child goes that is
+    exactly what the harness makes there, a real folder or a real file of
+    that shape (``SCRATCH_FOLDER_KINDS``), that this user owns and that is
+    older than ``max_age``: a run still using a copy made it minutes ago,
+    not a day ago. A link is never followed and never removed (the harness
+    makes none), nothing above or beside the root is opened, and a failure
+    costs that one entry. Never raises: this is housekeeping before a run,
+    not a condition of it.
+    """
+    import shutil
+    global _unmarked_noted
+    removed: List[str] = []
+    try:
+        root = scratch_root()
+        cutoff = (time.time() if now is None else now) - float(max_age)
+        with os.scandir(root) as listing:
+            entries = [entry.name for entry in listing]
+    except Exception:  # noqa: BLE001 -- the first call that needs the root reports it
+        log.debug("the scratch folder was not swept", exc_info=True)
+        return removed
+    if not scratch_marked(root):
+        if not _unmarked_noted:
+            _unmarked_noted = True
+            log.info("The scratch folder %s was not made by the harness (it has no %s file), so nothing in "
+                     "it is ever removed. Create an empty file of that name there to let a run clear what "
+                     "earlier runs left.", root, SCRATCH_MARKER)
+        return removed
+    for name in sorted(entries):
+        folder, single = _SCRATCH_FOLDER.fullmatch(name), _SCRATCH_FILE.fullmatch(name)
+        if not folder and not single:
+            continue
+        path = os.path.join(root, name)
+        try:
+            info = os.lstat(path)
+            if (os.name == "posix" and info.st_uid != os.getuid()) or info.st_mtime > cutoff:
+                continue
+            if folder and stat.S_ISDIR(info.st_mode):
+                shutil.rmtree(path)  # unlinks a link inside, never follows it
+            elif single and stat.S_ISREG(info.st_mode):
+                os.unlink(path)
+            else:
+                continue             # the name, but not what the harness makes under it
+            removed.append(name)
+        except OSError:
+            log.debug("could not remove the scratch leftover %s", name, exc_info=True)
+    if removed:
+        log.info("Removed %d leftover(s) older than %d hours from the scratch folder %s.",
+                 len(removed), int(max_age // 3600), root)
+    return removed
+
+
+def scratch_root() -> str:
+    """The private folder harness scratch lives under: source copies handed
+    to review calls, prompt files, the empty folders summary calls run in.
+
+    ``QUADRATUS_SCRATCH_DIR`` when set, else ``~/.cache/quadratus/scratch``.
+    Not the system temp folder, because a vendor sandbox in workspace-write
+    mode may write under ``/tmp`` and ``$TMPDIR``: an editing call steered by
+    text it read could drop a ``conftest.py`` into a concurrent reviewer's
+    copy there, and new files in a copy are that call's own scratch by
+    design, so nothing would flag it.
+
+    Each missing folder on the way is created 0700. The root must be a real
+    folder (not a link) that this user owns and nobody else can enter; one
+    that is not is refused, never repaired and never replaced by the temp
+    folder in silence, and the refusal names the variable that picks another.
+
+    A root this call creates is given the marker that lets a later run sweep
+    it (``SCRATCH_MARKER``). So is the default root when it has none: only
+    the harness makes ``~/.cache/quadratus/scratch``, and one made before
+    the marker existed would otherwise never be cleared again. A folder the
+    operator named that already existed is theirs and is left unmarked.
+    """
+    global _scratch_noted
+    way_out = "Set QUADRATUS_SCRATCH_DIR to a folder only you can read and write."
+    try:
+        root = scratch_root_path()
+    except RuntimeError as exc:  # no home folder to resolve
+        raise ProviderError(f"Cannot place the private scratch folder: {exc}. {way_out}") from exc
+    try:
+        missing, probe = [], root
+        while not os.path.lexists(probe) and probe.parent != probe:
+            missing.append(probe)
+            probe = probe.parent
+        made = False
+        for folder in reversed(missing):
+            try:
+                os.mkdir(folder, 0o700)
+                made = folder == root
+            except FileExistsError:
+                pass  # another run made it first
+        info = os.lstat(root)
+    except OSError as exc:
+        raise ProviderError(f"Cannot prepare the private scratch folder {root}: {exc}. {way_out}") from exc
+    if not stat.S_ISDIR(info.st_mode):
+        raise ProviderError(f"The scratch folder {root} is a link or a file, not a folder. {way_out}")
+    if os.name == "posix":
+        if info.st_uid != os.getuid():
+            raise ProviderError(f"The scratch folder {root} belongs to another user. {way_out}")
+        if info.st_mode & 0o077:
+            raise ProviderError(
+                f"The scratch folder {root} is open to other users (mode "
+                f"{stat.S_IMODE(info.st_mode):o}). Make it private (chmod 700) or name another. {way_out}")
+    if made or not os.environ.get("QUADRATUS_SCRATCH_DIR", "").strip():
+        _mark_scratch(root)
+    if not _scratch_noted:
+        try:
+            inside_temp = root.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())
+        except (OSError, ValueError):
+            inside_temp = False
+        if inside_temp:
+            # Said once, and not as a warning: it is the operator's choice
+            # (or a container whose home is a temp mount), not a fault.
+            _scratch_noted = True
+            log.info(
+                "The scratch folder %s is inside the system temp folder, which a vendor sandbox in "
+                "workspace-write mode can write. %s", root, way_out)
+    return str(root)
 
 
 @dataclass
@@ -160,27 +455,6 @@ class LLMProvider:
 
     def _retryable(self, exc: Exception) -> bool:
         raise NotImplementedError
-
-    def _replay_would_be_unsafe(self, exc: Exception) -> bool:
-        """Whether retrying this failure could re-apply work already done.
-
-        Two conditions together, and both are needed. The call must be able to
-        write -- a read-only review that times out has changed nothing, and
-        re-sending it is a genuine retry. And the failure must be one that
-        leaves the outcome unknown rather than known-failed: a timeout or a
-        cancellation stopped a call that may have finished most of its work,
-        whereas a rate-limit response means the vendor never ran it.
-        """
-        if not getattr(self, "allow_writes", False):
-            return False
-        if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
-            return True
-        text = str(exc).lower()
-        return any(
-            token in text
-            for token in ("timed out", "timeout", "cancelled", "canceled",
-                          "interrupted", "killed")
-        )
 
     # -- helpers -------------------------------------------------------------
     @staticmethod
@@ -314,11 +588,30 @@ class LLMProvider:
                 and getattr(spec, 'summary_turn_capped', lambda: False)()):
             from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
             shape = dict(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
+        identity = None
+        if control is not None:
+            import hashlib
+
+            from .delegation import invocation_context
+            context = invocation_context.get() or {}
+            if context.get('origin') == 'worker':
+                # A worker errand: a reserve the budget cannot hold fails this
+                # errand and nothing else (run_budget.ReserveRefused). Passed
+                # only here, so every other call reserves as it always did.
+                shape['terminal'] = False
+            identity = dict(seat=f'{self.name}:{self.model}', task=str(context.get('task') or 'run'),
+                            role=str(context.get('role') or 'direct'),
+                            prompt_digest=hashlib.sha256((prompt or '').encode()).hexdigest()[:32],
+                            authority=str(context.get('authority') or ''))
         if control is not None and control.limits.max_cost_usd is not None:
             ticket, remaining = control.reserve(transport=self.transport,
-                                                price_key=f'{self.name}:{self.model}', **shape)
+                                                price_key=f'{self.name}:{self.model}', identity=identity, **shape)
         else:
-            ticket, remaining = control.reserve(**shape) if control is not None else (None, None)
+            ticket, remaining = (control.reserve(identity=identity, **shape) if control is not None
+                                 else (None, None))
+        # The budget operation this call is: its id rides on the ledger row,
+        # so an unknown-usage latch names the call that caused it.
+        self.last_operation = f'O-{ticket}' if isinstance(ticket, int) else None
         previous_timeout = self.timeout if control is not None else None
         if control is not None:
             self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)
@@ -329,6 +622,8 @@ class LLMProvider:
         started = time.monotonic()
         failure = None
         text = ""
+        waited = getattr(self, "_retry_wait", None)
+        self._retry_wait = None
         try:
             text = self._call(prompt, system, turns)
             if not text:
@@ -338,6 +633,10 @@ class LLMProvider:
             failure = exc
             raise
         finally:
+            if waited:
+                # The wait before this re-sent attempt, on its own ledger row.
+                self.last_diagnostics = {**(getattr(self, "last_diagnostics", None) or {}),
+                                         "retry_wait_seconds": waited["seconds"], "retry_cause": waited["cause"]}
             budget_failure = None
             if control is not None:
                 try:
@@ -374,52 +673,148 @@ class LLMProvider:
                 raise budget_failure
 
     def _generate_once(self, prompt: str, system: str, turns: List[Turn]) -> str:
-        """One model's attempt, with transport retries. Refusals pass through."""
-        from .run_budget import RunBudgetExceeded
+        """One model's attempt, with transport retries. Refusals pass through.
 
+        A call that can write is never retried here, whatever the failure
+        says. On 2026-09-13 an editing call hit its 900s ceiling with work
+        already saved to disk, and the retry loop began replaying the same
+        writing prompt against a tree that call had already changed: doubling
+        edits, or applying a second pass to a first pass's output. That stop
+        once covered only failures whose text said "timed out" or
+        "cancelled", so a writing call that edited and then printed a
+        connection error was replayed four times. Whether a failed editing
+        call may be replayed is decided by whoever measured the project
+        around it (``runtime.Fleet``), never by the wording of the failure.
+
+        A call that cannot write changed nothing, so re-sending it is a
+        genuine retry: on a timeout, and on a failure that carries the typed
+        ``retryable`` fact (``TRANSPORT_FACTS``).
+        """
+        from .run_budget import FinishReserved, RunBudgetExceeded
+
+        writes = bool(getattr(self, "allow_writes", False))
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
+            final = attempt >= self.max_retries - 1
             try:
                 text = self._observed_call(prompt, system, turns, attempt + 1)
                 if not text:
                     raise ProviderError(f"{self.label} returned an empty response.")
                 return text
-            except (ProviderError, RunBudgetExceeded):
+            except TransientOverload as exc:
+                wait = self._transient_wait(exc, attempt)
+                if wait is None:
+                    raise
+                log.warning("%s was overloaded (status %s); re-sending the same call in %.1fs (attempt %d).",
+                            self.label, exc.status, wait, attempt + 1)
+                self._retry_wait = dict(seconds=round(wait, 3), cause="overloaded", status=exc.status)
+                last_exc = exc
+                time.sleep(wait)
+                continue
+            except FinishReserved as held:
+                if last_exc is None:
+                    raise
+                # A re-send the finish hold refused. The call was sent and
+                # failed, so its own failure is what the caller gets:
+                # FinishReserved means "refused before it started", and
+                # every handler reads it as no call made. The refusal is on
+                # the budget's record already.
+                failure = (last_exc if isinstance(last_exc, ProviderError) else
+                           carry_transport_facts(ProviderError(f"{self.label} call failed: {last_exc}"), last_exc))
+                failure.resend_refused = str(held)[:300]
+                try:
+                    failure.args = (f"{failure}; it was not sent again, to keep the calls held for the finish",)
+                except Exception:  # noqa: BLE001 -- the failure stands as it is
+                    pass
+                raise failure from held
+            except RunBudgetExceeded:
                 raise
+            except ProviderError as exc:
+                # Final, unless the vendor's own envelope named a failure
+                # that passes (a rate limit, a server error).
+                if writes or final or getattr(exc, "retryable", False) is not True:
+                    raise
+                last_exc = exc
             except Exception as exc:
                 last_exc = exc
-                if self._replay_would_be_unsafe(exc):
-                    # A timeout or cancellation on a call that could write does
-                    # not mean nothing happened. On 2026-09-13 an editing call
-                    # hit its 900s ceiling with work already saved to disk, and
-                    # the retry loop began replaying the same writing prompt
-                    # against a tree that call had already changed -- doubling
-                    # edits, or applying a second pass to a first pass's
-                    # output. The tree moved, so the prompt is no longer the
-                    # prompt that was sent. Whether to retry is now the
-                    # caller's decision, made with the partial work in hand.
-                    raise PartialWorkSuspected(
+                if writes:
+                    interrupted = (isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
+                                   or getattr(exc, "interrupted", False) is True)
+                    try:
+                        passing = not interrupted and bool(self._retryable(exc))
+                    except Exception:  # noqa: BLE001 -- a provider with no retry rule
+                        passing = False
+                    stop = PartialWorkSuspected(
                         f"{self.label} did not complete ({exc}). This call could "
                         f"write, so the working tree may already hold partial "
                         f"work; it must be inspected before anything is retried. "
                         f"Replaying the same prompt against a changed tree is "
                         f"not a retry, it is a second, different edit.",
                         cause=exc,
-                    ) from exc
-                if self._retryable(exc) and attempt < self.max_retries - 1:
-                    delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
-                    log.warning(
-                        "%s call failed (%s); retrying in %.1fs (attempt %d/%d).",
-                        self.label,
-                        exc,
-                        delay,
-                        attempt + 1,
-                        self.max_retries,
+                        interrupted=interrupted,
+                        retryable=passing,
                     )
-                    time.sleep(delay)
-                    continue
-                break
-        raise ProviderError(f"{self.label} call failed: {last_exc}") from last_exc
+                    # The stop is what the caller sees, so it keeps the facts
+                    # its cause carried: without them a spent window met by
+                    # an editing call was never marked, and the model stayed
+                    # on the roster. ``retryable`` stays as decided above.
+                    carry_transport_facts(stop, exc)
+                    stop.retryable = passing
+                    raise stop from exc
+                if final or not self._retryable(exc):
+                    break
+            delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
+            log.warning(
+                "%s call failed (%s); retrying in %.1fs (attempt %d/%d).",
+                self.label,
+                last_exc,
+                delay,
+                attempt + 1,
+                self.max_retries,
+            )
+            time.sleep(delay)
+        failure = ProviderError(f"{self.label} call failed: {last_exc}")
+        raise carry_transport_facts(failure, last_exc) from last_exc
+
+    def _transient_wait(self, exc: "TransientOverload", attempt: int) -> Optional[float]:
+        """The wait before re-sending a call the vendor refused as overloaded,
+        or None when it must not be re-sent: the retries are spent
+        (``MAX_TRANSIENT_RETRIES``, within ``max_retries``), the call could
+        write (a replay against a tree it may have changed is a second edit),
+        its usage is unknown (nothing settled the attempt), or the wait would
+        not leave the run's own wall time, after the finish hold, for the
+        call itself. The same seat, model and role are re-sent; nothing
+        falls back to another model or an API key."""
+        if attempt >= min(MAX_TRANSIENT_RETRIES, self.max_retries - 1):
+            return None
+        if getattr(self, "allow_writes", False):
+            return None
+        if getattr(self, "last_usage", None) is None:
+            return None
+        wait = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
+        control = getattr(self, "run_budget", None)
+        if control is not None:
+            snap = control.snapshot()
+            limits = snap.get("limits") or {}
+            from .run_budget import FINISH_STAGES, finish_stage
+            stage = finish_stage.get()
+            pending = [p for p in ((snap.get("finish_protection") or {}).get("pending") or []) if p in FINISH_STAGES]
+            # The finishing calls still held after this one (all of them for
+            # an ordinary call), as the budget's own admission counts them.
+            held_calls = len(pending if stage is None else
+                             [p for p in pending if FINISH_STAGES.index(p) > FINISH_STAGES.index(stage)])
+            if limits.get("max_calls") is not None and (
+                    int(limits["max_calls"]) - int(snap.get("reserved_attempts") or 0) < 1 + held_calls):
+                # No attempt is left for it: waiting would only delay the
+                # same stop (or the finish hold's refusal).
+                return None
+            held = float((snap.get("finish_protection") or {}).get("held_wall_seconds") or 0)
+            left = float(limits.get("wall_seconds") or 0) - float(snap.get("elapsed_seconds") or 0) - held
+            if wait >= left / 2:
+                # Half of what is left at most: the re-sent call needs time
+                # of its own after the wait.
+                return None
+        return wait
 
 
 def _field(obj, name: str, default=None):
@@ -614,7 +1009,8 @@ _REGISTRY = {
 }
 
 
-def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None) -> Optional[LLMProvider]:
+def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None,
+                   resolve_family: bool = True) -> Optional[LLMProvider]:
     """Build a single provider by name from settings, or ``None`` if unknown.
 
     The transport is chosen per provider by ``settings.backend_for(name)``:
@@ -631,6 +1027,14 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
     coding agent asked merely to critique will edit the working tree, and
     several of them at once is write-thrash. The API backends have no file
     access to grant.
+
+    ``resolve_family``: the bare path (``build_providers``, the four-phase
+    pipeline) binds the provider to the configured tier's family, resolved
+    through quadratus.latest once the installed client is known. A Fleet
+    passes False: it binds each seat's own family per call, and the
+    vendor's transport availability must not depend on whether the
+    settings' default family resolves (root's isolation control on
+    aab4fe7: a catalogue without Sol took Luna and Astra down with it).
     """
     entry = _REGISTRY.get(name)
     if entry is None:
@@ -647,7 +1051,7 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
         if cli_cls is None:
             log.warning("No CLI backend for %r; falling back to the API backend.", name)
         else:
-            return cli_cls(
+            provider = cli_cls(
                 model=settings.model_for(name),
                 allow_writes=allow_writes,
                 workdir=workdir,
@@ -657,6 +1061,20 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
                 retry_base_delay=settings.retry_base_delay,
                 refusal_fallback_model=settings.refusal_fallback_for(name),
             )
+            if resolve_family and provider.available():
+                # After construction, so the installed client's version is
+                # known to the catalogue check (minimal_client_version).
+                wire, unavailable = _cli_wire_model(name, settings,
+                                                    installed_client=getattr(provider, "client_version", None))
+                if unavailable:
+                    # A family the installed client cannot resolve: the
+                    # provider is kept so the status line can say why, and
+                    # makes no call. The transport itself is untouched.
+                    provider._client = None
+                    provider._init_error = unavailable
+                else:
+                    provider.model = wire
+            return provider
 
     return cls(
         model=getattr(settings, model_attr),
@@ -667,6 +1085,23 @@ def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=N
         retry_base_delay=settings.retry_base_delay,
         refusal_fallback_model=settings.refusal_fallback_for(name),
     )
+
+
+def _cli_wire_model(name: str, settings, *, installed_client=None):
+    """``(wire model, why unavailable)`` for the bare CLI path: the
+    configured tier name is a family (``sol``, ``opus``) or the vendor
+    default (``""``), resolved through quadratus.latest exactly as a Fleet
+    seat is, so no path hands a family name to a client as a model id
+    (root's factory control on bcd2b52). An explicit operator override
+    stays visible through the same resolution."""
+    alias = settings.model_for(name)
+    if not alias:
+        return alias, None
+    from .latest import resolve_model  # lazy: latest imports this module
+    found = resolve_model(f"{name}:{alias}", installed_client=installed_client)
+    if found.available:
+        return found.wire or "", None
+    return alias, f"{name}:{alias} is not usable: {found.reason}"
 
 
 def build_providers(settings) -> List[LLMProvider]:

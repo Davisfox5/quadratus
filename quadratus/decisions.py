@@ -21,6 +21,7 @@ and is not silently abandoned).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -37,6 +38,14 @@ JEV_DEFAULT_MODEL = "jev-latest"
 JEV_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/typesafe"
 JEV_GATEWAY_MODEL = "typesafe-ai/jev"
 JEV_GATEWAY_KEY_PREFIX = "vck_"
+#: Where the SDK sends a call when no base URL is set (docs/decisions-api.md).
+JEV_DEFAULT_HOST = "api.typesafe.ai"
+
+#: The most of a task description a decider is sent as its state. The session
+#: cuts the description to this before it asks (``Session._route_with_decider``),
+#: and the run-start disclosure quotes it, so the number an operator is told
+#: is the number that is enforced.
+TASK_TEXT_LIMIT = 8_000
 
 
 @dataclass(frozen=True)
@@ -94,10 +103,10 @@ DECISIONS: Dict[str, dict] = {
     ),
     "task.kind": dict(
         question="What kind of work is this task?",
-        answers=("general", "frontend", "backend", "testing", "security", "docs", "review", "architect"),
+        answers=("general", "frontend", "backend", "test", "security", "docs", "review", "architect"),
         rule="the orchestrator's KIND line; unrecognised kinds degrade to general (taskmeta.parse_metadata)",
         delegable=True,
-        note="answers must be read from task_kinds.KINDS at call time, not this seed",
+        note="answers must be read from task_kinds.ROUTING at call time, not this seed",
     ),
     "task.tier": dict(
         question="Is this a small, local, reversible change?",
@@ -248,6 +257,20 @@ class JevDecider:
         """Where calls go, for the record: "typesafe" or "vercel-gateway"."""
         return "vercel-gateway" if (self.base_url or "").startswith(JEV_GATEWAY_BASE_URL) else "typesafe"
 
+    @property
+    def destination(self) -> str:
+        """The network host task text is sent to: the configured base URL's
+        host, or the SDK's default when none is set. ``host`` above is a
+        label for the record; this is the name an operator can look up."""
+        if not self.base_url:
+            return JEV_DEFAULT_HOST
+        from urllib.parse import urlsplit
+        try:
+            named = urlsplit(self.base_url if "//" in self.base_url else "//" + self.base_url).hostname
+        except ValueError:
+            named = None
+        return named or f"the address in {JEV_BASE_URL_ENV}"
+
     def probe(self) -> List[str]:
         """The model names the account can call: the round trip is the fact
         recorded, as ``quadratus --probe`` does for the CLIs. A gateway may
@@ -273,7 +296,17 @@ class JevDecider:
         ticket = None
         call_options = {}
         if self.budget is not None:
-            ticket, remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}")
+            # The committed approval authority the session named for this
+            # decision rides the invocation context, as it does for a
+            # provider call (adversarial review of e688af5).
+            from .delegation import invocation_context
+            authority = str((invocation_context.get() or {}).get("authority") or "")
+            ticket, remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}",
+                                                     identity=dict(seat=f"jev:{self.model}", task="decide",
+                                                                   role="decider", prompt_digest=hashlib.sha256(
+                                                                       json.dumps(question, sort_keys=True,
+                                                                                  default=str).encode())
+                                                                   .hexdigest()[:32], authority=authority))
             # The SDK client retains its construction-time timeout. Override
             # it only when the run has less time left, keeping ordinary client
             # defaults and injected-client calls unchanged otherwise.
@@ -290,21 +323,38 @@ class JevDecider:
         finally:
             if ticket is not None:
                 usage = getattr(response, "usage", None)
-                self.budget.finish(ticket, dict(input_tokens=getattr(usage, "input_tokens", None),
-                                                output_tokens=getattr(usage, "output_tokens", None)),
-                                   price_key=f"jev:{getattr(response, 'model', None) or self.model}")
+                # The decision the model gave is the receipt's reply, so a
+                # settled decision is readable from the generation that
+                # settled it, never only its usage.
+                # A failed call's receipt keeps why it failed: the budget's
+                # own stop on unknown usage follows, and names it as its cause.
+                reply = (json.dumps(dict(failure=f"{type(failure).__name__}: {str(failure)[:300]}"))
+                         if response is None and failure is not None else "" if response is None else json.dumps(
+                             getattr(response, "answers", None) or getattr(response, "raw", None) or str(response),
+                             sort_keys=True, default=str))
+                try:
+                    self.budget.finish(ticket, dict(input_tokens=getattr(usage, "input_tokens", None),
+                                                    output_tokens=getattr(usage, "output_tokens", None)),
+                                       price_key=f"jev:{getattr(response, 'model', None) or self.model}", reply=reply)
+                except Exception as stop:
+                    if failure is not None and stop.__cause__ is None:
+                        stop.__cause__ = failure
+                    raise
         if failure is not None:
             raise DecisionsUnavailable(f"Jev call failed: {type(failure).__name__}: {failure}") from failure
         seconds = round(time.perf_counter() - started, 3)
         usage = getattr(response, "usage", None)
         model = getattr(response, "model", None) or self.model
-        record = dict(decision=decision.id, model=model, host=self.host,
+        # Both names are kept: the one asked for and the one that answered.
+        # An alias such as jev-latest resolves to a release, and a cost sheet
+        # written for the alias has no row for the release.
+        record = dict(decision=decision.id, model=model, requested_model=self.model, host=self.host,
                       input_tokens=getattr(usage, "input_tokens", None),
                       output_tokens=getattr(usage, "output_tokens", None), seconds=seconds)
         self.calls.append(record)
         if self.meter is not None:
             try:
-                self.meter.record(model=f"jev:{model}", prompt=decision.context, reply="",
+                self.meter.record(model=_priced_key(model, self.model), prompt=decision.context, reply="",
                                   input_tokens=record["input_tokens"], output_tokens=record["output_tokens"])
             except Exception:  # noqa: BLE001 -- metering is observational only
                 pass
@@ -316,11 +366,54 @@ class JevDecider:
             raise DecisionsUnavailable(f"Jev answered {choice!r}, not one of {decision.answers}")
         probabilities = dict(getattr(answer, "probabilities", {}) or {})
         usage_record = {k: record[k] for k in ("model", "host", "input_tokens", "output_tokens", "seconds")}
+        if model != self.model:
+            usage_record["requested_model"] = self.model
         if decision.labels:
             usage_record["labels"] = decision.labels
         return Verdict(decision=decision.id, answer=choice, source=f"jev:{model}",
                        confidence=getattr(answer, "confidence", None),
                        note=json.dumps(probabilities, sort_keys=True), usage=usage_record)
+
+
+def _priced_key(resolved: str, requested: str) -> str:
+    """The usage-sheet key a Jev call is metered under: the release that
+    answered when the sheet prices it, else the name that was asked for.
+
+    The meter prices an unknown model at its default, which is a frontier
+    model's rate; a release the sheet has not caught up with would be
+    metered at about seventy times what the alias it resolved from costs.
+    """
+    from .usage import PRICES
+    answered, asked = f"jev:{resolved}", f"jev:{requested}"
+    return answered if answered in PRICES or asked not in PRICES else asked
+
+
+def disclosure(decider) -> str:
+    """One line for the start of a run that has an external decider: what
+    leaves the machine and where it goes. Task text carries file paths,
+    requirement text and sometimes code, and the flag's help said only
+    "a billed API call" (whole-repo review, 2026-11-10)."""
+    name = str(getattr(decider, "name", None) or type(decider).__name__)
+    try:
+        # A decider handed in by an embedding caller computes this itself.
+        # One short line whatever it returns, and never an exception: this
+        # runs at the start of a run, outside its error handling.
+        where = " ".join(str(getattr(decider, "destination", None) or "").split())[:200]
+    except Exception:  # noqa: BLE001 -- a line of progress never stops a run
+        where = ""
+    where = where or "a destination the decider does not name"
+    try:
+        available = getattr(decider, "available", None)
+        unavailable = str(available() or "") if callable(available) else ""
+    except Exception:  # noqa: BLE001 -- a line of progress never stops a run
+        unavailable = ""
+    if unavailable:
+        # It refuses before any request, so the true statement is that
+        # nothing is sent.
+        return (f"Decider {name}: it cannot be called ({unavailable}), so no task text is sent to {where} "
+                "and every route keeps the rule's default.")
+    return (f"Decider {name}: each task description it routes (up to {TASK_TEXT_LIMIT:,} characters) "
+            f"is sent to {where}, outside this machine, as a billed API call.")
 
 
 def describe(decision_id: str, answers: Sequence[str], *, context: str = "") -> Decision:

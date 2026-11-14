@@ -48,6 +48,20 @@ _SMART_QUOTES = {
 }
 
 _OPENERS = {"{": "}", "[": "]"}
+_OPENER_RE = re.compile(r"[{\[]")
+_WS_RE = re.compile(r"\s*")
+
+#: Bounds on the scan for a balanced span. Each candidate start is scanned
+#: to its end, so a reply of unbalanced braces cost the square of its
+#: length: 8,000 "{" took 2.8 s, and a 100,000-brace reply stalled the
+#: harness for minutes (review 2026-11-10, gui/records 22). Past these the
+#: scan stops; the reply is then unrecoverable, and the caller re-asks.
+#: The steps are what bound the work. The starts are bounded well above
+#: what prose holds, so an object that follows a few hundred bracketed
+#: references or a code sample is still found, as it was before the bounds.
+_MAX_SCAN_CHARS = 200_000
+_MAX_SPAN_STARTS = 4_096
+_MAX_SPAN_STEPS = 1_000_000
 
 
 class StructuredError(RuntimeError):
@@ -83,9 +97,10 @@ def _drop_trailing_commas(text: str) -> str:
             out.append(ch)
             continue
         if ch == "," and not in_string:
-            rest = text[i + 1:]
-            stripped = rest.lstrip()
-            if stripped[:1] in ("}", "]"):
+            # Looked ahead in place: copying the rest of the text for every
+            # comma made this quadratic too.
+            after = _WS_RE.match(text, i + 1).end()
+            if text[after:after + 1] in ("}", "]"):
                 continue  # drop this comma
         out.append(ch)
     return "".join(out)
@@ -95,14 +110,21 @@ def _balanced_spans(text: str):
     """Yield candidate balanced JSON spans, outermost-first.
 
     Quote- and escape-aware so that braces inside strings do not affect depth.
+    Bounded: only the first ``_MAX_SCAN_CHARS`` characters are scanned, from
+    at most ``_MAX_SPAN_STARTS`` candidate starts, for at most
+    ``_MAX_SPAN_STEPS`` characters read in all.
     """
-    for start, ch in enumerate(text):
-        closer = _OPENERS.get(ch)
-        if closer is None:
-            continue
+    text = text[:_MAX_SCAN_CHARS]
+    starts = steps = 0
+    for opener in _OPENER_RE.finditer(text):
+        start = opener.start()
+        starts += 1
+        if starts > _MAX_SPAN_STARTS or steps >= _MAX_SPAN_STEPS:
+            return
         depth = 0
         in_string = False
         escaped = False
+        end = start
         for end in range(start, len(text)):
             c = text[end]
             if escaped:
@@ -121,8 +143,11 @@ def _balanced_spans(text: str):
             elif c in ("}", "]"):
                 depth -= 1
                 if depth == 0:
+                    steps += end - start + 1
                     yield text[start:end + 1]
                     break
+        else:
+            steps += end - start + 1    # never balanced: the whole tail was read
 
 
 def _candidates(text: str):
@@ -143,7 +168,8 @@ def _try_load(candidate: str) -> Optional[Any]:
     for attempt in (candidate, _drop_trailing_commas(_strip_smart_quotes(candidate))):
         try:
             return json.loads(attempt)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
+            # RecursionError: a reply of 100,000 "[" is not JSON either.
             continue
     return None
 

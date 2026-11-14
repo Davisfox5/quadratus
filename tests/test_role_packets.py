@@ -35,11 +35,11 @@ def packet_session(tmp_path):
 def test_every_role_gets_scope_checklist_and_conventions_without_peer_history(packet_session):
     session, spec, seen = packet_session
     prompts = [session._lead_prompt(spec),
-               session._collaborator_prompt(spec, 'draft', 'openai:gpt-5.6-sol'),
-               session._consult_prompt(spec, 'question', 'openai:gpt-5.6-sol'),
-               session._verifier_prompt(spec, 'draft', 'openai:gpt-5.6-sol')]
+               session._collaborator_prompt(spec, 'draft', 'openai:sol'),
+               session._consult_prompt(spec, 'question', 'openai:sol'),
+               session._verifier_prompt(spec, 'draft', 'openai:sol')]
     task = TaskMemory(spec.description, session.store)
-    session._recheck_blocking(spec, [('openai:gpt-5.6-sol', 'BLOCKING: first-private'),
+    session._recheck_blocking(spec, [('openai:sol', 'BLOCKING: first-private'),
                                    ('claude:opus', 'BLOCKING: second-private')], 'revision', task)
     prompts += seen
     for prompt in prompts:
@@ -66,13 +66,18 @@ def test_packet_caps_reference_bytes_and_never_cuts_required_scope(packet_sessio
         policy.role_packet(spec.scope, 'lead')
 
 
-def test_instruction_symlink_escape_is_refused(packet_session, tmp_path):
+def test_a_default_instruction_symlink_escape_is_skipped_and_a_listed_one_refused(packet_session, tmp_path):
     session, spec, _ = packet_session
     path = session.project / 'CLAUDE.md'
     path.unlink()
     external = tmp_path / 'external'
-    external.write_text('outside')
+    external.write_text('EXTERNAL-NOTES-MARKER')
     path.symlink_to(external)
+    # A default name nobody listed is skipped: it used to stop every packet
+    # of the run (whole-repo review, 2026-11-10). Its target is never read.
+    assert 'EXTERNAL-NOTES-MARKER' not in session._lead_prompt(spec)
+    # A name the policy itself lists is still refused.
+    session.config.repository_policy.document['instructions'] = ['CLAUDE.md']
     with pytest.raises(PolicyError, match='leaves the project'):
         session._lead_prompt(spec)
 
@@ -165,12 +170,15 @@ def test_editing_roles_keep_lead_checklist_without_a_write_grant(packet_session,
     assert 'Role: reviewer' not in seen[-1]
 
 
-def test_worker_gets_scope_without_parent_family_packet(packet_session):
+def test_worker_gets_neither_the_scope_block_nor_the_parent_family_packet(packet_session):
+    """A read-only worker answers one errand: its lead holds the scope, and
+    the scope and operator limits were being appended to every lookup."""
     from quadratus.delegation import invocation
     session, spec, seen = packet_session
     session._active_spec = spec
     with invocation(spec.task_id, 'worker:read-1', 'worker'):
         session._invoke_model('claude:haiku', 'Read this one definition')
-    assert spec.scope.render() in seen[-1]
+    assert seen[-1] == 'Read this one definition'
+    assert '## Scope of this task' not in seen[-1]
     assert '## Role packet' not in seen[-1]
     assert 'Family checklist' not in seen[-1]

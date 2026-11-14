@@ -36,7 +36,7 @@ from quadratus.scope import TaskScope
 from quadratus.session import _BLOCKED_REPORT_RULE, Session, SessionConfig, TaskSpec
 from quadratus.task_kinds import TaskKind
 
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 SECURITY_TASK = TaskSpec("t1", "close the tenant leak", kind=TaskKind.SECURITY,
                          scope=TaskScope(permitted_paths=["app.py"], max_lines=10))
 
@@ -176,7 +176,11 @@ def test_a_security_lead_can_commission_a_worker(tmp_path):
     assert key == "claude:haiku"
     assert "change line 29 to check the tenant" in prompt
     assert allow_writes is True
-    assert result.summary == "fixed" and result.reasoning == "worker evidence"
+    # No model writes a close-out (owner ruling, 2026-10-21): the harness
+    # records the task, so the one worker call is the only call of its kind
+    # and no close-out prompt can be mistaken for it.
+    assert result.summary.startswith("Recorded by the harness, not a model")
+    assert not any("The task is finished" in p for _, p in calls)
     drafts = [p for k, p in calls if "You are leading" in p]
     assert any("patched: line 29" in p for p in drafts)
     assert any("Applied the tenant check" in p for k, p in calls if "verifying security work" in p)
