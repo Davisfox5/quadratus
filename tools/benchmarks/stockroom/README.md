@@ -49,3 +49,32 @@ builds, GPT Sol reviews, one fix round, then the audit.
 In the second run the draft was 1.42M, the review 1.25M and the revision
 2.51M. The same model built the same job alone for 0.77M.
 
+## Supplied review, 2026-11-14
+
+`--supplied-review`: a task's reviewer and re-check judge the changed files
+handed to them in the message, in one turn with no tools. Same limits as the
+9M run above (800k per call, 10 rounds).
+
+| Run | Graders | Calls | Reported tokens | Outcome |
+| --- | --- | --- | --- | --- |
+| first | 94 of 116 | 27 | about 3,660,000 | stopped in task 6: a lead mistyped the project path in one write, the denial was read as a lost write grant (fixed since) |
+| second | 114 of 116 | 38 | about 6,050,000 | stopped before the audit: a re-check was not shown the file its finding was about and kept it open (fixed since) |
+| third | 116 of 116 | 41 | about 7,490,000 | the audit ran and held 11 of 35 requirements NOT MET; no repair task could be paid from the 1.3M left |
+
+Average reported tokens per call, the 9M run above against the third run here:
+
+| Call | Before | With supplied review |
+| --- | --- | --- |
+| review | 279,564 | 45,670 |
+| re-check, judged from handed files (6 of 9) | 147,776 | about 40,000 |
+| re-check, all nine (three read a copy) | 147,776 | 82,167 |
+| revision | 366,221 | 232,844 |
+| lead draft | 299,762 | 285,123 |
+| planner | 214,934 | 251,672 |
+| audit | 671,258 | 711,258 |
+
+The third run's total is 14% under the earlier 9M run's 8,740,000. Runs differ
+a good deal in how many tasks and fix rounds the planner chooses (7 planner
+calls and 9 revisions here, 5 and 6 there), so the per-call rows say more than
+the totals.
+
