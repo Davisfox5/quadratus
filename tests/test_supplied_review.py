@@ -265,3 +265,30 @@ def test_the_flag_chooses_the_setting():
     off = parser.parse_args(["--project", ".", "--session", "goal"])
     assert cli._session_options(on) == {"supplied_review": True}
     assert cli._session_options(off) == {}
+
+
+# --- found by the same benchmark run: a denied write outside the project ------
+
+def test_a_denied_write_outside_the_project_is_the_grant_working_not_a_lost_grant(tmp_path):
+    """A lead mistyped the project's absolute path in one write (a hyphen for
+    a slash). The CLI denied it, as it should, and the run stopped as if the
+    write grant had been lost."""
+    from quadratus.runtime import _relevant_denials
+    project = tmp_path / "project"
+    (project / "pkg").mkdir(parents=True)
+    inside = dict(kind="permission_denied", tool="Write", status="denied", path=str(project / "pkg/api.py"))
+    mistyped = dict(kind="permission_denied", tool="Write", status="denied",
+                    path=str(tmp_path) + "-project/pkg/api.py")
+    relative = dict(kind="permission_denied", tool="Edit", status="denied", path="pkg/api.py")
+    unknown = dict(kind="permission_denied", tool="Write", status="denied")
+    escape = dict(kind="permission_denied", tool="Write", status="denied", path=str(project / "../elsewhere.py"))
+
+    def judged(*entries):
+        return _relevant_denials(list(entries), (), writes_granted=True, project=project)
+
+    assert judged(mistyped) == [] and judged(escape) == []
+    assert judged(inside) == [f"Write {project / 'pkg/api.py'}"]
+    assert judged(relative) == ["Edit pkg/api.py"], "a path not known to be outside still counts"
+    assert judged(unknown) == ["Write"]
+    # With no project named, the rule is the one it was.
+    assert _relevant_denials([mistyped], (), writes_granted=True) == [f"Write {mistyped['path']}"]

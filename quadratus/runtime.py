@@ -838,7 +838,8 @@ class Fleet:
                 # ordinary continuation (Codex review of 3a55d82). A refusal
                 # never reaches here, so it keeps its precedence.
                 denied = _relevant_denials(getattr(view, "last_tool_failures", None),
-                                           getattr(self, "check_commands", ()) or (), writes_granted=True)
+                                           getattr(self, "check_commands", ()) or (), writes_granted=True,
+                                           project=self.project.root)
                 if denied:
                     from .session import CapabilityUnavailable
                     raise CapabilityUnavailable(
@@ -864,7 +865,8 @@ class Fleet:
                 # For the session's same-failure check across editing calls.
                 context["tool_failures"] = bounded_tool_failures(getattr(view, "last_tool_failures", None))
             denied = _relevant_denials(getattr(view, "last_tool_failures", None),
-                                       getattr(self, "check_commands", ()) or (), writes_granted=True)
+                                       getattr(self, "check_commands", ()) or (), writes_granted=True,
+                                       project=self.project.root)
             if denied:
                 # After the one invocation, never replayed or rerouted; the
                 # edits stay for inspection (Codex, Run 18).
@@ -1874,13 +1876,30 @@ def _looks_like_request(reply: str) -> bool:
     return any(_is_request_line(line.strip()) for line in (reply or "").splitlines())
 
 
-def _relevant_denials(failures, checks, *, writes_granted: bool = False) -> List[str]:
+def _outside_project(path, project) -> bool:
+    """Whether ``path`` is an absolute path that is not inside ``project``.
+    A relative, empty or unreadable path is not known to be outside."""
+    if not isinstance(path, str) or not os.path.isabs(path) or project is None:
+        return False
+    try:
+        root = os.path.realpath(os.fspath(project))
+        target = os.path.realpath(os.path.normpath(path))
+        return os.path.commonpath([root, target]) != root
+    except (OSError, ValueError):
+        return False
+
+
+def _relevant_denials(failures, checks, *, writes_granted: bool = False, project=None) -> List[str]:
     """Denied commands the harness itself named: a configured check exactly,
     or the harness's own capture command. With ``writes_granted``, a denied
     file tool as well: a call granted writes that cannot write has lost the
     capability the grant exists for (Stage B, 2026-10-03), and burning its
     turns on retries is not a model outcome. Other denials (exploration) are
-    only recorded in the ledger."""
+    only recorded in the ledger. So is a denied file tool whose path is
+    outside ``project``: the grant covers the project and nothing else, so
+    that denial is the grant working (stockroom benchmark, 2026-11-14: a
+    lead mistyped the project's absolute path in one write, the write was
+    rightly denied, and the run stopped as if writes had been lost)."""
     out = []
     for entry in failures if isinstance(failures, list) else ():
         if not isinstance(entry, dict) or entry.get("kind") != "permission_denied":
@@ -1889,6 +1908,8 @@ def _relevant_denials(failures, checks, *, writes_granted: bool = False) -> List
         if isinstance(command, str) and (command in checks or _is_capture_invocation(command)):
             out.append(command)
         elif writes_granted and entry.get("tool") and not command:
+            if _outside_project(entry.get("path"), project):
+                continue
             out.append(f"{entry['tool']} {entry.get('path') or ''}".strip())
     return out
 
