@@ -149,6 +149,10 @@ class EvidenceMixin:
             # Every covered requirement is a test command's pass: the
             # harness's receipt is its evidence (_TEST_COMMAND_RULE).
             return ""
+        if scope.proofs is None and self.config.optional_proofs:
+            # Optional proofs (2026-11-15): the lead's tests are the proof,
+            # judged by executed case at review and at the audit.
+            return ""
         if scope.proofs is None:
             return ('The task declares no proof scenarios: add "proofs": [{"id": "P1", "requirements": ["R<n>"], '
                     '"operation": ..., "state": ..., "expect": ..., "location": ...}, ...] to SCOPE, mapping every '

@@ -685,6 +685,9 @@ def _session_options(args) -> dict:
         chosen["design_cross_check"] = False
     if getattr(args, "supplied_review", False):
         chosen["supplied_review"] = True
+    if getattr(args, "lean", False):
+        from .session_knobs import LEAN_SETTINGS
+        chosen.update(dict.fromkeys(LEAN_SETTINGS, True))
     return chosen
 
 
@@ -1155,6 +1158,13 @@ def build_parser() -> argparse.ArgumentParser:
          help="Hand each task's reviewer and re-check the measured diff and the changed files in "
               "the message, and have them answer in one turn with no tools, in an empty folder. "
               "A review whose evidence does not fit one message reads a source copy as before.")
+    flag(knobs, "--lean", needs="engine", action="store_true",
+         help="The cheaper run shape, all at once: --supplied-review; planning calls and the final "
+              "audit answered in one turn from the files handed over; a revision made in one turn, "
+              "returning whole files the harness writes; an outline plan with no proof scenarios, "
+              "the lead writing its own tests; the reviewer's checklist shown to the lead first; and "
+              "a blocking finding that must quote the goal's own words. Each falls back to the "
+              "ordinary call when its message does not fit or its reply cannot be used.")
 
     watch = parser.add_argument_group(
         "monitor",

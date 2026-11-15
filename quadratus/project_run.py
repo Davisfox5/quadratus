@@ -1904,6 +1904,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # of a run that did not ask for it.
         **({'supplied_reviews': list(getattr(session, 'supplied_reviews', []) or [])}
            if session and getattr(session, 'supplied_reviews', None) else {}),
+        **({'goal_basis_demotions': list(getattr(session, 'goal_basis_demotions', []) or [])}
+           if session and getattr(session, 'goal_basis_demotions', None) else {}),
         'evidence_requests': list(getattr(session, 'evidence_requests', []) or []) if session else [],
         'review_notes': list(getattr(session, 'review_notes', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,

@@ -31,6 +31,13 @@ SESSION_KNOBS = {
     "spread_leads": None,
     "design_cross_check": None,
     "supplied_review": None,
+    "supplied_planning": None,
+    "supplied_audit": None,
+    "supplied_revision": None,
+    "optional_proofs": None,
+    "review_lens_upfront": None,
+    "goal_basis": None,
+    "outline_planning": None,
 }
 
 
@@ -57,3 +64,9 @@ def session_options(raw: Optional[Mapping]) -> dict:
             raise ValueError(f"{name} must be a whole number of at least {floor}, not {value!r}")
         checked[name] = value
     return checked
+
+
+#: What ``--lean`` turns on (2026-11-15): every setting that makes a call
+#: cheaper or avoids one, together.
+LEAN_SETTINGS = ("supplied_review", "supplied_planning", "supplied_audit", "supplied_revision",
+                 "optional_proofs", "review_lens_upfront", "goal_basis", "outline_planning")

@@ -97,7 +97,7 @@ def test_without_the_mark_a_review_reads_a_source_copy_as_before(fleet, monkeypa
     assert "fresh source copy" in " ".join(seen[0][0])
 
 
-@pytest.mark.parametrize("role", ["verifier", "design-review", "auditor"])
+@pytest.mark.parametrize("role", ["verifier", "design-review"])
 def test_a_seat_that_reads_the_whole_project_keeps_its_copy_even_when_marked(fleet, monkeypatch, role):
     made = fleet[0]
     seen = _launches(monkeypatch)

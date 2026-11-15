@@ -5180,7 +5180,7 @@ Key design decisions already settled:
   task's changed files, whole, to the reviewer's and re-check's prompt
   (`Session._supplied_evidence`), with small unchanged files while room is
   left, and Fleet runs the seat in an empty folder for one turn
-  (`Fleet._supplied_judgment`, the summary view's controls, 600 s). Nothing
+  (`Fleet._supplied_judgment`, the summary view's controls, 1,500 s since 2026-11-15). Nothing
   is cut: files that do not fit one message (128,000 bytes), a changed file
   that is not text, or design evidence send that review to a source copy.
   Unchanged files the prompt names are handed over first, because a re-check
@@ -5189,6 +5189,43 @@ Key design decisions already settled:
   its first line and is asked again, once, with a copy (`_needs_files`). No
   scratch demonstration is asked for. Measured on stockroom: a review fell
   from about 280k reported tokens to about 45k, a re-check from 148k to 40k.
+- **`--lean` is the cheaper run shape, and each part falls back to the old
+  call** (Davis, 2026-11-15; `session_knobs.LEAN_SETTINGS`, all off by
+  default). With reviews at 45k, the stockroom run still reported 7.49M:
+  revisions 2.1M, planning 1.8M, the audit 0.7M. The planner's prompts were
+  7,000 to 23,000 tokens and its calls reported 120,000 to 434,000 input
+  tokens; the rest was the seat reading the project again.
+  - `supplied_planning`, `supplied_audit`: the orchestrator and the auditor
+    answer in one turn from the prompt plus the files the run changed
+    (`Session._supplied_evidence` with the run-start source as the baseline).
+    The audit needs every changed file whole or it reads a copy; the planner
+    is shown what fits. Both can answer `NEED FILES:` and get a copy.
+  - One supplied message holds 400,000 bytes where the CLI reads its prompt
+    on stdin (claude, codex; probed with a 494,000-byte prompt) and
+    `MAX_ARGV_PROMPT` on grok (`runtime.supplied_prompt_limit`). One-turn
+    calls may take 1,500 s.
+  - `supplied_revision`: the revision gets the task's files and returns each
+    file it changes, whole, between `=== WRITE FILE path ===` and `=== END
+    FILE path ===` (`Fleet._supplied_edit`, `Project.write_files`). The
+    harness writes them under a patch's path rules, then the editing call's
+    own scope, watch and check rules apply. A cut or malformed reply, a path
+    outside editable source, or `NEED SESSION:` writes nothing and the
+    ordinary editing call follows, once. Whole files, not diffs: a model's
+    diff often fails `git apply`.
+  - `optional_proofs`, `outline_planning`: the planner gives each task its
+    files, covered requirements and the interfaces other tasks depend on,
+    and declares no proof scenario. No acceptance row is registered. The
+    lead writes the tests; an error requirement still needs an executed case
+    cited at review and at the audit.
+  - `review_lens_upfront`: the lead is shown the reviewer's error-boundary
+    and counterpart lenses before it writes.
+  - `goal_basis`: a BLOCKING line must end `| goal: "<words>"`, at least 12
+    characters found in the goal, a requirement or a ruling
+    (`Session._demote_unbased`). Otherwise it becomes a note for the audit,
+    unless its impact is an immediate risk. A finished review with no
+    blocking finding buys no revision. Demotions are in `result.json`.
+  - Not built: a one-time plan with a task queue. One-turn planning removes
+    most of that cost and keeps a plan decision after every task.
 - **session.py was split by moving code, and two rules keep it split**
   (2026-11-11, redone 2026-11-12 after the development line was merged;
   `tests/test_review1110_split.py`). It went from 29,386 lines to 10,238

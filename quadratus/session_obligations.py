@@ -2124,6 +2124,11 @@ class ObligationsMixin:
                                   runner=record.get("runner") if modality == "test" else None)
                     self._supersede_obligation(record)
             return
+        if self.config.optional_proofs:
+            # Optional proofs (2026-11-15): an acceptance sentence is the
+            # planner's intent for the lead, not a row for the audit to
+            # judge; the requirement is judged on its executed cases.
+            return
         for item in (getattr(scope, "acceptance", None) or ()):
             record = self._register_obligation(dict(task=spec.task_id, item=str(item), requirements=list(covers or []),
                                                     after_check=len(self.checks),

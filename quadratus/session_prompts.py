@@ -1293,3 +1293,40 @@ _DECIDER_LABELS_REQUEST = (
     "no line may be the bare word DONE, because each is read as that control verb rather "
     "than as your task. " + _UNDECLARED_RENDER_RULE
 )
+
+
+#: Outline planning (SessionConfig.outline_planning, 2026-11-15): the planner
+#: fixes the edges between tasks and leaves the rest to the lead. The
+#: stockroom planner wrote 7,000 to 32,000 output tokens per task.
+_OUTLINE_PLAN_NOTE = (
+    "This run plans in outline. For each task give only: its SCOPE (the files it owns), its COVERS, the "
+    "names, signatures, routes, commands and error codes other tasks depend on, and two or three sentences "
+    "of intent. Do not write the implementation, a list of tests or step-by-step instructions: the lead is "
+    "given the goal whole and decides those. Keep a task's description under about 1,500 characters."
+)
+
+#: Optional proofs (SessionConfig.optional_proofs): no scenario is declared
+#: at planning; the lead's tests are judged by executed case.
+_OPTIONAL_PROOFS_NOTE = (
+    'This run declares no proof scenarios: leave "proofs" out of SCOPE and write "acceptance" as one '
+    "plain sentence. The lead writes the tests that prove each covered requirement, in files a configured "
+    "check runs; the reviewer and the final audit judge them by the cases the harness shows executed."
+)
+
+#: The reviewer's lenses, shown to the lead before it writes
+#: (SessionConfig.review_lens_upfront).
+_LENS_UPFRONT = (
+    "Your work will be reviewed against the following, so meet it before you deliver, with a test for "
+    "each case the goal covers. "
+)
+
+#: A blocking finding quotes the words it rests on (SessionConfig.goal_basis).
+_GOAL_BASIS_RULE = (
+    " In this run a BLOCKING line must also end with ' | goal: \"<exact words>\"', quoting at least a "
+    "dozen characters exactly as they appear in the goal, a requirement or an operator ruling shown to "
+    "you: the words the work contradicts. The harness checks the quote. A BLOCKING line without a quote "
+    "it can find is kept as a note for the final audit and buys no revision, unless its impact is "
+    "data-loss, integrity, security or irreversible. An input, value or case the goal leaves unspecified "
+    "is a note, never BLOCKING, and a requirement line says NOT MET only for a contradiction you can "
+    "quote this way."
+)

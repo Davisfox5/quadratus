@@ -255,6 +255,32 @@ class Project:
         self._command([*GIT, 'apply', '--check', '-'], cwd=self.root, input=patch)
         self._command([*GIT, 'apply', '-'], cwd=self.root, input=patch)
 
+    def write_files(self, files):
+        """Write whole text files a one-turn edit returned, under the path
+        rules a patch is held to. Every path is checked before the first
+        byte is written; each file is written to a temporary name and
+        renamed, so no file is left half written."""
+        targets = []
+        for raw, text in files.items():
+            relative = Path(str(raw))
+            target = self.root / relative
+            if (not str(raw).strip() or relative.is_absolute() or '..' in relative.parts
+                    or not source_path(relative.parts)
+                    or any(part.startswith('.env') and part != '.env.example' for part in relative.parts)
+                    or not target.resolve().is_relative_to(self.root)
+                    or any(p.is_symlink() for p in [target, *target.parents] if p != self.root)
+                    or any(target.resolve().is_relative_to(p) for p in self.exclude)
+                    or target.is_dir() or not isinstance(text, str)):
+                raise ProviderError(f'WRITE FILE path is outside editable project source: {raw}')
+            targets.append((target, text))
+        for target, text in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            mode = target.stat().st_mode & 0o777 if target.exists() else 0o644
+            temporary = target.with_name(f'.{target.name}.quadratus-write')
+            temporary.write_text(text, encoding='utf-8')
+            temporary.chmod(mode)
+            temporary.replace(target)
+
     def git_status(self):
         try:
             return self._command([*GIT, 'status', '--short'], cwd=self.root).strip()

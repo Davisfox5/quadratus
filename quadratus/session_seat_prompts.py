@@ -31,6 +31,7 @@ from .session_prompts import (
     _ERROR_PATH_RULE,
     _EXECUTED_ERROR_RULE,
     _FINDING_SHAPE,
+    _GOAL_BASIS_RULE,
     _NO_REQUESTS_IN_FIX,
     _PLAIN_VERDICT_RULE,
     _PROBE_RULE,
@@ -250,7 +251,8 @@ class SeatPromptsMixin:
             "line> | impact: <data-loss|integrity|security|irreversible|correctness|contract|other>'. "
             "A finding with no basis is still recorded and carried to the final audit by id; a "
             "data-loss, integrity, security or irreversible impact holds the affected work whatever "
-            "its basis. " + _FINDING_SHAPE + " " + _ERROR_BOUNDARY_LENS + " " + _COUNTERPART_LENS
+            "its basis. " + (_GOAL_BASIS_RULE.strip() + " " if self.config.goal_basis else "")
+            + _FINDING_SHAPE + " " + _ERROR_BOUNDARY_LENS + " " + _COUNTERPART_LENS
             + " If you genuinely find nothing worth changing, "
             f"reply exactly 'NO FINDINGS' and nothing else: {_EMPTY_BLOCKING_RULE}. "
             f"Otherwise end your reply with exactly one line, {_REVIEW_COMPLETE}, once you have "

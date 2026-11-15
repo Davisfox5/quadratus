@@ -2535,7 +2535,7 @@ CODEX_SPEC = CLISpec(
 MAX_ARGV_PROMPT = 128_000
 #: The longest a supplied judgment (a one-turn review of handed evidence,
 #: ``Fleet._supplied_judgment``) may take, in seconds.
-SUPPLIED_JUDGMENT_TIMEOUT = 600.0
+SUPPLIED_JUDGMENT_TIMEOUT = 1500.0
 
 #: How much of a CLI's stderr survives into the ledger per attempt. Enough to
 #: hold a sandbox refusal or an auth failure verbatim; not a transcript.
