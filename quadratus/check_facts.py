@@ -337,16 +337,18 @@ def _check_runs(check: dict, root=None) -> List[dict]:
     from types import SimpleNamespace
 
     from .integration import (
+        _PYTEST_NAMES,
         RUNNER_UNKNOWN,
         _test_count,
         case_outcomes,
         deselected_count,
+        discovers_added_tests,
         is_filtered,
+        model_facing,
         operand_paths,
         skipped_count,
         unittest_discover_command,
     )
-    from .integration import _PYTEST_NAMES, discovers_added_tests, model_facing
     receipts = check.get("receipts") or ()
     # A single-command gate's selection and cwd are recorded on the check; its
     # receipts (the one synthesized when original tests join, and theirs)
