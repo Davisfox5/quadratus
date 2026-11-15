@@ -388,14 +388,22 @@ NAMED_GATE = H.GATE.replace(" -m pytest -q ", " -m pytest -q tests/test_app.py "
 PATH_ONLY = "NOT RUN: tests/test_app.py - I did not run it before closing"
 
 
-@pytest.mark.parametrize("gate, ran", [(NAMED_GATE, True), (H.GATE, False)], ids=["named-file", "discovery"])
+FILTERED_GATE = H.GATE.replace(" -m pytest -q ", " -m pytest -q -k add ")
+
+
+@pytest.mark.parametrize("gate, ran", [(NAMED_GATE, True), (H.GATE, True), (FILTERED_GATE, False)],
+                         ids=["named-file", "discovery", "filtered-discovery"])
 def test_a_path_only_report_the_effective_gate_ran_whole_agrees_everywhere(tmp_path, monkeypatch, gate, ran):
     """cycle13 O59/O63/O64: registration read the gate as not naming the
     file (``_gate_can_run`` False here, standing for the reading that
     differed from the later effective gate). A gate naming the file whole
     then ran it complete and passing: the item, its typed row, the audit's
-    lowering, result.json and tools/truth_check agree it ran. A discovery
-    gate names no file, so the same report stays truthful debt everywhere."""
+    lowering, result.json and tools/truth_check agree it ran. Since
+    2026-11-15 a pytest gate with no operand and nothing selected clears it
+    too, on its own report's passed case of that file (stockroom: ten
+    requirements held on two such lines while every case passed). A
+    filtered run names no file and shows no whole file, so the same report
+    stays truthful debt everywhere."""
     from tests.lifecycle.test_done_declarations import PLAN1
     from tools.truth_check import _not_run_cleared
     monkeypatch.setattr(Session, "_gate_can_run", lambda self, paths: False)

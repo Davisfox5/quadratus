@@ -225,3 +225,18 @@ def test_a_write_outside_editable_source_is_refused_before_any_file_is_written(t
     with pytest.raises(ProviderError, match="outside editable project source"):
         Project(root).write_files({"ok.py": "new\n", ".git/hooks/pre-commit": "#!/bin/sh\n"})
     assert (root / "ok.py").read_text() == "old\n"
+
+
+@pytest.mark.parametrize("command, whole", [
+    ("python -m pytest -q '--quadratus-report=/tmp/r.json'", True),
+    ("python3.13 -m pytest -q -p no:cacheprovider", True),
+    ("pytest -vv", True),
+    ("python -m pytest -q -k add", False),
+    ("python -m pytest -q tests/test_app.py", False),
+    ("python -m pytest -q -m slow", False),
+    ("python -m unittest discover -s tests", False),
+    ("sh -c 'pytest -q'", False),
+])
+def test_the_outside_checker_reads_a_whole_pytest_run_only_where_nothing_is_selected(command, whole):
+    from tools.truth_check import _whole_pytest
+    assert _whole_pytest(command) is whole
