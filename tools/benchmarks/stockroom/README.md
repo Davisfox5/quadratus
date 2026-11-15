@@ -78,3 +78,24 @@ a good deal in how many tasks and fix rounds the planner chooses (7 planner
 calls and 9 revisions here, 5 and 6 there), so the per-call rows say more than
 the totals.
 
+
+## With `--lean` (2026-11-15)
+
+Same goal, graders and limits as the supplied-review runs, with `--lean`.
+
+| | supplied-review run | `--lean` run |
+|---|---|---|
+| Graders | 116 of 116 | 116 of 116 |
+| Reported tokens | 7.49M | 4.71M |
+| Model calls | 41 | 48 |
+| Engine verdict | incomplete, 11 of 35 not met | incomplete, 18 of 32 not met |
+
+Per call, before and with `--lean`: planning 251,672 to 57,209 (11 calls);
+revision 232,844 to 75,682 (8 calls, one of which asked for a full session
+and reported about 283,000); audit 711,258 to 66,736. Lead drafts did not
+change (285,123 to 298,456, 8 calls) and are now half the run.
+
+Seven BLOCKING lines were kept as notes because they quoted no words the
+goal contains. Ten of the 18 NOT MET verdicts cite a lead's NOT RUN report
+(Codex leads could not open a socket in their sandbox and said so) that no
+later record settled, not a defect in the code.
