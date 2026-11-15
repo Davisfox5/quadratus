@@ -99,3 +99,19 @@ Seven BLOCKING lines were kept as notes because they quoted no words the
 goal contains. Ten of the 18 NOT MET verdicts cite a lead's NOT RUN report
 (Codex leads could not open a socket in their sandbox and said so) that no
 later record settled, not a defect in the code.
+
+## Second `--lean` run: NOT RUN reports cleared, no faster (2026-11-15)
+
+Engine at 8a3e9cd with `--lean --max-parallel-tasks 4`. Graders 116 of 116,
+5.27M reported tokens, 47 calls, 78 minutes (the first `--lean` run took 58).
+Incomplete: the audit held 6 of 32 requirements, down from 18. Every NOT RUN
+report was cleared by the harness's own run, so none of the six is
+paperwork.
+
+Where the 78 minutes went: calls were in flight for 67 of them and only 13
+minutes had more than one call running, although two batches formed. The
+first audit took 601 s. Opus leads took 403 s and 507 s. A revision that
+returns whole files took 209 s to 256 s on Opus (25,000 to 32,000 output
+tokens). The delivered test suite takes 158 s, and the harness ran it at
+least five times. The first audit found defects after five tasks, and the
+three repair tasks that followed added about 25 minutes.
