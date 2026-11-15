@@ -342,9 +342,35 @@ def _paths_cleared(entry, checks, record) -> bool:
                 # A whole module is its file, as the engine reads it.
                 operands = [m.replace(".", "/") + ".py" for m in modules]
             passed_files = {c.split("::", 1)[0] for c in _row_passed_cases(row) if "::" in c}
-            if all(f in operands and f in passed_files for f in files):
+            whole = _whole_pytest(row["command"])
+            if all((f in operands or whole) and f in passed_files for f in files):
                 return True
     return False
+
+
+def _whole_pytest(command: str) -> bool:
+    """Whether a command is pytest with nothing selected and no operand, so
+    it collects every test file: only verbosity flags, the harness's report
+    token and its cache switch. Its own report then shows which files ran,
+    as the engine reads it."""
+    import shlex
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    if re.fullmatch(r"python(\d+(\.\d+)*)?", Path(argv[0]).name) and argv[1:3] == ["-m", "pytest"]:
+        rest = argv[3:]
+    elif Path(argv[0]).name in ("pytest", "py.test"):
+        rest = argv[1:]
+    else:
+        return False
+    rest = [a for a in rest if not a.startswith("--quadratus-report")]
+    while "-p" in rest and rest.index("-p") + 1 < len(rest) and rest[rest.index("-p") + 1] == "no:cacheprovider":
+        at = rest.index("-p")
+        del rest[at:at + 2]
+    return all(a in ("-q", "-qq", "-v", "-vv", "-rA", "-ra") for a in rest)
 
 
 def _filtered(command: str) -> bool:

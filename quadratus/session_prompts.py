@@ -1302,7 +1302,11 @@ _OUTLINE_PLAN_NOTE = (
     "This run plans in outline. For each task give only: its SCOPE (the files it owns), its COVERS, the "
     "names, signatures, routes, commands and error codes other tasks depend on, and two or three sentences "
     "of intent. Do not write the implementation, a list of tests or step-by-step instructions: the lead is "
-    "given the goal whole and decides those. Keep a task's description under about 1,500 characters."
+    "given the goal whole and decides those. Keep a task's description under about 1,500 characters. "
+    "Plan the fewest tasks that cover the goal: one per layer or file group, whole, with its own tests, "
+    "never one per requirement and never a layer split in two. Tasks run one after another cost wall time: "
+    "once the task the others build on has closed, name everything that is left in one parallel batch "
+    "where a batch is offered."
 )
 
 #: Optional proofs (SessionConfig.optional_proofs): no scenario is declared

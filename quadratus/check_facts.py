@@ -346,6 +346,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         skipped_count,
         unittest_discover_command,
     )
+    from .integration import _PYTEST_NAMES, discovers_added_tests, model_facing
     receipts = check.get("receipts") or ()
     # A single-command gate's selection and cwd are recorded on the check; its
     # receipts (the one synthesized when original tests join, and theirs)
@@ -405,9 +406,37 @@ def _check_runs(check: dict, root=None) -> List[dict]:
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
+                        discovers=_discovering_pytest(argv, root, row["cwd"], _PYTEST_NAMES, discovers_added_tests,
+                                                      model_facing),
                         skipped_names=skipped_names, executed_names=executed_names, every_names=every_names,
                         qualified_names=qualified_names))
     return out
+
+
+def _discovering_pytest(argv, root, cwd, names, discovers, model_facing) -> bool:
+    """Whether a recorded command is pytest run from the project root with
+    nothing selected, so it collects every test file under the root
+    (``integration.discovers_added_tests`` with the harness's own report
+    token and its cache switch set aside). Such a run's own report then
+    shows which files' cases ran: a lead's 'NOT RUN: tests/test_api.py' is
+    about that file, and the stockroom run of 2026-11-15 held ten
+    requirements on two such lines while the gate's 469 passed cases
+    included both files (the gate named no file, so no receipt cleared
+    them). Pytest only; unittest discover grants no per-file reading."""
+    from pathlib import Path
+    try:
+        plain = [a for a in model_facing([str(a) for a in argv])]
+        while "-p" in plain and plain.index("-p") + 1 < len(plain) and plain[plain.index("-p") + 1] == "no:cacheprovider":
+            at = plain.index("-p")
+            del plain[at:at + 2]
+        if not plain or (cwd or ".") not in ("", "."):
+            return False
+        head = Path(plain[0]).name
+        if not (head in names or (head.startswith("python") and plain[1:3] == ["-m", "pytest"])):
+            return False
+        return bool(discovers(plain, root))
+    except Exception:  # noqa: BLE001 -- unknown is not discovering
+        return False
 
 
 def _split_runner_unknown(selection: str, marker: str) -> Tuple[bool, str]:

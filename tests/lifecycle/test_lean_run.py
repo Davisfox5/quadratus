@@ -121,3 +121,17 @@ def test_a_blocking_finding_with_no_goal_words_is_a_note_and_buys_no_revision(tm
     rows = H.result_json(replay)["goal_basis_demotions"]
     assert len(rows) == 1 and rows[0]["why"] == "no goal words quoted"
 
+
+
+def test_a_file_the_lead_could_not_run_is_cleared_by_the_whole_pytest_run_that_shows_it(tmp_path, monkeypatch):
+    """A lead whose sandbox refused a socket reports the test file NOT RUN.
+    The gate is pytest with no operand: it names no file, and its own
+    report shows that file's case passed (stockroom, 2026-11-15)."""
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Implemented add.\nNOT RUN: tests/test_app.py - the sandbox refused a socket\nCHANGED: ["app.py"]'
+
+    replay = _run(tmp_path, monkeypatch, lead=lead)
+    assert replay.result.completed, replay.result.error
+    entry, = H.result_json(replay)["unexecuted_acceptance"]
+    assert entry["item"] == "tests/test_app.py" and entry["discharge_state"] == "discharged"

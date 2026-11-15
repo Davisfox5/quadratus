@@ -8623,6 +8623,17 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                 continue
             if paths and check.get("passed"):
                 run = next((r for r in runs if all(p in r["files"] for p in paths)), None)
+                if run is None:
+                    # A whole pytest run that names no file collected every
+                    # test file; its own report shows each named file's
+                    # cases passed (2026-11-15). The cases it showed are the
+                    # evidence kept.
+                    for r in runs:
+                        if not r.get("discovers"):
+                            continue
+                        shown = sorted(c for c in _run_passed_cases(r) if c.split("::", 1)[0] in paths)
+                        if all(any(c.startswith(p + "::") for c in shown) for p in paths):
+                            return dict(index=index, run=r["id"], cases=[])
                 if run is not None:
                     return dict(index=index, run=run["id"], cases=[])
             if bound and check.get("passed"):
