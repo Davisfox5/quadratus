@@ -9654,11 +9654,13 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
 
     def _note_supplied_review(self, key, context: dict, why: str) -> None:
         """Keep how a review was run where the operator will read it."""
-        mode = "supplied" if context.get("supplied_review") else "copy"
+        mode = "supplied" if context.get("supplied_review") or context.get("supplied_edit") else "copy"
         row = dict(task=context.get("task", "run"), role=context.get("role"), model=key, mode=mode, why=why)
         self.supplied_reviews.append(row)
         self._note(f"{row['task']} {row['role']} by {key}: "
-                       + ("judging from handed files in one turn" if mode == "supplied"
+                       + ("revising from handed files in one turn" if context.get("supplied_edit")
+                          else "judging from handed files in one turn" if mode == "supplied"
+                          else "working in the project" if context.get("role") == "revision"
                           else "reading a source copy") + f" ({why})")
 
     def _observation_facts(self, task) -> str:
