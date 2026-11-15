@@ -91,6 +91,7 @@ from .check_facts import (  # noqa: F401
     _configured_checks,
     _describe_tree_change,
     _diagnostic_excerpt,
+    _discovering_pytest,
     _enclosing_call,
     _executed_clean,
     _failure_rows,
