@@ -238,8 +238,16 @@ def test_the_checker_rejects_forged_stale_or_mismatched_bindings(tmp_path, monke
     def path_only_not_operand(record, entry):
         path_only(record, entry)
         for check in record["checks"]:
-            check["command"] = check["command"].replace(" tests/test_app.py", "")
+            check["command"] = check["command"].replace(" tests/test_app.py", " tests/test_other.py")
     assert not _tampered(replay, path_only_not_operand), "a path the command did not name whole is not shown"
+
+    def path_only_whole_run(record, entry):
+        # Since 2026-11-15: pytest with nothing selected and no operand
+        # collected every file, and its report shows this file's case.
+        path_only(record, entry)
+        for check in record["checks"]:
+            check["command"] = check["command"].replace(" tests/test_app.py", "")
+    assert _tampered(replay, path_only_whole_run), "a whole pytest run shows the file by its own report"
 
     def path_only_other_source(record, entry):
         path_only(record, entry)
