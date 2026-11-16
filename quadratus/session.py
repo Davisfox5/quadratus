@@ -363,6 +363,7 @@ from .session_packets import PacketsMixin
 from .session_prompts import (  # noqa: F401
     _AUDIT_EXAMPLES,
     _AUDIT_LINE_RULE,
+    _AUDIT_REACH_RULE,
     _AUTHORITY_ORDER,
     _BLOCKED_REPORT_RULE,
     _BOUNDARY_NOTE_CHARS,
@@ -417,6 +418,7 @@ from .session_prompts import (  # noqa: F401
     _KIND_VOCABULARY,
     _LENS_UPFRONT,
     _MEASURED_DIFF_BODY,
+    _MINIMAL_REPAIR_RULE,
     _MISSING_SCENARIO_RULE,
     _NEED_FILES_RULE,
     _NEEDS_REQUEST,
@@ -449,6 +451,7 @@ from .session_prompts import (  # noqa: F401
     _SCOPE_REQUEST,
     _SIZE_GUIDE,
     _STANDING_REASON_CHARS,
+    _SUPPLIED_DRAFT_NOTE,
     _TERMINAL_REQUEST,
     _TEST_COMMAND_RULE,
     _TYPED_FINDING_FORMS,
@@ -771,6 +774,10 @@ class SessionConfig:
     #: and the harness writes them (``Fleet._supplied_edit``). A reply that
     #: cannot be written falls back to the ordinary editing call, once.
     supplied_revision: bool = False
+    #: The lead's first draft made the same way (2026-11-16): the task's
+    #: files go in, edits come back, the harness writes them and runs the
+    #: checks. Eight lead sessions of one stockroom run reported 3.2M tokens.
+    supplied_draft: bool = False
     #: Proof scenarios are optional: the planner names files, interfaces and
     #: requirements, the lead writes the tests, and the reviewer and the
     #: audit judge them by executed case.
@@ -1693,15 +1700,20 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
             facts = self._harness_facts(current_only=True, excerpt=True)
             if facts:
                 context = dict(context, harness_checks=facts)
-        if (supplied and self.project and allow_writes and self.config.supplied_revision
-                and context.get("origin") != "worker" and context.get("role") == "revision"
-                and self._writes()):
+        if (supplied and self.project and allow_writes
+                and context.get("origin") != "worker" and self._writes()
+                and ((context.get("role") == "revision" and self.config.supplied_revision)
+                     or (context.get("role") == "lead" and self.config.supplied_draft
+                         and spec is not None and spec.kind != "security"))):
             # A revision in one turn (SessionConfig.supplied_revision): the
             # task's files go in whole, whole files come back, the harness
             # writes them. What does not fit is revised in a session as before.
-            block, why = self._supplied_evidence(prompt, context, limit=self._supplied_limit(key), editing=True)
+            draft = context.get("role") == "lead"
+            block, why = self._supplied_evidence(prompt + (_SUPPLIED_DRAFT_NOTE if draft else ""), context,
+                                                 limit=self._supplied_limit(key), editing=True,
+                                                 require=not draft)
             if block:
-                prompt += block
+                prompt += (_SUPPLIED_DRAFT_NOTE if draft else "") + block
                 context = dict(context, supplied_edit=True)
             self._note_supplied_review(key, context, why)
         if (supplied and self.project and not blind_source and not allow_writes
@@ -9672,9 +9684,11 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         row = dict(task=context.get("task", "run"), role=context.get("role"), model=key, mode=mode, why=why)
         self.supplied_reviews.append(row)
         self._note(f"{row['task']} {row['role']} by {key}: "
-                       + ("revising from handed files in one turn" if context.get("supplied_edit")
+                       + ("writing from handed files in one turn" if context.get("supplied_edit")
+                          and context.get("role") == "lead"
+                          else "revising from handed files in one turn" if context.get("supplied_edit")
                           else "judging from handed files in one turn" if mode == "supplied"
-                          else "working in the project" if context.get("role") == "revision"
+                          else "working in the project" if context.get("role") in ("revision", "lead")
                           else "reading a source copy") + f" ({why})")
 
     def _observation_facts(self, task) -> str:

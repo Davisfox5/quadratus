@@ -1160,10 +1160,11 @@ def build_parser() -> argparse.ArgumentParser:
               "A review whose evidence does not fit one message reads a source copy as before.")
     flag(knobs, "--lean", needs="engine", action="store_true",
          help="The cheaper run shape, all at once: --supplied-review; planning calls and the final "
-              "audit answered in one turn from the files handed over; a revision made in one turn, "
-              "returning whole files the harness writes; an outline plan with no proof scenarios, "
+              "audit answered in one turn from the files handed over; the lead's draft and a revision "
+              "each made in one turn, returning edits the harness writes; an outline plan with no proof scenarios, "
               "the lead writing its own tests; the reviewer's checklist shown to the lead first; and "
-              "a blocking finding that must quote the goal's own words. Each falls back to the "
+              "a blocking finding that must quote the goal's own words, with the audit holding a "
+              "requirement only for what the goal asks. Each falls back to the "
               "ordinary call when its message does not fit or its reply cannot be used.")
 
     watch = parser.add_argument_group(

@@ -34,6 +34,7 @@ SESSION_KNOBS = {
     "supplied_planning": None,
     "supplied_audit": None,
     "supplied_revision": None,
+    "supplied_draft": None,
     "optional_proofs": None,
     "review_lens_upfront": None,
     "goal_basis": None,
@@ -68,5 +69,5 @@ def session_options(raw: Optional[Mapping]) -> dict:
 
 #: What ``--lean`` turns on (2026-11-15): every setting that makes a call
 #: cheaper or avoids one, together.
-LEAN_SETTINGS = ("supplied_review", "supplied_planning", "supplied_audit", "supplied_revision",
+LEAN_SETTINGS = ("supplied_review", "supplied_planning", "supplied_audit", "supplied_revision", "supplied_draft",
                  "optional_proofs", "review_lens_upfront", "goal_basis", "outline_planning")

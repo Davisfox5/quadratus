@@ -31,13 +31,11 @@ def _plan(call, replay):
 
 
 def _half(call, replay):
-    H.write(call, {"app.py": HALF})
-    return 'Implemented add.\nCHANGED: ["app.py"]'
+    return "Implemented add.\n=== WRITE FILE app.py ===\n" + HALF + "=== END FILE app.py ===\n"
 
 
 def _whole(call, replay):
-    H.write(call, {"app.py": FIXED})
-    return 'Implemented add.\nCHANGED: ["app.py"]'
+    return "Implemented add.\n=== WRITE FILE app.py ===\n" + FIXED + "=== END FILE app.py ===\n"
 
 
 def _blocks_once(line):
@@ -72,6 +70,12 @@ def test_a_lean_run_completes_with_no_proof_scenarios_and_one_turn_seats(tmp_pat
     lead = replay.of("lead")[0]
     assert "Your work will be reviewed against the following" in lead.prompt
     assert "Keep the tests fast" in lead.prompt
+    assert len(replay.of("lead")) == 1 and Path(lead.cwd) != replay.project
+    assert "You write this task in one reply" in lead.prompt and "=== FILE app.py (" in lead.prompt
+    assert "You write this task from this message alone" in lead.prompt + " ".join(lead.argv)
+    assert (replay.project / "app.py").read_text() == FIXED
+    audit = replay.of("auditor")[0].prompt
+    assert "RISK R<n>:" in audit and "at the edge of what a language or library can represent" in audit
     assert H.result_json(replay).get("evidence_obligations") in ([], None)
 
 
@@ -136,3 +140,44 @@ def test_a_file_the_lead_could_not_run_is_cleared_by_the_whole_pytest_run_that_s
     assert replay.result.completed, replay.result.error
     entry, = H.result_json(replay)["unexecuted_acceptance"]
     assert entry["item"] == "tests/test_app.py" and entry["discharge_state"] == "discharged"
+
+
+def test_a_draft_that_cannot_be_written_in_one_turn_gets_the_ordinary_lead_call(tmp_path, monkeypatch):
+    def lead(call, replay):
+        if len(replay.of("lead")) == 1:
+            return "NEED SESSION: I have to run the suite first."
+        H.write(call, {"app.py": FIXED})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    replay = _run(tmp_path, monkeypatch, lead=lead)
+    assert replay.result.completed, replay.result.error
+    first, second = replay.of("lead")
+    assert Path(first.cwd) != replay.project and Path(second.cwd) == replay.project
+    assert "You write this task in one reply" not in second.prompt
+
+
+def test_a_repair_after_the_audit_is_told_to_stay_small(tmp_path, monkeypatch):
+    def auditor(call, replay):
+        if len(replay.of("auditor")) == 1:
+            return ('R1: NOT MET - add(0, 2) returns 0; basis: "the sum of its two arguments"; evidence: '
+                    "source reading; at app.py add; example: add(0, 2) returns 0")
+        return MET
+
+    def plan(call, replay):
+        n = len(replay.of("orchestrator"))
+        if n == 1:
+            return PLAN
+        if n == 3:
+            return ("KIND: architect complex\nSCOPE: " + json.dumps(SCOPE)
+                    + "\nMake add(0, 2) return 2.\nCOVERS: R1")
+        return "DONE"
+
+    def lead(call, replay):
+        return _half(call, replay) if len(replay.of("lead")) == 1 else _whole(call, replay)
+
+    script = Script(orchestrator=plan, lead=lead, collaborator=_clean, auditor=auditor,
+                    **{"requirements-review": lambda call, replay: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, goal=GOAL, max_tasks=4, session_options=LEAN)
+    assert replay.result.completed, replay.result.error
+    sent_back = replay.of("orchestrator")[2].prompt
+    assert "DONE SENT BACK" in sent_back and "the smallest change that makes the audit's example right" in sent_back

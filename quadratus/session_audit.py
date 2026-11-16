@@ -42,6 +42,7 @@ from .session_design import _snapshot_files
 from .session_prompts import (
     _AUDIT_EXAMPLES,
     _AUDIT_LINE_RULE,
+    _AUDIT_REACH_RULE,
     _AUTHORITY_ORDER,
     _CONTRACT_BOUNDARY_RULE,
     _ERROR_PATH_RULE,
@@ -53,6 +54,7 @@ from .session_prompts import (
     _HISTORY_PER_REQUIREMENT,
     _HISTORY_REASON_CHARS,
     _HISTORY_TOTAL_CHARS,
+    _MINIMAL_REPAIR_RULE,
     _OWED_SETTLEMENT_ATTEMPTS,
     _PLAIN_VERDICT_RULE,
     _PROTOCOL_RULE,
@@ -478,7 +480,8 @@ class AuditMixin:
                    + " (with COVERS). COVERS takes these requirement ids; RESOLVES names only "
                    "finding ids, F<n> or RFT<task>-<n>, never a requirement. Name a repair for a finding on the "
                    "behaviour; for execution debt, a task whose checks run what the NOT RUN item binds. The same "
-                   "independent audit judges the repaired source. " + _REPAIR_OUTCOME_RULE)
+                   "independent audit judges the repaired source. " + _REPAIR_OUTCOME_RULE
+                   + (_MINIMAL_REPAIR_RULE if self.config.goal_basis else ""))
                 + remedy)
             self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
             return False
@@ -903,7 +906,8 @@ class AuditMixin:
             "them>; evidence: <executed reproduction | source reading | untested risk>; at <file and "
             "function>; example: <each distinct input or call you found and the wrong result it gives, at "
             "most " + str(_AUDIT_EXAMPLES) + ", separated by ' | ', or none for a qualitative requirement>'. Name "
-            "only examples you found; one is enough, and none is asked for beyond them. The original goal outranks a requirement's generated wording. A "
+            "only examples you found; one is enough, and none is asked for beyond them."
+            + (_AUDIT_REACH_RULE if self.config.goal_basis else "") + " The original goal outranks a requirement's generated wording. A "
             "MET without a cited "
             "file or test is counted as not met. " + _AUDIT_LINE_RULE + " A citation resolves only as a project-relative "
             "file path with an extension, or a test function named test_* defined in a file "

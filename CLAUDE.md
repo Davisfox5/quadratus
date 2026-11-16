@@ -5237,6 +5237,20 @@ Key design decisions already settled:
     a passed case of each named file (`check_facts._discovering_pytest`;
     `truth_check._whole_pytest` reads the same). A filtered run still
     clears nothing.
+  - Since 2026-11-16 (third stockroom run: 75 min, 6.40M, 11 of 21 held)
+    the lead's first draft is one turn too (`supplied_draft`): the files
+    the task names and small others go in, edits come back, the harness
+    writes them and runs the checks. `NEED SESSION:` or an unusable reply
+    gets the ordinary lead call. Not for security tasks. Eight lead
+    sessions had reported 3.2M tokens, half the run.
+  - Under `goal_basis` the audit prompt carries `_AUDIT_REACH_RULE`: NOT
+    MET only for what the goal's words ask, for an input the goal names or
+    ordinary use; a failure only at the edge of a representation the goal
+    does not mention is a `RISK R<n>:` line that buys no repair. The DONE
+    send-back adds `_MINIMAL_REPAIR_RULE`. Prompt only: the verdict stays
+    the auditor's. That run's audit held three requirements on a timestamp
+    of 10**4400, and the repair rewrote expiry with exact fractions, which
+    broke the goal's plain reading.
   - Not built: a one-time plan with a task queue. One-turn planning removes
     most of that cost and keeps a plan decision after every task.
 - **session.py was split by moving code, and two rules keep it split**

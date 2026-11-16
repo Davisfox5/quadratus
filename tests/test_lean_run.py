@@ -289,3 +289,11 @@ def test_the_harness_applies_an_edit_block_to_the_project(fleet, monkeypatch):
 def test_the_lead_is_told_to_keep_the_tests_fast_only_in_a_lean_run():
     from quadratus.session_prompts import _FAST_TESTS_RULE
     assert "never once per test" in _FAST_TESTS_RULE and "The whole suite should run in seconds" in _FAST_TESTS_RULE
+
+
+def test_the_audit_reach_and_small_repair_rules_are_stated_only_in_a_lean_run(tmp_path):
+    from quadratus.session_prompts import _AUDIT_REACH_RULE, _MINIMAL_REPAIR_RULE
+    assert "only for something the goal's words ask for" in _AUDIT_REACH_RULE
+    assert "RISK R<n>:" in _AUDIT_REACH_RULE and "buys no repair" in _AUDIT_REACH_RULE
+    assert "never replaces a rule the goal states in plain words" in _MINIMAL_REPAIR_RULE
+    assert "supplied_draft" in LEAN_SETTINGS and SessionConfig().supplied_draft is False

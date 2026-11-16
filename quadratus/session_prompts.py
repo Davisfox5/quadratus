@@ -631,6 +631,26 @@ _ERROR_BOUNDARY_LENS = (
 #: What a repair task states (cycle14, from the cycle13 assessment): the
 #: outcome the goal entitles the caller to and the causal class, never the
 #: narrower condition one reproduction showed. Generic by construction.
+#: What the audit may hold a requirement on, and how small a repair is
+#: (SessionConfig.goal_basis; stockroom run 2026-11-16: the audit held three
+#: requirements on a timestamp of 10**4400, and the repair rewrote expiry
+#: with exact fractions, which broke the goal's plain reading of it).
+_AUDIT_REACH_RULE = (
+    " In this run a requirement is NOT MET only for something the goal's words ask for: a behaviour the "
+    "goal, a requirement or a ruling states, failing for an input the goal names or one in ordinary use of "
+    "this product. A failure reached only through a value at the edge of what a language or library can "
+    "represent, which the goal does not mention (a number too large for a float, nesting hundreds deep, a "
+    "close() that fails after a commit), is not a contradiction of the goal: keep the requirement's verdict "
+    "as it is without that case and add one separate line, 'RISK R<n>: <the case and what happens>', which "
+    "is recorded and buys no repair. Where the goal is silent, do not choose a reading and then hold the "
+    "work to it."
+)
+_MINIMAL_REPAIR_RULE = (
+    " Keep each repair the smallest change that makes the audit's example right. A repair never replaces a "
+    "rule the goal states in plain words (how a value is computed, when something expires, which code a "
+    "refusal carries) with a stricter or cleverer one, and it leaves every behaviour the audit did not "
+    "name as it is.")
+
 _REPAIR_OUTCOME_RULE = (
     "State each repair as the outcome the goal entitles the caller to and the class of cause behind the "
     "failure (every input and path that reaches the same cause), never a narrower implementation "
@@ -1345,4 +1365,13 @@ _GOAL_BASIS_RULE = (
     "data-loss, integrity, security or irreversible. An input, value or case the goal leaves unspecified "
     "is a note, never BLOCKING, and a requirement line says NOT MET only for a contradiction you can "
     "quote this way."
+)
+#: The lead's first draft in one turn (SessionConfig.supplied_draft).
+_SUPPLIED_DRAFT_NOTE = (
+    "\n\nYou write this task in one reply, from the files shown below. You cannot run anything: the "
+    "harness applies what you return and runs the project's checks, and a failing check comes back to "
+    "you with its output. So write code and tests you are confident run as written, and keep to the "
+    "files and interfaces the task names. Worker, consult and fetch requests are not available in this "
+    "call; if the task cannot be written without reading a file that is not shown or without running "
+    "something first, reply with exactly one line, NEED SESSION: <why>."
 )
