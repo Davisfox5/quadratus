@@ -135,3 +135,25 @@ first audit read expiry as an exact-arithmetic question (a stored
 `expires_at` float against `now + ttl`), the repair tasks rewrote expiry
 with exact fractions, and the second audit then held seven requirements on
 that reading. One open review finding held R18.
+
+## Fourth `--lean` run: one-turn drafts, audit held to the goal (2026-11-16)
+
+Engine at e60442b, same flags. Graders 116 of 116, 3.16M reported tokens
+(6.40M the run before), 50 calls, 72 minutes. Incomplete at the task cap:
+the final audit held 2 of 21 requirements (11 the run before).
+
+Lead drafts: 9 calls, 0.91M tokens (3.23M before). Eight were written in
+one turn; one Sol draft answered `NEED SESSION:` and took the ordinary call
+(398,000 tokens). Opus one-turn drafts took 296 s and 591 s, writing 35,000
+and 67,000 output tokens; Sol drafts took 16 s to 87 s.
+
+The audit raised no edge-of-representation case. Its first pass held four
+requirements, one a real defect (a database that cannot be opened escaped
+the CLI's JSON failure line), which the next task fixed. What stayed held
+through three audits is one question the goal leaves open: a refused commit
+that is the first call to see a reservation expired must change nothing,
+and the reservation must never be active again. The audit named it as a
+decision, the planner cannot make it, and tasks 6 to 8 went to it.
+
+Time did not fall: planning took 935 s over 10 calls, three audits 923 s,
+and the two Opus drafts 887 s.
