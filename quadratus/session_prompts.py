@@ -645,6 +645,26 @@ _AUDIT_REACH_RULE = (
     "is recorded and buys no repair. Where the goal is silent, do not choose a reading and then hold the "
     "work to it."
 )
+#: The audit's third verdict (SessionConfig.audit_decisions; stockroom run
+#: 2026-11-16: the audit said "requires a decision" three times, the engine
+#: read it as NOT MET and three repair tasks could not settle it).
+_AUDIT_DECISION_RULE = (
+    " Where the goal is silent on a case, or two of its statements cannot both hold for it, and the work "
+    "follows one reading a careful person could defend, do not choose between the readings and do not "
+    "call it NOT MET: write 'R<n>: DECISION - <the case; reading A; reading B; which one the work "
+    "follows>'. The operator is asked and the answer is a ruling you then judge under. Use it only for "
+    "a real collision or gap in the goal's own words, never for a defect."
+)
+_AUDIT_CITE_RULE = (
+    " On a MET line, name every project file the requirement's behaviour lives in and the test file "
+    "that shows it. A requirement you judge MET is not asked again in a later audit of this run unless "
+    "one of the files its line names has changed, so a file left out is a file whose changes you will "
+    "not see for that requirement."
+)
+_BRIEF_GOAL_QUESTION = (
+    " Decide from the harness records and summaries above; do not re-derive each requirement, the "
+    "audit that follows does that. Think briefly and answer in one line."
+)
 _MINIMAL_REPAIR_RULE = (
     " Keep each repair the smallest change that makes the audit's example right. A repair never replaces a "
     "rule the goal states in plain words (how a value is computed, when something expires, which code a "
@@ -1323,10 +1343,13 @@ _OUTLINE_PLAN_NOTE = (
     "names, signatures, routes, commands and error codes other tasks depend on, and two or three sentences "
     "of intent. Do not write the implementation, a list of tests or step-by-step instructions: the lead is "
     "given the goal whole and decides those. Keep a task's description under about 1,500 characters. "
-    "Plan the fewest tasks that cover the goal: one per layer or file group, whole, with its own tests, "
-    "never one per requirement and never a layer split in two. Tasks run one after another cost wall time: "
-    "once the task the others build on has closed, name everything that is left in one parallel batch "
-    "where a batch is offered."
+    "Size each task so its lead can write it in one reply: about 500 changed lines, tests included, is "
+    "the most one task should need, because a larger draft takes many minutes to write. Split a larger "
+    "layer into tasks that own different files, and keep code with the tests that prove it. A large body "
+    "of work that is only tests or only documentation is its own task, labelled standard, never complex: "
+    "label a task complex only when its reasoning is hard, not because it is long. Never one task per "
+    "requirement. Tasks run one after another cost wall time: once the task the others build on has "
+    "closed, name everything that is left in one parallel batch where a batch is offered."
 )
 
 #: Optional proofs (SessionConfig.optional_proofs): no scenario is declared

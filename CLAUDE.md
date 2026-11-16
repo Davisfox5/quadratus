@@ -5251,6 +5251,26 @@ Key design decisions already settled:
     the auditor's. That run's audit held three requirements on a timestamp
     of 10**4400, and the repair rewrote expiry with exact fractions, which
     broke the goal's plain reading.
+  - Since 2026-11-16 (fourth run: 72 min, 3.16M, 2 of 21 held on one open
+    question) the audit is staged (`Session._audit_reply`), three settings:
+    - `sticky_audit`: a requirement judged MET, after the harness's own
+      lowering, is not asked again while its revision and every file its
+      MET line named are unchanged. The auditor is told to name those
+      files. Its earlier line is read again by the same rules.
+    - `split_audit`: more than six requirements are judged in up to four
+      calls at once, one call when the budget cannot hold the reserves.
+    - `audit_decisions`: `R<n>: DECISION - <question>` where the goal is
+      silent or collides. The operator is asked (`--ask-dir DIR` writes
+      `question-N.txt` and waits 30 minutes for `answer-N.txt`); with no
+      answer the seated planner states one reading. The answer is a
+      ruling, the auditor judges those ids once more under it, and
+      `result.json` `audit_decisions` says who answered. Still undecided
+      is NOT MET.
+  - The planner is told to size a task for one reply (about 500 changed
+    lines), split a larger layer by files, and label test-only or
+    doc-only bulk standard. With one-turn drafts, simple and standard
+    leads are not spread to another vendor. The cap's goal question is
+    told to answer in one line.
   - Not built: a one-time plan with a task queue. One-turn planning removes
     most of that cost and keeps a plan decision after every task.
 - **session.py was split by moving code, and two rules keep it split**

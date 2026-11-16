@@ -40,6 +40,8 @@ from .reply_parsers import _ANSWER_ID, _DECIDE, _NOT_MET_SEGMENT, _QUOTED_SPAN, 
 from .run_budget import FinishReserved, finishing
 from .session_design import _snapshot_files
 from .session_prompts import (
+    _AUDIT_CITE_RULE,
+    _AUDIT_DECISION_RULE,
     _AUDIT_EXAMPLES,
     _AUDIT_LINE_RULE,
     _AUDIT_REACH_RULE,
@@ -60,7 +62,7 @@ from .session_prompts import (
     _PROTOCOL_RULE,
     _REPAIR_OUTCOME_RULE,
 )
-from .session_types import is_design_task
+from .session_types import OperatorInputNeeded, is_design_task
 from .verdicts import audit_lines as _audit_lines
 from .verdicts import review_reading as _review_reading
 
@@ -907,7 +909,9 @@ class AuditMixin:
             "function>; example: <each distinct input or call you found and the wrong result it gives, at "
             "most " + str(_AUDIT_EXAMPLES) + ", separated by ' | ', or none for a qualitative requirement>'. Name "
             "only examples you found; one is enough, and none is asked for beyond them."
-            + (_AUDIT_REACH_RULE if self.config.goal_basis else "") + " The original goal outranks a requirement's generated wording. A "
+            + (_AUDIT_REACH_RULE if self.config.goal_basis else "")
+            + (_AUDIT_DECISION_RULE if self.config.audit_decisions else "")
+            + (_AUDIT_CITE_RULE if self.config.sticky_audit else "") + " The original goal outranks a requirement's generated wording. A "
             "MET without a cited "
             "file or test is counted as not met. " + _AUDIT_LINE_RULE + " A citation resolves only as a project-relative "
             "file path with an extension, or a test function named test_* defined in a file "
@@ -941,7 +945,15 @@ class AuditMixin:
         failed = False
         try:
             with invocation("audit", "auditor"), finishing("audit"):
-                reply = self._invoke_model(auditor, prompt)
+                if self.config.sticky_audit or self.config.split_audit or self.config.audit_decisions:
+                    reply = self._audit_reply(auditor, evidence + instructions, required)
+                    middle = self._packet()
+                    if getattr(self, "_audit_ruled", False) and middle.source == packet_before.source:
+                        # A ruling given during the audit is part of what it
+                        # judged, not a change made under it.
+                        packet_before = middle
+                else:
+                    reply = self._invoke_model(auditor, prompt)
         except ProviderError as exc:
             # An audit that could not run is not a pass, and it is not a
             # verdict or a final audit on record either: the next episode
@@ -1072,6 +1084,9 @@ class AuditMixin:
             # C1; the source-only cache tried in that batch was refused by
             # tests/test_boundary_records.py).
             self.requirement_audits[-1]["binding"] = self._audit_binding(ids)
+        if self.config.sticky_audit and not failed:
+            self._remember_met(reply or "", verdicts)
+            self.requirement_audits[-1]["kept"] = list(getattr(self, "_audit_kept", []) or [])
         if final and not failed:
             # Two packets, both named: the one the auditor was handed
             # (``packet``) and the one its own dispositions settled
@@ -1086,6 +1101,196 @@ class AuditMixin:
                                      verdicts={r: [ok, why] for r, (ok, why) in verdicts.items()},
                                      acceptance=dict(self._last_acceptance))
         return verdicts
+
+    # -- the staged audit (2026-11-16): kept verdicts, parallel calls, decisions
+
+    _AUDIT_SHARD_IDS = 6
+    _AUDIT_MAX_SHARDS = 4
+    _AUDIT_MAX_DECISIONS = 4
+
+    def _file_hashes(self) -> Dict[str, str]:
+        from .project import Project
+        try:
+            now = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- unknown source keeps nothing
+            return {}
+        return {name: hashlib.sha256(data).hexdigest() for name, data in now.items()}
+
+    def _remember_met(self, reply: str, verdicts: dict) -> None:
+        """Keep each requirement's MET line with the files it named, after the
+        harness's own lowering: only a verdict that stood is kept."""
+        hashes = self._file_hashes() if self.project else {}
+        revisions = self._requirement_revisions()
+        lines = {}
+        for line in reply.splitlines():
+            rid = self._answer_id(line)
+            if rid and rid not in lines and re.search(r":\s*\**MET\b", line.replace("**", "")):
+                lines[rid] = line.strip()
+        for rid, (met, _why) in verdicts.items():
+            line = lines.get(rid)
+            named = {name: digest for name, digest in hashes.items() if line and len(name) >= 5 and name in line}
+            if met and line and named:
+                self._sticky_met[rid] = dict(line=line, files=named, revision=int(revisions.get(rid, 1)))
+            else:
+                self._sticky_met.pop(rid, None)
+
+    def _kept_met_lines(self, required) -> Dict[str, str]:
+        """The requirements a later audit does not ask again: judged MET
+        before, same requirement revision, every named file byte-identical."""
+        if not self._sticky_met or not self.project:
+            return {}
+        hashes, revisions = self._file_hashes(), self._requirement_revisions()
+        kept = {}
+        for rid, kind in required:
+            entry = self._sticky_met.get(rid)
+            if (kind == "requirement" and entry and int(revisions.get(rid, 1)) == entry["revision"]
+                    and all(hashes.get(name) == digest for name, digest in entry["files"].items())):
+                kept[rid] = entry["line"]
+        return kept
+
+    def _audit_reply(self, auditor, base: str, required) -> str:
+        """The audit's reply under the staged settings: verdicts kept from an
+        earlier audit are written back as they were given, the rest is asked
+        in one call or several at once, and a DECISION line is settled by a
+        ruling and one more question to the auditor. The caller reads the
+        result as it reads a single reply."""
+        import contextvars
+        from concurrent.futures import ThreadPoolExecutor
+        self._audit_ruled = False
+        kept = self._kept_met_lines(required) if self.config.sticky_audit else {}
+        self._audit_kept = sorted(kept)
+        ask = [(i, k) for i, k in required if i not in kept]
+        note = ""
+        if kept:
+            note = ("\n\n## Already judged\nAn earlier audit of this run judged these MET, and no file its "
+                    "verdict named has changed since: " + ", ".join(sorted(kept)) + ". They are not asked "
+                    "again: write no line for them.")
+            self._note(f"audit: {len(kept)} requirement(s) kept from an earlier audit, {len(ask)} id(s) asked")
+        replies: List[str] = []
+        if ask:
+            groups = self._audit_groups(ask)
+            if len(groups) == 1:
+                replies.append(self._invoke_model(auditor, base + note + self._audit_lines_block(ask)) or "")
+            else:
+                self._note(f"audit: {len(ask)} id(s) judged in {len(groups)} calls at once")
+                tail = ("\nThe other requirements are being judged in separate calls at the same time. "
+                        "Judge only the ids listed here.")
+                prompts = [base + note + self._audit_lines_block(group) + tail for group in groups]
+                contexts = [contextvars.copy_context() for _ in prompts]
+                with ThreadPoolExecutor(max_workers=len(prompts)) as pool:
+                    futures = [pool.submit(context.run, self._invoke_model, auditor, prompt)
+                               for context, prompt in zip(contexts, prompts, strict=True)]
+                    outcomes = []
+                    for future in futures:
+                        try:
+                            outcomes.append(future.result() or "")
+                        except BaseException as exc:  # noqa: BLE001 -- raised below, after every call ended
+                            outcomes.append(exc)
+                for outcome in outcomes:
+                    if isinstance(outcome, BaseException):
+                        raise outcome
+                replies.extend(outcomes)
+        reply = "\n".join(replies)
+        if self.config.audit_decisions:
+            reply = self._settle_audit_decisions(auditor, base, reply)
+        return "\n".join([reply] + [kept[rid] for rid in sorted(kept)]).strip()
+
+    def _audit_groups(self, ask) -> List[list]:
+        """How the asked ids are divided among calls: requirements in runs of
+        about six, at most four calls, every other id with the first. One
+        call when the setting is off or the budget cannot hold the reserves."""
+        requirements = [pair for pair in ask if pair[1] == "requirement"]
+        others = [pair for pair in ask if pair[1] != "requirement"]
+        count = 1
+        if self.config.split_audit and len(requirements) > self._AUDIT_SHARD_IDS:
+            count = min(self._AUDIT_MAX_SHARDS, -(-len(requirements) // self._AUDIT_SHARD_IDS))
+            shortfall = getattr(getattr(self.invoke, "__self__", None), "reserve_shortfall", None)
+            try:
+                if shortfall is not None and shortfall(count):
+                    count = 1
+            except Exception:  # noqa: BLE001 -- one call is always admissible as before
+                count = 1
+        if count == 1:
+            return [list(ask)]
+        size = -(-len(requirements) // count)
+        groups = [requirements[i:i + size] for i in range(0, len(requirements), size)]
+        groups[0] = groups[0] + others
+        return groups
+
+    _DECISION_LINE = re.compile(r"^\s*\**(R\d+)\**\s*:\s*\**DECISION\**\s*[-:\u2013\u2014]?\s*(.*)$", re.I)
+
+    def _settle_audit_decisions(self, auditor, base: str, reply: str) -> str:
+        """Each DECISION line becomes a question for the operator (the seated
+        planner when no operator answers), the answer a standing ruling, and
+        the auditor judges exactly those requirements again under it. A
+        requirement still undecided after that is NOT MET, said as such."""
+        asked: Dict[str, List[str]] = {}
+        body = []
+        for line in reply.splitlines():
+            hit = self._DECISION_LINE.match(line)
+            if hit and hit.group(2).strip():
+                asked.setdefault(hit.group(2).strip(), []).append(hit.group(1).upper())
+            else:
+                body.append(line)
+        if not asked:
+            return reply
+        rulings, ids = [], []
+        for question, rids in list(asked.items())[:self._AUDIT_MAX_DECISIONS]:
+            text = (f"The audit needs a decision on {', '.join(rids)} before it can judge "
+                    f"{'it' if len(rids) == 1 else 'them'}: {question}")
+            answer, who = "", "operator"
+            if self.config.ask_operator is not None:
+                self._note(f"audit decision needed on {', '.join(rids)}: asking the operator")
+                try:
+                    answer = str(self.config.ask_operator(text) or "").strip()
+                except OperatorInputNeeded:
+                    answer = ""
+            if not answer:
+                who, answer = "planner", self._planner_reading(text)
+            if not answer:
+                continue
+            ruling = (f"Q: {text} -- A: {answer}"
+                      + ("" if who == "operator" else " (the planner's reading; no operator answered)"))
+            self.memory.ledger.rulings.append(ruling)
+            self._audit_ruled = True
+            rulings.append(ruling)
+            ids.extend(r for r in rids if r not in ids)
+            self.audit_decisions.append(dict(requirements=list(rids), question=question, answer=answer,
+                                             answered_by=who,
+                                             source=self._source_fingerprint() if self.project else None))
+            self._note(f"audit decision on {', '.join(rids)} answered by the {who}: {answer[:160]}")
+        undecided = [r for rids in asked.values() for r in rids if r not in ids]
+        again = ""
+        if ids:
+            prompt = (base + "\n\n## Rulings given during this audit (binding)\n"
+                      + "\n".join(f"- {r}" for r in rulings)
+                      + "\nDECISION is not available for these ids now: judge each MET or NOT MET under the "
+                      "rulings above." + self._audit_lines_block([(r, "requirement") for r in ids], completion=True))
+            again = self._invoke_model(auditor, prompt) or ""
+        answered = []
+        for line in again.splitlines():
+            rid = self._answer_id(line)
+            if rid in ids and not self._DECISION_LINE.match(line):
+                body.append(line)
+                answered.append(rid)
+        for rid in ids + undecided:
+            if rid not in answered:
+                body.append(f"{rid}: NOT MET - undecided: the audit asked for a decision and none settled it")
+        return "\n".join(body)
+
+    def _planner_reading(self, question: str) -> str:
+        """The seated planner's one-sentence reading when no operator answers."""
+        seat = self.seat()
+        prompt = ("# Goal (verbatim)\n" + self.goal + "\n\n" + question + "\n\nNo operator can be reached. "
+                  "Choose the reading closest to the goal's plain words and state it as one rule, in one or "
+                  "two sentences. Reply with exactly one line: READING: <the rule>.")
+        try:
+            with invocation("audit", "orchestrator"):
+                reply = self._invoke_model(seat.key, prompt) or ""
+        except ProviderError:
+            return ""
+        hit = re.search(r"^\s*READING:\s*(.+)$", reply, re.M)
+        return hit.group(1).strip()[:600] if hit else ""
 
     def _audit_did_not_run(self, auditor, reason: str, **kept) -> None:
         """Record an audit that judged nothing: no auditor, a failed call, a

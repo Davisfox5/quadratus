@@ -549,10 +549,51 @@ def _answer(prompt: str, question: str) -> str:
         raise OperatorInputNeeded(question) from None
 
 
+#: How long a question written to ``--ask-dir`` waits for its answer file.
+ASK_DIR_WAIT_SECONDS = 1800.0
+
+
+def _file_operator(directory, wait=None):
+    """Questions as files: ``question-N.txt`` is written to ``directory`` and
+    the run waits for a non-empty ``answer-N.txt`` beside it. For a run with
+    no terminal that someone, or another program, is watching. No answer in
+    time is no operator, as for a closed terminal."""
+    import time
+    from pathlib import Path
+
+    from .session import OperatorInputNeeded
+
+    def ask(question):
+        folder = Path(directory)
+        folder.mkdir(parents=True, exist_ok=True)
+        number = len(list(folder.glob("question-*.txt"))) + 1
+        draft = folder / f".question-{number}.tmp"
+        draft.write_text(question, encoding="utf-8")
+        draft.replace(folder / f"question-{number}.txt")
+        limit = ASK_DIR_WAIT_SECONDS if wait is None else wait
+        print(f">> question {number} for the operator is in {folder / f'question-{number}.txt'}; "
+              f"waiting up to {int(limit)} s for answer-{number}.txt", flush=True)
+        deadline = time.monotonic() + limit
+        answer = folder / f"answer-{number}.txt"
+        while time.monotonic() < deadline:
+            try:
+                text = answer.read_text(encoding="utf-8").strip() if answer.is_file() else ""
+            except OSError:
+                text = ""
+            if text:
+                print(f">> question {number} answered", flush=True)
+                return text
+            time.sleep(1.0)
+        raise OperatorInputNeeded(question)
+    return ask
+
+
 def _operator(args):
     """Interactive answers, preceded by any rulings the operator gave in advance."""
     def interactive(question):
         return _answer(f"\n{question}\n> ", question)
+    if getattr(args, "ask_dir", None):
+        interactive = _file_operator(args.ask_dir)
     path = getattr(args, "rulings", None)
     if not path:
         return interactive
@@ -1158,13 +1199,18 @@ def build_parser() -> argparse.ArgumentParser:
          help="Hand each task's reviewer and re-check the measured diff and the changed files in "
               "the message, and have them answer in one turn with no tools, in an empty folder. "
               "A review whose evidence does not fit one message reads a source copy as before.")
+    flag(knobs, "--ask-dir", needs="engine", default=None, metavar="DIR",
+         help="Ask the operator through files: each question is written to DIR as question-N.txt "
+              "and the run waits up to 30 minutes for answer-N.txt. For a run with no terminal.")
     flag(knobs, "--lean", needs="engine", action="store_true",
          help="The cheaper run shape, all at once: --supplied-review; planning calls and the final "
               "audit answered in one turn from the files handed over; the lead's draft and a revision "
               "each made in one turn, returning edits the harness writes; an outline plan with no proof scenarios, "
               "the lead writing its own tests; the reviewer's checklist shown to the lead first; and "
               "a blocking finding that must quote the goal's own words, with the audit holding a "
-              "requirement only for what the goal asks. Each falls back to the "
+              "requirement only for what the goal asks; a requirement judged MET is not judged again "
+              "while the files its verdict named are unchanged, the audit runs as up to four calls at "
+              "once, and it may ask for a decision where the goal is silent. Each falls back to the "
               "ordinary call when its message does not fit or its reply cannot be used.")
 
     watch = parser.add_argument_group(

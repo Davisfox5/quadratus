@@ -5,6 +5,7 @@ auditor answering from handed files. Offline: scripted replies below the
 vendor CLIs."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -181,3 +182,114 @@ def test_a_repair_after_the_audit_is_told_to_stay_small(tmp_path, monkeypatch):
     assert replay.result.completed, replay.result.error
     sent_back = replay.of("orchestrator")[2].prompt
     assert "DONE SENT BACK" in sent_back and "the smallest change that makes the audit's example right" in sent_back
+
+
+def _three(tmp_path, monkeypatch, auditor, **extra):
+    goal = "Make add return the sum of its two arguments. Keep sub as it is. Document add in README.md."
+    plan = ("REQUIREMENTS:\nR1: add returns the sum of its two arguments\nR2: sub is unchanged\n"
+            "R3: README.md documents add\nKIND: architect complex\nSCOPE: " + json.dumps(SCOPE)
+            + "\nImplement add in app.py.\nCOVERS: R1, R2, R3")
+
+    def orchestrator(call, replay):
+        return plan if len(replay.of("orchestrator")) == 1 else "DONE"
+
+    def collaborator(call, replay):
+        return ("No blocking findings.\nR1: MET - tests/test_app.py::test_add\nR2: MET - app.py\n"
+                "R3: MET - app.py\nREVIEW: COMPLETE")
+
+    script = Script(orchestrator=orchestrator, lead=_whole, collaborator=collaborator, auditor=auditor,
+                    **{"requirements-review": lambda call, replay: "COMPLETE"})
+    return H.run(tmp_path, monkeypatch, script, files=FILES, goal=goal, max_tasks=4, session_options=LEAN, **extra)
+
+
+def test_a_decision_is_asked_becomes_a_ruling_and_the_auditor_judges_under_it(tmp_path, monkeypatch):
+    asked = []
+
+    def auditor(call, replay):
+        if "Rulings given during this audit" in call.prompt:
+            assert "Keep sub exactly as written" in call.prompt and "R2" in call.prompt
+            return "R2: MET - app.py"
+        return ("R1: MET - app.py tests/test_app.py::test_add\n"
+                "R2: DECISION - the goal does not say whether sub may gain a docstring; A: no change at all; "
+                "B: behaviour only; the work follows A\nR3: MET - app.py")
+
+    def operator(question):
+        asked.append(question)
+        return "Keep sub exactly as written."
+
+    replay = _three(tmp_path, monkeypatch, auditor, ask_operator=operator)
+    assert replay.result.completed, replay.result.error
+    assert len(asked) == 1 and "R2" in asked[0] and "docstring" in asked[0]
+    row, = H.result_json(replay)["audit_decisions"]
+    assert row["answered_by"] == "operator" and row["requirements"] == ["R2"]
+    first = replay.of("auditor")[0].prompt
+    assert "R<n>: DECISION - " in first and "is not asked again in a later audit" in first
+
+
+def test_a_requirement_judged_met_is_not_asked_again_while_its_files_are_unchanged(tmp_path, monkeypatch):
+    def auditor(call, replay):
+        if len(replay.of("auditor")) == 1:
+            return ("R1: MET - app.py tests/test_app.py::test_add\nR2: MET - app.py\n"
+                    "R3: NOT MET - README.md does not mention add; basis: \"Document add in README.md\"; "
+                    "evidence: source reading; at README.md; example: none")
+        assert "## Already judged" in call.prompt
+        lines = call.prompt.split("## Lines this reply must contain")[1]
+        assert "R3" in lines and "R1" not in lines and "R2" not in lines
+        return "R3: MET - README.md"
+
+    goal_scope = dict(SCOPE, permitted_paths=["README.md"])
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        if n == 1:
+            return ("REQUIREMENTS:\nR1: add returns the sum of its two arguments\nR2: sub is unchanged\n"
+                    "R3: README.md documents add\nKIND: architect complex\nSCOPE: " + json.dumps(SCOPE)
+                    + "\nImplement add in app.py.\nCOVERS: R1, R2, R3")
+        if n == 3:
+            return ("KIND: architect complex\nSCOPE: " + json.dumps(goal_scope)
+                    + "\nDocument add in README.md.\nCOVERS: R3")
+        return "DONE"
+
+    def lead(call, replay):
+        if len(replay.of("lead")) == 1:
+            return _whole(call, replay)
+        return "Documented add.\n=== WRITE FILE README.md ===\nadd(a, b) returns the sum.\n=== END FILE README.md ===\n"
+
+    def collaborator(call, replay):
+        return ("No blocking findings.\nR1: MET - tests/test_app.py::test_add\nR2: MET - app.py\n"
+                "R3: MET - README.md\nREVIEW: COMPLETE")
+
+    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator, auditor=auditor,
+                    **{"requirements-review": lambda call, replay: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES,
+                   goal="Make add return the sum of its two arguments. Keep sub as it is. Document add in README.md.",
+                   max_tasks=4, session_options=LEAN)
+    assert replay.result.completed, replay.result.error
+    assert len(replay.of("auditor")) == 2
+
+
+def test_a_long_requirement_list_is_audited_in_several_calls_at_once(tmp_path, monkeypatch):
+    ids = [f"R{n}" for n in range(1, 15)]
+    plan = ("REQUIREMENTS:\n" + "\n".join(f"{r}: add returns the sum of its two arguments, case {r}" for r in ids)
+            + "\nKIND: architect complex\nSCOPE: " + json.dumps(SCOPE) + "\nImplement add in app.py.\nCOVERS: "
+            + ", ".join(ids))
+
+    def orchestrator(call, replay):
+        return plan if len(replay.of("orchestrator")) == 1 else "DONE"
+
+    def answer(call, replay):
+        asked = call.prompt.split("## Lines this reply must contain")[1]
+        return "\n".join(f"{r}: MET - app.py tests/test_app.py::test_add" for r in ids
+                         if re.search(rf"\b{r}\b", asked))
+
+    def collaborator(call, replay):
+        return ("No blocking findings.\n" + "\n".join(f"{r}: MET - tests/test_app.py::test_add" for r in ids)
+                + "\nREVIEW: COMPLETE")
+
+    script = Script(orchestrator=orchestrator, lead=_whole, collaborator=collaborator, auditor=answer,
+                    **{"requirements-review": lambda call, replay: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, goal=GOAL, max_tasks=4, session_options=LEAN)
+    assert replay.result.completed, replay.result.error
+    calls = replay.of("auditor")
+    assert len(calls) == 3
+    assert all("judged in separate calls at the same time" in call.prompt for call in calls)

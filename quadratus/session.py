@@ -361,6 +361,8 @@ from .session_findings import FindingsMixin
 from .session_obligations import ObligationsMixin
 from .session_packets import PacketsMixin
 from .session_prompts import (  # noqa: F401
+    _AUDIT_CITE_RULE,
+    _AUDIT_DECISION_RULE,
     _AUDIT_EXAMPLES,
     _AUDIT_LINE_RULE,
     _AUDIT_REACH_RULE,
@@ -369,6 +371,7 @@ from .session_prompts import (  # noqa: F401
     _BOUNDARY_NOTE_CHARS,
     _BOUNDARY_NOTE_RULE,
     _BOUNDARY_NOTES_PER_REPLY,
+    _BRIEF_GOAL_QUESTION,
     _CAP_NO_VERDICT,
     _CAPTURE_SCOPE_REQUEST,
     _CAPTURE_SHAPE,
@@ -778,6 +781,15 @@ class SessionConfig:
     #: files go in, edits come back, the harness writes them and runs the
     #: checks. Eight lead sessions of one stockroom run reported 3.2M tokens.
     supplied_draft: bool = False
+    #: A requirement an audit judged MET is not asked again in a later audit
+    #: of the run while every file its MET line named is unchanged.
+    sticky_audit: bool = False
+    #: The audit's requirements are judged in up to four calls at once.
+    split_audit: bool = False
+    #: The audit may answer 'R<n>: DECISION - <question>': the operator is
+    #: asked (the planner when no operator answers), the answer is a ruling,
+    #: and the auditor judges those requirements again under it.
+    audit_decisions: bool = False
     #: Proof scenarios are optional: the planner names files, interfaces and
     #: requirements, the lead writes the tests, and the reviewer and the
     #: audit judge them by executed case.
@@ -916,6 +928,11 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         self.supplied_reviews: List[dict] = []
         #: BLOCKING lines kept as notes under ``goal_basis`` (``_demote_unbased``).
         self.goal_basis_demotions: List[dict] = []
+        #: Questions an audit raised as DECISION, with who answered and what.
+        self.audit_decisions: List[dict] = []
+        #: MET lines kept under ``sticky_audit``: requirement id to its line,
+        #: the hashes of the files it named and the requirement's revision.
+        self._sticky_met: Dict[str, dict] = {}
         #: Ordinary calls the budget refused to keep the finish, and what each
         #: would have done (run_budget.FinishReserved).
         self.finish_refusals: List[dict] = []
@@ -2231,6 +2248,10 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         keeps its rung, and a pinned kind keeps its pin.
         """
         if not self.config.spread_leads or spec.complexity not in (Complexity.SIMPLE, Complexity.STANDARD):
+            return selected
+        if self.config.supplied_draft:
+            # A one-turn draft is as long as its writer is slow, so the
+            # ladder's seat for simple and standard work stands (2026-11-16).
             return selected
         if policy_for(spec.kind).prefer:
             return selected
@@ -9180,7 +9201,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                  "source, and your DONE does not stand in for that check."
                  if self.memory.ledger.requirements and self.config.requirements_ledger else "")
         prompt = self.memory.render(
-            current=_TERMINAL_REQUEST + audit,
+            current=_TERMINAL_REQUEST + (_BRIEF_GOAL_QUESTION if self.config.outline_planning else "") + audit,
             recent=self.config.recent_entries,
             with_previews=False,
             extra=self._map_block(),

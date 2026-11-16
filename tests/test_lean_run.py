@@ -297,3 +297,41 @@ def test_the_audit_reach_and_small_repair_rules_are_stated_only_in_a_lean_run(tm
     assert "RISK R<n>:" in _AUDIT_REACH_RULE and "buys no repair" in _AUDIT_REACH_RULE
     assert "never replaces a rule the goal states in plain words" in _MINIMAL_REPAIR_RULE
     assert "supplied_draft" in LEAN_SETTINGS and SessionConfig().supplied_draft is False
+
+
+def test_the_audit_is_divided_only_when_it_is_long_and_never_past_four_calls(tmp_path):
+    session, root = _session(tmp_path, {"app.py": "a = 1\n"}, split_audit=True)
+    few = [(f"R{n}", "requirement") for n in range(1, 7)]
+    assert session._audit_groups(few) == [few]
+    many = [(f"R{n}", "requirement") for n in range(1, 31)] + [("O1", "row")]
+    groups = session._audit_groups(many)
+    assert len(groups) == 4 and sorted(pair for group in groups for pair in group) == sorted(many)
+    assert ("O1", "row") in groups[0]
+    (tmp_path / "off").mkdir()
+    plain, _ = _session(tmp_path / "off", {"app.py": "a = 1\n"})
+    assert plain._audit_groups(many) == [many]
+
+
+def test_a_kept_verdict_lapses_when_a_file_it_named_changes(tmp_path):
+    session, root = _session(tmp_path, {"app.py": "a = 1\n", "other.py": "b = 2\n"}, sticky_audit=True)
+    session._remember_met("R1: MET - app.py shows it\nR2: MET - nothing named\nR3: NOT MET - no", {
+        "R1": (True, "app.py"), "R2": (True, "x"), "R3": (False, "no")})
+    required = [("R1", "requirement"), ("R2", "requirement"), ("R3", "requirement")]
+    assert list(session._kept_met_lines(required)) == ["R1"]
+    (root / "other.py").write_text("b = 3\n")
+    assert list(session._kept_met_lines(required)) == ["R1"]
+    (root / "app.py").write_text("a = 2\n")
+    assert session._kept_met_lines(required) == {}
+
+
+def test_a_question_file_waits_for_its_answer_file(tmp_path):
+    import threading
+
+    from quadratus.cli import _file_operator
+    from quadratus.session import OperatorInputNeeded
+    ask = _file_operator(tmp_path / "q", wait=5)
+    threading.Timer(0.3, lambda: (tmp_path / "q" / "answer-1.txt").write_text("yes\n")).start()
+    assert ask("May sub change?") == "yes"
+    assert (tmp_path / "q" / "question-1.txt").read_text() == "May sub change?"
+    with pytest.raises(OperatorInputNeeded):
+        _file_operator(tmp_path / "q", wait=0.2)("And add?")
