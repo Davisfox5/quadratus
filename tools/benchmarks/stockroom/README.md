@@ -115,3 +115,23 @@ returns whole files took 209 s to 256 s on Opus (25,000 to 32,000 output
 tokens). The delivered test suite takes 158 s, and the harness ran it at
 least five times. The first audit found defects after five tasks, and the
 three repair tasks that followed added about 25 minutes.
+
+## Third `--lean` run: edit blocks and fast tests (2026-11-16)
+
+Engine at f95b0a4, same flags, nothing else running on the machine. Graders
+116 of 116, 6.40M reported tokens, 72 calls, 75 minutes. Incomplete at the
+task cap: the audit held 11 of 21 requirements.
+
+What the two changes did. The delivered suite runs in 5.5 s (696 tests),
+against 158 s in the run before. Of 11 revision calls, 8 were answered in
+one turn; 3 Sol revisions answered `NEED SESSION:` and took the ordinary
+call. Opus one-turn revisions took 30 s, 114 s, 119 s and 250 s; the long
+ones still wrote 13,000 to 29,000 output tokens, most of it new tests.
+
+Why it was not faster. The run used all eight task slots and 16 lead calls
+(1,589 s and 3.23M tokens, half the run). Two audits took 939 s and eight
+planning calls 912 s; the goal question at the cap alone took 293 s. The
+first audit read expiry as an exact-arithmetic question (a stored
+`expires_at` float against `now + ttl`), the repair tasks rewrote expiry
+with exact fractions, and the second audit then held seven requirements on
+that reading. One open review finding held R18.
