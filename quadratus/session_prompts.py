@@ -1324,6 +1324,18 @@ _LENS_UPFRONT = (
     "each case the goal covers. "
 )
 
+#: Tests the harness runs many times must be quick (2026-11-16: a lead gave
+#: every HTTP test a half-second server shutdown, the suite took 158 s and
+#: the harness ran it five times; the run before had a 7 s suite).
+_FAST_TESTS_RULE = (
+    "Keep the tests fast: the harness runs the whole suite several times per task, and every second of it is "
+    "paid each time. No sleeps and no fixed waits; start a test server once per module or session, never "
+    "once per test, and shut it down without a polling delay (for http.server, serve_forever(poll_interval=0.01) "
+    "or a per-request handler call with no server at all); keep thread and iteration counts as small as the "
+    "behaviour needs; use short timeouts for the cases that must time out. The whole suite should run in "
+    "seconds."
+)
+
 #: A blocking finding quotes the words it rests on (SessionConfig.goal_basis).
 _GOAL_BASIS_RULE = (
     " In this run a BLOCKING line must also end with ' | goal: \"<exact words>\"', quoting at least a "

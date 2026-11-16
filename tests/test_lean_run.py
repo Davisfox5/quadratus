@@ -240,3 +240,52 @@ def test_a_write_outside_editable_source_is_refused_before_any_file_is_written(t
 def test_the_outside_checker_reads_a_whole_pytest_run_only_where_nothing_is_selected(command, whole):
     from tools.truth_check import _whole_pytest
     assert _whole_pytest(command) is whole
+
+
+# --- changed parts only (2026-11-16) ------------------------------------------
+
+TWO = "def add(a, b):\n    return 0\n\n\ndef sub(a, b):\n    return 0\n"
+EDIT = ("Fixed add.\n=== EDIT FILE app.py ===\n<<<<<<< FIND\ndef add(a, b):\n    return 0\n=======\n"
+        "def add(a, b):\n    return a + b\n>>>>>>> END\n=== END FILE app.py ===\n")
+
+
+def test_an_edit_block_changes_only_the_text_it_finds():
+    files, account = supplied_edit_files(EDIT, {"app.py": TWO})
+    assert files == {"app.py": TWO.replace("return 0", "return a + b", 1)} and account == "Fixed add."
+
+
+def test_blocks_apply_in_order_each_to_the_file_the_one_before_left():
+    reply = ("=== EDIT FILE app.py ===\n<<<<<<< FIND\ndef add(a, b):\n    return 0\n=======\ndef add(a, b):\n"
+             "    return a + b\n>>>>>>> END\n<<<<<<< FIND\n    return 0\n=======\n    return a - b\n>>>>>>> END\n"
+             "=== END FILE app.py ===\n")
+    files, _ = supplied_edit_files(reply, {"app.py": TWO})
+    assert files["app.py"] == "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+
+
+@pytest.mark.parametrize("reply", [
+    EDIT.replace("def add(a, b):\n    return 0\n=======", "    return 0\n======="),   # found twice
+    EDIT.replace("return 0\n=======", "return 1\n======="),                             # not found
+    EDIT.replace("app.py", "new.py"),                                                   # no such file
+    EDIT.replace(">>>>>>> END\n", ""),                                                  # a block left open
+    EDIT.replace("<<<<<<< FIND\ndef add(a, b):\n    return 0\n", "<<<<<<< FIND\n"),      # an empty FIND
+    EDIT + "=== WRITE FILE app.py ===\nx = 1\n=== END FILE app.py ===\n",               # one file two ways
+])
+def test_an_edit_that_cannot_be_placed_exactly_writes_nothing(reply):
+    with pytest.raises(SuppliedEditUnusable):
+        supplied_edit_files(reply, {"app.py": TWO})
+
+
+def test_the_harness_applies_an_edit_block_to_the_project(fleet, monkeypatch):
+    made, root = fleet
+    (root / "app.py").write_text(TWO)
+    seen = _launches(monkeypatch, EDIT)
+    with invocation("t1", "revision", supplied_edit=True):
+        reply = made.invoke("grok:default", "Revise.", allow_writes=True)
+    assert (root / "app.py").read_text() == TWO.replace("return 0", "return a + b", 1)
+    assert reply.endswith('CHANGED: ["app.py"]') and "<<<<<<< FIND" not in reply
+    assert "only the parts you change" in " ".join(seen[0][0])
+
+
+def test_the_lead_is_told_to_keep_the_tests_fast_only_in_a_lean_run():
+    from quadratus.session_prompts import _FAST_TESTS_RULE
+    assert "never once per test" in _FAST_TESTS_RULE and "The whole suite should run in seconds" in _FAST_TESTS_RULE

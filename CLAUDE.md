@@ -5224,6 +5224,19 @@ Key design decisions already settled:
     (`Session._demote_unbased`). Otherwise it becomes a note for the audit,
     unless its impact is an immediate risk. A finished review with no
     blocking finding buys no revision. Demotions are in `result.json`.
+  - Since 2026-11-16 a one-turn revision returns only the parts it changes:
+    `=== EDIT FILE path ===` holding `<<<<<<< FIND` / `=======` / `>>>>>>>
+    END` blocks, each FIND copied exactly and found once in the file
+    (`runtime._apply_edit_blocks`). A FIND found zero or several times, an
+    open block or a file given two ways writes nothing and the ordinary
+    call follows. WRITE FILE stays for new files. Whole-file replies took an
+    Opus revision 209 to 256 s. The lead is also told to keep tests fast
+    (`_FAST_TESTS_RULE`): one run's suite took 158 s, the one before 7 s.
+  - A path-only NOT RUN item is cleared by a pytest run with nothing
+    selected and no operand, from the project root, whose own report shows
+    a passed case of each named file (`check_facts._discovering_pytest`;
+    `truth_check._whole_pytest` reads the same). A filtered run still
+    clears nothing.
   - Not built: a one-time plan with a task queue. One-turn planning removes
     most of that cost and keeps a plan decision after every task.
 - **session.py was split by moving code, and two rules keep it split**

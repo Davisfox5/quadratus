@@ -71,6 +71,7 @@ def test_a_lean_run_completes_with_no_proof_scenarios_and_one_turn_seats(tmp_pat
     assert "=== FILE app.py (" in replay.of("auditor")[0].prompt
     lead = replay.of("lead")[0]
     assert "Your work will be reviewed against the following" in lead.prompt
+    assert "Keep the tests fast" in lead.prompt
     assert H.result_json(replay).get("evidence_obligations") in ([], None)
 
 

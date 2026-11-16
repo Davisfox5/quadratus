@@ -398,6 +398,7 @@ from .session_prompts import (  # noqa: F401
     _EVIDENCE_CHANNEL,
     _EXECUTED_ERROR_RULE,
     _EXPLORING_COSTS,
+    _FAST_TESTS_RULE,
     _FETCH_SYNTAX,
     _FINDING_SHAPE,
     _FINISH_REASON_CHARS,
@@ -9353,6 +9354,7 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
             parts.append(TEST_SUBSTANCE_RULE)
         if self.config.review_lens_upfront and self._writes() and not is_review_only(spec):
             parts.append(_LENS_UPFRONT + _ERROR_BOUNDARY_LENS + " " + _COUNTERPART_LENS)
+            parts.append(_FAST_TESTS_RULE)
         if any(self._test_command_requirement(r) for r in getattr(self, "_current_covers", []) or []):
             parts.append(_TEST_COMMAND_RULE)
         if no_worker:
