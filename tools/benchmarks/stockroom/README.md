@@ -185,3 +185,23 @@ no change needed. The auditor then judged R11 in one 45 s call.
 
 Drafts: Opus wrote the first task in 278 s (33,600 output tokens); five Sol
 drafts took 24 s to 126 s. Planning was 744 s over six calls.
+
+## Sixth run: the fifth repeated (2026-11-16)
+
+Same engine (965eea9) and flags as the fifth run. Graders 116 of 116,
+3.18M reported tokens, 52 calls, 64 minutes, reported complete (33
+requirements, seven tasks). So two runs in a row finished complete, and
+the spread between them is 45 to 64 minutes and 2.0M to 3.2M tokens.
+
+Where the extra 19 minutes went: the planner labelled the HTTP task
+complex, so Opus wrote it in one turn (539 s, 61,800 output tokens; the
+fifth run's planner gave that work to Sol in 126 s). One of the first
+audit's four parallel calls took 459 s while the other three took 81 to
+100 s, so that pass was no faster than one call. Nine revisions against
+five.
+
+The second audit kept 18 of 33 verdicts and asked 15 ids in three calls
+(178 s). The audit asked one decision, on R33: whether upgrading an old
+database on open breaks "a refused command changes nothing" when the
+command is then refused. Answered as the operator by the watching session:
+no, the upgrade belongs to opening; the data must be untouched.
