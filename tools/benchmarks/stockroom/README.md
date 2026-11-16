@@ -157,3 +157,31 @@ decision, the planner cannot make it, and tasks 6 to 8 went to it.
 
 Time did not fall: planning took 935 s over 10 calls, three audits 923 s,
 and the two Opus drafts 887 s.
+
+## Fifth `--lean` run: staged audit, complete (2026-11-16)
+
+Engine at 965eea9 with `--lean --ask-dir`, task limit 12, and the goal's
+item 8 amended (recording an expiry is not a change). Graders 116 of 116,
+2.02M reported tokens, 38 calls, 45 minutes. The engine reported the goal
+complete: the first run of this benchmark to end that way. Six tasks.
+
+| | Fourth run | Fifth run |
+|---|---|---|
+| Time | 72 min | 45 min |
+| Reported tokens | 3.16M | 2.02M |
+| Calls | 50 | 38 |
+| Engine verdict | 2 of 21 held | complete (30 requirements) |
+
+The first audit ran as four calls at once and took 207 s on the wall
+(923 s for three audits the run before). It held two requirements, both in
+the command line, and one task repaired them. The second audit kept 6
+verdicts and asked 24 ids in four calls, 134 s.
+
+The audit asked one decision, on R11: the server answers requests it cannot
+parse (bad request line, unsupported version, oversized headers) with 400
+`invalid_json`, and the goal names no code for them. Answered through the
+question folder, as the operator, by the session watching the run: accepted,
+no change needed. The auditor then judged R11 in one 45 s call.
+
+Drafts: Opus wrote the first task in 278 s (33,600 output tokens); five Sol
+drafts took 24 s to 126 s. Planning was 744 s over six calls.
