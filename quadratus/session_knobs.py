@@ -36,6 +36,7 @@ SESSION_KNOBS = {
     "supplied_revision": None,
     "supplied_draft": None,
     "sticky_audit": None,
+    "plan_queue": None,
     "split_audit": None,
     "audit_decisions": None,
     "optional_proofs": None,
@@ -74,4 +75,4 @@ def session_options(raw: Optional[Mapping]) -> dict:
 #: cheaper or avoids one, together.
 LEAN_SETTINGS = ("supplied_review", "supplied_planning", "supplied_audit", "supplied_revision", "supplied_draft",
                  "optional_proofs", "review_lens_upfront", "goal_basis", "outline_planning",
-                 "sticky_audit", "split_audit", "audit_decisions")
+                 "sticky_audit", "split_audit", "audit_decisions", "plan_queue")

@@ -1352,6 +1352,20 @@ _OUTLINE_PLAN_NOTE = (
     "closed, name everything that is left in one parallel batch where a batch is offered."
 )
 
+#: The whole plan in the first reply (SessionConfig.plan_queue; stockroom,
+#: 2026-11-16: six planning calls took 744 s of a 45-minute run).
+_PLAN_QUEUE_MARK = "=== NEXT WAVE ==="
+_PLAN_QUEUE_NOTE = (
+    "Plan the whole job in this reply where you can. After the task or parallel batch that runs first, "
+    "write a line that is exactly '" + _PLAN_QUEUE_MARK + "' and then the wave that follows it, complete, "
+    "in exactly the form you would give at the next decision: one task, or a parallel batch. Repeat for "
+    "each later wave, in order. While every wave closes with nothing open, the harness runs the next one "
+    "as written without asking you again, and asks you once more when the plan is used up. If anything "
+    "goes wrong (a finding left open, a failed check, a task that did not finish, a wave sent back) the "
+    "waves not yet run are set aside and you are asked what comes next, with them shown. A later wave "
+    "never says DONE and never uses CONTINUES or RESOLVES."
+)
+
 #: Optional proofs (SessionConfig.optional_proofs): no scenario is declared
 #: at planning; the lead's tests are judged by executed case.
 _OPTIONAL_PROOFS_NOTE = (

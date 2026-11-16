@@ -5271,8 +5271,17 @@ Key design decisions already settled:
     doc-only bulk standard. With one-turn drafts, simple and standard
     leads are not spread to another vendor. The cap's goal question is
     told to answer in one line.
-  - Not built: a one-time plan with a task queue. One-turn planning removes
-    most of that cost and keeps a plan decision after every task.
+  - `plan_queue` (2026-11-16; six planning calls took 744 s of the fifth
+    run's 45 minutes): the planner may give the whole plan in one reply,
+    each later wave after a line `=== NEXT WAVE ===`
+    (`Session._take_plan_waves`). A later wave is read exactly as a fresh
+    reply, with no planning call, while nothing is open
+    (`_next_planned_wave`: no send-back pending, no batch in progress,
+    `_open_work()` empty). Anything else sets the remaining waves aside
+    and shows them to the planner, who is asked as before. The planner is
+    still asked when the plan is used up, so DONE stays its decision. A
+    wave that says DONE, CONTINUES, RESOLVES or DISCHARGES is dropped. The
+    queue is not carried across a resume. `result.json` `plan_waves`.
 - **session.py was split by moving code, and two rules keep it split**
   (2026-11-11, redone 2026-11-12 after the development line was merged;
   `tests/test_review1110_split.py`). It went from 29,386 lines to 10,238

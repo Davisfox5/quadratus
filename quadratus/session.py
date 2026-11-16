@@ -440,6 +440,8 @@ from .session_prompts import (  # noqa: F401
     _PARALLEL_REQUEST,
     _PLAIN_VERDICT_RULE,
     _PLAN_NOTE_CHARS,
+    _PLAN_QUEUE_MARK,
+    _PLAN_QUEUE_NOTE,
     _PROBE_RULE,
     _PROTOCOL_RULE,
     _READ_BEFORE_YOU_EXPLORE,
@@ -790,6 +792,10 @@ class SessionConfig:
     #: asked (the planner when no operator answers), the answer is a ruling,
     #: and the auditor judges those requirements again under it.
     audit_decisions: bool = False
+    #: The planner may give the whole plan in one reply, as waves; the
+    #: harness runs each later wave without a planning call while nothing
+    #: is open, and asks again when the plan is used up or anything fails.
+    plan_queue: bool = False
     #: Proof scenarios are optional: the planner names files, interfaces and
     #: requirements, the lead writes the tests, and the reviewer and the
     #: audit judge them by executed case.
@@ -930,6 +936,11 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
         self.goal_basis_demotions: List[dict] = []
         #: Questions an audit raised as DECISION, with who answered and what.
         self.audit_decisions: List[dict] = []
+        #: Later waves of a plan given in one reply (``plan_queue``), as the
+        #: planner wrote them, and what became of each.
+        self._plan_queue: List[str] = []
+        self._plan_aside: str = ""
+        self.plan_waves: List[dict] = []
         #: MET lines kept under ``sticky_audit``: requirement id to its line,
         #: the hashes of the files it named and the requirement's revision.
         self._sticky_met: Dict[str, dict] = {}
@@ -4805,6 +4816,9 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                     + ("\n\n" + _OPTIONAL_PROOFS_NOTE
                        if self.config.optional_proofs and self.project and self.config.allow_writes else "")
                     + ("\n\n" + _OUTLINE_PLAN_NOTE if self.config.outline_planning else "")
+                    + ("\n\n" + _PLAN_QUEUE_NOTE if self.config.plan_queue and self._explicit_tasks is None
+                       else "")
+                    + self._plan_aside
                     + ("\n\n" + once(_CAPTURE_SCOPE_REQUEST, "capture")
                        + f" This task's id will be {self._next_task_id()}."
                        if self._capture_guidance() else "")
@@ -4853,8 +4867,18 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
             return body + correction if correction else body
 
         asks = 0
+        planned = self._next_planned_wave()
         while True:
-            seat, reply = self._ask_seat(seat, build_with_correction)
+            if planned is not None:
+                # The planner already wrote this wave (plan_queue): it is read
+                # exactly as a fresh reply is, and no call is made for it.
+                reply, planned = planned, None
+            else:
+                if self._plan_queue:
+                    self._set_plan_aside("the wave run from the plan was sent back")
+                seat, reply = self._ask_seat(seat, build_with_correction)
+                self._plan_aside = ""
+                reply = self._take_plan_waves(reply)
             reply = self._absorb_requirements(reply)
             correction = ""
             evidence = _parse_evidence(reply)
@@ -9172,6 +9196,56 @@ class Session(ChecksMixin, DesignMixin, AuditMixin, SeatPromptsMixin, SecurityMi
                          for r in open_findings)
         return obligations.View(requirements=requirements, tasks=tuple(tasks), evidence=evidence,
                                 judgments=judgments, capacity=capacity, notes=tuple(notes))
+
+    def _take_plan_waves(self, reply: str) -> str:
+        """Split a planning reply at the wave marks: the first part is the
+        reply, the rest replaces the queue of waves to run later."""
+        if not self.config.plan_queue or not isinstance(reply, str) or _PLAN_QUEUE_MARK not in reply:
+            return reply
+        parts = [part.strip() for part in re.split(r"(?m)^[ \t]*" + re.escape(_PLAN_QUEUE_MARK) + r"[ \t]*$",
+                                                   reply)]
+        later = [part for part in parts[1:]
+                 if part and part != "DONE" and not re.search(r"(?m)^\s*(CONTINUES|RESOLVES|DISCHARGES)\s*:", part)]
+        self._plan_queue = later
+        if later:
+            self._note(f"the planner gave {len(later)} later wave(s) with this reply")
+        return parts[0]
+
+    def _set_plan_aside(self, why: str) -> None:
+        """Drop the waves not yet run and keep them to show the planner."""
+        waves, self._plan_queue = self._plan_queue, []
+        if not waves:
+            return
+        self.plan_waves.append(dict(outcome="set aside", why=why, waves=len(waves)))
+        self._note(f"{len(waves)} planned wave(s) set aside: {why}")
+        shown = "\n\n".join(f"Wave {i}:\n{text[:3000]}" for i, text in enumerate(waves, 1))
+        self._plan_aside = ("\n\n## Waves of your earlier plan that were not run\nSet aside because " + why
+                            + ". Name what comes next: repeat, change or replace them.\n" + shown)
+
+    def _next_planned_wave(self) -> Optional[str]:
+        """The next wave of the plan, when one is queued and nothing has
+        happened that the planner has to answer; None means ask."""
+        if not self._plan_queue:
+            return None
+        why = ""
+        if self._done_refusal:
+            why = "a reply was sent back"
+        elif self._batch or self._serial_queue:
+            why = "a batch is still being worked through"
+        else:
+            try:
+                blocked = self._open_work()
+            except Exception:  # noqa: BLE001 -- unknown state asks the planner
+                blocked = ["the record could not be read"]
+            if blocked:
+                why = "work is open: " + "; ".join(str(b) for b in blocked[:3])[:400]
+        if why:
+            self._set_plan_aside(why)
+            return None
+        wave = self._plan_queue.pop(0)
+        self.plan_waves.append(dict(outcome="run", remaining=len(self._plan_queue)))
+        self._note(f"running the next planned wave without a planning call ({len(self._plan_queue)} left after it)")
+        return wave
 
     def _confirm_goal_met(self) -> bool:
         """After the cap: ask once whether the goal is met, and never act on it.

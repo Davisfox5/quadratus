@@ -1210,7 +1210,8 @@ def build_parser() -> argparse.ArgumentParser:
               "a blocking finding that must quote the goal's own words, with the audit holding a "
               "requirement only for what the goal asks; a requirement judged MET is not judged again "
               "while the files its verdict named are unchanged, the audit runs as up to four calls at "
-              "once, and it may ask for a decision where the goal is silent. Each falls back to the "
+              "once, and it may ask for a decision where the goal is silent; the planner may give "
+              "the whole plan at once. Each falls back to the "
               "ordinary call when its message does not fit or its reply cannot be used.")
 
     watch = parser.add_argument_group(

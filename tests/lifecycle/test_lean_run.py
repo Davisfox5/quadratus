@@ -293,3 +293,46 @@ def test_a_long_requirement_list_is_audited_in_several_calls_at_once(tmp_path, m
     calls = replay.of("auditor")
     assert len(calls) == 3
     assert all("judged in separate calls at the same time" in call.prompt for call in calls)
+
+
+def test_a_plan_given_in_one_reply_runs_its_later_wave_without_a_planning_call(tmp_path, monkeypatch):
+    readme = dict(SCOPE, permitted_paths=["README.md"])
+    first = ("REQUIREMENTS:\nR1: add returns the sum of its two arguments\nR2: README.md documents add\n"
+             "KIND: architect complex\nSCOPE: " + json.dumps(SCOPE) + "\nImplement add in app.py.\nCOVERS: R1\n"
+             "=== NEXT WAVE ===\nKIND: architect complex\nSCOPE: " + json.dumps(readme)
+             + "\nDocument add in README.md.\nCOVERS: R2")
+
+    def orchestrator(call, replay):
+        assert "=== NEXT WAVE ===" in call.prompt
+        return first if len(replay.of("orchestrator")) == 1 else "DONE"
+
+    def lead(call, replay):
+        if len(replay.of("lead")) == 1:
+            return _whole(call, replay)
+        return "Documented add.\n=== WRITE FILE README.md ===\nadd(a, b) returns the sum.\n=== END FILE README.md ===\n"
+
+    def collaborator(call, replay):
+        rid = "R1" if len(replay.of("collaborator")) == 1 else "R2"
+        cite = "tests/test_app.py::test_add" if rid == "R1" else "README.md"
+        return f"No blocking findings.\n{rid}: MET - {cite}\nREVIEW: COMPLETE"
+
+    script = Script(orchestrator=orchestrator, lead=lead, collaborator=collaborator,
+                    auditor=lambda call, replay: "R1: MET - app.py tests/test_app.py::test_add\nR2: MET - README.md",
+                    **{"requirements-review": lambda call, replay: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES,
+                   goal="Make add return the sum of its two arguments. Document add in README.md.",
+                   max_tasks=4, session_options=LEAN)
+    assert replay.result.completed, replay.result.error
+    assert len(replay.of("lead")) == 2 and len(replay.of("orchestrator")) == 2
+    assert [w["outcome"] for w in H.result_json(replay)["plan_waves"]] == ["run"]
+
+
+def test_a_planned_wave_is_set_aside_when_work_is_left_open(tmp_path):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+    session = Session("g", ArtifactStore(tmp_path / "a"), lambda *a, **k: "", config=SessionConfig(plan_queue=True))
+    assert session._take_plan_waves("KIND: x\nfirst\n=== NEXT WAVE ===\nsecond\n=== NEXT WAVE ===\nDONE") == "KIND: x\nfirst"
+    assert session._plan_queue == ["second"]
+    session._open_work = lambda: ["t1 is capped"]
+    assert session._next_planned_wave() is None and session._plan_queue == []
+    assert "Wave 1:\nsecond" in session._plan_aside and "t1 is capped" in session._plan_aside
