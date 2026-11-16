@@ -205,3 +205,27 @@ The second audit kept 18 of 33 verdicts and asked 15 ids in three calls
 database on open breaks "a refused command changes nothing" when the
 command is then refused. Answered as the operator by the watching session:
 no, the upgrade belongs to opening; the data must be untouched.
+
+## Seventh run: plan given at once (2026-11-16)
+
+Engine at 71aa4dc, same flags, `plan_queue` on. Graders 116 of 116, 4.07M
+reported tokens, 67 calls, 64 minutes. Incomplete at the 12-task cap: the
+final audit held R10 and R11.
+
+The plan queue worked as built and saved little here. The planner gave
+three waves; the second ran with no planning call; the third was set aside
+when a reviewer's finding was left open, and a later one-wave plan ran the
+same way. Eleven planning calls were still made (1,075 s), because six of
+the twelve tasks were repairs the plan could not foresee.
+
+Why it did not finish: tasks 7 to 12 all worked on Content-Length
+handling for R10 and R11. The first audit held R11 on an obsolete folded
+header (`Content-Length: 37` continued on a second line). The repair
+rejected that and also began rejecting ordinary optional whitespace around
+the value, and the last audit held R10 and R11 on that. Four tasks in a row
+covered R11 alone. The audit's reach rule did not treat the folded header
+as an edge case.
+
+The audit asked one decision, on R15, the same question as the sixth run
+(upgrade on open against "a refused command changes nothing"), and got the
+same answer.
