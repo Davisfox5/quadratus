@@ -652,7 +652,7 @@ _AUDIT_DECISION_RULE = (
     " Where the goal is silent on a case, or two of its statements cannot both hold for it, and the work "
     "follows one reading a careful person could defend, do not choose between the readings and do not "
     "call it NOT MET: write 'R<n>: DECISION - <the case; reading A; reading B; which one the work "
-    "follows>'. The operator is asked and the answer is a ruling you then judge under. Use it only for "
+    "follows>'. The planner rules on it and you then judge under that ruling. Use it only for "
     "a real collision or gap in the goal's own words, never for a defect."
 )
 _AUDIT_CITE_RULE = (

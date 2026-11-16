@@ -184,27 +184,7 @@ def test_a_repair_after_the_audit_is_told_to_stay_small(tmp_path, monkeypatch):
     assert "DONE SENT BACK" in sent_back and "the smallest change that makes the audit's example right" in sent_back
 
 
-def _three(tmp_path, monkeypatch, auditor, **extra):
-    goal = "Make add return the sum of its two arguments. Keep sub as it is. Document add in README.md."
-    plan = ("REQUIREMENTS:\nR1: add returns the sum of its two arguments\nR2: sub is unchanged\n"
-            "R3: README.md documents add\nKIND: architect complex\nSCOPE: " + json.dumps(SCOPE)
-            + "\nImplement add in app.py.\nCOVERS: R1, R2, R3")
-
-    def orchestrator(call, replay):
-        return plan if len(replay.of("orchestrator")) == 1 else "DONE"
-
-    def collaborator(call, replay):
-        return ("No blocking findings.\nR1: MET - tests/test_app.py::test_add\nR2: MET - app.py\n"
-                "R3: MET - app.py\nREVIEW: COMPLETE")
-
-    script = Script(orchestrator=orchestrator, lead=_whole, collaborator=collaborator, auditor=auditor,
-                    **{"requirements-review": lambda call, replay: "COMPLETE"})
-    return H.run(tmp_path, monkeypatch, script, files=FILES, goal=goal, max_tasks=4, session_options=LEAN, **extra)
-
-
-def test_a_decision_is_asked_becomes_a_ruling_and_the_auditor_judges_under_it(tmp_path, monkeypatch):
-    asked = []
-
+def test_a_decision_goes_to_the_planner_becomes_a_ruling_and_is_reported(tmp_path, monkeypatch):
     def auditor(call, replay):
         if "Rulings given during this audit" in call.prompt:
             assert "Keep sub exactly as written" in call.prompt and "R2" in call.prompt
@@ -213,17 +193,36 @@ def test_a_decision_is_asked_becomes_a_ruling_and_the_auditor_judges_under_it(tm
                 "R2: DECISION - the goal does not say whether sub may gain a docstring; A: no change at all; "
                 "B: behaviour only; the work follows A\nR3: MET - app.py")
 
+    asked = []
+
     def operator(question):
         asked.append(question)
-        return "Keep sub exactly as written."
+        return "never asked"
 
-    replay = _three(tmp_path, monkeypatch, auditor, ask_operator=operator)
+    plan = ("REQUIREMENTS:\nR1: add returns the sum of its two arguments\nR2: sub is unchanged\n"
+            "R3: README.md documents add\nKIND: architect complex\nSCOPE: " + json.dumps(SCOPE)
+            + "\nImplement add in app.py.\nCOVERS: R1, R2, R3")
+
+    def orchestrator(call, replay):
+        if "The audit needs a ruling on R2" in call.prompt:
+            assert "docstring" in call.prompt and "sub is unchanged" in call.prompt
+            return "READING: Keep sub exactly as written."
+        return plan if len([c for c in replay.of("orchestrator") if "needs a ruling" not in c.prompt]) == 1 else "DONE"
+
+    def collaborator(call, replay):
+        return ("No blocking findings.\nR1: MET - tests/test_app.py::test_add\nR2: MET - app.py\n"
+                "R3: MET - app.py\nREVIEW: COMPLETE")
+
+    script = Script(orchestrator=orchestrator, lead=_whole, collaborator=collaborator, auditor=auditor,
+                    **{"requirements-review": lambda call, replay: "COMPLETE"})
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4, session_options=LEAN,
+                   goal="Make add return the sum of its two arguments. Keep sub as it is. Document add in README.md.",
+                   ask_operator=operator)
     assert replay.result.completed, replay.result.error
-    assert len(asked) == 1 and "R2" in asked[0] and "docstring" in asked[0]
+    assert asked == []
     row, = H.result_json(replay)["audit_decisions"]
-    assert row["answered_by"] == "operator" and row["requirements"] == ["R2"]
-    first = replay.of("auditor")[0].prompt
-    assert "R<n>: DECISION - " in first and "is not asked again in a later audit" in first
+    assert row["answered_by"] == "planner" and row["requirements"] == ["R2"] and row["kind"] == "decision"
+    assert "Rulings the planner made for you" in replay.result.report and "Keep sub exactly" in replay.result.report
 
 
 def test_a_requirement_judged_met_is_not_asked_again_while_its_files_are_unchanged(tmp_path, monkeypatch):

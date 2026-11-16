@@ -1755,6 +1755,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     recovery_section = _improvement_section(session)
     if recovery_section:
         lines += [recovery_section]
+    rulings = list(getattr(session, 'audit_decisions', []) or []) if session else []
+    if rulings:
+        lines += ['## Rulings the planner made for you', '',
+                  'The audit could not settle these points and the planner decided them. Each binds the audit.', '']
+        lines += [f"- {', '.join(r.get('requirements') or [])} ({r.get('kind', 'decision')}): "
+                  f"{str(r.get('question', ''))[:400]} Ruling: {str(r.get('answer', ''))[:400]}" for r in rulings]
+        lines += ['']
     lines += ['## Task ledger', '', ledger]
     report = '\n'.join(lines)
     contests = list(getattr(session, 'contests', []) or []) if session else []

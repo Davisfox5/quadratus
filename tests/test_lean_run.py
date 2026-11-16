@@ -335,3 +335,32 @@ def test_a_question_file_waits_for_its_answer_file(tmp_path):
     assert (tmp_path / "q" / "question-1.txt").read_text() == "May sub change?"
     with pytest.raises(OperatorInputNeeded):
         _file_operator(tmp_path / "q", wait=0.2)("And add?")
+
+
+def test_a_requirement_held_after_two_repairs_goes_to_the_planner_once(tmp_path):
+    session, root = _session(tmp_path, {"app.py": "a = 1\n"}, audit_decisions=True)
+    session.memory.ledger.requirements["R1"] = "Reject a negative quantity"
+    session.requirement_audits = [dict(stated=["R1"]), dict(stated=["R1"]), dict(stated=["R1"], ran=False)]
+    calls = []
+
+    def invoke(key, prompt, **kwargs):
+        calls.append(prompt)
+        if "Rulings given during this audit" not in prompt:
+            assert "Two repairs have already been spent" in prompt and "Reject a negative quantity" in prompt
+            return "READING: The work stands as it is on folded headers."
+        return "R1: MET - app.py"
+
+    session._invoke_model = invoke
+    out = session._settle_audit_decisions("openai:sol", "BASE", "R1: NOT MET - a folded header is accepted\nR2: MET - app.py")
+    assert "R1: MET - app.py" in out and "R2: MET - app.py" in out and "NOT MET" not in out
+    assert len(calls) == 2 and "folded headers" in calls[1]
+    assert session.audit_decisions[0]["kind"] == "repeat" and "on the operator's behalf" in session.memory.ledger.rulings[-1]
+    again = session._settle_audit_decisions("openai:sol", "BASE", "R1: NOT MET - still")
+    assert again == "R1: NOT MET - still" and len(calls) == 2
+
+
+def test_a_first_or_second_not_met_is_left_to_the_ordinary_repair(tmp_path):
+    session, root = _session(tmp_path, {"app.py": "a = 1\n"}, audit_decisions=True)
+    session.requirement_audits = [dict(stated=["R1"])]
+    session._invoke_model = _never
+    assert session._settle_audit_decisions("openai:sol", "BASE", "R1: NOT MET - x") == "R1: NOT MET - x"

@@ -5260,12 +5260,17 @@ Key design decisions already settled:
     - `split_audit`: more than six requirements are judged in up to four
       calls at once, one call when the budget cannot hold the reserves.
     - `audit_decisions`: `R<n>: DECISION - <question>` where the goal is
-      silent or collides. The operator is asked (`--ask-dir DIR` writes
-      `question-N.txt` and waits 30 minutes for `answer-N.txt`); with no
-      answer the seated planner states one reading. The answer is a
-      ruling, the auditor judges those ids once more under it, and
-      `result.json` `audit_decisions` says who answered. Still undecided
-      is NOT MET.
+      silent or collides. The seated planner rules, never the operator
+      (Davis, 2026-11-16: a question about the code's fine detail cannot
+      be put to someone without the models' context, and there are too
+      many). The same route takes a NOT MET on a requirement the audit
+      has already held twice (`_AUDIT_REPAIR_ATTEMPTS`), once per
+      requirement: the planner rules that the work stands on that point,
+      or states exactly what one more repair must do. The ruling binds,
+      the auditor judges those ids once more under it, and the report
+      lists every one under "Rulings the planner made for you"
+      (`result.json` `audit_decisions`). `--ask-dir` still serves the
+      planner's own ASK.
   - The planner is told to size a task for one reply (about 500 changed
     lines), split a larger layer by files, and label test-only or
     doc-only bulk standard. With one-turn drafts, simple and standard

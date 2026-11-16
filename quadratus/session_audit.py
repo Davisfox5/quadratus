@@ -62,7 +62,7 @@ from .session_prompts import (
     _PROTOCOL_RULE,
     _REPAIR_OUTCOME_RULE,
 )
-from .session_types import OperatorInputNeeded, is_design_task
+from .session_types import is_design_task
 from .verdicts import audit_lines as _audit_lines
 from .verdicts import review_reading as _review_reading
 
@@ -1219,53 +1219,74 @@ class AuditMixin:
 
     _DECISION_LINE = re.compile(r"^\s*\**(R\d+)\**\s*:\s*\**DECISION\**\s*[-:\u2013\u2014]?\s*(.*)$", re.I)
 
+    _AUDIT_REPAIR_ATTEMPTS = 2
+
     def _settle_audit_decisions(self, auditor, base: str, reply: str) -> str:
-        """Each DECISION line becomes a question for the operator (the seated
-        planner when no operator answers), the answer a standing ruling, and
-        the auditor judges exactly those requirements again under it. A
-        requirement still undecided after that is NOT MET, said as such."""
+        """Two kinds of line go to the seated planner, never to the operator
+        (Davis, 2026-11-16: a question about the code's fine detail cannot be
+        put to someone who lacks the models' context, and there are too many
+        of them): a DECISION line, and a NOT MET on a requirement the audit
+        has already held twice, so two repairs did not settle it. The planner
+        states one rule, it is recorded as a ruling made on the operator's
+        behalf, and the auditor judges exactly those requirements again under
+        it. Each requirement is ruled on as a repeat once. Every ruling is in
+        result.json and the report, where the operator reads it."""
         asked: Dict[str, List[str]] = {}
+        kinds: Dict[str, str] = {}
         body = []
+        ruled = getattr(self, "_repeat_ruled", None)
+        if ruled is None:
+            ruled = self._repeat_ruled = set()
+        earlier: Dict[str, int] = {}
+        for audit in self.requirement_audits:
+            if audit.get("ran") is not False:
+                for rid in audit.get("stated") or []:
+                    earlier[rid] = earlier.get(rid, 0) + 1
+        repeats = {rid: why for rid, met, why in _audit_lines(reply)
+                   if not met and rid not in ruled and earlier.get(rid, 0) >= self._AUDIT_REPAIR_ATTEMPTS}
         for line in reply.splitlines():
             hit = self._DECISION_LINE.match(line)
+            rid = self._answer_id(line)
             if hit and hit.group(2).strip():
                 asked.setdefault(hit.group(2).strip(), []).append(hit.group(1).upper())
+                kinds[hit.group(2).strip()] = "decision"
+            elif rid in repeats and re.search(r":\s*\**NOT MET\b", line.replace("**", "")):
+                question = (f"the audit has held this requirement {earlier[rid] + 1} times and "
+                            f"{earlier[rid]} repair(s) did not settle it. Its finding now: {repeats[rid]}")
+                asked.setdefault(question, []).append(rid)
+                kinds[question] = "repeat"
+                ruled.add(rid)
             else:
                 body.append(line)
         if not asked:
             return reply
         rulings, ids = [], []
         for question, rids in list(asked.items())[:self._AUDIT_MAX_DECISIONS]:
-            text = (f"The audit needs a decision on {', '.join(rids)} before it can judge "
-                    f"{'it' if len(rids) == 1 else 'them'}: {question}")
-            answer, who = "", "operator"
-            if self.config.ask_operator is not None:
-                self._note(f"audit decision needed on {', '.join(rids)}: asking the operator")
-                try:
-                    answer = str(self.config.ask_operator(text) or "").strip()
-                except OperatorInputNeeded:
-                    answer = ""
-            if not answer:
-                who, answer = "planner", self._planner_reading(text)
+            texts = "\n".join(f"{r}: {self.memory.ledger.requirements.get(r, '')}" for r in rids)
+            text = (f"The audit needs a ruling on {', '.join(rids)}.\n{texts}\n\n"
+                    + ("The auditor's question: " if kinds[question] == "decision" else "What happened: ")
+                    + question)
+            self._note(f"audit {kinds[question]} on {', '.join(rids)}: the planner rules")
+            answer = self._planner_reading(text, repeat=kinds[question] == "repeat")
             if not answer:
                 continue
-            ruling = (f"Q: {text} -- A: {answer}"
-                      + ("" if who == "operator" else " (the planner's reading; no operator answered)"))
+            ruling = (f"Q: {text} -- A: {answer} (the planner's ruling, made on the operator's behalf)")
             self.memory.ledger.rulings.append(ruling)
             self._audit_ruled = True
             rulings.append(ruling)
             ids.extend(r for r in rids if r not in ids)
-            self.audit_decisions.append(dict(requirements=list(rids), question=question, answer=answer,
-                                             answered_by=who,
+            self.audit_decisions.append(dict(requirements=list(rids), kind=kinds[question], question=question,
+                                             answer=answer, answered_by="planner",
                                              source=self._source_fingerprint() if self.project else None))
-            self._note(f"audit decision on {', '.join(rids)} answered by the {who}: {answer[:160]}")
+            self._note(f"audit {kinds[question]} on {', '.join(rids)} ruled by the planner: {answer[:160]}")
         undecided = [r for rids in asked.values() for r in rids if r not in ids]
         again = ""
         if ids:
             prompt = (base + "\n\n## Rulings given during this audit (binding)\n"
                       + "\n".join(f"- {r}" for r in rulings)
                       + "\nDECISION is not available for these ids now: judge each MET or NOT MET under the "
-                      "rulings above." + self._audit_lines_block([(r, "requirement") for r in ids], completion=True))
+                      "rulings above. A ruling that accepts the work as it stands settles the point it names."
+                      + self._audit_lines_block([(r, "requirement") for r in ids], completion=True))
             again = self._invoke_model(auditor, prompt) or ""
         answered = []
         for line in again.splitlines():
@@ -1275,15 +1296,22 @@ class AuditMixin:
                 answered.append(rid)
         for rid in ids + undecided:
             if rid not in answered:
-                body.append(f"{rid}: NOT MET - undecided: the audit asked for a decision and none settled it")
+                why = repeats.get(rid) or "the audit asked for a decision and none settled it"
+                body.append(f"{rid}: NOT MET - {why}")
         return "\n".join(body)
 
-    def _planner_reading(self, question: str) -> str:
-        """The seated planner's one-sentence reading when no operator answers."""
+    def _planner_reading(self, question: str, *, repeat: bool = False) -> str:
+        """The seated planner's ruling on a point the audit could not settle."""
         seat = self.seat()
-        prompt = ("# Goal (verbatim)\n" + self.goal + "\n\n" + question + "\n\nNo operator can be reached. "
-                  "Choose the reading closest to the goal's plain words and state it as one rule, in one or "
-                  "two sentences. Reply with exactly one line: READING: <the rule>.")
+        prompt = ("# Goal (verbatim)\n" + self.memory.goal + "\n\n" + question + "\n\nYou decide this for the "
+                  "operator, who reads your ruling in the run's report and is not asked. "
+                  + ("Two repairs have already been spent on it. Decide whether the goal's plain words really "
+                     "require what the auditor asks. If they do not (an edge case the goal never mentions, or "
+                     "a stricter reading than the goal states), rule that the work stands as it is on this "
+                     "point. If they do, state in one sentence exactly what the work must do, so one more "
+                     "repair can finish it. " if repeat else
+                     "Choose the reading closest to the goal's plain words. ")
+                  + "State the rule in one or two sentences. Reply with exactly one line: READING: <the rule>.")
         try:
             with invocation("audit", "orchestrator"):
                 reply = self._invoke_model(seat.key, prompt) or ""
