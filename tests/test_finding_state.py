@@ -518,7 +518,7 @@ def test_a_parallel_childs_design_debt_replay_agrees(tmp_path):
 def test_a_parallel_unmerged_child_replay_agrees(tmp_path):
     from tests.test_parallel_tasks import BATCH, Orchestrated
     from tests.test_parallel_tasks import _session as parallel_session
-    session, _ = parallel_session(tmp_path, Orchestrated([BATCH, "DONE"], lead_delay=0, rogue="b.py"))
+    session, _ = parallel_session(tmp_path, Orchestrated([BATCH, "DONE"], lead_delay=0, crash="b.py"))
     session.run(max_tasks=4)
     state = FS.from_session(session)
     report = _parity(session, session.stop_reason)

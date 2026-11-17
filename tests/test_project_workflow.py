@@ -21,6 +21,17 @@ FAKE_CLI = r'''
 import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
+if args == ['--version']:
+    # The provider reads the client's version once at construction (the
+    # stale-client preflight). A real binary answers it without reading a
+    # prompt, touching the source or running an agent turn, and so does
+    # this one: before 0e8a0db it fell through to stdin and traced a
+    # coding call at the caller's cwd.
+    # One fake serves all three vendors, so it reports a version above every
+    # vendor's qualified minimum; the minimums themselves are tested in
+    # tests/test_client_version_preflight.py.
+    print('fake-vendor 99.0.0')
+    sys.exit(0)
 source_before = {p.name: p.read_bytes() for p in Path('.').glob('*.py')}
 def flag(key, default=''):
     return args[args.index(key) + 1] if key in args else default
@@ -60,6 +71,8 @@ elif 'You are leading' in prompt or 'Fix the failure' in prompt:
         reply = 'Saved add.py'
 elif mode == 'patch':
     reply = 'PATCH:\n```diff\n--- a/add.py\n+++ b/add.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return 0\n+    return a + b\n```'
+elif mode == 'reply':
+    reply = os.environ['FAKE_REPLY']
 else:
     reply = 'NO FINDINGS'
 if 'You are leading' in prompt or 'Fix the failure' in prompt:
@@ -105,7 +118,12 @@ def calls(trace):
     return [json.loads(line) for line in trace.read_text().splitlines()]
 
 
-def test_actual_edits_survive_cleanup_and_checks_target_selected_project(project_env):
+def test_actual_edits_survive_cleanup_and_checks_target_selected_project(project_env, monkeypatch):
+    from tests.lifecycle.harness import grok_lead_routing
+    # The fake client reports 99.0.0, which the codex catalogue refuses as a
+    # client mismatch, so OpenAI is unavailable here and this case's reviewer
+    # was always the Grok peer: selected explicitly since 2026-11-01.
+    grok_lead_routing(monkeypatch, trust=True)
     project, settings, trace, caller = project_env
     before_caller = (caller / 'add.py').read_bytes()
     result = run_project('Fix addition', project, settings, allow_writes=True,
@@ -293,7 +311,14 @@ def test_autodetected_python_check_uses_project_environment(tmp_path):
     python = tmp_path / '.venv' / 'bin' / 'python'
     python.parent.mkdir(parents=True)
     python.symlink_to(sys.executable)
-    assert scan_repo(tmp_path).check_command[0] == str(python)
+    # A bin/python alone is a file any repository can carry: it is used only
+    # inside a real virtual environment (pyvenv.cfg) that resolves to an
+    # interpreter outside the project.
+    scan = scan_repo(tmp_path)
+    assert scan.check_command[0] == sys.executable and 'pyvenv.cfg' in scan.interpreter_note
+    (tmp_path / '.venv' / 'pyvenv.cfg').write_text('home = /usr/bin\n')
+    scan = scan_repo(tmp_path)
+    assert scan.check_command[0] == str(python) and scan.interpreter_note == ''
 
 
 def test_a_real_run_records_who_actually_ran_and_what_it_could_not_observe(project_env):

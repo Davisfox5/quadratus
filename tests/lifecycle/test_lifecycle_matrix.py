@@ -11,7 +11,9 @@ Controller determinism, not live reliability.
 """
 
 import json
+import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,9 +30,13 @@ FIXED = "def add(a, b):\n    return a + b\n"
 #: gate result is about the case, not about a broken fixture.
 FILES_OK = {**FILES, "app.py": FIXED}
 T1 = dict(permitted_paths=["app.py", "tests/test_app.py"], intended_result="add works",
-          acceptance=["add(1, 2) == 3"], max_lines=40)
+          acceptance=["add(1, 2) == 3"], max_lines=40,
+          proofs=H.proofs_for("R1", "tests/test_app.py", operation="add(1, 2)", state="nothing stored",
+                              expect="3 is returned"))
 T2 = dict(permitted_paths=["README.md"], intended_result="README documents add",
-          acceptance=["README names add"], max_lines=20)
+          acceptance=["README names add"], max_lines=20,
+          proofs=H.proofs_for("R2", "README.md", operation="the README is read", state="add is implemented",
+                              expect="README names add", evidence="reading"))
 DECL_T1 = "KIND: architect complex\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py."
 DECL_T2 = "KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md."
 CLOSEOUT = "SUMMARY: done\nDECISIONS: none recorded\nDEAD ENDS: none"
@@ -56,8 +62,60 @@ def _fetch_request(style, artifact):
     }[style]
 
 
+_COVERED = re.compile(r"## Original requirements this task covers \(verbatim\)\n\n((?:R\d+: .*\n?)+)")
+
+
+def covered_met(prompt: str) -> str:
+    """A scripted reviewer's verdict lines (r05 on 1655cf1): a review of
+    goal-bearing work gives one MET line per covered requirement."""
+    found = _COVERED.search(prompt or "")
+    rids = re.findall(r"^(R\d+): ", found.group(1), re.MULTILINE) if found else []
+    return "".join(f"{rid}: MET - scripted reviewer\n" for rid in rids)
+
+
+def judging(base=None, *, reading=None, legacy=None, capture=None):
+    """An opt-in scripted judge (audit or design review) that adds this
+    fixture's own explicit per-obligation line for the reading, legacy or
+    capture rows the prompt lists (the verdict text after the id, written
+    by the case, citing what it read or saw). ``base`` is the reply it
+    extends (default: one MET per covered requirement). Nothing is added
+    for a modality the case does not name, and nothing here decides
+    anything: the text is the case's judgment, addressed to the right id."""
+    def judge(call, replay):
+        reply = base(call, replay) if base is not None else covered_met(call.prompt).rstrip("\n")
+        for modality, line in (("reading", reading), ("legacy", legacy), ("capture", capture)):
+            if line:
+                reply += "".join(f"\n{oid}: {line}" for oid in H.obligation_ids(call.prompt, modality=modality))
+        return reply
+    return judge
+
+
+#: The one scenario the default fixture declares (T1, proofs_for above): the
+#: only row the default auditor judges, by name (replies.judging_scenarios).
+ADD_PROOF = T1["proofs"][0]
+ADD_SCENARIO = "P1: add(1, 2); given nothing stored; expect 3 is returned; in tests/test_app.py"
+#: This fixture's authored basis for that scenario.
+ADD_SHOWN = ("the project check executed tests/test_app.py::test_add on the delivered source, which is exactly "
+             "this scenario")
+
+
+def default_audit(prompt: str) -> str:
+    """The default fixture's own audit: one MET per covered requirement and,
+    for its own declared add scenario where the prompt lists it executed,
+    this fixture's authored sufficiency line. Nothing is judged for any
+    other row: a case that declares its own scenarios authors its own
+    lines (replies.judged, replies.judging_scenarios)."""
+    from tests.lifecycle.replies import judging_scenarios
+    return judging_scenarios(lambda c, r: covered_met(prompt).rstrip("\n"), ADD_PROOF, basis=ADD_SHOWN)(
+        SimpleNamespace(prompt=prompt), None)
+
+
 class Script:
-    """Default replies by role; a case overrides the parts it is about."""
+    """Default replies by role; a case overrides the parts it is about. An
+    overridden handler's reply is carried exactly as written (nothing is
+    added to it, so a missing, duplicated or contradictory judgment stays
+    what the case wrote); only the default auditor judges, and only the
+    default fixture's own scenario (``default_audit``)."""
 
     def __init__(self, **overrides):
         self.overrides = overrides
@@ -66,8 +124,11 @@ class Script:
         handler = self.overrides.get(call.role) or getattr(self, "_" + call.role.split(":")[0].replace("-", "_"),
                                                            None)
         if handler is None:
-            return "No blocking findings.\nREVIEW: COMPLETE"
+            return "No blocking findings.\n" + covered_met(call.prompt) + "REVIEW: COMPLETE"
         return handler(call, replay)
+
+    def _auditor(self, call, replay):
+        return default_audit(call.prompt)
 
     def _orchestrator(self, call, replay):
         n = len(replay.of("orchestrator"))
@@ -76,7 +137,7 @@ class Script:
     def _lead(self, call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED})
-            return 'Implemented add.\nCHANGED: ["app.py"]'
+            return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
         H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
         return 'Documented add.\nCHANGED: ["README.md"]'
 
@@ -126,7 +187,7 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
             return _fetch_request(style, ids[0])
         assert "tested in tests/test_app.py" in call.prompt, "the fetched artifact reached the lead"
         H.write(call, {"app.py": FIXED})
-        return 'Implemented add.\nCHANGED: ["app.py"]'
+        return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
     def collaborator(call, replay):
         if call.vendor == "codex":
@@ -144,7 +205,10 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
     assert _read(replay, "app.py") == FIXED and "test_negative" in _read(replay, "tests/test_app.py")
     assert "returns the sum" in _read(replay, "README.md")
     assert len(replay.of("worker")) == 1
-    assert [c.task for c in replay.of("closeout")] == ["t1", "t2"]
+    # Every task's record is the harness's own (Davis, 2026-10-21): no model
+    # close-out for t1 either, and the next planning call read t1's record.
+    assert replay.of("closeout") == []
+    assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
     assert len(replay.of("recheck")) == 1
     assert not replay.result.completed, "a task cap is an incomplete outcome, never completion"
 
@@ -224,7 +288,14 @@ def test_a_revision_is_told_which_files_are_already_recorded(tmp_path, monkeypat
 
 def test_a_fix_round_is_told_which_files_are_already_recorded(tmp_path, monkeypatch):
     def recheck(call, replay):
-        return "BLOCKING: still no negative-number test." if len(replay.of("recheck")) == 1 else "RESOLVED"
+        # The first recheck keeps every standing finding (one disposition
+        # per expected id, as the protocol reads it); the fix round's
+        # recheck resolves each by id. A bare RESOLVED judges nothing for a
+        # finding it does not name (tests.lifecycle.replies).
+        from tests.lifecycle.replies import recheck_reply
+        if len(replay.of("recheck")) == 1:
+            return recheck_reply(call.prompt, default="UNRESOLVED still no negative-number test")
+        return recheck_reply(call.prompt, default="RESOLVED - the fix round adds the negative-number test")
 
     def revision(call, replay):
         assert "Files this task has already changed" in call.prompt and "app.py" in call.prompt
@@ -236,12 +307,15 @@ def test_a_fix_round_is_told_which_files_are_already_recorded(tmp_path, monkeypa
     assert len(replay.of("revision")) == 2, "the review revision, then one fix round"
     assert any("remain unresolved" in c.prompt for c in replay.of("revision"))
     assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
+    findings = H.result_json(replay)["review_findings"]
+    assert findings and all(f["closed"] and f["state"] == "resolved" for f in findings), findings
+    assert all(f["history"][0]["state"] == "unresolved" for f in findings), "the first recheck held them"
 
 
 def test_a_revision_with_no_edits_and_an_empty_declaration_proceeds(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script())
     assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
-    assert [c.task for c in replay.of("closeout")] == ["t1"]
+    assert not replay.of("closeout") and len(replay.artifact_texts("factual-closeout")) == 1
 
 
 # -- 3. design work: stale renders corrected with no new source edits ----------------
@@ -360,6 +434,7 @@ def test_a_claude_failure_past_the_turn_count_is_not_read_as_a_cap(tmp_path, mon
 
 
 def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -376,6 +451,7 @@ def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
 
 def test_two_caps_in_a_row_stop_with_a_named_breaker_and_the_work_kept(tmp_path, monkeypatch):
     """Run 14: the breaker stopped the run and result.error was blank."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -401,6 +477,7 @@ def test_two_caps_in_a_row_stop_with_a_named_breaker_and_the_work_kept(tmp_path,
 
 def test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation(tmp_path, monkeypatch):
     """Grok review of #33: an error field at the count was read as the cap and replanned."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         H.write(call, {"README.md": "# app\n\npartial\n"})
         return H.grok_ok("I'll finish the README next", stop="cancelled", num_turns=14, error="overloaded")
@@ -417,6 +494,7 @@ def test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation(tmp_path,
 
 def test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchanged_tree(tmp_path, monkeypatch):
     """Not a cap: the unchanged tree lets another lead take the task, once."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.vendor == "grok":
             return H.grok_ok("I'll create it", stop="cancelled", num_turns=3)
@@ -433,15 +511,16 @@ def test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchange
 
 # -- 5. vendor refusal is preserved, never retried or rerouted ------------------------
 
-def test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues(tmp_path, monkeypatch):
+def test_no_task_record_is_ever_asked_of_a_model_so_none_can_be_refused(tmp_path, monkeypatch):
+    """The model close-out and its refusal path are gone (Davis, 2026-10-21):
+    a scripted refusal for the closeout role is never reached."""
     def closeout(call, replay):
         return H.claude_refusal() if call.task == "t1" else CLOSEOUT
 
     replay = _run(tmp_path, monkeypatch, Script(closeout=closeout), max_tasks=2)
     assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
-    assert [c.task for c in replay.of("closeout")] == ["t1", "t2"], "one close-out call per task, no retry"
-    refused = replay.artifact_texts("closeout-refused")
-    assert len(refused) == 1 and "declined" in refused[0]
+    assert replay.of("closeout") == [] and not replay.artifact_texts("closeout-refused")
+    assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
 
 
 def test_a_refused_lead_is_not_retried_or_rerouted(tmp_path, monkeypatch):
@@ -461,6 +540,7 @@ def test_a_refused_lead_is_not_retried_or_rerouted(tmp_path, monkeypatch):
 @pytest.mark.parametrize("stop", ["refusal", "content_filter"])
 def test_a_grok_decline_is_one_lead_at_any_count_on_any_tree(tmp_path, monkeypatch, stop, turns, wrote):
     """Codex review of f7548a2: a decline on an unchanged tree was handed to another lead."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if wrote:
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -531,10 +611,14 @@ def _continuation_run(tmp_path, monkeypatch, cases, estimate=60):
                 settings=Settings(backend="cli", lead_max_turns=14))
 
 
-def test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup(tmp_path, monkeypatch):
+def test_the_planner_is_told_to_count_test_setup_and_size_proof_with_the_implementation(tmp_path, monkeypatch):
+    """The setup a new test file pays is still counted; the blanket advice
+    to make it its own earlier task is gone (a delivery is sized with the
+    executed proof its COVERS promise, in the same task)."""
     replay = _continuation_run(tmp_path, monkeypatch, cases=6)
     first, second = replay.of("orchestrator")[:2]
-    assert "fixed setup cost" in first.prompt and "its own earlier" in first.prompt
+    assert "fixed setup a new test file pays" in first.prompt and "its own earlier" not in first.prompt
+    assert "Size the implementation and its executed proof together" in first.prompt
     assert "count every test not yet written in full, including its" in second.prompt
 
 
@@ -544,16 +628,18 @@ def test_a_continuation_sized_for_its_tests_and_setup_proceeds(tmp_path, monkeyp
     assert "test_case_5" in _read(replay, "tests/test_clock.py")
 
 
-def test_a_continuation_whose_tests_overrun_fails_the_task_with_work_preserved(tmp_path, monkeypatch):
-    """The ceiling is unchanged: 1.5 x 60 = 90 lines, and the tests are not trimmed to fit."""
+def test_a_continuation_whose_tests_run_past_the_estimate_keeps_every_test_and_closes(tmp_path, monkeypatch):
+    """Operator directive 2026-10-20: ~103 lines of tests against an
+    estimate of ~60 are measured and reported, never stopped or trimmed;
+    the task closes on its checks and reviews with every case kept."""
     replay = _continuation_run(tmp_path, monkeypatch, cases=14)      # ~103 lines
     t2 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t2")
-    assert t2["closed_as"] == "failed"
-    fact = next(f for f in t2["facts"] if f["kind"] == "failed")
-    assert fact["detail"].startswith("scope: Task exceeded its declared scope")
-    assert "stopped past 90" in (fact.get("full") or fact["detail"]) and "in tests" in (fact.get("full") or fact["detail"])
-    assert not replay.result.completed
-    assert "test_case_13" in _read(replay, "tests/test_clock.py"), "the work is preserved"
+    assert t2["closed_as"] == "closed" and not any(f["kind"] == "failed" for f in t2["facts"])
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
+    report = H.result_json(replay)["scope_reports"][-1]
+    assert report["oversized"] and report["within_scope"] and report["test_lines"] > 90
+    assert not any("Bring the change down" in c.prompt for c in replay.calls), "no trim call"
+    assert "test_case_13" in _read(replay, "tests/test_clock.py"), "every test is kept"
 
 
 # -- 8. an interactive capture whose step failed (Codex review, Run 13) ---------------
@@ -598,6 +684,7 @@ def test_a_clean_render_without_steps_still_verifies(tmp_path, monkeypatch):
     prompt asks for steps; the cross-vendor final review and the independent
     grader decide whether the render shows the change (Grok review of #33).
     """
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = H.run(tmp_path, monkeypatch, _design_script("Renders refreshed.\nCHANGED: []"),
                    files=_design_files())
     record = json.loads(replay.artifact_texts("design-evidence")[0])
@@ -610,6 +697,7 @@ def test_a_clean_render_without_steps_still_verifies(tmp_path, monkeypatch):
 # -- 9. discovery before writing (Run 14, 2026-09-26) ---------------------------------
 
 def test_a_capped_lead_is_told_its_round_budget(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # every lead is a turn-capped seat (codex has none)
     replay = _run(tmp_path, monkeypatch, Script(), max_tasks=2, settings=Settings(backend="cli", lead_max_turns=14))
     for call in replay.of("lead"):
         assert "This call has at most 14 tool rounds" in call.prompt, call.vendor
@@ -645,6 +733,7 @@ def test_the_first_lead_is_handed_its_scoped_files_as_they_are(tmp_path, monkeyp
 def test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_more(
         tmp_path, monkeypatch, narration, act):
     """Codex review of 895cf67: zero changed files does not say the rounds went to reading."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             if act == "revert":
@@ -670,6 +759,7 @@ def test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_m
 
 
 def test_capped_edits_reach_the_continuation_as_the_tree_now_has_them(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial draft\n"})
@@ -721,6 +811,7 @@ def test_secret_hidden_and_linked_files_in_a_scope_never_reach_a_prompt(tmp_path
 
 def test_a_tail_edit_in_a_long_file_reaches_the_continuation_as_a_window(tmp_path, monkeypatch):
     """Codex review of 895cf67: a prefix cut at line 297 of 1,669 hid the capped call's tail edit."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     long_file = "".join(f"line_{i:04d} = {i}  # filler text to make the file long\n" for i in range(1, 1601))
     scope = dict(T2, permitted_paths=["README.md", "notes/long.py"], max_lines=40)
     decl = "KIND: docs simple\nSCOPE: " + json.dumps(scope) + "\nDocument add in README.md."
@@ -928,7 +1019,7 @@ def test_an_ordinary_command_check_keeps_exit_code_semantics(tmp_path, monkeypat
 # -- 13. Run 16: review-only design tasks, fixtures, freshness, reviewer evidence --------
 
 def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None, fix=None, review=None,
-                edits=None):
+                edits=None, collaborator=None):
     scope = dict(DESIGN, max_lines=max_lines, **({"edits": edits} if edits else {}))
     if edits == "none" and revision is None:
         # The default script's revision edits style.css, which a declared
@@ -938,7 +1029,7 @@ def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None
     script = _design_script("Renders refreshed.\nCHANGED: []")
     script.overrides["orchestrator"] = lambda call, replay: decl if len(replay.of("orchestrator")) == 1 else DECL_T2
     for role, handler in (("lead", lead), ("revision", revision), ("design-fix", fix),
-                          ("design-review", review)):
+                          ("design-review", review), ("collaborator", collaborator)):
         if handler is not None:
             script.overrides[role] = handler
     return H.run(tmp_path, monkeypatch, script, files=_design_files())
@@ -1199,8 +1290,30 @@ def test_a_copy_that_fails_after_preflight_stops_the_review_before_the_model(tmp
 
 def test_a_rewritten_exclusions_file_cannot_hide_a_source_change(tmp_path, monkeypatch):
     """Codex review of 40ba65b, through the whole controller: after the
-    capture the lead changes a permitted file and rewrites the exclusions
-    file to hide it; the session's own source still decides."""
+    capture a permitted file changes and the exclusions file is rewritten to
+    hide it; the session's own source still decides. The rewrite arrives
+    from outside an editing call here (as project code run by a check could
+    do it), since an editing call that rewrites the file now fails its task
+    first: see the next case."""
+    from quadratus.design_evidence import EXCLUDES_FILE
+
+    def collaborator(call, replay):
+        (replay.project / "static/style.css").write_text("#import { color: red; }\n")
+        (replay.project / EXCLUDES_FILE).write_text(json.dumps(["static/style.css"]))
+        return "No blocking findings.\nREVIEW: COMPLETE"
+
+    replay = _design_run(tmp_path, monkeypatch, lead=_edits_and_captures, collaborator=collaborator,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert "captured on a different source tree" in record["first_problem"]
+    assert len(replay.of("design-fix")) == 1
+
+
+def test_an_editing_call_that_rewrites_the_exclusions_file_fails_its_task(tmp_path, monkeypatch):
+    """Whole-repo review, 2026-11-10: the exclusions file is one of the paths
+    the project watch lists around every editing call, so the lead that
+    rewrote it to hide a change is stopped at that call, with the path named
+    and nothing reviewed on top of it."""
     from quadratus.design_evidence import EXCLUDES_FILE
 
     def lead(call, replay):
@@ -1212,6 +1325,6 @@ def test_a_rewritten_exclusions_file_cannot_hide_a_source_change(tmp_path, monke
 
     replay = _design_run(tmp_path, monkeypatch, lead=lead,
                          revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
-    record = json.loads(replay.artifact_texts("design-evidence")[0])
-    assert "captured on a different source tree" in record["first_problem"]
-    assert len(replay.of("design-fix")) == 1
+    assert H.result_json(replay)["failed_tasks"] == ["t1"] and not replay.result.completed
+    assert ".quadratus/source-excludes.json (changed)" in replay.result.report
+    assert not replay.of("collaborator") and not replay.of("design-review")

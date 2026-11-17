@@ -37,6 +37,18 @@ class IsolatedResult:
 #: Short enough that a stall is noticed promptly, long enough that the
 #: supervisor is not spinning: the workload writes far less often than this.
 _POLL_SECONDS = 5
+#: How long `docker rm --force` gets. Separate from the workload's ceiling.
+_CLEANUP_SECONDS = 15
+
+
+def _exit_code(text):
+    """The workload's exit status from `docker wait`, or None when its output
+    is not a number. None is a failed run with an unknown status: an empty
+    reply from the daemon must not raise past the cleanup or read as zero."""
+    try:
+        return int(str(text).strip())
+    except ValueError:
+        return None
 
 
 def _tree(path):
@@ -54,6 +66,37 @@ def _tree(path):
 
 
 _AUTH_FILES = {'.codex/auth.json', '.claude/.credentials.json', '.grok/auth.json'}
+
+#: The operator's standing trust settings, carried into the container by
+#: name. They decide whether a run starts at all: the approval of a project's
+#: own policy file by hash (quadratus.policy.TRUST_ENV) and the permission to
+#: run in a project that carries vendor agent configuration
+#: (quadratus.project_watch.ALLOW_AGENT_CONFIG_ENV). Without them a contained
+#: run refused what the same operator's direct run accepted. Neither is a
+#: credential: one is a file hash, the other a yes. Nothing else in the
+#: harness's environment is carried, and no credential ever is. Spelled here
+#: so this module stays free of the engine's imports; a test holds the two
+#: names equal to their owners'.
+TRUST_SETTINGS = ('QUADRATUS_TRUST_PROJECT_POLICY', 'QUADRATUS_ALLOW_PROJECT_AGENT_CONFIG')
+
+
+def _trust_env(environ=None):
+    """``--env`` arguments carrying each trust setting the operator has set.
+
+    A setting that is unset or blank is left out, so the container reads it
+    as unset too. The value goes in as written, as one argument and through
+    no shell: what the contained run makes of it is what a direct run would.
+    Returns the arguments and the names carried.
+    """
+    environ = os.environ if environ is None else environ
+    args, names = [], []
+    for name in TRUST_SETTINGS:
+        value = environ.get(name, '')
+        if not value.strip():
+            continue
+        args += ['--env', f'{name}={value}']
+        names.append(name)
+    return args, names
 
 
 def _credential_tree(path):
@@ -80,8 +123,16 @@ def _credential_tree(path):
 
 
 def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=False,
-                 credentials=None, heartbeat=None, stall_seconds=None):
+                 credentials=None, heartbeat=None, stall_seconds=None, forward_trust=True):
     """Run a command in a disposable container and always remove its processes.
+
+    The container's environment is fixed, with one addition: the operator's
+    two standing trust settings (``TRUST_SETTINGS``) are carried in when set,
+    so a contained run starts or refuses exactly as a direct run by the same
+    operator would. ``forward_trust=False`` carries neither, and the run
+    inside then decides from its own flags alone. No credential is ever
+    carried this way; the only credentials a container sees are the files of
+    an explicit ``credentials`` seed.
 
     Timeout bounds the workload; Docker control-plane cleanup has a separate
     bounded grace. Cleanup failure raises instead of claiming work has stopped.
@@ -140,6 +191,11 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
         command = ['/bin/sh', '-c',
                    'umask 077; mkdir -p "$HOME" && cp -R /run/solver-auth/. "$HOME"/ '
                    '&& exec "$@"', 'solver-auth-bootstrap', *command]
+    trust_args, trusted = _trust_env() if forward_trust else ([], [])
+    if trusted:
+        # Names only: the policy approval is a file hash, but it is the
+        # operator's and nothing here needs to print it.
+        log.info('Carrying the operator\'s trust settings into the container: %s', ', '.join(trusted))
     name = 'quadratus-blind-' + uuid.uuid4().hex
     deadline = time.monotonic() + wall_seconds
     args = ['docker', 'create', '--name', name, '--pull', 'never', '--init',
@@ -149,7 +205,7 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
             '--memory', '2g', '--cpus', '2', '--pids-limit', '512',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
             '--env', 'HOME=/tmp/solver-home', '--env', 'PYTHONDONTWRITEBYTECODE=1',
-            '--env', 'PYTHONPATH=/opt/quadratus', '--workdir', '/work',
+            '--env', 'PYTHONPATH=/opt/quadratus', *trust_args, '--workdir', '/work',
             '--mount', f'type=bind,source={work},target=/work',
             '--mount', f'type=bind,source={runtime},target=/opt/quadratus,readonly',
             *auth_mount,
@@ -192,7 +248,7 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
         docker(['docker', 'start', name])
         if stall_seconds is None:
             result = docker(['docker', 'wait', name])
-            code = int(result.stdout.strip())
+            code = _exit_code(result.stdout)
             outcome = 'success' if code == 0 else 'failed'
         else:
             # Waited in slices so the heartbeat can be read between them. The
@@ -206,7 +262,7 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
                     result = subprocess.run(['docker', 'wait', name], capture_output=True,
                                             text=True, check=True,
                                             timeout=max(0.01, slice_end - time.monotonic()))
-                    code = int(result.stdout.strip())
+                    code = _exit_code(result.stdout)
                     outcome = 'success' if code == 0 else 'failed'
                     break
                 except subprocess.TimeoutExpired:
@@ -232,8 +288,16 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
     finally:
         # Killing the whole container also kills descendants that created
         # their own process groups; killpg on the Python parent cannot do that.
-        stopped = subprocess.run(['docker', 'rm', '--force', name],
-                                 capture_output=True, text=True, timeout=15)
+        try:
+            stopped = subprocess.run(['docker', 'rm', '--force', name],
+                                     capture_output=True, text=True, timeout=_CLEANUP_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            # A daemon too slow to answer is the same fact as a failed
+            # removal: the container may still be running. Left to raise as
+            # it was, the timeout replaced both the run's outcome and this
+            # message.
+            raise RuntimeError('Container cleanup failed; workload stop is unverified '
+                               f'(docker rm gave no answer in {_CLEANUP_SECONDS}s)') from exc
         if stopped.returncode and 'No such container' not in stopped.stderr:
             raise RuntimeError('Container cleanup failed; workload stop is unverified')
     # Stdout from workload must be explicitly written under /work if needed;

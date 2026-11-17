@@ -336,7 +336,8 @@ def integrate(record: dict, *, task_id: str, sha: str, candidate: str,
     return task
 
 
-def move_candidate(record: dict, *, sha: str, reason: str, by: str) -> dict:
+def move_candidate(record: dict, *, sha: str, reason: str, by: str, pr: Optional[int] = None,
+                   gate: Optional[str] = None) -> dict:
     """Move the candidate SHA outside ``integrate``: a merge that happened
     without a cleared review, a rebase, a correction. The move is refused
     without a reason, and the previous SHA stays in the candidate's history
@@ -347,8 +348,16 @@ def move_candidate(record: dict, *, sha: str, reason: str, by: str) -> dict:
     previous = record["candidate"]["sha"]
     if _same_commit(previous, sha):
         raise RecordError(f"the candidate is already {sha[:7]}")
-    record["candidate"].setdefault("history", []).append(
-        dict(previous=previous, sha=sha, reason=reason, by=by, at=_now()))
+    entry = dict(previous=previous, sha=sha, reason=reason, by=by, at=_now())
+    # A new gate or PR is part of the move and kept beside it, so the
+    # previous gate stays readable in the history (step 2 reconciliation).
+    if pr is not None:
+        entry["previous_pr"] = record["candidate"].get("pr")
+        record["candidate"]["pr"] = pr
+    if gate:
+        entry["previous_gate"] = record["candidate"].get("gate")
+        record["candidate"]["gate"] = gate
+    record["candidate"].setdefault("history", []).append(entry)
     record["candidate"]["sha"] = sha
     return record["candidate"]
 
@@ -482,8 +491,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     add("receipt", "--kind", "--sha", "--state", "--evidence",
         **{"--kind": dict(required=True), "--sha": dict(required=True),
            "--state": dict(required=True, choices=RECEIPT_STATES), "--evidence": dict(default="")})
-    add("candidate", "--sha", "--reason", "--by",
-        **{"--sha": dict(required=True), "--reason": dict(required=True), "--by": dict(required=True)})
+    add("candidate", "--sha", "--reason", "--by", "--pr", "--gate",
+        **{"--sha": dict(required=True), "--reason": dict(required=True), "--by": dict(required=True),
+           "--pr": dict(type=int, default=None), "--gate": dict(default=None)})
     add("extend", "--id", "--owns", "--by", "--resolve",
         **{"--id": dict(required=True), "--owns": dict(nargs="+", required=True), "--by": dict(required=True),
            "--resolve": dict(action="store_true")})
@@ -533,7 +543,7 @@ def _apply(args: argparse.Namespace, record: dict) -> None:
     elif args.command == "receipt":
         receipt(record, kind=args.kind, sha=args.sha, state=args.state, evidence=args.evidence)
     elif args.command == "candidate":
-        move_candidate(record, sha=args.sha, reason=args.reason, by=args.by)
+        move_candidate(record, sha=args.sha, reason=args.reason, by=args.by, pr=args.pr, gate=args.gate)
     elif args.command == "extend":
         extend(record, task_id=args.id, owns=args.owns, by=args.by, resolve=args.resolve)
     elif args.command == "note":

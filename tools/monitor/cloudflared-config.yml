@@ -4,6 +4,10 @@
 #
 # Only the monitor port is routed. The Gradio GUI (7860) is never put on a
 # tunnel: its Project tab can read files and run check commands.
+#
+# The monitor answers only to host names it was started with. Admit the
+# hostname below when starting it: QUADRATUS_MONITOR_ALLOW_HOST=<hostname>
+# (the launch agent's plist sets it under EnvironmentVariables).
 tunnel: <TUNNEL-ID>
 credentials-file: /Users/davisfox/.cloudflared/<TUNNEL-ID>.json
 

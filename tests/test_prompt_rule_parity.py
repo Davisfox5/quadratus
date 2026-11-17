@@ -16,7 +16,7 @@ from quadratus.artifacts import ArtifactStore
 from quadratus.design_evidence import MAX_SELECTOR_CHARS, MAX_STEPS
 from quadratus.scope import TaskScope
 from quadratus.session import Session, SessionConfig, TaskSpec
-from quadratus.task_kinds import MAX_TASK_LINES
+from quadratus.task_kinds import TASK_SIZE_GUIDE
 from quadratus.taskmeta import MAX_PREFACE_LINES, MAX_REQUEST_PREFACE_LINES
 
 
@@ -49,9 +49,16 @@ def test_the_scope_line_form_and_path_rules_are_stated():
     assert "no description after its labels is refused" in text
     for rule in ("backslashes", "leading ~", ".quadratus path", "surrounding whitespace"):
         assert rule in text
-    assert f"no greater than {MAX_TASK_LINES}" in text and '"max_lines": ' + str(MAX_TASK_LINES) in text
+    # The size is a guide, not a ceiling (advisory sizing, 2026-10-20). It is
+    # stated once, in _SIZE_GUIDE; the SCOPE rule points at it and keeps the
+    # number only as its example value (tests/test_review1110_prompts.py).
+    assert '"max_lines": ' + str(TASK_SIZE_GUIDE) in text and "never squeezed" in text
+    assert "no greater than" not in text and "an overrun stops the task" not in text
+    assert "the size guide above" in text and f"about ~{TASK_SIZE_GUIDE} lines of diff" in S._SIZE_GUIDE
     assert "one correction" in text and "not DONE, ASK or FETCH" in text
-    assert "20,000 bytes" in text
+    # The size bound is the role packet's, stated per run (cycle21,
+    # tests/lifecycle/test_cycle21_dispatch_intake.py); no fixed number here.
+    assert "20,000 bytes" not in text
 
 
 def test_the_capture_rules_are_stated_from_the_validator_constants():
@@ -88,10 +95,14 @@ def test_the_ask_limit_and_decide_scope_are_stated():
 def test_the_parallel_request_carries_the_configured_limit_and_the_exclusions(tmp_path):
     text = S._parallel_request(4)
     assert "two to 4 tasks" in text
+    # Both lines added the CONTINUES exclusion; the prompt keeps the review
+    # batch's wording of it, with what happens to a batch that holds one.
     assert "RESOLVES a finding, and a task the harness captures, are named alone" in text
+    assert "so is a task that CONTINUES another" in text and "is sent back whole" in text
     assert "its first block runs alone" in text
     import inspect
-    assert "_parallel_request(self.config.max_parallel_tasks)" in inspect.getsource(S.Session.next_task)
+    # next_task wraps one planning decision (cycle03); the prompt is built in it.
+    assert "_parallel_request(self.config.max_parallel_tasks)" in inspect.getsource(S.Session._next_task_decision)
 
 
 def test_the_first_decomposition_asks_for_covers_with_the_requirements(tmp_path):
@@ -218,7 +229,7 @@ def test_the_verifier_is_told_capitalised_markers_count_in_prose(tmp_path):
     session = _session(tmp_path)
     text = session._verifier_prompt(TaskSpec("t1", "do it"), "draft", "claude:opus")
     assert "in capitals are read as findings wherever they appear" in text
-    assert "'BLOCKING: none' is read as no finding" in text
+    assert S._EMPTY_BLOCKING_RULE in text and "end with VERDICT: ACCEPT" in text
     assert S._has_security_finding("This defect is BLOCKING.") and not S._has_security_finding("nothing blocking here")
 
 
@@ -228,8 +239,8 @@ def test_the_json_verdict_instruction_states_every_structured_rule(tmp_path):
     prompts = []
     session._invoke_model = lambda key, prompt, **kw: prompts.append(prompt) or "not json"
     spec = TaskSpec("t1", "harden it", scope=TaskScope(["a.py"], acceptance=["no secrets logged"]))
-    session._verify_security_json(spec, TaskMemory("t1", "openai:gpt-5.6-sol", session.store), "draft",
-                                  "openai:gpt-5.6-sol", "claude:opus")
+    session._verify_security_json(spec, TaskMemory("t1", "openai:sol", session.store), "draft",
+                                  "openai:sol", "claude:opus")
     text = prompts[0]
     for rule in ("This JSON replaces the BLOCKING: lines", "echoes the hash below exactly", "copied verbatim",
                  "A reject must name a blocking finding or a failed criterion", "no duplicate keys",
@@ -252,7 +263,10 @@ def test_the_blocked_report_rule_states_what_the_harness_does():
 def test_the_capture_command_limits_are_stated_from_the_constants():
     assert f"At most {MAX_STEPS} steps" in S._DESIGN_RENDER_SHOWS
     assert f"at most {MAX_SELECTOR_CHARS} characters" in S._DESIGN_RENDER_SHOWS
-    assert "--file takes SELECTOR=PATH" in S._DESIGN_RENDER_SHOWS
+    # One upload flag is named, the one that takes any selector; --file and
+    # its no-[ rule are no longer offered, so there is no rule to state.
+    assert "--upload SELECTOR project/relative/fixture" in S._DESIGN_RENDER_SHOWS
+    assert "--file" not in S._DESIGN_RENDER_SHOWS
 
 
 def test_the_validator_and_the_capture_command_share_one_selector_bound():
@@ -283,3 +297,111 @@ def test_the_bounded_editor_role_does_not_offer_lead_channels():
         else inspect.getsource(runtime)
     assert "may be returned alone before the patch" not in source
     assert "cannot hire, consult or fetch" in source
+
+
+def test_the_early_rejection_scenario_is_stated_in_the_scenario_grammar_the_parser_reads(tmp_path):
+    """Cycle18 (PR73 6742757517, 5b): guidance only, in the planner's
+    scenario declaration, worded in the keys the proof parser accepts."""
+    from quadratus.scope import PROOF_KEYS
+    rule = S._EARLY_REJECTION_SCENARIO_RULE
+    assert rule in S._SCOPE_REQUEST
+    for key in ("operation", "expect"):
+        assert key in PROOF_KEYS and f"whose {key} is" in rule
+    with_writes = _orchestrator_prompt(tmp_path / "w", project=str(tmp_path), allow_writes=True)
+    assert rule in with_writes
+    assert rule not in _orchestrator_prompt(tmp_path / "r"), "no scenarios are declared without a SCOPE request"
+
+
+# -- the contest judge ----------------------------------------------------------------
+
+def test_the_contest_judge_is_told_the_rule_its_reply_is_read_by():
+    """One closing WINNER line decides; anything else is no verdict and the
+    next rule decides (quadratus.contest). Each clause the prompt states is a
+    clause the reader enforces, and the session sends that prompt."""
+    import inspect
+
+    from quadratus import contest
+    prompt = contest.judge_prompt(packet="## Role packet", task_text="the task", draft_a="\nA", draft_b="\nB")
+    assert contest.JUDGE_RULE in prompt
+    rule = contest.JUDGE_RULE
+    assert "exactly one line, 'WINNER: A' or 'WINNER: B'" in rule and "before it one line of reason" in rule
+    assert contest.read_winner("B covers the empty case.\nWINNER: B") == ("B", "B covers the empty case.")
+    for stated, reply in (("no such line", "Both are fine."),
+                          ("with both", "x\nWINNER: A and B"),
+                          ("a condition or anything else after the letter", "x\nWINNER: A if the tests pass"),
+                          ("two WINNER lines", "WINNER: A\nx\nWINNER: A"),
+                          ("That closing line is all that is read", "WINNER: A\nthough B is close")):
+        assert stated in rule, stated
+        assert contest.read_winner(reply) is None, reply
+    assert "is no verdict" in rule and "by the smaller diff" in rule and "no second round" in rule
+    assert contest.RULES.index("judge") + 1 == contest.RULES.index("size"), "what decides when it gives none"
+    # Stated with its condition, and decided that way: size is a rule between
+    # two attempts that both changed something.
+    assert "by the smaller diff when both attempts changed something" in rule
+    real = dict(completed=True, in_scope=True, changed=["a.py"], changed_lines=30)
+    small = dict(real, changed_lines=4)
+    nothing = dict(completed=True, in_scope=True, changed=[], changed_lines=0)
+    assert contest.decide_tied(real, small, None) == ("challenger", "size")
+    assert contest.decide_tied(real, nothing, None) == ("routed", "default")
+    source = inspect.getsource(S.Session._ask_judge)
+    assert "rules.judge_prompt(" in source and "rules.read_winner(reply)" in source
+
+
+# -- one line per id: the accepting word (conformance audit, 2026-11-12) ---------------
+
+def test_the_plain_acceptance_rule_states_what_the_line_readers_refuse():
+    """quadratus.verdicts.plain_acceptance reads RESOLVED, INVALIDATED,
+    SUFFICIENT, MET and READ; each example the rule gives is one it refuses,
+    and the form it gives is one it accepts."""
+    from quadratus import judgment, verdicts
+    rule = S._PLAIN_VERDICT_RULE
+    for word in ("RESOLVED", "INVALIDATED", "SUFFICIENT", "MET", "READ"):
+        assert word in rule
+    assert "followed at once by ' - ' and the reason" in rule and "no verdict for that id" in rule
+    assert "'RESOLVED once ...'" in rule and "'SUFFICIENT - only if ...'" in rule and "'MET, but ...'" in rule
+    assert verdicts.recheck_line("F1: RESOLVED once the check is added")[1] == ""
+    assert verdicts.row_line("O1: SUFFICIENT - only if the float case runs")[1] == ""
+    assert verdicts.requirement_line("R1: MET, but only partly")[1] is None
+    assert verdicts.recheck_line("F1: RESOLVED - the check is added")[1] == "RESOLVED"
+    assert judgment.recheck_verdicts("F1: RESOLVED - fine, UNRESOLVED for floats", ["F1"]).dispositions[
+        "F1"].state == judgment.INVALID, "the rejecting word in capitals inside the reason"
+
+
+def test_every_prompt_that_asks_for_an_accepting_line_states_the_separator_form_and_the_rule(tmp_path):
+    import inspect
+    import re
+    from pathlib import Path
+    session = _session(tmp_path)
+    recheck = session._recheck_instructions(["F1", "F2"])
+    assert "'<id>: RESOLVED - <how the revision addresses it>'" in recheck
+    assert "'<id>: INVALIDATED - <the test, file, receipt or command" in recheck
+    assert S._PLAIN_VERDICT_RULE in recheck and "A line that opens 'UNRESOLVED:' with no id" in recheck
+    # No prompt offers the old form, where a reason and a condition look alike.
+    root = Path(S.__file__).parent
+    for path in sorted(root.glob("session*.py")):
+        old = re.findall(r"(?<![A-Z])(?:SUFFICIENT|RESOLVED|INVALIDATED) (?:\"\n\s*f?\")?<", path.read_text(encoding="utf-8"))
+        assert not old, f"{path.name} offers an accepting word with no separator: {old}"
+    for builder in (Session._audit_requirements, Session._final_design_review, Session._restated_review_block,
+                    Session._restatement_judgment_prompt, Session._reassess, Session._recheck_instructions,
+                    Session._not_run_block):
+        assert "_PLAIN_VERDICT_RULE" in inspect.getsource(builder), builder.__name__
+
+
+def test_the_reviewer_is_told_the_rule_its_requirement_lines_are_read_by():
+    import inspect
+    source = inspect.getsource(Session._goal_authority)
+    assert "'R<n>: MET - <file>:<line>'" in source and "_AUDIT_LINE_RULE" in source
+    assert "'MET, but only partly'" in S._AUDIT_LINE_RULE
+    assert S._requirement_verdicts("R1: MET, but only partly") == {}
+    assert S._requirement_verdicts("R1: MET by the tests") == {}
+
+
+def test_the_comparison_and_inspection_prompts_state_what_voids_an_acceptance():
+    import inspect
+    compare = inspect.getsource(Session._judge_test_repairs)
+    assert "voids every" in compare and "TEST INTACT line in it" in compare and "_has_prefixed_finding(reply)" in compare
+    note = inspect.getsource(Session._inspection_note)
+    assert "'READ <id> - <what the files show for this" in note and "read only some of them" in note
+    assert "records nothing" in note
+    from quadratus import verdicts
+    assert verdicts.inspection_lines("READ IG-0123456789 not yet")[0][0] == ""

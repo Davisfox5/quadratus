@@ -171,12 +171,12 @@ def test_a_project_run_without_a_pid_is_unknown_with_its_last_write_age(tmp_path
 def test_the_latest_call_gives_task_seat_role_stage_and_the_event_line(tmp_path):
     run_dir = _run_dir(tmp_path)
     _append(run_dir / "invocations.jsonl", _event(task="run", role="orchestrator", model="claude:fable"),
-            _event(task="T3", role="gate-fix", model="openai:gpt-5.6-sol", seconds=80.2, attempt=2,
+            _event(task="T3", role="gate-fix", model="openai:sol", seconds=80.2, attempt=2,
                    detail="Gate failed: 2 tests\nsecond line"))
     status = read_status(tmp_path)
     assert status["task"] == "T3" and status["role"] == "gate-fix" and status["stage"] == "gate"
-    assert status["seat"] == "openai:gpt-5.6-sol"
-    assert status["last_event"] == ("T3/gate-fix | openai:gpt-5.6-sol | invoked | ok | 80 s | 1,200 tokens"
+    assert status["seat"] == "openai:sol"
+    assert status["last_event"] == ("T3/gate-fix | openai:sol | invoked | ok | 80 s | 1,200 tokens"
                                     " | attempt 2 | Gate failed: 2 tests")
     assert status["calls"] == 2
 

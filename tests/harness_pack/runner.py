@@ -11,7 +11,7 @@ reply. Families validated only by this pack carry the label
 Case format (JSON)::
 
     {
-      "id": "scope-overrun-stops", "shape": "scope-trap",
+      "id": "scope-overrun-is-advisory", "shape": "scope-trap",
       "source": "which incident or report section this replays",
       "family": "pure-logic", "grader": false,
       "session": {"project": true, "git": false, "allow_writes": true,

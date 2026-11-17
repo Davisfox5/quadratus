@@ -171,14 +171,16 @@ def test_the_text_states_the_smaller_summary_reserve_and_the_effective_lead_cap(
     before every call, while a one-turn summary call reserves at most 64,000,
     and it left out the lead turn cap the runner derives."""
     text = gui.limits_summary(10, *gui.preset_values(DIAGNOSTIC))
+    # Changed 2026-11-12 (merge ruling 2): no run makes a summary call, so
+    # the text no longer promises one a smaller reserve.
     assert "An ordinary call starts only while at least 250,000 tokens" in text
-    assert "(Claude, Grok) needs 64,000" in text
+    assert "summary call" not in text
     assert "Lead turn cap: 20 rounds" in text and "derived from the 1,500,000-token per-call threshold" in text
     assert "Codex seats have no turn flag" in text
     text = gui.limits_summary(10, *gui.preset_values(DIAGNOSTIC), operator_turns=12)
     assert "Lead turn cap: 12 rounds" in text and "operator setting" in text
     small = gui.limits_summary(10, True, 24, 500_000, 900, 2, 40_000, 0, 0)
-    assert "needs 40,000" in small and "Lead turn cap" not in small
+    assert "at least 40,000 tokens" in small and "Lead turn cap" not in small
     assert "Lead turn cap" not in gui.limits_summary(10, False, 24, 500_000, 900, 2, 0, 0, 0)
 
 

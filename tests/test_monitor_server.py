@@ -83,14 +83,24 @@ def test_status_json_is_the_same_dict_the_cli_prints(server):
     assert [r["run"] for r in payload["history"]] == [r["run"] for r in run_history(tmp_path, limit=5)]
 
 
-def test_query_parameters_switch_the_watched_project_and_the_form_keeps_them(server, tmp_path):
-    _, base, _ = server
+def test_query_parameters_switch_the_watched_project_and_the_form_keeps_them(tmp_path):
+    # Only to a folder the operator admitted: any other path is refused
+    # (whole-repo review 2026-11-10, gui_records 2; tests/test_review1110_web.py).
+    _project(tmp_path)
     other = tmp_path / "other"
     other.mkdir()
-    code, _, body = _get(base + f"/?project={other}&series=")
-    assert code == 200
-    assert "Not running" in body and "no run directories" in body
-    assert f'value="{other}"' in body
+    srv = monitor_server.MonitorServer(0, project=str(tmp_path), history=5, allow_projects=[str(other)])
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        code, _, body = _get(base + f"/?project={other}&series=")
+        assert code == 200
+        assert "Not running" in body and "no run directories" in body
+        assert f'value="{other}"' in body
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_a_blank_parameter_clears_a_launch_default_instead_of_restoring_it(tmp_path):

@@ -69,9 +69,9 @@ def test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey(
     assert task["dispatch"]["owner"] == task["contract"]["owner"]
     assert task["dispatch"]["owner"] == task["invoked_owner"]
     assert task["invoked_owner"] == task["lead"]
-    # The seat key names the API family (openai), while the CLI executable is
-    # named codex; the model id is the stable identity shared by both records.
-    assert task["invoked_owner"].partition(":")[2] == fix.model
+    # The seat key names the family (openai:sol); the wire model is the
+    # release the job resolved for it, recorded under result.json "models".
+    assert result["models"]["resolutions"][task["invoked_owner"]]["wire"] == fix.model
     assert task["attempts"]["design_fix"] == 1
     assert "design" in task["stages"]
     assert result["design_checks"][-1]["verified"] is recaptured

@@ -91,7 +91,7 @@ def test_screenshots_removed_after_the_run_are_caught_with_the_project(tmp_path,
 
 def test_direct_task_with_a_failed_cheap_gate_has_no_model_closeout(tmp_path, monkeypatch):
     from quadratus import project_run
-    from tests.lifecycle.test_direct_tier import _files
+    from tests.lifecycle.test_direct_tier import _files, _non_goal
     files = {**_files(), "tests/test_cheap.py": "def test_cheap():\n    assert 1 == 2\n"}
     monkeypatch.setattr("tests.lifecycle.test_direct_tier._files", lambda: files)
     plan = project_run._gate_plan
@@ -99,7 +99,9 @@ def test_direct_task_with_a_failed_cheap_gate_has_no_model_closeout(tmp_path, mo
                                         "tests/test_cheap.py"), cheap=True)
     monkeypatch.setattr(project_run, "_gate_plan", lambda command, extras, scan: (
         (plan(command, extras, scan) or [GateCommand(id="check", argv=tuple(command))]) + [lint]))
-    replay = _run(tmp_path, monkeypatch, _decl())
+    # Non-goal direct work: work that covers requirements is refused the
+    # direct tier (root review of 1a58853).
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch))
     assert any(c["command"] == "gate suite" and not c["passed"] for c in
                json.loads((replay.result.run_dir / "result.json").read_text())["checks"])
     assert _roles(replay).get("closeout", 0) == 0

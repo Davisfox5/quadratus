@@ -33,9 +33,11 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import List, Optional, Tuple
+
+from .child_env import CREDENTIAL_WORDS, PASS_VARIABLE, withheld
 
 __all__ = ["CaptureFailure", "CaptureProfile", "ENVIRONMENT", "PreviewFailed", "load_profile",
            "profile_from_dict", "running", "capture_task", "capture_argv", "validate_capture"]
@@ -50,9 +52,14 @@ SHUTDOWN_STEP_SECONDS = 4
 SHUTDOWN_SECONDS = 3 * SHUTDOWN_STEP_SECONDS
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 #: Names an operator profile may not set: what changes how programs load or
-#: where they look, and anything that reads as a credential.
-_ENV_RESERVED = re.compile(r"PATH|HOME|SHELL|USER|TMPDIR|.*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH"
-                           r"|COOKIE|SESSION).*|(?:LD|DYLD|PYTHON|NODE|NPM|UV|PIP|GIT|SSH|AWS|GCP|AZURE)_.*"
+#: where they look, and anything that reads as a credential. The credential
+#: words are child_env's one list. They are matched anywhere in the name
+#: here, as they always were; a child's inherited environment matches them
+#: part by part, because dropping ``KEYBOARD_LAYOUT`` from a child would be a
+#: fault. ``_env`` also refuses every name a child would not inherit, so a
+#: profile cannot put one back.
+_ENV_RESERVED = re.compile(r"PATH|HOME|SHELL|USER|TMPDIR|.*(?:" + "|".join(CREDENTIAL_WORDS)
+                           + r"|COOKIE|SESSION).*|(?:LD|DYLD|PYTHON|NODE|NPM|UV|PIP|GIT|SSH|AWS|GCP|AZURE)_.*"
                            r"|PYTHON.*|NODE.*")
 #: How much preview output a failure carries back.
 _LOG_TAIL = 2_000
@@ -154,6 +161,16 @@ class CaptureProfile:
     total_timeout: float = 150
     #: Operator-declared environment for the preview only; see ``_env``.
     env: Tuple[Tuple[str, str], ...] = ()
+    #: The operator's escape for a page that needs shared workers. A pinned
+    #: capture runs without them, because their requests cannot be held to
+    #: the preview origin (``browser.render_page``); with this they run,
+    #: unpinned, and the render records that they did.
+    shared_workers: bool = False
+    #: The operator's word that this preview is served by a process outside
+    #: the one the run starts (a container's port forwarder, a server the
+    #: command hands off to). Without it such a listener stops the capture
+    #: (``running``); with it the listener is recorded and the capture goes on.
+    outside_listener: bool = False
 
     @property
     def port(self) -> int:
@@ -309,9 +326,24 @@ def profile_from_dict(data, root) -> CaptureProfile:
 
     Raises ``ValueError`` naming the first field that may not be used.
     """
-    root = Path(root)
     if not isinstance(data, dict):
         raise ValueError("capture profile must be a JSON object")
+    # Read apart from the fields below: the operator's two escapes, which
+    # are about what the capture accepts, not about how the preview starts.
+    data = dict(data)
+    escapes = {}
+    for name in ("shared_workers", "outside_listener"):
+        value = data.pop(name, False)
+        if type(value) is not bool:
+            raise ValueError(f"capture profile {name} must be true or false")
+        if value:
+            escapes[name] = True
+    profile = _preview_profile(data, root)
+    return replace(profile, **escapes) if escapes else profile
+
+
+def _preview_profile(data: dict, root) -> CaptureProfile:
+    root = Path(root)
     unknown = set(data) - {"preview", "origin", "ready_path", "ready_timeout", "capture_timeout",
                            "ready_status", "total_timeout", "env"}
     if unknown:
@@ -381,6 +413,12 @@ def _env(values, root: Path) -> Tuple[Tuple[str, str], ...]:
         raise ValueError("capture profile env must be an object of at most 16 names")
     out = []
     for name, value in values.items():
+        if isinstance(name, str) and _ENV_NAME.fullmatch(name) and withheld(name):
+            # The rule that keeps a name out of a child's inherited
+            # environment also keeps a profile from setting it.
+            raise ValueError(f"capture profile env name {name[:40]!r} may not be set: it reads as a credential "
+                             f"or can re-route a vendor call. To give the preview an inherited value, export "
+                             f"it and name it in {PASS_VARIABLE}")
         if not isinstance(name, str) or not _ENV_NAME.fullmatch(name) or _ENV_RESERVED.fullmatch(name):
             raise ValueError(f"capture profile env name {str(name)[:40]!r} may not be set")
         if (not isinstance(value, str) or len(value) > 512 or _SHELL.search(value)
@@ -416,7 +454,9 @@ def _listening(host: str, port: int) -> bool:
 
 
 def _environment() -> dict:
-    """The gate's environment rule: no stale bytecode, nothing else added."""
+    """The gate's environment rule: the check profile (no inherited
+    credentials), no stale bytecode, nothing else added. The preview server
+    and the capture both start from this."""
     from .integration import _fresh_bytecode_env
     with _fresh_bytecode_env() as env:
         return {k: v for k, v in env.items() if k != "PYTHONPYCACHEPREFIX"}
@@ -478,15 +518,173 @@ def _outside_runner(first: str, root: Path) -> bool:
     return False
 
 
+def _proc_listeners(port: int) -> Optional[list]:
+    """Linux: every TCP socket listening on ``port`` as ``(address, pids)``,
+    read from /proc; pids is empty when no readable process holds it. None
+    when /proc does not list sockets here."""
+    import struct
+    sockets = []
+    try:
+        for table, family, size in (("/proc/net/tcp", socket.AF_INET, 8), ("/proc/net/tcp6", socket.AF_INET6, 32)):
+            if not os.path.exists(table):
+                continue
+            with open(table, encoding="ascii", errors="replace") as handle:
+                for line in handle.readlines()[1:]:
+                    fields = line.split()
+                    if len(fields) < 10 or fields[3] != "0A":
+                        continue
+                    address, _, hex_port = fields[1].rpartition(":")
+                    if int(hex_port, 16) != port or len(address) != size:
+                        continue
+                    words = [int(address[i:i + 8], 16) for i in range(0, size, 8)]
+                    host = socket.inet_ntop(family, struct.pack(f"={len(words)}I", *words))
+                    sockets.append((f"[{host}]" if family == socket.AF_INET6 else host, fields[9]))
+    except (OSError, ValueError):
+        return None
+    if not sockets and not os.path.exists("/proc/net/tcp"):
+        return None
+    holders: dict = {inode: set() for _, inode in sockets}
+    for entry in (os.listdir("/proc") if holders else ()):
+        if not entry.isdigit():
+            continue
+        try:
+            for fd in os.listdir(f"/proc/{entry}/fd"):
+                try:
+                    link = os.readlink(f"/proc/{entry}/fd/{fd}")
+                except OSError:
+                    continue
+                if link.startswith("socket:[") and link[8:-1] in holders:
+                    holders[link[8:-1]].add(int(entry))
+        except OSError:
+            continue    # another user's process, or one that has gone
+    return [(host, sorted(holders[inode])) for host, inode in sockets]
+
+
+def _lsof_listeners(port: int) -> Optional[list]:
+    """Elsewhere (macOS): the same, from ``lsof``. None when it cannot say."""
+    try:
+        found = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpn"], capture_output=True,
+                               text=True, timeout=5, check=False, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if found.returncode not in (0, 1):
+        return None
+    sockets, pid = [], None
+    for line in found.stdout.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith("n") and pid is not None:
+            sockets.append((line[1:].rpartition(":")[0] or line[1:], [pid]))
+    return sockets
+
+
+def _parent(pid: int) -> Optional[int]:
+    """The parent of ``pid``, or None when it cannot be told."""
+    if os.path.exists("/proc/self/stat"):
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as handle:
+                # "pid (name) state ppid ...": the name may hold spaces and ")".
+                return int(handle.read(4096).rpartition(b")")[2].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+    try:
+        found = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True,
+                               timeout=2, check=False, stdin=subprocess.DEVNULL)
+        return int(found.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _started_by(pid: int, ancestor: int, deadline: Optional[float] = None) -> Optional[bool]:
+    """Whether ``pid`` is ``ancestor`` or a process it started, however
+    indirectly: True, False once its line of parents reaches init without
+    meeting ``ancestor``, or None when that line cannot be read to its end
+    (a process that has gone, no tool, out of time)."""
+    for _ in range(32):
+        if pid == ancestor:
+            return True
+        if deadline is not None and time.monotonic() > deadline:
+            return None
+        parent = _parent(pid)
+        if parent is None:
+            return None
+        if parent <= 1:
+            return False
+        pid = parent
+    return None
+
+
+def _listener_record(port: int, pgid: int) -> dict:
+    """Who listens on the preview's port and where, as far as it can be told.
+
+    ``addresses`` are the bound addresses; ``exposed`` is True when one is
+    not loopback, so a server bound to every interface is on record (and
+    absent when the listener could not be read: unknown, never "not
+    exposed"). ``owner`` is ``preview`` when a listening socket is held by a process in
+    the preview's own process group, or by one the preview started that
+    left the group (honcho, watchexec and air start their server in a group
+    of its own); ``other`` only when every listener's holder is known and
+    shown not to be the preview's; and ``unknown`` otherwise (no tool,
+    another user's process, a holder that has gone or whose parents cannot
+    be read). Best effort: only ``other`` is ever acted on."""
+    sockets = _proc_listeners(port) if os.path.exists("/proc/net/tcp") else _lsof_listeners(port)
+    if not sockets:
+        return dict(addresses=[], owner="unknown", pids=[])
+    ours, known, pids = False, True, set()
+    for _, holders in sockets:
+        groups = set()
+        for pid in holders:
+            try:
+                groups.add(os.getpgid(pid))
+            except OSError:
+                known = False
+        ours = ours or pgid in groups
+        known = known and bool(groups)
+        pids.update(holders)
+    if known and not ours:
+        # Asked only where the group says "other": the preview's own server,
+        # started in another group, is still the preview's. "other" stands
+        # only when every holder's line of parents was read and none met
+        # the preview; one that cannot be read leaves the owner unknown.
+        deadline = time.monotonic() + 5
+        answers = [_started_by(pid, pgid, deadline) for pid in sorted(pids)[:8]]
+        ours = True in answers
+        known = ours or (len(pids) <= 8 and all(answer is False for answer in answers))
+    addresses = sorted({host for host, _ in sockets})
+    loopback = ("127.", "[::1]", "localhost", "[::ffff:127.")
+    return dict(addresses=addresses, owner="preview" if ours else "other" if known else "unknown",
+                pids=sorted(pids)[:8], exposed=any(not host.startswith(loopback) for host in addresses))
+
+
+#: What the last preview started for each origin recorded about its
+#: listener; cleared when the next one starts.
+_LISTENERS: dict = {}
+
+
+def _note_listener(profile: CaptureProfile, listener: Optional[dict]) -> None:
+    if listener is not None and profile.origin in _LISTENERS:
+        listener.update(_LISTENERS[profile.origin])
+
+
 @contextmanager
-def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
+def running(profile: CaptureProfile, root, deadline: Optional[float] = None, listener: Optional[dict] = None):
     """Start the preview, wait until it answers, yield, and always stop it.
 
     Refused before launch when something already listens on the port, so a
     stray service can never stand in for this preview. Readiness needs the
-    preview still alive at each poll for the same reason.
+    preview still alive at each poll for the same reason. Once it answers,
+    who holds the listening socket is read (``_listener_record``, filled
+    into ``listener`` when given): a process that bound the port between
+    the check and the launch, with the preview alive but not listening,
+    would otherwise be captured as the preview (review 2026-11-10, checks
+    22). Only a listener shown to be outside the preview's process group
+    stops the capture; where the owner cannot be told, nothing changes.
+    A preview that serves through another process on purpose (a container's
+    port forwarder) says so in its profile (``outside_listener``): the
+    listener is then recorded and the capture goes on.
     """
     root = Path(root)
+    _LISTENERS.pop(profile.origin, None)
     if _listening(profile.host, profile.port):
         raise PreviewFailed(f"something is already listening on {profile.origin}; the preview was not started",
                             origin=ENVIRONMENT)
@@ -531,6 +729,22 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
             time.sleep(0.2)
         if proc.poll() is not None:
             raise PreviewFailed(f"the preview exited with {proc.returncode} as it became ready")
+        try:
+            record = _listener_record(profile.port, proc.pid)
+        except Exception:  # noqa: BLE001 -- best effort: an unreadable owner is never a failure
+            record = dict(addresses=[], owner="unknown", pids=[])
+        _LISTENERS[profile.origin] = record
+        if listener is not None:
+            listener.update(record)
+        if record["owner"] == "other" and not profile.outside_listener:
+            # Refused by default, with the operator's way out named: a
+            # preview that serves through a container's port forwarder is
+            # held by a process outside its group on purpose.
+            raise PreviewFailed(f"{profile.origin} is served by another process (pid "
+                                f"{', '.join(map(str, record['pids'])) or 'unknown'}), not by the preview "
+                                "this run started; nothing was captured. Where the preview is meant to be "
+                                "served by another process (a container's port forwarder), the capture "
+                                'profile can say so with "outside_listener": true')
         yield proc
     finally:
         _stop(proc)
@@ -551,20 +765,21 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Opt
     token so the views of one attempt combine and nothing older does, and
     ``measured`` hands the capture the harness's receipt for the views
     already taken, so a sibling is reused only when it still carries
-    exactly those digests."""
+    exactly those digests.
+
+    The harness's own options come before the first step, and the capture
+    reads them nowhere else: what a task declares (a selector, a message, a
+    file path) fills step positions only, so it can never be taken for a
+    view name, a measurement or the attempt token (review 2026-11-10,
+    checks 16)."""
     target = profile.origin + _web_path(capture.get("path", "/"), "capture path")
     # -P and a working directory outside the project: a project folder named
     # quadratus can never stand in for the harness's own capture module
     # (Codex review of 3a55d82); the project is passed as an absolute root.
     isolate = ["-P"] if sys.version_info >= (3, 11) else []
     argv = [sys.executable, *isolate, "-m", "quadratus.design_evidence", target, task_id, "{root}", "--pinned"]
-    for step in capture.get("steps") or []:
-        if step.get("action") == "file":
-            argv += ["--upload", step["selector"], step["path"]]
-        elif step.get("action") == "confirm":
-            argv += ["--confirm", step["selector"], step["message"]]
-        else:
-            argv += [f"--{step['action']}", step["selector"]]
+    if profile.shared_workers:
+        argv.append("--shared-workers")
     for name, files in sorted((measured or {}).items()):
         for leaf, digest in sorted((files or {}).items()):
             # A digest that could not be read travels as "missing", never as
@@ -575,11 +790,18 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Opt
         argv += ["--view", view]
     if attempt:
         argv += ["--attempt", attempt]
+    for step in capture.get("steps") or []:
+        if step.get("action") == "file":
+            argv += ["--upload", step["selector"], step["path"]]
+        elif step.get("action") == "confirm":
+            argv += ["--confirm", step["selector"], step["message"]]
+        else:
+            argv += [f"--{step['action']}", step["selector"]]
     return argv
 
 
 def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
-                 receipt: Optional[dict] = None) -> str:
+                 receipt: Optional[dict] = None, listener: Optional[dict] = None) -> str:
     """Preview, capture the task's declared state, stop. Returns "" on success
     or why it failed; never raises for a preview or capture failure.
 
@@ -587,6 +809,11 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
     harness measures them right after that view's capture process ends
     (``design_evidence.view_receipt``): a record kept outside the project,
     for ``check_records(receipt=...)`` to hold the summary to.
+
+    ``listener``, when given, is filled with where the preview listened and
+    who held the socket (``_listener_record``), from the last preview this
+    capture started: the address it bound, and whether that was every
+    interface.
 
     A declaration that changes the preview's state (``mutates_preview``) is
     captured one view per preview: the preview is started, the view
@@ -614,6 +841,7 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
             failure, spent = _capture_once(profile, root,
                                            capture_argv(profile, task_id, capture, view, attempt, measured=taken),
                                            deadline, allowance)
+            _note_listener(profile, listener)
             if failure:
                 return failure
             taken[view] = view_receipt(root, task_id, view)
@@ -629,6 +857,7 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
         return ""
     failure, _ = _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline,
                                float(profile.capture_timeout))
+    _note_listener(profile, listener)
     if not failure and receipt is not None:
         from .design_evidence import VIEWPORTS, view_receipt
         for view in VIEWPORTS:
@@ -700,6 +929,13 @@ def validate_capture(capture) -> dict:
                                                      or len(step["message"]) > MAX_SELECTOR_CHARS))):
             raise ValueError("SCOPE capture steps need action click, wait, confirm or file, a selector, "
                              "a path for file steps only and a message for confirm steps only")
+        # No declared value may read as a command-line option: each travels
+        # as an argument of the capture command (checks 16). The command
+        # reads them by position as well; this is the same rule stated to
+        # the declaring seat, refused where it is declared.
+        for key in ("selector", "path", "message"):
+            if isinstance(step.get(key), str) and step[key].strip().startswith("--"):
+                raise ValueError(f'SCOPE capture steps: a {key} may not begin with "--"')
         if step["action"] == "file":
             # Syntax and containment now; which task owns a fixture is checked
             # at dispatch, existence and hash by the capture (a repair may

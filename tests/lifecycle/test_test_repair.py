@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.lifecycle import harness as H
+from tests.lifecycle.replies import judging_scenarios
 from tests.lifecycle.test_lifecycle_matrix import CLOSEOUT, FIXED, Script
 
 pytestmark = pytest.mark.requirements_ledger
@@ -29,7 +30,8 @@ REPAIRED = "def test_reset_keeps_order():\n    assert [1, 2] == sorted([2, 1])\n
 FILES = {"app.py": FIXED, "tests/test_app.py": "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n",
          "tests/test_reset.py": BROKEN, "README.md": "# app\n"}
 SCOPE = dict(permitted_paths=["app.py", "tests/test_reset.py", "tests/test_app.py"],
-             intended_result="the reset test is repaired", acceptance=["tests pass"], max_lines=40)
+             intended_result="the reset test is repaired", acceptance=["tests pass"], max_lines=40,
+             proofs=H.proofs_for("R1", "tests/test_reset.py"))
 DECL = ("REQUIREMENTS:\nR1: tests/test_reset.py is repaired and passes\n"
         "KIND: testing standard\nSCOPE: " + json.dumps(SCOPE) + "\nRepair tests/test_reset.py.\nCOVERS: R1")
 
@@ -39,11 +41,15 @@ def _run(tmp_path, monkeypatch, writes, *, repair=("tests/test_reset.py",)):
 
     def lead(call, replay):
         H.write(call, writes)
-        return "Repaired the test.\nCHANGED: " + json.dumps(sorted(writes))
+        return ("Repaired the test.\nPROVES: P1 - tests/test_reset.py::test_reset_keeps_order\nCHANGED: "
+                + json.dumps(sorted(writes)))
     script = Script(orchestrator=lambda c, r: plan.pop(0) if plan else "DONE", lead=lead,
                     closeout=lambda c, r: CLOSEOUT,
                     **{"requirements-review": lambda c, r: "COMPLETE",
-                       "auditor": lambda c, r: "R1: MET - tests/test_reset.py"})
+                       "auditor": judging_scenarios(
+                           lambda c, r: "R1: MET - tests/test_reset.py", SCOPE["proofs"][0],
+                           basis="the project check executed tests/test_reset.py::test_reset_keeps_order repaired, "
+                                 "on the delivered source, which is this scenario")})
     return H.run(tmp_path, monkeypatch, script, files=FILES, check=CHECK, max_tasks=2, repair_tests=repair)
 
 

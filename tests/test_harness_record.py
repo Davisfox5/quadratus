@@ -26,7 +26,7 @@ def test_a_verified_capture_reaches_the_planner_ahead_of_a_contradicting_account
         "final_review": {"reviewer": "claude:opus", "verdict": "APPROVED"}})
     session._outcome = TaskOutcome("t6", "audit")
     session._outcome.edge("checks", True)
-    session.memory.absorb(TaskSummary(task_id="t6", author="openai:gpt-5.6-sol", summary=T6_ACCOUNT,
+    session.memory.absorb(TaskSummary(task_id="t6", author="openai:sol", summary=T6_ACCOUNT,
                                       reasoning="review-only"))
     text = session.memory.render()
     record = text.index("Harness record")

@@ -3,5 +3,7 @@ openai>=1.40.0
 python-dotenv>=1.0.0
 colorama>=0.4.6
 gradio>=6,<7
+fastapi>=0.110
+uvicorn>=0.29
 playwright>=1.40
 jsonschema>=4.18

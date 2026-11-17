@@ -41,6 +41,7 @@ def _recovered_then_capped(tmp_path, monkeypatch, writes):
 
 
 def test_g1_a_capped_redraft_is_a_capped_task_with_its_work_kept(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = _recovered_then_capped(tmp_path, monkeypatch, {"README.md": "# app\n\npartial\n"})
     t1 = _task(replay)
     assert t1["closed_as"] == "turn_limited", replay.result.error
@@ -56,6 +57,7 @@ def test_g1_a_capped_redraft_is_a_capped_task_with_its_work_kept(tmp_path, monke
 
 
 def test_g1_a_capped_redraft_with_no_change_is_recorded_as_such(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = _recovered_then_capped(tmp_path, monkeypatch, None)
     t1 = _task(replay)
     assert t1["closed_as"] == "turn_limited" and t1["partial"]["changed"] == []
@@ -63,6 +65,7 @@ def test_g1_a_capped_redraft_with_no_change_is_recorded_as_such(tmp_path, monkey
 
 
 def test_g1_a_capped_redraft_outside_its_scope_fails_the_task_with_the_work_kept(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     replay = _recovered_then_capped(tmp_path, monkeypatch, {"app.py": "def add(a, b):\n    return 1\n"})
     t1 = _task(replay)
     assert t1["closed_as"] == "failed"

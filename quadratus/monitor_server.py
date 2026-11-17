@@ -15,30 +15,74 @@ HTTPS address only the operator's own devices can open. Safari's "Add to
 Home Screen" then makes it an icon; the page declares itself a standalone
 web app so it opens without browser chrome.
 
-The page accepts ``?project=`` and ``?series=`` so one server covers any
-project or series without a restart; the values given on the command line
-are the defaults. Reading another path's run directory is the same read the
-command line would make, bounded the same way.
+Loopback is not the whole lock (whole-repo review 2026-11-10, gui_records
+2: with ``Host: evil.example`` the page returned another project's path,
+run id and error text, and "project folder X does not exist" told a caller
+which folders exist). Two rules hold on every request:
+
+- The Host header must be a loopback name with the serving port, or a name
+  the operator admitted (``--allow-host``, ``QUADRATUS_MONITOR_ALLOW_HOST``).
+  A page that re-points its own name at 127.0.0.1 still sends that name,
+  so it gets a 421 and nothing else. A Tailscale or tunnel name is admitted
+  the same way: by the operator, by name.
+- ``?project=`` and ``?series=`` are honoured only for the launch values
+  and the folders the operator admitted (``--allow-project``,
+  ``QUADRATUS_MONITOR_ALLOW_PROJECT``). Anything else gets one fixed
+  refusal, decided before the filesystem is touched, so it says nothing
+  about what exists.
 """
 
 from __future__ import annotations
 
 import html
 import json
+import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 from urllib.parse import parse_qs, urlsplit
 
-from .monitor import UNKNOWN, read_status, run_history
+from .local_http import env_list, host_allowed, parse_allowed_hosts, split_host
+from .monitor import UNKNOWN, read_status, render_breakdown_html, run_history
 
-__all__ = ["MonitorServer", "render_html", "serve", "DEFAULT_PORT", "REFRESH_SECONDS"]
+__all__ = ["MonitorServer", "render_html", "serve", "DEFAULT_PORT", "REFRESH_SECONDS",
+           "ALLOW_HOST_ENV", "ALLOW_PROJECT_ENV", "ALLOW_HOST_FLAG", "ALLOW_PROJECT_FLAG", "PATH_REFUSAL"]
 
 DEFAULT_PORT = 7861
 #: The page reloads itself this often. Every read is bounded, so it is cheap.
 REFRESH_SECONDS = 5
 #: Loopback only; Tailscale Serve is the way off this machine.
 BIND = "127.0.0.1"
+#: Comma separated host names the page also answers to (a Tailscale Serve or
+#: tunnel name). A name alone admits any port; ``name:port`` admits that one.
+ALLOW_HOST_ENV = "QUADRATUS_MONITOR_ALLOW_HOST"
+#: Comma separated project folders or series directories ``?project=`` and
+#: ``?series=`` may name besides the launch values.
+ALLOW_PROJECT_ENV = "QUADRATUS_MONITOR_ALLOW_PROJECT"
+#: The command-line spellings of the two settings (``quadratus --monitor
+#: --serve``), named beside them wherever a refusal says how to admit more.
+ALLOW_HOST_FLAG = "--allow-host"
+ALLOW_PROJECT_FLAG = "--allow-project"
+#: The one answer to a path that was not admitted. It is the same whether or
+#: not the path exists, and it is sent before anything is read.
+PATH_REFUSAL = ("This monitor shows only the project and series it was started with. "
+                f"Admit another folder with {ALLOW_PROJECT_FLAG} DIR (or {ALLOW_PROJECT_ENV}) "
+                "when starting it.")
+
+
+def _host_refusal(values) -> str:
+    # Name the refused host only when it is a plain host name: the operator
+    # reads this on the phone to learn which name to admit.
+    pair = split_host(values[0]) if len(values) == 1 else None
+    named = f"the host name {pair[0]}" if pair else "that host name"
+    return (f"This monitor does not answer to {named}. Admit a name with {ALLOW_HOST_FLAG} NAME "
+            f"(or {ALLOW_HOST_ENV}, comma separated) when starting the monitor.")
+
+
+def _same_path(value: str) -> str:
+    # Compared as text only: no filesystem read happens for a path that has
+    # not been admitted.
+    return os.path.abspath(os.path.expanduser(value))
 
 _MANIFEST = {
     "name": "Quadratus monitor",
@@ -87,8 +131,14 @@ def _fmt(value: Any) -> str:
 
 
 def render_html(status: Dict[str, Any], history: List[Dict[str, Any]], *,
-                project: str = "", series: str = "", refresh: int = REFRESH_SECONDS) -> str:
-    """The status and history as one self-reloading page."""
+                project: str = "", series: str = "", refresh: int = REFRESH_SECONDS,
+                admitted: Optional[Sequence[str]] = None) -> str:
+    """The status and history as one self-reloading page.
+
+    ``admitted`` is what the server accepts in the two fields besides the
+    launch values. None draws the form as it always was; an empty list
+    leaves it out, because any other value would only be refused.
+    """
     live = status.get("live")
     live_class, live_word = (("yes", "LIVE") if live is True else ("no", "Not running") if live is False
                              else ("unknown", "Unknown"))
@@ -136,6 +186,7 @@ def render_html(status: Dict[str, Any], history: List[Dict[str, Any]], *,
     if status.get("finished") is True:
         parts.append(f"<div class=\"ended\"><b>Ended:</b> {_e(status.get('terminal_status'))}: "
                      f"{_e(status.get('stop_reason'))}<br><b>Report:</b> {_e(status.get('report'))}</div>")
+    parts.append(render_breakdown_html(status.get("breakdown")))
     if history:
         parts.append("<table><tr><th>Run</th><th>Started</th><th>Status</th><th>Tokens</th><th>Stop reason</th></tr>")
         for row in history:
@@ -147,11 +198,15 @@ def render_html(status: Dict[str, Any], history: List[Dict[str, Any]], *,
     if unknown:
         parts.append("<details><summary>Unknown fields</summary><ul>"
                      + "".join(f"<li>{_e(k)}: {_e(v)}</li>" for k, v in unknown.items()) + "</ul></details>")
-    parts.append(
-        "<form method=\"get\" action=\"/\">"
-        f"<input name=\"project\" placeholder=\"Project folder\" value=\"{_e(project)}\">"
-        f"<input name=\"series\" placeholder=\"Stage B series directory\" value=\"{_e(series)}\">"
-        "<button type=\"submit\">Watch</button></form>")
+    if admitted is None or admitted:
+        choices = "".join(f"<option value=\"{_e(path)}\">" for path in admitted or ())
+        parts.append(
+            "<form method=\"get\" action=\"/\">"
+            f"<input name=\"project\" list=\"admitted\" placeholder=\"Project folder\" value=\"{_e(project)}\">"
+            f"<input name=\"series\" list=\"admitted\" placeholder=\"Stage B series directory\" "
+            f"value=\"{_e(series)}\">"
+            f"<datalist id=\"admitted\">{choices}</datalist>"
+            "<button type=\"submit\">Watch</button></form>")
     parts.append(f"<div class=\"stamp\">Read at {_e(status.get('read_at'))}; reloads every {int(refresh)} s. "
                  "This page only reads the run directory.</div></body></html>")
     return "".join(parts)
@@ -164,12 +219,46 @@ class MonitorServer(ThreadingHTTPServer):
 
     def __init__(self, port: int = DEFAULT_PORT, *, project: Optional[str] = None,
                  series: Optional[str] = None, state_dir: Optional[str] = None, history: int = 10,
-                 refresh: int = REFRESH_SECONDS):
+                 refresh: int = REFRESH_SECONDS, allow_hosts: Iterable[str] = (),
+                 allow_projects: Iterable[str] = ()):
         self.defaults = dict(project=project or "", series=series or "")
         self.state_dir = state_dir
         self.history = history
         self.refresh = refresh
+        # Parsed before the socket is bound: a bad entry is a ValueError, not a half-open server.
+        self.allow_hosts = parse_allowed_hosts(allow_hosts, ALLOW_HOST_ENV)
+        extra = [str(path).strip() for path in allow_projects or () if str(path).strip()]
+        self.allow_projects = tuple(dict.fromkeys(_same_path(path) for path in extra))
+        # Each folder a request may name, under its compared spelling, with
+        # the operator's own spelling of it: that one is what gets read.
+        self._admitted: Dict[str, str] = {}
+        for own in (*self.defaults.values(), *extra):
+            if own:
+                self._admitted.setdefault(_same_path(own), own)
         super().__init__((BIND, int(port)), _Handler)
+
+    def admitted(self, value: str) -> Optional[str]:
+        """The folder ``?project=`` or ``?series=`` stands for when it names
+        ``value``, or None when it was not admitted. Blank stays blank.
+
+        The answer is the operator's own spelling, never the request's. The
+        comparison is text, and text drops ``link/..`` where the filesystem
+        follows the link first, so reading the request's spelling let
+        ``<parent>/link/../<launch>`` pass as the launch folder and read a
+        different one. Never raises: a value the comparison cannot take (a
+        NUL after ``~``) is simply not admitted.
+        """
+        if not value:
+            return ""
+        try:
+            return self._admitted.get(_same_path(value))
+        except (ValueError, OSError):
+            return None
+
+    def admits(self, value: str) -> bool:
+        """Whether ``?project=`` or ``?series=`` may name ``value``: blank, a
+        launch value, or a folder the operator admitted."""
+        return self.admitted(value) is not None
 
     def snapshot(self, project: str, series: str):
         status = read_status(project or None, series or None, state_dir=self.state_dir)
@@ -199,6 +288,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -207,6 +297,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):  # noqa: N802 -- stdlib naming
+        # Before anything else, the manifest and the 404 included: a name
+        # this server does not answer to learns nothing from it.
+        hosts = self.headers.get_all("Host") or []
+        if not host_allowed(hosts, self.server.server_address[1], self.server.allow_hosts):
+            self._send(_host_refusal(hosts).encode("utf-8"), "text/plain; charset=utf-8",
+                       HTTPStatus.MISDIRECTED_REQUEST)
+            return
         path = urlsplit(self.path).path
         try:
             if path == "/manifest.webmanifest":
@@ -215,13 +312,18 @@ class _Handler(BaseHTTPRequestHandler):
             if path not in ("/", "/index.html", "/status.json"):
                 self._send(b"not found", "text/plain; charset=utf-8", HTTPStatus.NOT_FOUND)
                 return
-            project, series = self._params()
+            # From here on the two values are the operator's own spellings.
+            project, series = (self.server.admitted(value) for value in self._params())
+            if project is None or series is None:
+                self._send(PATH_REFUSAL.encode("utf-8"), "text/plain; charset=utf-8", HTTPStatus.FORBIDDEN)
+                return
             status, history = self.server.snapshot(project, series)
             if path == "/status.json":
                 body = json.dumps({"status": status, "history": history}, indent=2, default=str)
                 self._send(body.encode("utf-8"), "application/json")
                 return
-            page = render_html(status, history, project=project, series=series, refresh=self.server.refresh)
+            page = render_html(status, history, project=project, series=series, refresh=self.server.refresh,
+                               admitted=self.server.allow_projects)
             self._send(page.encode("utf-8"), "text/html; charset=utf-8")
         except Exception as exc:  # noqa: BLE001 -- the page must come up even when a read misbehaves
             body = f"monitor error: {type(exc).__name__}: {exc}".encode("utf-8")
@@ -229,13 +331,34 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def serve(port: int = DEFAULT_PORT, *, project: Optional[str] = None, series: Optional[str] = None,
-          state_dir: Optional[str] = None, history: int = 10, announce=print) -> int:
-    """Run the monitor page until interrupted. Loopback only."""
-    with MonitorServer(port, project=project, series=series, state_dir=state_dir, history=history) as server:
+          state_dir: Optional[str] = None, history: int = 10, announce=print,
+          allow_hosts: Iterable[str] = (), allow_projects: Iterable[str] = ()) -> int:
+    """Run the monitor page until interrupted. Loopback only.
+
+    ``allow_hosts`` and ``allow_projects`` add to what the two environment
+    settings name. Leaving all four out serves the loopback names and the
+    launch project and series only. A host entry that is not a host name is
+    reported and nothing is served (exit 2).
+    """
+    given, standing = list(allow_hosts or ()), list(env_list(ALLOW_HOST_ENV))
+    hosts = [*given, *standing]
+    projects = [*(allow_projects or ()), *env_list(ALLOW_PROJECT_ENV)]
+    try:
+        # Read apart so a bad entry is reported under the setting it came from.
+        pairs = (*parse_allowed_hosts(given, ALLOW_HOST_FLAG), *parse_allowed_hosts(standing, ALLOW_HOST_ENV))
+        admitted = ", ".join(name if at is None else f"{name}:{at}" for name, at in pairs)
+    except ValueError as exc:
+        announce(f"Error: {exc}")
+        return 2
+    with MonitorServer(port, project=project, series=series, state_dir=state_dir, history=history,
+                       allow_hosts=hosts, allow_projects=projects) as server:
         bound = server.server_address[1]
         announce(f"Quadratus monitor on http://{BIND}:{bound}/  (read-only; Ctrl-C stops it)")
         announce(f"On a phone: run `tailscale serve --bg {bound}` on this Mac, open the address it prints, "
                  "then Share > Add to Home Screen.")
+        announce(f"The page answers to 127.0.0.1 and localhost on port {bound}, and to "
+                 f"{admitted or 'no other name'}. Admit the phone's address by name: "
+                 f"{ALLOW_HOST_FLAG} <name> (or {ALLOW_HOST_ENV}=<name>).")
         try:
             server.serve_forever()
         except KeyboardInterrupt:

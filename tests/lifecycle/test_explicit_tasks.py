@@ -13,11 +13,33 @@ import pytest
 
 from quadratus.run_budget import RunLimits
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_direct_tier import FAVICON, _files, _task
+from tests.lifecycle.test_direct_tier import FAVICON, _task
+from tests.lifecycle.test_direct_tier import _files as _direct_files
 from tests.lifecycle.test_lifecycle_matrix import CLOSEOUT, FILES, FIXED, T1, T2, Script
 
 FAVICON_TASK = "KIND: frontend simple\nSCOPE: " + json.dumps(FAVICON) + "\nAdd a favicon route and link."
-README_TASK = "KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md."
+# The explicit cases that audit cover R1 ("README documents add"); T2's own
+# reading scenario names R2, so the listed task declares the same scenario
+# against R1 (root's full suite on c9a665b: a proof naming a requirement
+# outside COVERS binds nothing, and the reading row was never on the record).
+README_T2 = dict(T2, proofs=H.proofs_for("R1", "README.md", operation="the README is read",
+                                         state="add is implemented", expect="README names add",
+                                         evidence="reading"))
+README_TASK = "KIND: docs simple\nSCOPE: " + json.dumps(README_T2) + "\nDocument add in README.md."
+#: This file's own explicit judgment of the README reading scenario, written
+#: per obligation id by a scripted auditor that was shown the row (opt-in).
+READING_JUDGED = "SUFFICIENT - README.md on the delivered source names add(a, b) and says it returns a + b"
+#: The explicit-task baseline: a valid, distinct, pre-existing favicon, so
+#: tests/test_basic.py::test_favicon_file passes before any listed task runs
+#: and a README-only task's check is about that task (root's full suite on
+#: c9a665b: the direct tier's empty favicon failed every explicit run's check
+#: and masked the audit assertions). The favicon task still changes the
+#: bytes; the direct tier keeps its own broken baseline.
+PLACEHOLDER_SVG = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><!-- placeholder --></svg>\n"
+
+
+def _files():
+    return {**_direct_files(), "static/favicon.svg": PLACEHOLDER_SVG}
 ADD_TASK = "KIND: architect complex\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py."
 
 
@@ -68,7 +90,8 @@ def test_listed_tasks_run_in_order_with_no_planner_call(tmp_path, monkeypatch):
     assert record["goal_judged"] is False and record["invalid"] is None and record["not_run"] == 0
     assert (replay.project / "README.md").read_text().startswith("# app\n\nadd(")
     assert _task(replay)["contract"]["required"]["tier"] == "normal"
-    assert {c.role.split(":")[0] for c in replay.calls} >= {"lead", "collaborator", "closeout"}
+    assert {c.role.split(":")[0] for c in replay.calls} >= {"lead", "collaborator"}
+    assert not replay.of("closeout"), "a task's record is the harness's own (2026-10-21)"
 
 
 def test_a_listed_task_may_carry_the_direct_tier_label(tmp_path, monkeypatch):
@@ -79,7 +102,11 @@ def test_a_listed_task_may_carry_the_direct_tier_label(tmp_path, monkeypatch):
     assert replay.result.completed, replay.result.error
     by_task = replay.workflow["calls_by_task"]
     assert "collaborator" not in by_task["t1"] and "closeout" not in by_task["t1"]
-    assert "closeout" in by_task["t2"]
+    assert "lead" in by_task["t2"] and "closeout" not in by_task["t2"]
+
+
+def replay_kinds(replay):
+    return sorted({k for k in replay._kinds_all() if k in ("factual-closeout", "direct-closeout", "closeout-refused")})
 
 
 @pytest.mark.parametrize("text,reason", [
@@ -118,6 +145,8 @@ def test_the_session_itself_refuses_a_list_past_the_cap_with_a_typed_stop(tmp_pa
 
 
 def test_a_refusal_on_a_listed_task_is_still_the_refusal_stop(tmp_path, monkeypatch):
+    from quadratus.session import Session
+    monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "claude:opus")  # the refusal injected is Claude's
     replay = _run(tmp_path, monkeypatch, [README_TASK],
                   script=_script(lead=lambda c, r: H.claude_refusal("cyber")), record_complete=False)
     assert replay.result.error.startswith("Provider") and not replay.result.completed
@@ -126,12 +155,27 @@ def test_a_refusal_on_a_listed_task_is_still_the_refusal_stop(tmp_path, monkeypa
 
 
 def test_the_run_budget_still_stops_a_listed_run(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, [README_TASK, FAVICON_TASK],
+    replay = _run(tmp_path, monkeypatch, [FAVICON_TASK, README_TASK],
                   limits=RunLimits(max_calls=1, max_reported_tokens=6_000_000, wall_seconds=600,
                                    max_concurrent_workers=2),
                   record_complete=False)
-    assert "budget" in replay.result.error.lower(), replay.result.error
-    assert replay.of("orchestrator") == [] and not replay.result.completed
+    # Whole-route admission refuses t1 before any call: its mandatory stages
+    # (the draft, its review and the design review; no close-out call exists
+    # since 2026-10-21) cannot be paid from one call. The budget restriction
+    # still stops the listed run; the stop is the refusal.
+    error = replay.result.error or ""
+    assert "FinishReserved" in error and "cannot pay its 3 mandatory stage(s)" in error, error
+    assert replay.calls == [] and replay.of("orchestrator") == [] and not replay.result.completed
+    result = H.result_json(replay)
+    # A listed run has no planner to send the refusal back to: it is the
+    # run's own terminal budget fact, and the list records t1 as not run.
+    (fact,) = [f for f in result["workflow"]["run"]["facts"] if f["kind"] == "budget"]
+    assert fact["terminal"] and "mandatory stage(s)" in fact["detail"], fact
+    assert result["budget"]["reserved_attempts"] == 0 and result["budget"]["limits"]["max_calls"] == 1
+    listed = result["explicit_tasks"]
+    assert listed["listed"] == 2 and listed["not_run"] >= 1 and listed["tasks_closed_clean"] == []
+    assert not listed["completed"]
+    assert (replay.project / "README.md").read_text() == FILES["README.md"], "nothing written"
 
 
 def test_a_failed_listed_task_keeps_its_work_and_the_list_ends_incomplete(tmp_path, monkeypatch):
@@ -176,4 +220,5 @@ def test_the_direct_and_normal_tiers_deliver_the_same_checked_readme(tmp_path, m
     assert H.gate_results(direct)[-1] == H.gate_results(normal)[-1] == "PASSED"
     assert _task(direct)["contract"]["required"]["tier"] == "direct"
     assert "closeout" not in direct.workflow["calls_by_task"]["t1"]
-    assert "closeout" in normal.workflow["calls_by_task"]["t1"]
+    assert "closeout" not in normal.workflow["calls_by_task"]["t1"]
+    assert replay_kinds(direct) == ["direct-closeout"] and replay_kinds(normal) == ["factual-closeout"]

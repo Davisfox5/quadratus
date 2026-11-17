@@ -225,6 +225,28 @@ def test_actual_timeout_output_preserved_and_seed_removed(boundary, monkeypatch)
     assert not (home / 'auth.json').exists()
 
 
+def test_transport_timeout_receipt_is_private_sanitized_and_keeps_unknown_usage(boundary, monkeypatch):
+    adapter, provider = boundary
+    from tools.native_call_diagnostics import LOG_FILTER
+    def launch(argv, **kwargs):
+        assert kwargs['env']['RUST_LOG'] == LOG_FILTER
+        raw = ('INFO codex_otel.trace_safe: event.name="codex.websocket_connect" '
+               'http.response.status_code=429 error.message="SECRET"\nnormal error\n')
+        raise subprocess.TimeoutExpired(argv, 12, output='{"type":"turn.started"}', stderr=raw)
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    with adapter.installed(), pytest.raises(subprocess.TimeoutExpired) as failure:
+        provider._call('original request', '', [])
+    home = Path(adapter.receipts[0]['home'])
+    receipt = json.loads((home / 'native-transport.json').read_text())
+    assert receipt['outcome'] == 'local_deadline' and receipt['deadline_seconds'] == 12
+    assert receipt['events'][0]['http.response.status_code'] == 429
+    assert receipt['usage_total'] is None
+    assert failure.value.stderr == 'normal error\n'
+    assert 'SECRET' not in (home / 'native-transport.json').read_text()
+    assert not (home / 'auth.json').exists()
+
+
 @pytest.mark.parametrize('disposable', [False, True])
 def test_temp_files_do_not_enter_measured_source_and_scratch_is_removed(boundary, monkeypatch, disposable):
     adapter, provider = boundary
@@ -292,3 +314,93 @@ def test_replaced_scratch_is_not_deleted_and_further_calls_refused(boundary, mon
     finally:
         for path in paths:
             shutil.rmtree(path)
+
+
+def _scratch_policy(copy):
+    return ('(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n'
+            f'(allow file-write* (subpath {json.dumps(str(copy))}) '
+            '(literal "/dev/null") (literal "/dev/tty"))\n')
+
+
+def test_composed_scratch_gate_keeps_one_launcher_and_private_denies(tmp_path):
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    parent = tmp_path / "outer.sb"
+    parent.write_text('(version 1)\n(allow default)\n(deny file-write* (subpath "/private/operator"))\n')
+    scratch = _scratch_policy(copy) + '(deny file-read* (subpath "/private/live"))\n'
+    result = protected_gate_argv(['/usr/bin/sandbox-exec', '-p', scratch, 'python3', '-m', 'pytest'],
+                                 parent, cwd=copy)
+    assert result[:2] == ['/usr/bin/sandbox-exec', '-p']
+    assert result[3:] == ['python3', '-m', 'pytest']
+    assert result[2].count('(version 1)') == result[2].count('(allow default)') == 1
+    assert result[2].index('(allow file-write*') < result[2].index('(deny file-write* (subpath')
+    assert result[2].rstrip().endswith('(deny file-read* (subpath "/private/live"))')
+
+
+def test_ordinary_gate_keeps_existing_private_launcher(tmp_path):
+    from tools.step2_native_execution import protected_gate_argv
+    parent = tmp_path / "outer.sb"
+    argv = ['python3', '-m', 'unittest', 'discover']
+    assert protected_gate_argv(argv, parent, cwd=tmp_path) == ['/usr/bin/sandbox-exec', '-f', str(parent), *argv]
+
+
+@pytest.mark.parametrize("bad", ["outside", "relative", "extra_allow"])
+def test_unexpected_scratch_gate_policy_is_rejected(tmp_path, bad):
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    profile = _scratch_policy(Path("relative") if bad == "relative" else copy)
+    if bad == "extra_allow":
+        profile += '(allow file-write*)\n'
+    cwd = tmp_path if bad == "outside" else copy
+    with pytest.raises(ValueError):
+        protected_gate_argv(['/usr/bin/sandbox-exec', '-p', profile, 'python3'], tmp_path / "outer.sb", cwd=cwd)
+
+
+@pytest.mark.parametrize("operation", ["file-write*", "network*"])
+def test_parent_allow_exception_cannot_expand_scratch_authority(tmp_path, operation):
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    parent = tmp_path / "outer.sb"
+    parent.write_text(f'(version 1)\n(allow default)\n(allow {operation})\n')
+    with pytest.raises(ValueError, match="expand scratch authority"):
+        protected_gate_argv(['/usr/bin/sandbox-exec', '-p', _scratch_policy(copy), 'python3'], parent, cwd=copy)
+
+
+@pytest.mark.parametrize("line", [
+    '(deny file-read* (subpath "/answers")) (allow file-write* (subpath "/out"))',
+    '(allow file-read* (subpath "/x")) (allow network*)',
+])
+def test_a_second_clause_on_one_parent_line_is_refused(tmp_path, line):
+    """Only the first clause of a line was checked, so a write or network
+    allow after it was composed after the scratch denies and won."""
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    parent = tmp_path / "outer.sb"
+    parent.write_text(f'(version 1)\n(allow default)\n{line}\n')
+    with pytest.raises(ValueError, match="expand scratch authority"):
+        protected_gate_argv(['/usr/bin/sandbox-exec', '-p', _scratch_policy(copy), 'python3'], parent, cwd=copy)
+
+
+@pytest.mark.parametrize("line", [
+    '(allow file-read-data (subpath "/x"))',
+    '(deny file-read* (subpath "/odd)(path"))',
+    '(deny file-read* (subpath "/a\\"b"))',
+    '(deny file-read* (subpath "/answers")) ; note (allow file-write*)',
+])
+def test_one_clause_parent_lines_still_compose(tmp_path, line):
+    """Quoted parentheses, an escaped quote and a trailing comment are one
+    clause; each composes once, before the scratch read denies."""
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    parent = tmp_path / "outer.sb"
+    parent.write_text(f'(version 1)\n(allow default)\n{line}\n')
+    hidden = '(deny file-read* (subpath "/private/live"))\n'
+    result = protected_gate_argv(['/usr/bin/sandbox-exec', '-p', _scratch_policy(copy) + hidden, 'python3'],
+                                 parent, cwd=copy)
+    assert result[2].count(line) == 1
+    assert result[2].rstrip().endswith(hidden.strip())

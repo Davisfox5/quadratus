@@ -18,7 +18,7 @@ import pytest
 
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_dependency_identity import _run
-from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script
+from tests.lifecycle.test_lifecycle_matrix import FILES, FIXED, Script, judging
 
 BROKEN = "def add(a, b):\n    return a - b\n"
 HANDED = "THE HARNESS HAS ALREADY RUN THE PROJECT'S CHECK COMMANDS ON EXACTLY THIS SOURCE"
@@ -176,16 +176,29 @@ def test_a_check_of_another_gate_on_the_same_source_is_not_a_seat_receipt(tmp_pa
     assert seen and seen[0]["gate"] == _gate_identity(_two_command_gate(replay.project))
 
 
+PROVEN = 'Wrote add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
+
+
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("gate_changes", [False, True, "forbidden"], ids=["same-gate", "other-gate", "forbidden"])
+@pytest.mark.parametrize("gate_changes", [False, True, "forbidden", "unbound"],
+                         ids=["same-gate", "other-gate", "forbidden", "unbound"])
 def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp_path, monkeypatch, gate_changes):
+    """The handoff is the positive only when the source is fully verified.
+    t1's scenario lives in the test file the project's check runs, and its
+    lead binds it with the ordinary PROVES line, so the check's receipt on
+    the exact source shows P1 executed (cycle02 made an unbound or
+    unexecuted acceptance row a reason to dispatch; this fixture had never
+    bound P1 and was handed off on the gate alone). ``unbound``: the same
+    run with the PROVES line omitted is dispatched, never counted covered."""
     import json
 
     from quadratus.session import Session
     from tests.lifecycle.test_lifecycle_matrix import T2
     reqs = "REQUIREMENTS:\nR1: add returns the sum\nR2: the README documents add\n"
-    build = ('KIND: architect complex\nSCOPE: {"permitted_paths": ["app.py"], "intended_result": "add works", '
-             '"acceptance": ["add(1, 2) == 3"], "max_lines": 40}\nImplement add in app.py.\nCOVERS: R1')
+    build = ("KIND: architect complex\nSCOPE: " + json.dumps(dict(
+        permitted_paths=["app.py"], intended_result="add works", acceptance=["add(1, 2) == 3"], max_lines=40,
+        proofs=H.proofs_for("R1", "tests/test_app.py", operation="add(1, 2)", state="nothing stored",
+                            expect="3 is returned"))) + "\nImplement add in app.py.\nCOVERS: R1")
     verify = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, max_lines=1, edits="none"))
               + "\nCheck the README against app.py.\nCOVERS: R2")
     forbid = ("README.md",) if gate_changes == "forbidden" else ()
@@ -200,8 +213,14 @@ def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp
         return original(self)
 
     monkeypatch.setattr(Session, "next_task", next_task)
-    script = Script(lead=_writes(FIXED), orchestrator=lambda c, r: plan.pop(0) if plan else "DONE",
-                    auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md")
+    proven, plain = _writes(FIXED, reply=PROVEN), _writes(FIXED)
+
+    def lead(call, replay):
+        return (proven if call.task == "t1" and gate_changes != "unbound" else plain)(call, replay)
+    script = Script(lead=lead, orchestrator=lambda c, r: plan.pop(0) if plan else "DONE",
+                    auditor=judging(lambda c, r: "R1: MET - app.py\nR2: MET - README.md",
+                                    reading="SUFFICIENT - README.md names add(a, b) and its result, which is all R2 asks",
+                                    legacy="SUFFICIENT - README.md names add(a, b), checked against app.py"))
     replay = _run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4, forbid=forbid)
     requirements = H.result_json(replay)["requirements"]
     if gate_changes == "forbidden":
@@ -211,11 +230,22 @@ def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp
         assert requirements["verification_dispatched"][0]["why"] == "the repository policy refuses this task"
         assert "PolicyError" in replay.result.error and not replay.result.completed
         assert requirements["status"].get("R2", "open") == "open"
+    elif gate_changes == "unbound":
+        assert requirements["verification_handoffs"] == []
+        assert requirements["verification_dispatched"][0]["why"] == \
+            "an acceptance scenario is not shown executed on the current source"
+        (row,) = [o for o in H.result_json(replay)["evidence_obligations"]
+                  if o.get("kind") == "acceptance" and o.get("task") == "t1"]
+        assert row["execution"] != "ran" and not row.get("cases")
     elif gate_changes:
         assert requirements["verification_handoffs"] == []
         assert requirements["verification_dispatched"][0]["why"] == \
             "the latest project check ran a different gate than this task's"
     else:
+        (row,) = [o for o in H.result_json(replay)["evidence_obligations"]
+                  if o.get("kind") == "acceptance" and o.get("task") == "t1"]
+        assert row["cases"] == ["tests/test_app.py::test_add"] and row["execution"] == "ran", row
+        assert row["source_digest"], "executed on a recorded source"
         assert [h["task"] for h in requirements["verification_handoffs"]] == ["t2"], "the positive control"
 
 

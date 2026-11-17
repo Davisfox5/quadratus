@@ -21,7 +21,7 @@ from .test_session import Recorder
 
 FABLE = "claude:fable"
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 
 
 @pytest.fixture
@@ -174,15 +174,18 @@ def test_uncritiqued_work_pays_for_no_revision(store):
     assert not any("Revise your work" in c["prompt"] for c in rec.calls)
 
 
-def test_the_revision_lands_before_the_closeout(store):
-    """The close-out must summarise the revised work, not the first draft."""
+def test_the_record_is_written_after_the_revision_and_names_the_review(store):
+    """The record covers the revised work, not the first draft: it is the
+    last thing the task does, after the revision, and no summary call
+    follows it (Davis, 2026-10-21)."""
     rec = Recorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
     order = [c["prompt"] for c in rec.calls]
-    revise_at = next(i for i, p in enumerate(order) if "Revise your work" in p)
-    close_at = next(i for i, p in enumerate(order) if "The task is finished" in p)
-    assert revise_at < close_at
+    assert any("Revise your work" in p for p in order)
+    assert not any("The task is finished" in p for p in order)
+    assert got.summary.startswith("Recorded by the harness") and "Reviews: " in got.summary
+    assert "no reviewer was invoked" not in got.summary
 
 
 # -- the fix->verify cycle ----------------------------------------------------
@@ -225,11 +228,10 @@ def test_an_unresolved_verdict_buys_exactly_one_more_revision(store):
 def test_the_cycle_is_capped_and_leftovers_reach_the_closeout(store):
     rec = BlockingRecorder(["UNRESOLVED: no", "UNRESOLVED: still no"])
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
     rechecks = [c for c in rec.calls if "Check only your BLOCKING" in c["prompt"]]
     assert len(rechecks) == 2  # capped by max_fix_cycles=2
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "still unresolved at close" in closeout
+    assert "Unresolved review findings: " in got.summary and "Unresolved review findings: none" not in got.summary
 
 
 def test_non_blocking_critiques_get_no_recheck(store):
@@ -249,12 +251,21 @@ def test_reviewers_are_told_how_to_mark_blocking_findings(store):
 
 
 def test_rechecks_never_widen_scope(store):
-    rec = BlockingRecorder(["RESOLVED"])
+    """A recheck judges exactly the findings it is handed, by id, and
+    reopens nothing else. A genuine new defect is not discarded for arriving
+    on a recheck (blueprint section 4): it is recorded as its own finding
+    with its own id, and the expected findings' dispositions stand as read."""
+    rec = BlockingRecorder(["RFT1-1: RESOLVED - escaped now\nNEW: the parser accepts malformed numbers | "
+                            "basis: tests/test_numbers.py | impact: correctness", "RFT1-2: RESOLVED - fixed"])
     s = _session(store, rec)
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
     recheck = next(c["prompt"] for c in rec.calls
                    if "Check only your BLOCKING" in c["prompt"])
-    assert "Do not raise new findings" in recheck
+    assert "Do not reopen the review of anything else" in recheck and "Expected ids: RFT1-1" in recheck
+    states = {r["fid"]: r["state"] for r in s.review_findings}
+    assert states == {"RFT1-1": "resolved", "RFT1-2": "resolved"}
+    new = next(r for r in s.review_findings if r["fid"] == "RFT1-2")
+    assert new["basis"] == {"kind": "evidence", "ref": "tests/test_numbers.py"} and new["impact"] == "correctness"
 
 
 # -- the fetch channel --------------------------------------------------------
@@ -335,7 +346,9 @@ def test_a_draft_mentioning_fetch_in_prose_is_not_a_request(store):
 
 
 class ConsultingRecorder(Recorder):
-    """The lead asks Sol one question, then drafts with the answer."""
+    """The lead asks Sol one question, then drafts with the answer. Since
+    2026-11-01 SIMPLE leads on Sol, so the consult cases run COMPLEX (Opus
+    leads) and Sol stays a peer the lead can name."""
 
     def __init__(self, consult_line="CONSULT Sol: is bcrypt still the right choice?"):
         super().__init__()
@@ -353,7 +366,7 @@ class ConsultingRecorder(Recorder):
 def test_a_lead_can_consult_a_named_peer(store):
     rec = ConsultingRecorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.COMPLEX))
     consults = [c for c in rec.calls if "area of strength" in c["prompt"]]
     assert len(consults) == 1
     assert consults[0]["model"] == SOL
@@ -365,7 +378,7 @@ def test_the_consultant_answers_blind(store):
     ledger, or the session. Expertise, not agreement."""
     rec = ConsultingRecorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.COMPLEX))
     consult = next(c["prompt"] for c in rec.calls if "area of strength" in c["prompt"])
     assert "Build a JSON parser" not in consult   # no goal/ledger
     assert "You are leading" not in consult       # no lead prompt
@@ -374,7 +387,7 @@ def test_the_consultant_answers_blind(store):
 def test_the_answer_returns_to_the_lead_and_is_filed(store):
     rec = ConsultingRecorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.COMPLEX))
     redraft = [c["prompt"] for c in rec.calls
                if "Consult answers" in c["prompt"] and "You are leading" in c["prompt"]]
     assert redraft
@@ -402,7 +415,7 @@ def test_the_consult_budget_is_enforced(store):
 
     rec = Chatty()
     s = _session(store, rec)
-    summary = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    summary = s.run_task(TaskSpec("t1", "work", complexity=Complexity.COMPLEX))
     assert summary.outcome == "failed", "the task fails on its own channel; the run goes on"
     assert s.failed_records["t1"]["cause"] == "channel"
     assert "Consult budget exhausted" in s.failed_records["t1"]["error"]
@@ -437,7 +450,11 @@ def test_clean_reviews_buy_no_revision_round(store):
     assert not any("Revise your work" in c["prompt"] for c in rec.calls)
 
 
-def test_one_substantive_review_still_triggers_the_revision(store):
+def test_one_substantive_review_still_triggers_the_revision(store, monkeypatch):
+    from quadratus.registry import MODE_ROSTERS
+    # Two collaborators are the case (one empty review, one substantive):
+    # a COMPLEX lead draws every other peer, so the trust needs three seats.
+    monkeypatch.setitem(MODE_ROSTERS["adversarial"], "peers", ["claude:opus", "openai:sol", "grok:default"])
     class Mixed(Recorder):
         def __init__(self):
             super().__init__()

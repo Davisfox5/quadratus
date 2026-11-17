@@ -21,13 +21,13 @@ to over-delegate to subagents, so the caps are structural, not advisory.
 
 **Workers are picked by errand, not by vendor loyalty.** The worker tree
 (:data:`WORKER_TREE`) maps what the errand *is* to the cheap model measured
-or reputed best at it: live lookup to Grok Fast, long reading to Luna, fact
-and code checking and anything visual to Haiku, rote formatting and drafting
-to Luna, with an in-family bump for errands that defeat the cheap tier. An
-earlier design defaulted workers to the lead's own vendor to reuse cached
-prefixes; that was retired -- each vendor's cache stays warm as long as the
-vendor gets regular use, which the tree itself guarantees, and the
-vendor-loyal default would have sent web lookups to models with stale
+or reputed best at it: live lookup to the Grok worker call, long reading to
+Luna, fact and code checking and anything visual to Haiku, rote formatting
+and drafting to Luna, with an in-family bump for errands that defeat the
+cheap tier. An earlier design defaulted workers to the lead's own vendor to
+reuse cached prefixes; that was retired -- each vendor's cache stays warm as
+long as the vendor gets regular use, which the tree itself guarantees, and
+the vendor-loyal default would have sent web lookups to models with stale
 knowledge.
 
 The tree lost a vendor on 2026-09-12 when Google left the lineup, and the two
@@ -146,13 +146,14 @@ class RepeatedFailure(RuntimeError):
 
 #: Errand -> the cheap model best suited to it, one per vendor, so picking by
 #: skill also spreads load across every subscription window. Seeds, not
-#: truth: only Haiku is verified in this harness, and the tier churns monthly.
+#: truth: the tier churns monthly. Haiku's alias was checked against a live
+#: binary; Luna and the Grok worker call have recorded runs behind them.
 WORKER_TREE: dict = {
     #: Live web lookup, anything current. Grok's strength is the search itself.
     "lookup": "grok:worker",
     #: Read something long and digest it. The widest cheap window that is not
     #: an unverified vendor claim (1.1M against Haiku's 200K).
-    "read": "openai:gpt-5.6-luna",
+    "read": "openai:luna",
     #: Read a screenshot, PDF, or image. Picked for the capability rather than
     #: the window: the Claude CLI reads image files off disk directly.
     "visual": "claude:haiku",
@@ -163,8 +164,8 @@ WORKER_TREE: dict = {
     "code": "claude:haiku",
     #: Format, tag, sort, extract fields, draft boilerplate. Literal-minded
     #: is a feature here.
-    "format": "openai:gpt-5.6-luna",
-    "draft": "openai:gpt-5.6-luna",
+    "format": "openai:luna",
+    "draft": "openai:luna",
 }
 
 #: Escalation stays in the family: an errand the base worker could not do,
@@ -182,7 +183,7 @@ WORKER_TREE: dict = {
 #: cannot be invoked passes that check and fails at transport instead.
 WORKER_ESCALATION: dict = {
     "claude:haiku": "claude:sonnet",
-    "openai:gpt-5.6-luna": "openai:gpt-5.6-terra",
+    "openai:luna": "openai:terra",
     "grok:worker": "grok:expert",
 }
 
@@ -571,10 +572,23 @@ class WorkerPool:
                 with self._lock:
                     self.store.put(raw, kind=f'worker-step:{label}', author=model_key)
         except Exception as exc:
+            from .run_budget import ReserveRefused
             with self._lock:
-                self._failed.add(fingerprint)
-                if getattr(exc, 'provider_response', ''):
-                    self.store.put(exc.provider_response, kind=f'worker-stopped:{label}', author=model_key)
+                # A call the budget did not start says nothing about this
+                # prompt on this worker: the lead may send it again once
+                # there is room, and is not told it "already failed".
+                if not isinstance(exc, ReserveRefused):
+                    self._failed.add(fingerprint)
+                from .runtime import response_record
+                kept = response_record(exc)
+                if kept is not None:
+                    # The kept reply with its labelled metadata (root review of
+                    # b49a0cb, R6); a store failure is noted, never hidden.
+                    try:
+                        self.store.put(json.dumps(kept), kind=f'worker-stopped:{label}', author=model_key)
+                    except Exception as stored:  # noqa: BLE001 -- evidence never replaces the failure
+                        exc.retention_error = f'{type(stored).__name__}: {str(stored)[:160]}'
+                        log.warning('could not keep the rejected worker reply: %s', exc.retention_error)
             raise
         finally:
             worker_loop_control.reset(marker)

@@ -174,8 +174,8 @@ def _live(tmp_path):
 
 def test_a_test_command_recorded_as_started_shows_as_checking(tmp_path):
     run, journal = _live(tmp_path)
-    journal.record('call-started', call_id='a', model='openai:gpt-5.6-sol', role='lead', task='t1')
-    journal.record('call-ended', call_id='a', model='openai:gpt-5.6-sol', role='lead', task='t1')
+    journal.record('call-started', call_id='a', model='openai:sol', role='lead', task='t1')
+    journal.record('call-ended', call_id='a', model='openai:sol', role='lead', task='t1')
     journal.record('check-started', task='t1')
     view = render_story(read_status(tmp_path))
     assert '<div class="qm-big">Testing the changes</div>' in view

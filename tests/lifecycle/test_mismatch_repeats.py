@@ -74,6 +74,7 @@ def test_r2_collaboration_drift_is_recorded_once_across_readers(tmp_path, monkey
 def test_r3_collaboration_drift_is_recorded_once_across_a_lead_recovery(tmp_path, monkeypatch):
     """The first lead fails without touching source; the recovery lead
     redrafts. collaborators_for runs for each lead, and the drift persists."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "grok:default")
 
     def lead(call, replay):

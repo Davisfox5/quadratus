@@ -11,8 +11,9 @@ hot path.
 
 Two grades of number, clearly separated:
 
-* **Measured** -- when the CLI reports real token counts (the Claude CLI's
-  JSON envelope carries a ``usage`` block), those are recorded as-is.
+* **Measured** -- when the CLI reports real token counts, those are recorded
+  as-is. All three do today: the Claude and Grok JSON envelopes carry a
+  ``usage`` block and codex reports it on its ``turn.completed`` event.
 * **Estimated** -- otherwise tokens are estimated at ~4 characters per token,
   the long-standing English/code rule of thumb. Estimates are marked as
   estimates in the record; they are good enough to rank hot spots and size a
@@ -32,6 +33,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .safe_io import append_private
+
 __all__ = ["PRICES", "Price", "InvocationRecord", "UsageMeter", "CHARS_PER_TOKEN"]
 
 #: The estimation rule of thumb. Real tokenisers vary by ±25% either side of
@@ -47,8 +50,9 @@ class Price:
     output_per_mtok: float
 
 
-#: Seed price sheet, per model key, compiled 2026-08. Stale within months by
-#: design assumption -- correct it from the vendor pages, not from memory.
+#: Seed price sheet, per model key, first compiled 2026-08; rows added since
+#: carry their own date or note. Stale within months by design assumption --
+#: correct it from the vendor pages, not from memory.
 #: Keys are roster keys, which are stable across a model line's releases, so a
 #: floating alias that moves to a new release keeps pricing at the old one's
 #: rate until someone edits here. That is the intended failure: a wrong dollar
@@ -73,14 +77,16 @@ PRICES: Dict[str, Price] = {
     # it is priced here at its own line's flagship rate as a placeholder that
     # errs high. Every figure in this dict is a seed, but this one is a guess
     # on top of a seed -- correct it before any decision turns on it.
-    "openai:gpt-6-astra": Price(2.5, 20.0),
-    "openai:gpt-5.6-sol": Price(1.25, 10.0),
-    "openai:gpt-5.6-terra": Price(0.6, 5.0),
-    "openai:gpt-5.6-luna": Price(0.25, 2.0),
+    "openai:astra": Price(2.5, 20.0),
+    "openai:sol": Price(1.25, 10.0),
+    "openai:terra": Price(0.6, 5.0),
+    "openai:luna": Price(0.25, 2.0),
     # Priced at what the default resolves to today (4.6). A vendor-default row
     # is the one most likely to drift away from its price line, which is the
     # accepted cost of not pinning the model: a wrong figure on a
     # counterfactual meter is cheaper than a run stuck on last year's Grok.
+    # The worker and expert seats are the same model line called at a
+    # different effort, so all three share its rate.
     "grok:default": Price(2.0, 6.0),
     "grok:worker": Price(2.0, 6.0),
     "grok:expert": Price(2.0, 6.0),
@@ -100,6 +106,9 @@ class InvocationRecord:
     #: False when tokens were estimated from characters rather than reported
     #: by the CLI. Estimates rank hot spots; they do not bill.
     measured: bool
+    #: The key whose price was used when ``model`` (the name the response
+    #: reported) has none on the sheet; empty when ``model`` priced itself.
+    priced_as: str = ""
 
 
 class UsageMeter:
@@ -125,6 +134,7 @@ class UsageMeter:
         reply: str = "",
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
+        fallback_model: Optional[str] = None,
     ) -> InvocationRecord:
         """Record one call. Real token counts win; characters estimate the rest."""
         measured = input_tokens is not None and output_tokens is not None
@@ -132,7 +142,17 @@ class UsageMeter:
             input_tokens = int(len(prompt or "") / CHARS_PER_TOKEN)
         if output_tokens is None:
             output_tokens = int(len(reply or "") / CHARS_PER_TOKEN)
-        price = PRICES.get(model, DEFAULT_PRICE)
+        # ``model`` is the name the response reported. When the sheet has no
+        # price for it but has one for the key the call was made under
+        # (``fallback_model``: jev-latest answering as a dated release), that
+        # price is used and both names are kept, instead of the default price.
+        # A legacy version key is priced as the family row that answers for it.
+        from .registry import canonical_key
+        price, priced_as = PRICES.get(canonical_key(model)), ""
+        if price is None and fallback_model and fallback_model in PRICES:
+            price, priced_as = PRICES[fallback_model], fallback_model
+        if price is None:
+            price = DEFAULT_PRICE
         cost = (
             input_tokens * price.input_per_mtok
             + output_tokens * price.output_per_mtok
@@ -143,13 +163,18 @@ class UsageMeter:
             output_tokens=output_tokens,
             cost_usd=round(cost, 6),
             measured=measured,
+            priced_as=priced_as,
         )
+        row = asdict(entry)
+        if not priced_as:
+            del row["priced_as"]  # the line a record always had
         with self._lock:
             self._records.append(entry)
             if self.path is not None:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(asdict(entry)) + "\n")
+                # Owner-only from the first line: the log names every model
+                # called and what each call cost. Never written through a link.
+                append_private(self.path, json.dumps(row) + "\n")
         return entry
 
     def wrap(self, invoke):
@@ -200,12 +225,14 @@ class UsageMeter:
             return "No usage recorded."
         estimated = sum(1 for r in self.records if not r.measured)
         lines = ["# Usage report (API-price counterfactual)", ""]
+        priced_as = {r.model: r.priced_as for r in self.records if r.priced_as}
         for model in sorted(rows, key=lambda m: -rows[m]["cost_usd"]):
             agg = rows[model]
             lines.append(
                 f"- {model}: {agg['calls']} calls, "
                 f"{agg['input_tokens']:,} in / {agg['output_tokens']:,} out tokens, "
                 f"${agg['cost_usd']:.4f}"
+                + (f" (priced as {priced_as[model]})" if model in priced_as else "")
             )
         lines.append("")
         lines.append(f"**Total: ${self.total_cost():.4f}**")

@@ -18,6 +18,7 @@ from tools import truth_check
     ["--repair-test", "tests/test_app.py"],
     ["--tasks", "tasks.json"],
     ["--rulings", "rulings.json"],
+    ["--resume", "prior-run"],
     ["--survey-recovery", "0"],
     ["--direct-tier"],
 ])

@@ -122,9 +122,7 @@ The `goal` must match the run's goal. Paths and original case names are exact;
 globs and missing original cases are refused before the run starts. An
 intentional retirement uses `"action": "retire"` with an empty
 `"replacements": []` and a reason. Each replacement names the test file and
-case that must execute successfully. Checks must report those case names;
-use verbose test output, such as `pytest -v`, on this release.
-To preapprove the completed test diff,
+case that must execute successfully. To preapprove the completed test diff,
 also include `"current_sha256"` for its exact resulting bytes; without that
 field, the envelope authorizes the plan and the operator still approves the
 concrete diff through the question channel.

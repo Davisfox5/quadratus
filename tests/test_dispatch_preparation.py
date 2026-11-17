@@ -16,7 +16,7 @@ from quadratus.integration import IntegrationGate
 from quadratus.policy import PolicyError, load_policy
 from tests.test_parallel_tasks import Orchestrated, _block
 from tests.test_parallel_tasks import _session as parallel_session
-from tests.test_policy import document, write_policy
+from tests.test_policy import approval, document, write_policy
 
 
 def _policy(project):
@@ -29,7 +29,7 @@ def _policy(project):
                             "test-both-ways": {"absent": True, "because": "fixture"},
                             "typecheck": {"absent": True, "because": "fixture"}}
     write_policy(project, doc)
-    return load_policy(project)
+    return load_policy(project, trust_project_policy=approval(project))
 
 
 def _run(tmp_path, plan, *, policy=True, gate_argv=("true",)):
@@ -78,7 +78,10 @@ def test_the_contract_scope_is_the_scope_the_task_ran_under(tmp_path, monkeypatc
     import json
     ran_under = json.loads(seen[0])
     assert session.task_outcomes[0].contract["scope"] == ran_under
-    assert ran_under["forbidden_paths"] == [".env", ".git/**"], "the policy's narrowing is in the contract"
+    # The policy's own denials, and the built-in ones no project policy can
+    # remove (whole-repo review, 2026-11-10).
+    assert ran_under["forbidden_paths"] == [".env", ".git/**", ".env.*", ".quadratus/**"], \
+        "the policy's narrowing is in the contract"
 
 
 def test_an_operator_gate_is_kept_beside_the_policy_gates(tmp_path):

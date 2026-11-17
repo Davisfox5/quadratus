@@ -19,7 +19,9 @@ No engine change, runtime wiring, live run or vendor call.
   - The recorded delivery digests are the bytes the reviewer read and the
     bytes the project keeps.
   - When the runner's environment breaks after a design-fix, gate-fix or
-    security-fix, there's no repair call. The run hands off to the operator.
+    security-fix, the task's one bounded repair is spent (PR73 6693873055),
+    the check still fails, the cause stays unestablished and nothing
+    completes (`CheckFailing`, primary operator).
 - **E1 attribution limit:** a preview exiting 1 without structured proof of
   its origin remains `invalid_proof` and incomplete. It does not authorize an
   application repair. Proven launch or harness failures can be operator
@@ -57,9 +59,9 @@ No decision is patched. Scripted replies prove routing, not model judgement.
 | Acknowledgment: positive boundary | `test_an_exact_approval_with_surrounding_whitespace_is_an_approval` | pass: `reviewer` True, `unsatisfied` empty, completed |
 | Identity: approved = delivered = kept | `test_the_recorded_delivery_is_the_bytes_the_reviewer_read_and_the_bytes_kept` | pass: `delivery.files` sha256 equals the reviewer copy and the project, for all 3 mandatory files; the reviewer is another vendor |
 | Replaced after approval (E2) | `test_an_approved_tasks_renders_changed_by_a_later_task_do_not_complete` | pass: the digests diverge from the record and the run remains incomplete; historical `9eabf69` completed incorrectly |
-| Operator: runner lost after the design-fix | `test_a_runner_lost_after_the_design_fix_gets_no_gate_fix_and_no_review` | pass: `CheckUnattributable` (operator), 0 gate-fix, 1 design-fix, no design review, work kept |
-| Operator: runner lost after an attributable failure's gate-fix | `test_a_runner_lost_after_a_gate_fix_is_the_operators_not_a_product_failure` | pass: 1 gate-fix; first attempt `product` True, last False; primary `operator`; app unchanged |
-| Operator: runner lost after a security-fix | `test_a_runner_lost_after_a_security_fix_gets_no_further_repair_or_verdict` | pass: 1 security-fix, 1 verifier call, 0 gate-fix, `CheckUnattributable` |
+| Runner lost after the design-fix | `test_a_runner_lost_after_the_design_fix_spends_one_gate_fix_and_completes_nothing` | pass: 1 gate-fix, 1 design-fix, `CheckFailing`, primary `operator`, work kept |
+| Runner lost after an attributable failure's gate-fix | `test_a_runner_lost_after_a_gate_fix_stays_unestablished_never_a_product_failure` | pass: 1 gate-fix; first attempt `product` True, last False; primary `operator`; app unchanged |
+| Runner lost after a security-fix | `test_a_runner_lost_after_a_security_fix_buys_no_gate_fix_and_no_acceptance` | pass: 1 security-fix, 0 gate-fix, `CheckFailing`, incomplete |
 | Operator: preview can't start, no repair | `test_a_preview_that_never_starts_gets_no_repair_call` | pass: no design-fix, gate-fix or review; lead's edit kept; `DesignUnverified: task t1 ... exited with 1 before it was ready` |
 | Preview exits 1 without proven attribution (E1) | `test_a_preview_exit_without_proven_origin_remains_invalid_proof` | pass: active `invalid_proof`, incomplete, no repair call; exit status alone does not establish operator provenance |
 

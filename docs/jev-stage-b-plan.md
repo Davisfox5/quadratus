@@ -36,8 +36,9 @@ cell is not a win.
 - Seven features, two arms, one repeat: fourteen runs. The runner supports
   `repeats` if a second pass is authorized later.
 - Every cell is a planned run (`goal` only, no listed task text): the
-  orchestrator writes the tasks under `max_tasks` (10), each inside
-  `MAX_TASK_LINES`, with `declared_paths` as the scope fence. Survey mode
+  orchestrator writes the tasks under `max_tasks` (10), each sized to the
+  `TASK_SIZE_GUIDE` (advisory since 2026-10-20), with `declared_paths` as
+  the scope fence. Survey mode
   is on (`survey_recovery` 4): a failed or capped task is kept, the
   orchestrator re-plans with a HYPOTHESIS line that the harness records
   and never acts on, a same-cause repeat with nothing new changed stops

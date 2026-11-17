@@ -111,14 +111,14 @@ def test_a_granted_directory_view_sends_the_control(tmp_path):
 
 
 def test_a_restricted_worker_seat_sends_the_control_and_keeps_effort():
-    argv = _codex(key="openai:gpt-5.6-luna")._build_argv("p", "s")
+    argv = _codex(key="openai:luna")._build_argv("p", "s")
     assert _has_control(argv)
     assert argv[argv.index("--sandbox") + 1] == "read-only"
     assert "model_reasoning_effort=low" in argv
     assert "--skip-git-repo-check" in argv
 
 
-@pytest.mark.parametrize("key", ["openai:gpt-5.6-sol", "openai:gpt-6-astra", "openai:gpt-5.6-terra"])
+@pytest.mark.parametrize("key", ["openai:sol", "openai:astra", "openai:terra"])
 def test_every_senior_and_escalation_seat_sends_the_control(key):
     spec = resolve(key)
     argv = _codex(key=key)._build_argv("p", "s")
@@ -201,7 +201,7 @@ def test_a_conflicting_override_is_refused_before_launch(monkeypatch, raw):
 @pytest.mark.parametrize("raw", CONFLICTS)
 def test_a_conflict_is_refused_on_every_permission_mode(monkeypatch, raw):
     monkeypatch.setenv("QUADRATUS_CLI_ARGS_OPENAI", raw)
-    for provider in (_codex(), _codex(allow_writes=True), _codex(key="openai:gpt-5.6-luna")):
+    for provider in (_codex(), _codex(allow_writes=True), _codex(key="openai:luna")):
         with pytest.raises(ProviderError):
             provider._build_argv("p", "s")
 

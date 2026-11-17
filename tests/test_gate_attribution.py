@@ -11,6 +11,7 @@ import sys
 import pytest
 
 from quadratus.integration import (
+    PRODUCER,
     REPORT_TOKEN,
     GateCommand,
     GateSuite,
@@ -36,9 +37,13 @@ def _reasons(result):
 def test_a_plain_assertion_in_a_test_body_is_product(tmp_path):
     result = _gate(tmp_path, "def test_a():\n    assert 1 == 2\n\ndef test_b():\n    pass\n")
     assert result.report["state"] == "parsed" and result.report["exitstatus"] == 1
+    # The failure's own identity rides along (cycle04 R2): its crash site and
+    # a message digest; it decides no attribution.
+    digest = result.report["failures"][0]["message_sha"]
+    assert isinstance(digest, str) and len(digest) == 16
     assert result.report["failures"] == [dict(nodeid="test_app.py::test_a", when="call",
                                               exc_type="builtins.AssertionError", assertion=True,
-                                              body=True)]
+                                              body=True, site="test_app.py:2", message_sha=digest)]
     assert attribute(result) == dict(product=True, reasons=[])
     assert not list(tmp_path.glob("*.json")), "the report lives outside the project"
 
@@ -118,11 +123,11 @@ EXPECTED = dict(nonce="n1", module_file="/owned/quadratus_gate_report_ab.py", mo
 
 
 def _report(**changes):
-    good = dict(producer="quadratus-pytest/4", nonce="n1", module_file=EXPECTED["module_file"],
+    good = dict(producer=PRODUCER, nonce="n1", module_file=EXPECTED["module_file"],
                 module_sha256=EXPECTED["module_sha256"], exitstatus=1, collected=1, collect_errors=0,
                 counts=dict(passed=0, failed=1, errors=0, skipped=0),
                 failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=True)],
-                truncated=False)
+                truncated=False, passed_cases=[], passed_truncated=False)
     good.update(changes)
     return good
 
@@ -151,7 +156,13 @@ def test_impossible_or_mistyped_reports_are_malformed_never_product(tmp_path):
            dict(counts=dict(passed=5, failed=1, errors=0, skipped=0)),
            dict(failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=1)]),
            dict(failures=[dict(nodeid="t", when="later", exc_type="x", assertion=True)]),
-           dict(failures=[]), dict(truncated=True)]
+           dict(failures=[]), dict(truncated=True),
+           # Named passed cases (root review of 5ca254c): absent, mistyped,
+           # one per count, distinct, and a cut flag only with a full list.
+           dict(passed_cases=None), dict(passed_truncated=0), dict(passed_cases=["t::a"]),
+           dict(counts=dict(passed=2, failed=1, errors=0, skipped=0), collected=3, passed_cases=["t::a", "t::a"]),
+           dict(counts=dict(passed=1, failed=1, errors=0, skipped=0), collected=2, passed_cases=[""]),
+           dict(passed_truncated=True)]
     for change in bad:
         state = read_report(_written(tmp_path, _report(**change)), EXPECTED)
         assert state["state"] == "unparsable", (change, state)
@@ -287,8 +298,10 @@ def test_a_node_assertion_failure_is_product_and_the_tap_count_survives(tmp_path
             "test('ok', () => {});\ntest('bad', () => { assert.strictEqual(1, 2); });\n")
     result = _node_gate(tmp_path, body)
     assert result.returncode == 1 and result.report["state"] == "parsed", result.report
+    # The node producer records no failure identity: none is invented.
     assert result.report["failures"] == [dict(nodeid=result.report["failures"][0]["nodeid"], when="call",
-                                              exc_type="AssertionError", assertion=True, body=None)]
+                                              exc_type="AssertionError", assertion=True, body=None,
+                                              site=None, message_sha=None)]
     assert result.report["counts"] == dict(passed=1, failed=1, errors=0, skipped=0)
     assert attribute(result) == dict(product=True, reasons=[])
     assert "# pass 1" in result.output and "# fail 1" in result.output, "TAP stays on stdout for the count"

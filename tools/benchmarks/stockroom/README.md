@@ -1,0 +1,253 @@
+# stockroom benchmark
+
+One job for comparing the session engine with a single model on the same goal.
+
+- `seed/` is the starting project (a small inventory service; 12 tests).
+- `goal.txt` is the goal: stock reservations across the store, the HTTP API,
+  the command line and the docs, with refusal codes, strict JSON, a schema
+  upgrade and a no-overselling rule under threads.
+- `graders/` holds 116 hidden tests. They are never shown to a run.
+  `graders/grade.sh PROJECT OUT.json` runs them against a finished project and
+  writes `{"passed", "total"}`, the grade file `tools/compare_runs.py` reads.
+
+To run it: copy `seed/` somewhere, `git init` and commit it, then start a run
+with `--project` on the copy, the text of `goal.txt` as the goal, and
+`--check "python -m pytest -q --quadratus-report={report}"`. The check needs
+that report option: without it no test case is named and no requirement can
+be shown.
+
+## First results, 2026-11-12 (engine at 916c7e3)
+
+| Run | Graders | Calls | Reported tokens | Outcome |
+| --- | --- | --- | --- | --- |
+| `--baseline openai:sol` | 116 of 116 | 1 | about 378,000 | check passed |
+| `--baseline claude:opus` | 116 of 116 | 1 | about 765,000 | check passed |
+| engine, 500k per call | not graded | 5 | about 1,200,000 | stopped in task 1: a revision reported 511,672 tokens against the 500,000 per-call ceiling |
+| engine, 800k per call, 10 rounds, 6M total | 114 of 116 | 22 | about 5,000,000 | stopped before task 4 (docs): its route was priced at 1,000,000 tokens with 725,944 left; no audit ran |
+
+| engine, 800k per call, 10 rounds, 9M total (2026-11-13, at e3f6aee) | 116 of 116 | 34 | about 8,740,000 | six tasks closed; the audit ran and held 6 of 22 requirements NOT MET; the goal question was then refused with 59,011 tokens left, so the run reported incomplete |
+
+The second engine run's two misses are the two documentation graders; its
+code passed every code grader. Grok was not seated in any engine run: no
+task was labelled rote.
+
+The third run spent, by role: revisions 2.2M, lead drafts 1.8M, reviews 1.7M,
+rechecks 1.2M, planning 1.1M, the audit 0.7M. Its audit findings were edge
+cases the graders do not test. One was probed afterwards: a timestamp of
+10**400 raises OverflowError in that build and in both baseline builds.
+
+## The lean shape, 2026-11-13
+
+One listed task covering every requirement (`--tasks`, no planner): Opus
+builds, GPT Sol reviews, one fix round, then the audit.
+
+| Run | Graders | Calls | Reported tokens | Outcome |
+| --- | --- | --- | --- | --- |
+| lean, 1.2M per call | 116 of 116 | 2 | about 1,320,000 | stopped: the draft reported 1,266,498 tokens against the 1,200,000 ceiling |
+| lean, 2.5M per call | 116 of 116 | 4 | about 5,220,000 | stopped: the revision reported 2,505,850 tokens against the 2,500,000 ceiling; no recheck or audit ran |
+
+In the second run the draft was 1.42M, the review 1.25M and the revision
+2.51M. The same model built the same job alone for 0.77M.
+
+## Supplied review, 2026-11-14
+
+`--supplied-review`: a task's reviewer and re-check judge the changed files
+handed to them in the message, in one turn with no tools. Same limits as the
+9M run above (800k per call, 10 rounds).
+
+| Run | Graders | Calls | Reported tokens | Outcome |
+| --- | --- | --- | --- | --- |
+| first | 94 of 116 | 27 | about 3,660,000 | stopped in task 6: a lead mistyped the project path in one write, the denial was read as a lost write grant (fixed since) |
+| second | 114 of 116 | 38 | about 6,050,000 | stopped before the audit: a re-check was not shown the file its finding was about and kept it open (fixed since) |
+| third | 116 of 116 | 41 | about 7,490,000 | the audit ran and held 11 of 35 requirements NOT MET; no repair task could be paid from the 1.3M left |
+
+Average reported tokens per call, the 9M run above against the third run here:
+
+| Call | Before | With supplied review |
+| --- | --- | --- |
+| review | 279,564 | 45,670 |
+| re-check, judged from handed files (6 of 9) | 147,776 | about 40,000 |
+| re-check, all nine (three read a copy) | 147,776 | 82,167 |
+| revision | 366,221 | 232,844 |
+| lead draft | 299,762 | 285,123 |
+| planner | 214,934 | 251,672 |
+| audit | 671,258 | 711,258 |
+
+The third run's total is 14% under the earlier 9M run's 8,740,000. Runs differ
+a good deal in how many tasks and fix rounds the planner chooses (7 planner
+calls and 9 revisions here, 5 and 6 there), so the per-call rows say more than
+the totals.
+
+
+## With `--lean` (2026-11-15)
+
+Same goal, graders and limits as the supplied-review runs, with `--lean`.
+
+| | supplied-review run | `--lean` run |
+|---|---|---|
+| Graders | 116 of 116 | 116 of 116 |
+| Reported tokens | 7.49M | 4.71M |
+| Model calls | 41 | 48 |
+| Engine verdict | incomplete, 11 of 35 not met | incomplete, 18 of 32 not met |
+
+Per call, before and with `--lean`: planning 251,672 to 57,209 (11 calls);
+revision 232,844 to 75,682 (8 calls, one of which asked for a full session
+and reported about 283,000); audit 711,258 to 66,736. Lead drafts did not
+change (285,123 to 298,456, 8 calls) and are now half the run.
+
+Seven BLOCKING lines were kept as notes because they quoted no words the
+goal contains. Ten of the 18 NOT MET verdicts cite a lead's NOT RUN report
+(Codex leads could not open a socket in their sandbox and said so) that no
+later record settled, not a defect in the code.
+
+## Second `--lean` run: NOT RUN reports cleared, no faster (2026-11-15)
+
+Engine at 8a3e9cd with `--lean --max-parallel-tasks 4`. Graders 116 of 116,
+5.27M reported tokens, 47 calls, 78 minutes (the first `--lean` run took 58).
+Incomplete: the audit held 6 of 32 requirements, down from 18. Every NOT RUN
+report was cleared by the harness's own run, so none of the six is
+paperwork.
+
+Where the 78 minutes went: calls were in flight for 67 of them and only 13
+minutes had more than one call running, although two batches formed. The
+first audit took 601 s. Opus leads took 403 s and 507 s. A revision that
+returns whole files took 209 s to 256 s on Opus (25,000 to 32,000 output
+tokens). The delivered test suite takes 158 s, and the harness ran it at
+least five times. The first audit found defects after five tasks, and the
+three repair tasks that followed added about 25 minutes.
+
+## Third `--lean` run: edit blocks and fast tests (2026-11-16)
+
+Engine at f95b0a4, same flags, nothing else running on the machine. Graders
+116 of 116, 6.40M reported tokens, 72 calls, 75 minutes. Incomplete at the
+task cap: the audit held 11 of 21 requirements.
+
+What the two changes did. The delivered suite runs in 5.5 s (696 tests),
+against 158 s in the run before. Of 11 revision calls, 8 were answered in
+one turn; 3 Sol revisions answered `NEED SESSION:` and took the ordinary
+call. Opus one-turn revisions took 30 s, 114 s, 119 s and 250 s; the long
+ones still wrote 13,000 to 29,000 output tokens, most of it new tests.
+
+Why it was not faster. The run used all eight task slots and 16 lead calls
+(1,589 s and 3.23M tokens, half the run). Two audits took 939 s and eight
+planning calls 912 s; the goal question at the cap alone took 293 s. The
+first audit read expiry as an exact-arithmetic question (a stored
+`expires_at` float against `now + ttl`), the repair tasks rewrote expiry
+with exact fractions, and the second audit then held seven requirements on
+that reading. One open review finding held R18.
+
+## Fourth `--lean` run: one-turn drafts, audit held to the goal (2026-11-16)
+
+Engine at e60442b, same flags. Graders 116 of 116, 3.16M reported tokens
+(6.40M the run before), 50 calls, 72 minutes. Incomplete at the task cap:
+the final audit held 2 of 21 requirements (11 the run before).
+
+Lead drafts: 9 calls, 0.91M tokens (3.23M before). Eight were written in
+one turn; one Sol draft answered `NEED SESSION:` and took the ordinary call
+(398,000 tokens). Opus one-turn drafts took 296 s and 591 s, writing 35,000
+and 67,000 output tokens; Sol drafts took 16 s to 87 s.
+
+The audit raised no edge-of-representation case. Its first pass held four
+requirements, one a real defect (a database that cannot be opened escaped
+the CLI's JSON failure line), which the next task fixed. What stayed held
+through three audits is one question the goal leaves open: a refused commit
+that is the first call to see a reservation expired must change nothing,
+and the reservation must never be active again. The audit named it as a
+decision, the planner cannot make it, and tasks 6 to 8 went to it.
+
+Time did not fall: planning took 935 s over 10 calls, three audits 923 s,
+and the two Opus drafts 887 s.
+
+## Fifth `--lean` run: staged audit, complete (2026-11-16)
+
+Engine at 965eea9 with `--lean --ask-dir`, task limit 12, and the goal's
+item 8 amended (recording an expiry is not a change). Graders 116 of 116,
+2.02M reported tokens, 38 calls, 45 minutes. The engine reported the goal
+complete: the first run of this benchmark to end that way. Six tasks.
+
+| | Fourth run | Fifth run |
+|---|---|---|
+| Time | 72 min | 45 min |
+| Reported tokens | 3.16M | 2.02M |
+| Calls | 50 | 38 |
+| Engine verdict | 2 of 21 held | complete (30 requirements) |
+
+The first audit ran as four calls at once and took 207 s on the wall
+(923 s for three audits the run before). It held two requirements, both in
+the command line, and one task repaired them. The second audit kept 6
+verdicts and asked 24 ids in four calls, 134 s.
+
+The audit asked one decision, on R11: the server answers requests it cannot
+parse (bad request line, unsupported version, oversized headers) with 400
+`invalid_json`, and the goal names no code for them. Answered through the
+question folder, as the operator, by the session watching the run: accepted,
+no change needed. The auditor then judged R11 in one 45 s call.
+
+Drafts: Opus wrote the first task in 278 s (33,600 output tokens); five Sol
+drafts took 24 s to 126 s. Planning was 744 s over six calls.
+
+## Sixth run: the fifth repeated (2026-11-16)
+
+Same engine (965eea9) and flags as the fifth run. Graders 116 of 116,
+3.18M reported tokens, 52 calls, 64 minutes, reported complete (33
+requirements, seven tasks). So two runs in a row finished complete, and
+the spread between them is 45 to 64 minutes and 2.0M to 3.2M tokens.
+
+Where the extra 19 minutes went: the planner labelled the HTTP task
+complex, so Opus wrote it in one turn (539 s, 61,800 output tokens; the
+fifth run's planner gave that work to Sol in 126 s). One of the first
+audit's four parallel calls took 459 s while the other three took 81 to
+100 s, so that pass was no faster than one call. Nine revisions against
+five.
+
+The second audit kept 18 of 33 verdicts and asked 15 ids in three calls
+(178 s). The audit asked one decision, on R33: whether upgrading an old
+database on open breaks "a refused command changes nothing" when the
+command is then refused. Answered as the operator by the watching session:
+no, the upgrade belongs to opening; the data must be untouched.
+
+## Seventh run: plan given at once (2026-11-16)
+
+Engine at 71aa4dc, same flags, `plan_queue` on. Graders 116 of 116, 4.07M
+reported tokens, 67 calls, 64 minutes. Incomplete at the 12-task cap: the
+final audit held R10 and R11.
+
+The plan queue worked as built and saved little here. The planner gave
+three waves; the second ran with no planning call; the third was set aside
+when a reviewer's finding was left open, and a later one-wave plan ran the
+same way. Eleven planning calls were still made (1,075 s), because six of
+the twelve tasks were repairs the plan could not foresee.
+
+Why it did not finish: tasks 7 to 12 all worked on Content-Length
+handling for R10 and R11. The first audit held R11 on an obsolete folded
+header (`Content-Length: 37` continued on a second line). The repair
+rejected that and also began rejecting ordinary optional whitespace around
+the value, and the last audit held R10 and R11 on that. Four tasks in a row
+covered R11 alone. The audit's reach rule did not treat the folded header
+as an edge case.
+
+The audit asked one decision, on R15, the same question as the sixth run
+(upgrade on open against "a refused command changes nothing"), and got the
+same answer.
+
+## Eighth run: the planner rules on audit disputes (2026-11-16)
+
+Engine at d13772d, `--lean`, no question channel. Graders 116 of 116, 2.36M
+reported tokens, 46 calls, 46 minutes, reported complete (33 requirements,
+eight tasks). The operator was asked nothing.
+
+The audit raised two decisions and the planner ruled on both, each in one
+call, and the auditor then judged those requirements under the ruling:
+
+- R29: which routes the Content-Length rules cover. Ruling: only the one
+  route that reads a body, `POST /reservations`.
+- R33: whether upgrading an old database on open breaks "a refused command
+  changes nothing". Ruling: no; opening is not part of the refused call,
+  and the data must be unchanged from the opened database.
+
+No requirement was held three times, so the two-repairs rule did not fire.
+The first audit held two requirements, two tasks repaired them, and the
+second audit kept 24 of 33 verdicts and asked 9 ids in two calls.
+
+The plan queue ran one later wave without a planning call and set one
+aside when a reviewer's finding was left open. Nine planning calls (664 s).

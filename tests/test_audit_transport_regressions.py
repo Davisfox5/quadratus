@@ -16,8 +16,10 @@ from quadratus.run_budget import RunBudget, RunLimits
 
 @pytest.mark.parametrize("error", [
     {"message": "connection lost"},
+    {"status": 503},
     {},
     None,
+    "malformed failure detail",
 ])
 def test_codex_failed_turn_cannot_deliver_earlier_narration(error):
     stream = "\n".join(json.dumps(event) for event in [
@@ -26,8 +28,35 @@ def test_codex_failed_turn_cannot_deliver_earlier_narration(error):
         {"type": "turn.failed", "error": error},
     ])
 
-    with pytest.raises(ProviderError, match="turn failed"):
+    with pytest.raises(ProviderError, match="turn failed") as caught:
         _extract_codex_result(stream)
+    assert caught.value.partial_text == "I am inspecting the project."
+
+
+@pytest.mark.parametrize("terminals", [
+    ("turn.failed", "turn.completed"),
+    ("turn.completed", "turn.failed"),
+])
+def test_codex_last_terminal_event_decides_native_recovery(terminals):
+    def terminal(kind):
+        return {"type": kind, **({"error": {"message": "401 Unauthorized"}}
+                                 if kind == "turn.failed" else {})}
+
+    stream = "\n".join(json.dumps(event) for event in [
+        {"type": "item.completed", "item": {
+            "type": "agent_message", "text": "I am inspecting the project."}},
+        terminal(terminals[0]),
+        {"type": "item.completed", "item": {
+            "type": "agent_message", "text": "Recovered final answer."}},
+        terminal(terminals[1]),
+    ])
+
+    if terminals[-1] == "turn.completed":
+        assert _extract_codex_result(stream) == "Recovered final answer."
+    else:
+        with pytest.raises(ProviderError) as caught:
+            _extract_codex_result(stream)
+        assert caught.value.auth_invalid
 
 
 def test_codex_auth_failure_after_narration_keeps_vendor_sign_in_marker():

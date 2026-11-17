@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .config import Settings
-from .latest import alias_env_var, record_resolution
+from .latest import alias_env_var, record_resolution, resolve_model
 from .registry import MODE_ROSTERS, ORCHESTRATOR_CHAIN, ROSTER, VENDORS, resolve
 from .runtime import Fleet, _looks_exhausted
 
@@ -80,6 +80,10 @@ class ProbeResult:
     seconds: float = 0.0
     #: Aliases tried before this one, all of which the CLI rejected.
     rejected: Sequence[str] = ()
+    #: The failure's own envelope said the subscription window is spent (the
+    #: typed fact, ``runtime._looks_exhausted``). Never read from ``detail``,
+    #: which is text.
+    exhausted: bool = False
 
 
 def default_probe_set() -> List[str]:
@@ -155,17 +159,24 @@ def probe_models(
                 # all, and what does it say it is" is the question that
                 # matters for this row.
                 candidates = [""]
-            elif spec.floating:
-                candidates = list(spec.alias_chain)
             else:
-                candidates = [spec.alias]
+                # The family's resolution for this machine (the installed
+                # client's catalogue, or the alias the CLI resolves): the one
+                # string the run would send. A family that resolves to
+                # nothing is reported with the reason and never guessed at.
+                found = resolve_model(key, installed_client=getattr(
+                    active._vendor_provider(spec.provider), "client_version", None))
+                if not found.available:
+                    results.append(ProbeResult(key, "", False, detail=f"unavailable: {found.reason}"))
+                    continue
+                candidates = [found.wire or ""]
             rejected: List[str] = []
             for alias in candidates:
                 if on_progress:
                     on_progress(f"{key} -> {alias}")
                 started = time.monotonic()
                 try:
-                    reply = active.provider_for(key).for_model(alias).generate(
+                    reply = active.provider_for(key).for_seat(alias, effort="low").generate(
                         PROBE_PROMPT, system="Answer in as few words as possible."
                     )
                 except Exception as exc:  # noqa: BLE001 -- the probe reports, never raises
@@ -175,6 +186,7 @@ def probe_models(
                         detail=str(exc).strip()[:300],
                         seconds=round(time.monotonic() - started, 2),
                         rejected=tuple(rejected[:-1]),
+                        exhausted=_looks_exhausted(exc),
                     )
                     continue
                 result = ProbeResult(
@@ -223,7 +235,7 @@ def render_report(
             said = f" — says it is {result.reported!r}" if result.reported else ""
             shown = result.alias or "(the CLI's own default, no model flag)"
             lines.append(f"  OK   {result.key} -> {shown}{tried}{said}")
-        elif _looks_exhausted(result.detail):
+        elif result.exhausted:
             # The alias was fine; the window is not. Telling an operator to go
             # edit a working alias because their quota ran out sends them to
             # fix the one thing that is not broken.
@@ -240,7 +252,7 @@ def render_report(
             )
 
     failed = [r for r in models if not r.ok]
-    spent = [r for r in failed if _looks_exhausted(r.detail)]
+    spent = [r for r in failed if r.exhausted]
     lines += ["", "Summary", "-------"]
     lines.append(
         f"  {len(models) - len(failed)} of {len(models)} models answered; "

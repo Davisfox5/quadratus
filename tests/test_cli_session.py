@@ -36,8 +36,7 @@ class FakeFleet:
         if "Name the single next task" in prompt:
             return self._script.pop(0) if self._script else "DONE"
         if "The task is finished" in prompt:
-            return ("SUMMARY: did the thing\nREASONING: it was simplest\n"
-                    "DEAD ENDS: - Tried X; too slow.")
+            raise AssertionError("no model summary call exists: a task's record is the harness's (2026-10-21)")
         if "full task list" in prompt or "expected task list" in prompt:
             return "1. do the thing"
         return f"[{model}] output"
@@ -75,7 +74,13 @@ def test_a_session_runs_and_reports(tmp_path, fleet, capsys):
     assert _run(tmp_path) == 0
     out = capsys.readouterr().out
     assert "task(s) complete" in out
-    assert "did the thing" in out
+    # The task's record is the harness's own, printed as recorded: with no
+    # project selected the source measurement is unknown and no check ran,
+    # and the durable full record is pointed at, never a model's summary.
+    assert "Recorded by the harness, not a model" in out
+    assert "Changed: unknown (no project selected)" in out and "Checks: no check recorded" in out
+    assert "full record: artifact" in out
+    assert not any("The task is finished" in c["prompt"] for c in fleet["fleet"].calls)
 
 
 def test_the_state_directory_holds_everything_the_run_accumulated(tmp_path, fleet):

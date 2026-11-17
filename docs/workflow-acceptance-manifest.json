@@ -81,7 +81,7 @@
     {
       "id": "J4",
       "tests": [
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix"
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_one_diagnosed_gate_fix"
       ],
       "required_obligations": [
         "calls",
@@ -91,14 +91,14 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix"
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_one_diagnosed_gate_fix"
         ]
       }
     },
     {
       "id": "J5",
       "tests": [
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix"
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_one_diagnosed_gate_fix"
       ],
       "required_obligations": [
         "calls",
@@ -108,15 +108,15 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix"
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_one_diagnosed_gate_fix"
         ]
       }
     },
     {
       "id": "J6",
       "tests": [
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix",
-        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix"
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_one_diagnosed_gate_fix",
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_one_diagnosed_gate_fix"
       ],
       "required_obligations": [
         "calls",
@@ -126,8 +126,8 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix",
-          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix"
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_one_diagnosed_gate_fix",
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_one_diagnosed_gate_fix"
         ]
       }
     },
@@ -366,7 +366,7 @@
       "id": "J17",
       "tests": [
         "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
-        "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+        "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused"
       ],
       "required_obligations": [
         "calls",
@@ -377,11 +377,11 @@
       "coverage": {
         "calls": [
           "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
-          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused"
         ],
         "outcome": [
           "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
-          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused"
         ]
       }
     },
@@ -584,7 +584,7 @@
       "id": "J29",
       "tests": [
         "tests/test_workflow_session.py::test_a_merged_parallel_batch_records_each_child_with_its_owner",
-        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
       ],
       "required_obligations": [
         "calls",
@@ -596,7 +596,7 @@
       "coverage": {
         "outcome": [
           "tests/test_workflow_session.py::test_a_merged_parallel_batch_records_each_child_with_its_owner",
-          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
         ]
       }
     },
@@ -704,7 +704,7 @@
     {
       "id": "J35",
       "tests": [
-        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
       ],
       "required_obligations": [
         "calls",
@@ -715,7 +715,7 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
         ]
       }
     },

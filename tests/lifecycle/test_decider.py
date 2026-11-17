@@ -26,7 +26,7 @@ class FakeDecider:
 
 def _lead(call, replay):
     H.write(call, {"app.py": FIXED})
-    return 'Implemented add.\nCHANGED: ["app.py"]'
+    return 'Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]'
 
 
 def _run(tmp_path, monkeypatch, decl, decider):
@@ -175,6 +175,10 @@ def _one_unlabelled_task():
 
 def test_the_call_limit_stops_the_run_before_a_second_jev_decision(tmp_path, monkeypatch):
     from quadratus.run_budget import RunLimits
+    # The finish hold (Davis, 2026-10-16) would refuse an earlier ordinary
+    # call; this case pins the limit itself, so the hold is off here and is
+    # controlled in tests/lifecycle/test_finish_capacity.py.
+    monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
     decider = _jev([_JevAnswer("backend", 300), _JevAnswer("rote", 300)])
     replay = H.run(tmp_path, monkeypatch, _one_unlabelled_task(), files=FILES, max_tasks=2, decider=decider,
                    limits=RunLimits(max_calls=2, max_reported_tokens=6_000_000, wall_seconds=600,

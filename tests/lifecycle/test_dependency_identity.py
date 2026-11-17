@@ -98,7 +98,8 @@ def test_a_capped_gate_fix_that_fixed_the_code_is_gated_again_and_passes(tmp_pat
     (fix,) = replay.of("gate-fix")
     assert _turns_flag(fix) == str(CAP)
     assert H.gate_results(replay) == ["PASSED"], "the required check decides, after the capped fix"
-    assert H.ended_at_cap(replay, 1) and replay.of("closeout")
+    # The job's only task is its last wave: the harness writes its record.
+    assert H.ended_at_cap(replay, 1) and replay.artifact_texts("factual-closeout") and not replay.of("closeout")
     assert H.result_json(replay)["turn_limited_tasks"] == []
     assert replay.artifacts("capped-fix")
 
@@ -181,13 +182,14 @@ def test_a_gate_fix_denied_the_harness_command_at_the_cap_is_a_capability_stop(t
     assert len(replay.of("gate-fix")) == 1 and H.gate_results(replay) == []
 
 
-def test_review_seats_share_the_cap_and_closeout_and_the_orchestrator_do_not(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, Script(), files=FILES)
-    assert H.ended_at_cap(replay, 1)
+def test_review_seats_share_the_cap_and_the_orchestrator_does_not(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # a non-codex collaborator (the Grok peer) shows the cap flag
+    # Two tasks: both records are the harness's own (Davis, 2026-10-21); no
+    # close-out call exists to cap or to exempt.
+    replay = _run(tmp_path, monkeypatch, Script(), files=FILES, max_tasks=2)
+    assert H.ended_at_cap(replay, 2) and replay.of("closeout") == []
     assert all(_turns_flag(c) is None for c in replay.of("orchestrator"))
-    # The close-out keeps its own one-turn, tool-less summary form.
-    assert all(_turns_flag(c) == "1" for c in replay.of("closeout"))
-    assert replay.of("collaborator") and replay.of("closeout")
+    assert replay.of("collaborator")
     # Review seats joined the capped set after series rule-2ffa7f6 f3 and f5
     # (runtime.REVIEW_CAPPED_ROLES): the same cap as the lead's editing calls.
     for role in ("lead", "revision", "collaborator", "recheck"):
@@ -433,6 +435,7 @@ def test_a_capped_revision_that_touched_a_tree_is_named_when_the_run_ends_at_its
 def test_a_grok_gate_fix_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch, turns, edits):
     """Codex's 90cc5d9 baseline: without a cap on the fix role, a cancelled
     Grok envelope at 14 or 20 turns was a ProviderError."""
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def gate_fix(call, replay):
         if edits:
             H.write(call, {"app.py": FIXED})
@@ -447,6 +450,7 @@ def test_a_grok_gate_fix_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch, 
 
 
 def test_a_grok_revision_cancelled_at_the_cap_takes_the_capped_task_path(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def revision(call, replay):
         return H.grok_ok("Still revising.", stop="cancelled", num_turns=CAP)
     replay = _run(tmp_path, monkeypatch, Script(revision=revision), files=FILES, lead="grok:default")

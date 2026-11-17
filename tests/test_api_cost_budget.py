@@ -61,12 +61,19 @@ def test_missing_api_rate_stops_before_reservation():
     assert b.snapshot()['reserved_attempts'] == 0
 
 
-def test_unpriced_resolved_model_stops_after_preserving_unknown_cost():
-    b = budget()
+def test_unpriced_resolved_model_is_priced_as_the_reserved_key_and_both_names_are_kept():
+    # This pinned a stop (unknown_api_cost) until 2026-11-10: a rate for
+    # jev:jev-latest and a response naming jev-1.13.0 ended a run after its
+    # first decision. The call was admitted under the reserved key's rate, so
+    # it is priced there and the record carries both names.
+    b = budget(cap=1)
     ticket, _ = b.reserve(transport='api', price_key='openai:fixture')
-    with pytest.raises(RunBudgetExceeded, match='unknown_api_cost'):
-        b.finish(ticket, {'input_tokens': 1, 'output_tokens': 1}, price_key='openai:changed')
-    assert b.snapshot()['unknown_api_cost_attempts'] == 1
+    b.finish(ticket, {'input_tokens': 1, 'output_tokens': 1}, price_key='openai:changed')
+    snap = b.snapshot()
+    assert snap['unknown_api_cost_attempts'] == 0 and snap['stop_reason'] == ''
+    assert snap['api_cost_usd'] == pytest.approx(3 / 1_000_000)
+    assert snap['api_price_fallbacks'] == [
+        dict(reported_model='openai:changed', priced_as='openai:fixture', attempts=1)]
 
 
 def test_unknown_usage_is_never_priced_as_zero():

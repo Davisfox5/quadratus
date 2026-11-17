@@ -42,8 +42,10 @@ AUDIT_DEBT = frozenset({"audit_debt", "ledger_missing"})
 DESIGN_DEBT = frozenset({"design_evidence", "design_review"})
 
 _CHECK_ATTEMPT = re.compile(r"check attempt \d+ failed\Z")
+#: An unmerged child that changed nothing says so (cycle15) instead of
+#: naming an artifact as if it held edits; both forms are the same fact.
 _UNMERGED_LEGACY = re.compile(r"Parallel task (?P<task>\S+) was not merged \((?P<reason>.*)\); "
-                              r"its files are kept in artifact \S+\.\Z", re.S)
+                              r"(?:its files are kept in artifact \S+|it changed no files)\.\Z", re.S)
 _DEPENDENCY = ("DependencyTreeChanged:", "DependencyIdentityUnavailable:")
 _FACT_LIMIT = 400
 #: Session._note_exception keeps this much of an exception's message in detail.

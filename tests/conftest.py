@@ -65,6 +65,25 @@ class FakeProvider(LLMProvider):
         return self._is_retryable
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _harness_scratch_stays_in_the_test_tree(tmp_path_factory):
+    """Source copies, prompt files and provider scratch folders go under the
+    private scratch root (``providers.scratch_root``), which by default is
+    in the developer's home. Tests keep theirs in pytest's own temp tree, so
+    a provider a test never cleaned up leaves nothing behind there."""
+    import os
+
+    root = tmp_path_factory.mktemp("quadratus-scratch")
+    os.chmod(root, 0o700)
+    previous = os.environ.get("QUADRATUS_SCRATCH_DIR")
+    os.environ["QUADRATUS_SCRATCH_DIR"] = str(root)
+    yield
+    if previous is None:
+        os.environ.pop("QUADRATUS_SCRATCH_DIR", None)
+    else:
+        os.environ["QUADRATUS_SCRATCH_DIR"] = previous
+
+
 @pytest.fixture
 def settings() -> Settings:
     s = Settings(
@@ -75,6 +94,59 @@ def settings() -> Settings:
     )
     s.retry_base_delay = 0.0
     return s
+
+
+#: The installed codex client's catalogue as the Mac held it on 2026-10-24
+#: (models_cache.json, client 0.163.0): the families this engine routes to,
+#: with the efforts each lists. Tests point the resolver at a fresh copy so
+#: no test reads the developer's own ~/.codex; a test about a stale,
+#: missing or malformed catalogue writes its own and sets the variable.
+CODEX_CATALOG_MODELS = [
+    dict(slug="gpt-6.1-sol", display_name="GPT-6.1 Sol", visibility="list", default_reasoning_level="low",
+         supported_reasoning_levels=[dict(effort=e) for e in ("low", "medium", "high", "xhigh", "max", "ultra")]),
+    dict(slug="gpt-6-astra", display_name="GPT-6 Astra", visibility="list", default_reasoning_level="low",
+         supported_reasoning_levels=[dict(effort=e) for e in ("low", "medium", "high", "xhigh", "max", "ultra")]),
+    dict(slug="gpt-6-luna", display_name="GPT-6 Luna", visibility="list", default_reasoning_level="low",
+         supported_reasoning_levels=[dict(effort=e) for e in ("low", "medium", "high", "xhigh", "max")]),
+    dict(slug="gpt-5.6-terra", display_name="GPT-5.6 Terra", visibility="list", default_reasoning_level="low",
+         supported_reasoning_levels=[dict(effort=e) for e in ("low", "medium", "high", "xhigh", "max", "ultra")]),
+    dict(slug="gpt-6-sol", display_name="GPT-6 Sol", visibility="list",
+         supported_reasoning_levels=[dict(effort=e) for e in ("low", "medium", "high", "xhigh")]),
+    dict(slug="gpt-5.6-sol", display_name="GPT-5.6 Sol", visibility="list",
+         supported_reasoning_levels=[dict(effort=e) for e in ("low", "medium", "high", "xhigh")]),
+    dict(slug="gpt-5.6-luna", display_name="GPT-5.6 Luna", visibility="list",
+         supported_reasoning_levels=[dict(effort=e) for e in ("low", "medium", "high")]),
+]
+
+
+def write_codex_catalog(path, models=None, *, client_version="0.163.0", fetched_at=None):
+    """Write a catalogue file in the client's shape; returns the path."""
+    import json
+    import time
+    from datetime import datetime, timezone
+    fetched = fetched_at or datetime.fromtimestamp(time.time(), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    path.write_text(json.dumps(dict(fetched_at=fetched, client_version=client_version,
+                                    models=list(CODEX_CATALOG_MODELS if models is None else models))))
+    return path
+
+
+@pytest.fixture(scope="session")
+def _codex_catalog_file(tmp_path_factory):
+    return write_codex_catalog(tmp_path_factory.mktemp("codex") / "models_cache.json")
+
+
+@pytest.fixture(autouse=True)
+def _the_installed_codex_catalogue(monkeypatch, _codex_catalog_file):
+    """Every test resolves OpenAI families against the fixture catalogue
+    unless it sets QUADRATUS_CODEX_CATALOG itself."""
+    monkeypatch.setenv("QUADRATUS_CODEX_CATALOG", str(_codex_catalog_file))
+    # The grok listing is a subprocess of the real binary; tests with a fake
+    # CLI script must not see it in their argv logs. The dedicated tests
+    # turn it on with a scripted runner.
+    monkeypatch.setenv("QUADRATUS_GROK_MODELS", "0")
+    for name in ("QUADRATUS_ALIAS_OPENAI_SOL", "QUADRATUS_ALIAS_OPENAI_ASTRA", "QUADRATUS_ALIAS_OPENAI_LUNA",
+                 "QUADRATUS_ALIAS_OPENAI_TERRA", "QUADRATUS_CATALOG_MAX_AGE_HOURS"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

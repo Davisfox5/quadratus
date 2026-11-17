@@ -29,10 +29,17 @@ Parity first. The stop names, kinds and texts are the ones the session
 writes today, byte for byte. Where today's decision looks wrong, the
 decision says so in ``divergences`` and still returns today's answer: this
 candidate carries no authority to change final DONE behaviour.
+
+One rule added since (review of 2026-11-10): a requirements audit that did
+not run judged nothing. DONE is sent back once so the next DONE asks for it
+again; a second miss, or a miss with no DONE left to ask (the cap, an
+explicit list, a spent allowance), is the operator stop ``AuditUnavailable``,
+never ``RequirementsUnmet``.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
@@ -158,10 +165,26 @@ class CompletionInputs:
     max_reopens: int = 3
     #: Answers to steps already made. None: not asked.
     goal_confirmed: Optional[bool] = None
+    #: At the cap: why the record on the current source already makes
+    #: completion impossible, so the goal question is not asked (cycle02).
+    known_incomplete: str = ""
     requirements_satisfied: Optional[bool] = None
     #: The refusal text the requirements check left (``_done_refusal``).
     done_refusal: str = ""
+    #: Why the requirements audit did not run ("" when it ran or was not
+    #: reached), and how many DONE checks in a row it has now missed. An
+    #: audit that did not happen judged nothing: it is never "not met".
+    audit_unavailable: str = ""
+    audit_misses: int = 0
     dependencies_verified: bool = False
+    #: A task route refused at dispatch that forfeited the remaining slots
+    #: (``Session._route_forfeit``): the cap's stop names it, never the cap
+    #: alone.
+    route_forfeit: Optional[dict] = None
+    #: The job's commitment to end after one task whose ordinary route could
+    #: not be paid (``Session._terminal_route``): the cap's stop names the
+    #: relinquished slots as a choice, never as the cap reached.
+    terminal_route: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -297,6 +320,8 @@ def _validate(inputs: CompletionInputs) -> None:
         raise ValueError("requirements cannot fail with the ledger off; today's check returns True")
     if inputs.site == DONE_REPLY and inputs.goal_confirmed is not None:
         raise ValueError("the goal question is asked only at the cap")
+    if inputs.audit_unavailable and inputs.requirements_satisfied is not False:
+        raise ValueError("an audit that did not run cannot leave the requirements satisfied or unasked")
 
 
 def _done_reply(inputs: CompletionInputs, debt: Debt) -> Decision:
@@ -315,11 +340,22 @@ def _done_reply(inputs: CompletionInputs, debt: Debt) -> Decision:
             raise ValueError("dependencies are verified at DONE only after the requirements check")
         return Decision(STEP, site, debt, step=CHECK_REQUIREMENTS)
     if not satisfied:
+        if inputs.audit_unavailable:
+            # Nothing was judged, so there is nothing to cover again: the next
+            # DONE asks for the audit once more, then the operator is told.
+            if inputs.audit_misses <= 1 and inputs.reopens < inputs.max_reopens:
+                return Decision(SEND_BACK, site, debt,
+                                reopen_fact="DONE sent back: the requirements audit did not run")
+            return _audit_stop(inputs, debt, f"in {max(inputs.audit_misses, 1)} attempt(s) at DONE")
         if inputs.reopens < inputs.max_reopens:
             return Decision(SEND_BACK, site, debt, reopen_fact="DONE sent back: requirements open")
+        # The owed work is named here because this stop now reaches a run
+        # the cap used to end first (slots are charged at dispatch, so a
+        # DONE sent back spends none; quality/completion batch, 2026-10-31).
+        owed = (f" Capped or failed work not continued: {', '.join(debt.partial)}." if debt.partial else "")
         return _classed(Decision(INCOMPLETE, site, debt, stop=Stop("unverified", (
             f"RequirementsUnmet: DONE was sent back {inputs.reopens} time(s) and the "
-            f"requirements are still not met: {_why(inputs)}. Work preserved."))))
+            f"requirements are still not met: {_why(inputs)}.{owed} Work preserved."))))
     if not inputs.dependencies_verified:
         return Decision(STEP, site, debt, step=VERIFY_DEPENDENCIES)
     # Today's conjunction, in its order: partiality is evaluated (and its
@@ -340,12 +376,20 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
         # No slot is left to repay them, so the goal question is not asked.
         if inputs.goal_confirmed is not None or inputs.requirements_satisfied is not None:
             raise ValueError("open audit findings at the cap forbid the goal question")
-        return _findings_stop(site, debt, "the task cap was reached")
+        return _findings_stop(site, debt, _reached(inputs) if inputs.route_forfeit or inputs.terminal_route
+                              else "the task cap was reached")
     mismatches = debt.partial_mismatches
     confirmed = satisfied = None
     if debt.partial:
         if inputs.goal_confirmed is not None:
             raise ValueError("capped or unmerged work at the cap forbids the goal question")
+    elif inputs.goal_confirmed is None and inputs.known_incomplete:
+        return _classed(Decision(INCOMPLETE, site, debt, done_accepted=False, partial_mismatches=mismatches,
+                                 stop=Stop("unverified", (
+                                     f"RequirementsUnmet: {_reached(inputs)}, and the record on the current "
+                                     f"source already holds requirements not met ({inputs.known_incomplete[:400]}); "
+                                     "the goal question was not asked because no answer could complete the run. "
+                                     "Work preserved."))))
     elif inputs.goal_confirmed is None:
         return Decision(STEP, site, debt, step=CONFIRM_GOAL, partial_mismatches=mismatches)
     else:
@@ -359,27 +403,113 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
     completed = bool(confirmed and satisfied and not debt.legacy_open_findings
                      and not _checks_standing_failed(debt))
     if completed:
-        return _guard(inputs, debt, "the cap's goal confirmation", done_accepted=True,
-                      partial_mismatches=mismatches)
-    cap = inputs.max_tasks
+        where = "the cap's goal confirmation"
+        if inputs.route_forfeit or inputs.terminal_route:
+            where = f"the goal confirmation (asked when {_reached(inputs)})"
+        return _guard(inputs, debt, where, done_accepted=True, partial_mismatches=mismatches)
     if confirmed is False:
         return _classed(Decision(INCOMPLETE, site, debt, done_accepted=False, partial_mismatches=mismatches,
-                                 stop=Stop("cap", (f"GoalUnconfirmedAtCap: the task cap ({cap}) was reached and "
-                                                   "the orchestrator did not confirm the goal met. "
+                                 stop=Stop("cap", (f"GoalUnconfirmedAtCap: {_reached(inputs)} and the "
+                                                   "orchestrator did not confirm the goal met. "
                                                    "Work preserved."))))
+    if confirmed and satisfied is False and inputs.audit_unavailable:
+        # No slot is left for a DONE that would ask for the audit again.
+        return _audit_stop(inputs, debt, f"when {_reached(inputs)} with the goal confirmed",
+                           done_accepted=False, partial_mismatches=mismatches)
     if confirmed and satisfied is False:
         return _classed(Decision(INCOMPLETE, site, debt, done_accepted=False, partial_mismatches=mismatches,
                                  stop=Stop("unverified", (
-                                     f"RequirementsUnmet: the task cap ({cap}) was reached with the goal "
+                                     f"RequirementsUnmet: {_reached(inputs)} with the goal "
                                      f"confirmed but the requirements not met: {_why(inputs)}. "
                                      "Work preserved."))))
-    return _open_work_stop(inputs, debt, "GoalUnconfirmedAtCap", f"the task cap ({cap}) was reached",
+    return _open_work_stop(inputs, debt, "GoalUnconfirmedAtCap", _reached(inputs),
                            done_accepted=False, partial_mismatches=mismatches)
 
 
+def _reached(inputs: CompletionInputs) -> str:
+    """How the cap's decision was reached: the cap itself, or a task route
+    refused at dispatch that forfeited the remaining slots (the honest
+    stop reason: the fresh end-to-end job on 21b342d read 'the task cap
+    (3) was reached' when one slot was refused and two forfeited)."""
+    forfeit = inputs.route_forfeit
+    if forfeit and forfeit.get("site") in ("before planning", "planning re-ask"):
+        # Cycle03: decided by a quote before a planning call or before a
+        # planner re-ask, so no task was named.
+        what = ("no continuation of the known remaining work could be paid"
+                if forfeit.get("site") == "before planning" else "the planner's re-ask could not be paid")
+        return (f"{what} from the allowance left ({forfeit.get('detail')}), so "
+                f"{forfeit.get('slots_unused')} of {inputs.max_tasks} task slot(s) were forfeited "
+                f"{forfeit.get('site')}")
+    if forfeit:
+        return (f"{forfeit.get('task')}'s route could not be paid from the allowance left "
+                f"({forfeit.get('detail')}), so {forfeit.get('slots_unused')} of {inputs.max_tasks} task "
+                "slot(s) were forfeited")
+    terminal = inputs.terminal_route
+    if terminal:
+        return (f"the job committed to end after {terminal.get('task')} on its terminal route "
+                f"({terminal.get('reason')}), relinquishing {terminal.get('relinquished')} of "
+                f"{inputs.max_tasks} task slot(s)")
+    return f"the task cap ({inputs.max_tasks}) was reached"
+
+
+#: The terminal summary's bound on the send-back it quotes (unchanged).
+_WHY_CHARS = 400
+_LABEL_OPEN = re.compile(r" \((?:its quoted basis|no basis stated)")
+
+
 def _why(inputs: CompletionInputs) -> str:
+    """The send-back the terminal summary quotes, within ``_WHY_CHARS``
+    (cycle20). Whole lines are kept while they fit; a line that does not is
+    cut at a word, never inside a provenance label, and keeps its
+    requirement id, then one marker counts what was left out; for an
+    audit's send-back it says each reason is whole, or with its artifact, in
+    ``finish_routing``. Short text is unchanged."""
     why = (inputs.done_refusal or "").replace(_SENT_BACK, "").strip()
-    return why[:400] or "the requirements check did not pass"
+    if len(why) <= _WHY_CHARS:
+        return why or "the requirements check did not pass"
+    lines = why.splitlines()
+    audit = why.startswith(_AUDIT_FOUND)
+    kept: list = []
+    for i, line in enumerate(lines):
+        rest = "\n".join(lines[i:])
+        marker = _omitted(len(rest), audit)
+        room = _WHY_CHARS - len("\n".join(kept)) - (1 if kept else 0) - len(marker)
+        if len(line) <= room and i < len(lines) - 1:
+            kept.append(line)
+            continue
+        if len(line) <= room:
+            kept.append(line)
+            break
+        cut = line[:max(0, room)]
+        label = _LABEL_OPEN.search(cut)
+        if label is not None:
+            cut = cut[:label.start()]
+        elif " " in cut:
+            cut = cut[:cut.rfind(" ")]
+        cut = cut.rstrip()
+        kept.append(cut + _omitted(len(rest) - len(cut), audit))
+        break
+    return "\n".join(kept).strip()
+
+
+#: The send-back that lists an audit's unmet requirements; only its reasons
+#: are routed, so only it may say ``finish_routing`` holds each one.
+_AUDIT_FOUND = "An independent audit found these requirements not met:"
+
+
+def _omitted(count: int, audit: bool) -> str:
+    return (f" [... {count} more characters; each reason, whole or with its artifact, is in result.json "
+            "finish_routing]" if audit else f" [... {count} more characters]")
+
+
+def _audit_stop(inputs: CompletionInputs, debt: Debt, where: str, **fields) -> Decision:
+    """The requirements audit did not run and no retry is left: an operator
+    stop under its own name. Never RequirementsUnmet, which says an audit
+    judged a requirement and found it missing."""
+    return _classed(Decision(INCOMPLETE, inputs.site, debt, stop=Stop("operator", (
+        f"AuditUnavailable: the independent requirements audit did not run {where} "
+        f"({(inputs.audit_unavailable or '').strip()[:300]}). No requirement was judged met or not met. "
+        "Work preserved.")), **fields))
 
 
 def _checks_standing_failed(debt: Debt) -> bool:
@@ -474,6 +604,9 @@ class RequirementsAnswer:
     satisfied: bool
     refusal: str
     ledger: LedgerSnapshot
+    #: Why the audit did not run, and its misses in a row (CompletionInputs).
+    audit_unavailable: str = ""
+    audit_misses: int = 0
 
 
 def resolve(inputs: CompletionInputs, *, confirm_goal: Callable[[], bool],
@@ -496,7 +629,9 @@ def resolve(inputs: CompletionInputs, *, confirm_goal: Callable[[], bool],
         elif decision.step == CHECK_REQUIREMENTS:
             answer = check_requirements()
             inputs = replace(inputs, requirements_satisfied=bool(answer.satisfied),
-                             done_refusal=answer.refusal or "", ledger=answer.ledger)
+                             done_refusal=answer.refusal or "", ledger=answer.ledger,
+                             audit_unavailable=answer.audit_unavailable or "",
+                             audit_misses=answer.audit_misses)
         else:
             verify_dependencies()
             inputs = replace(inputs, dependencies_verified=True)
@@ -516,6 +651,8 @@ def snapshot_session(session, *, site: str, max_tasks: int = 0, **answers) -> Co
         legacy_open_findings=tuple(session.open_findings),
         legacy_partial=frozenset(session._partial_tasks),
         max_tasks=max_tasks,
+        route_forfeit=getattr(session, "_route_forfeit", None),
+        terminal_route=getattr(session, "_terminal_route", None),
         reopens=answers.pop("reopens", session._requirement_reopens),
         max_reopens=answers.pop("max_reopens", session.config.max_requirement_reopens),
         **answers,

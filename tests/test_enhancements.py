@@ -22,7 +22,7 @@ from .test_session import Recorder  # reuse the scripted fake
 
 FABLE = "claude:fable"
 OPUS = "claude:opus"
-SOL = "openai:gpt-5.6-sol"
+SOL = "openai:sol"
 TRUST = [OPUS, SOL, "grok:default"]
 
 
@@ -136,24 +136,24 @@ def test_the_goal_still_leads_and_the_question_still_closes(store, tmp_path):
     assert prompt.index("MAP-MARKER") < prompt.index("Name the single next task")
 
 
-def test_closeouts_teach_the_map(store, tmp_path):
+def test_a_task_record_never_amends_the_map(store, tmp_path):
+    """The model close-out that used to carry MAP NOTES is gone (Davis,
+    2026-10-21); the map is amended from orientation and close-out
+    requests elsewhere, never by a task's record."""
     m = CodebaseMap(tmp_path / "map.jsonl")
     rec = Recorder(closeout=(
         "SUMMARY: built it\nREASONING: simplest\n"
         "MAP NOTES:\n- conventions: errors are wrapped in AppError\n"
-        "- not-a-note-without-content:"
     ))
     s = _session(store, rec, config=SessionConfig(codebase_map=m))
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert len(m) == 1
-    assert "AppError" in m.render()
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert len(m) == 0 and "the codebase map was not amended by this task" in got.summary
 
 
-def test_without_a_map_closeouts_do_not_ask_for_notes(store, rec):
+def test_no_summary_prompt_is_ever_sent_for_a_task(store, rec):
     s = _session(store, rec)
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "MAP NOTES" not in closeout
+    assert not any("The task is finished" in c["prompt"] or "MAP NOTES" in c["prompt"] for c in rec.calls)
 
 
 # -- 4: the failure-loop breaker ----------------------------------------------
@@ -251,11 +251,11 @@ def test_an_approved_plan_runs_normally(store):
     assert len(s.run(max_tasks=5)) == 1
 
 
-def test_the_plan_request_carries_the_size_ceiling(store, rec):
+def test_the_plan_request_carries_the_size_guide(store, rec):
     s = _session(store, rec)
     s.plan()
-    from quadratus.task_kinds import MAX_TASK_LINES
-    assert str(MAX_TASK_LINES) in rec.calls[0]["prompt"]
+    from quadratus.task_kinds import TASK_SIZE_GUIDE
+    assert str(TASK_SIZE_GUIDE) in rec.calls[0]["prompt"]
 
 
 def test_no_gate_means_no_extra_invocation(store):
@@ -283,8 +283,8 @@ def test_the_tree_picks_by_errand_and_spreads_vendors():
 def test_demanding_errands_escalate_within_their_own_family():
     """The skill stays matched; the horsepower goes up one tier."""
     assert pick_worker("check", demanding=True) == "claude:sonnet"
-    assert pick_worker("read", demanding=True) == "openai:gpt-5.6-terra"
-    assert pick_worker("format", demanding=True) == "openai:gpt-5.6-terra"
+    assert pick_worker("read", demanding=True) == "openai:terra"
+    assert pick_worker("format", demanding=True) == "openai:terra"
     assert pick_worker("lookup", demanding=True) == "grok:expert"
 
 
@@ -471,9 +471,9 @@ def test_a_failing_gate_feeds_the_output_back_for_one_fix(store):
     assert gate.runs == 2
 
 
-def test_a_failure_without_an_attributable_report_gets_no_fix(store):
-    from quadratus.integration import CheckUnattributable
-
+def test_a_failure_without_an_attributable_report_gets_the_bounded_fix_with_its_diagnosis(store):
+    """PR73 6693873055: an undeclared report is a diagnostic fact, not a
+    stop. The repair call gets the output and the harness's diagnosis."""
     class Undeclared(StubGate):
         def run(self):
             self.runs += 1
@@ -481,23 +481,52 @@ def test_a_failure_without_an_attributable_report_gets_no_fix(store):
     rec = Recorder()
     gate = Undeclared([])
     s = _session(store, rec, config=SessionConfig(integration_gate=gate))
-    with pytest.raises(CheckUnattributable, match="structured report undeclared"):
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    fixes = [c["prompt"] for c in rec.calls if "integration check failed" in c["prompt"]]
+    assert gate.runs == 2 and len(fixes) == 1, "one bounded fix, then the check decides"
+    assert "Harness diagnosis" in fixes[0] and "structured report undeclared" in fixes[0]
+
+
+def test_a_runner_whose_launch_failed_gets_no_fix(store):
+    from quadratus.integration import CheckUnattributable
+
+    class Unlaunchable(StubGate):
+        def run(self):
+            self.runs += 1
+            return GateResult(passed=False, command="pytest -q", returncode=None,
+                              output="(command not found: pytest)", blocker="runner unavailable: pytest")
+    rec = Recorder()
+    gate = Unlaunchable([])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    with pytest.raises(CheckUnattributable, match="runner unavailable"):
         s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     assert gate.runs == 1 and not any("integration check failed" in c["prompt"] for c in rec.calls)
+
+
+@pytest.mark.parametrize("code", [126, 127])
+def test_an_exit_status_alone_names_no_cause_and_is_repaired(store, code):
+    """Root review of b49a0cb, R1: project code can exit 126 or 127."""
+    class Exiting(StubGate):
+        def run(self):
+            self.runs += 1
+            return GateResult(passed=False, command="pytest -q", returncode=code, output="app exited")
+    rec = Recorder()
+    gate = Exiting([])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert gate.runs == 2 and sum("integration check failed" in c["prompt"] for c in rec.calls) == 1
 
 
 def test_a_persistent_failure_is_carried_loudly_to_the_closeout(store):
     rec = Recorder()
     gate = StubGate([False, False])
     s = _session(store, rec, config=SessionConfig(integration_gate=gate))
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
-    assert "still failing at close" in closeout
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert "Checks: last check FAILED" in got.summary and "PASSED" not in got.summary
 
 
 def test_no_gate_configured_means_no_gate_runs(store):
     rec = Recorder()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
-    assert not any("Integration gate" in c["prompt"] for c in rec.calls
-                   if "The task is finished" in c["prompt"])
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert "Checks: no check recorded" in got.summary

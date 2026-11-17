@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from quadratus import cli, project_run
+from quadratus import checkpoint, cli, project_run
 from quadratus import integration as I
 from quadratus.config import Settings
 
@@ -206,3 +206,44 @@ def test_cli_forwards_the_operator_test_changes_file(tmp_path, monkeypatch):
     assert seen["test_changes"] == "approvals.json" and callable(seen["ask_operator"])
 
 
+def test_resume_validates_preapproved_test_changes_against_verified_original_baseline(tmp_path, monkeypatch):
+    raw = _envelope(tmp_path, approved=True)
+    (tmp_path / PATH).write_bytes(NEW)
+    parent = tmp_path / ".quadratus/runs/previous"
+    parent.mkdir(parents=True)
+    checkpoint.write(parent, dict(version=checkpoint.VERSION,
+                                  state=checkpoint._encode({"_original_tests": {PATH: OLD}})))
+    seen = {}
+
+    def run(*args, **kwargs):
+        seen.update(kwargs)
+        return "preflight only; full resume validation still required"
+
+    monkeypatch.setattr(project_run, "_run", run)
+    result = project_run.run_project(GOAL, tmp_path, Settings(), test_changes=raw, resume_from="previous")
+
+    assert result.startswith("preflight only")
+    assert seen["test_changes"][0]["original_sha256"] == _digest(OLD)
+    assert seen["test_changes"][0]["current_sha256"] == _digest(NEW)
+    assert seen["resume_from"] == "previous"
+
+
+@pytest.mark.parametrize("bad_baseline", [None, {PATH: "unencoded text is not original bytes"}])
+def test_resume_refuses_missing_or_malformed_original_baseline_before_execution(tmp_path, monkeypatch, bad_baseline):
+    raw = _envelope(tmp_path)
+    parent = tmp_path / ".quadratus/runs/previous"
+    parent.mkdir(parents=True)
+    checkpoint.write(parent, dict(version=checkpoint.VERSION,
+                                  state=checkpoint._encode({"_original_tests": bad_baseline})))
+    monkeypatch.setattr(project_run, "_run", lambda *a, **k: pytest.fail("no resume effect is allowed"))
+    with pytest.raises(checkpoint.CheckpointRefused, match="original-test baseline"):
+        project_run.run_project(GOAL, tmp_path, Settings(), test_changes=raw, resume_from="previous")
+
+
+def test_resume_test_authority_cannot_load_a_checkpoint_outside_this_projects_runs(tmp_path, monkeypatch):
+    raw = _envelope(tmp_path)
+    outside = tmp_path / "another-project-run"
+    outside.mkdir()
+    monkeypatch.setattr(checkpoint, "load", lambda *a: pytest.fail("must reject the path before reading it"))
+    with pytest.raises(checkpoint.CheckpointRefused, match="not a run of this project"):
+        project_run.run_project(GOAL, tmp_path, Settings(), test_changes=raw, resume_from=outside)

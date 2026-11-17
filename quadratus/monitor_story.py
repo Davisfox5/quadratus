@@ -17,12 +17,14 @@ from .monitor import (
     _read_json,
     _read_regular,
     _tail_jsonl,
+    render_breakdown_html,
     render_markdown,
 )
 
 ROLE_LABELS = {
     'orchestrator': 'Planning the next step', 'requirements-review': 'Reviewing the plan',
     'lead': 'Building the change', 'direct': 'Building the change',
+    'judge': 'Choosing between two drafts',
     'collaborator': 'Reviewing the change', 'verifier': 'Checking the fix',
     'revision': 'Making corrections', 'recheck': 'Checking the corrections', 'design-review': 'Reviewing screenshots',
     'design-fix': 'Correcting the interface', 'gate-fix': 'Correcting a failed test',
@@ -34,6 +36,18 @@ PUBLIC_KINDS = {'draft', 'revision', 'monitor-reply', 'direct-closeout'}
 def _safe(text):
     # Render saved model text as text, never executable HTML or Markdown links.
     return html.escape(str(text), quote=True)
+
+
+def _text(value):
+    """``value`` when it is text, else ''. These files are written by a run
+    this monitor does not control, so a field is used as a key, a name or a
+    label only after it is known to be a string."""
+    return value if isinstance(value, str) else ''
+
+
+def _records(value):
+    """The dict entries of ``value`` when it is a list, else none."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 def _model(key):
@@ -150,7 +164,7 @@ def _activity_line(event, work=None, reply_text=None, check_text=None):
     kind = event.get('kind')
     actor = _model(event.get('model'))
     action = ROLE_LABELS.get(str(event.get('role', '')), 'Working on the task')
-    task = str(event.get('task', ''))
+    task = _text(event.get('task'))
     detail = (work or {}).get(task)
     suffix = f' · {_step(task)}' if _step(task) else ''
     subject = f' — {detail}' if detail else suffix
@@ -182,6 +196,8 @@ def _activity_line(event, work=None, reply_text=None, check_text=None):
             return f'{_step(failed[1])}: tests failed; planning a correction'
         if 'RunBudgetExceeded' in message and message.startswith('call ended:'):
             return 'Usage limit reached; the run is stopping'
+        if 'FinishReserved' in message and message.startswith('call ended:'):
+            return 'Ordinary work stopped to keep room for the goal check and audit'
     return None
 
 
@@ -241,18 +257,22 @@ def _saved_checks(run_dir):
         node_fail = re.findall(r'(?:# fail |ℹ fail )(\d+)', clean)
         totals = dict(passed=0, failed=0, skipped=0)
         counted = False
-        if node_pass and node_fail:
-            totals['passed'] += sum(map(int, node_pass))
-            totals['failed'] += sum(map(int, node_fail))
-            counted = True
-        outcome = r'\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|rerun|warnings?)'
-        for line in clean.splitlines():
-            if not re.fullmatch(r'\s*(?:=+\s*)?' + outcome + r'(?:, ' + outcome +
-                                r')*(?: in [\d.]+s(?: \([^)]*\))?)?\s*=*\s*', line):
-                continue
-            for count, name in re.findall(r'(\d+) (passed|failed|errors?|skipped)\b', line):
-                totals['failed' if name in ('error', 'errors') else name] += int(count)
+        try:
+            if node_pass and node_fail:
+                totals['passed'] += sum(map(int, node_pass))
+                totals['failed'] += sum(map(int, node_fail))
                 counted = True
+            outcome = r'\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|rerun|warnings?)'
+            for line in clean.splitlines():
+                if not re.fullmatch(r'\s*(?:=+\s*)?' + outcome + r'(?:, ' + outcome +
+                                    r')*(?: in [\d.]+s(?: \([^)]*\))?)?\s*=*\s*', line):
+                    continue
+                for count, name in re.findall(r'(\d+) (passed|failed|errors?|skipped)\b', line):
+                    totals['failed' if name in ('error', 'errors') else name] += int(count)
+                    counted = True
+        except ValueError:
+            # A digit run too long for int() is not a count: state none for this output.
+            counted = False
         if counted:
             summary = f'{totals["passed"]} passed · {totals["failed"]} failed'
             if totals['skipped']:
@@ -364,6 +384,10 @@ def _run_outcome(status, budget, last):
         return 'Completed — goal recorded as met', 'confirmed', 'Quadratus recorded the overall goal as complete.'
     if terminal == 'listed tasks complete':
         return 'Planned tasks finished — overall review not run', 'idle', 'The listed tasks finished. This run did not review the overall goal.'
+    if terminal == 'baseline, not judged':
+        # One model alone (quadratus.baseline): the tests are shown in their
+        # own box, and nothing here reviewed the goal.
+        return 'Baseline run: one model alone, goal not judged', 'idle', 'One model worked alone. Nothing in this run reviewed the overall goal.'
     reason = str(status.get('stop_reason', ''))
     match = re.search(r'timed out after (\d+)s', reason)
     if match:
@@ -474,16 +498,55 @@ def render_story(status):
     cards each opening to the full text, then every technical fact
     collapsed. Read-only: no model call, no generated summary; every saved
     string is escaped. Test results and overall completion stay separate;
-    returned team claims never replace independent test receipts."""
-    root = status.get('run_dir')
+    returned team claims never replace independent test receipts.
+
+    Never raises, like ``monitor.read_status``: the panel is redrawn every
+    few seconds from files a run is still writing, and ``receipts: null``,
+    a failure entry that was not an object or a list where a task id
+    belonged each raised here and blanked the tab on every refresh
+    (whole-repo review 2026-11-10, gui_records 10). Each field is checked
+    before it is used; anything that still goes wrong becomes one
+    "unreadable record" panel that claims nothing about the run."""
+    try:
+        return _render_story(status)
+    except Exception as exc:  # noqa: BLE001 -- a monitor never fails on the run it describes
+        return _unreadable(status, exc)
+
+
+def _unreadable(status, exc):
+    """The panel when the saved record could not be rendered: it says so,
+    names the kind of fault, and keeps the technical facts when those can
+    still be shown. It states no progress, test result or outcome."""
+    out = [_STYLE, '<div class="qm">',
+           '<section class="qm-banner qm-idle" role="status" aria-live="polite">'
+           '<h2>Unreadable record</h2>'
+           f'<p>The saved run record could not be shown ({_safe(type(exc).__name__)}). '
+           'This is a problem reading the files, not a result of the run; the run itself is not affected.</p>'
+           '</section>']
+    try:
+        out.append('<details><summary>Run records and full report</summary><pre>'
+                   + _safe(render_markdown(status)) + '</pre></details>')
+    except Exception:  # noqa: BLE001 -- the fallback must not fail either
+        pass
+    out.append('</div>')
+    return '\n'.join(out)
+
+
+def _render_story(status):
+    root = _text(status.get('run_dir'))
     run_dir = Path(root) if root and root != UNKNOWN else None
     result, events, replies = None, [], []
     if run_dir:
         result, _ = _read_json(run_dir / 'result.json')
+        if result is None:
+            # Absent or unreadable export: the committed terminal decides.
+            from .monitor import _terminal_result
+            result, _ = _terminal_result(run_dir)
         events, _ = _tail_jsonl(run_dir / 'activity.jsonl')
         replies = _read_replies(run_dir)
     work = _task_work(events, result)
-    budget, _ = _read_json(run_dir / 'budget.json') if run_dir else (None, None)
+    from .jobstore import read_budget
+    budget, _ = read_budget(run_dir) if run_dir else (None, None)
     budget = budget or {}
     preserved = _preserved_reply(run_dir, budget) if run_dir and status.get('finished') is True else None
     if preserved:
@@ -502,7 +565,7 @@ def render_story(status):
                 summary = match['summary'] if match else None
             except (ValueError, TypeError, OverflowError):
                 pass
-        return _activity_line(event, work, reply_text.get(event.get('artifact')), summary)
+        return _activity_line(event, work, reply_text.get(_text(event.get('artifact'))), summary)
     finished = status.get('finished') is True
     terminal = status.get('terminal_status')
     title, tone, why = _run_outcome(status, budget, last)
@@ -524,10 +587,13 @@ def render_story(status):
         checking = any(e.get('kind') == 'check-started' for e in active[-3:])
         progress = f'<div class="qm-big">{"Testing the changes" if checking else "In progress"}</div>{now}'
     elif finished:
-        progress = '<div class="qm-big">' + ('Finished' if terminal == 'complete' else 'Stopped') + '</div>'
-        last_task = next((e for e in reversed(events) if e.get('kind') == 'call-started' and work.get(e.get('task'))), None)
-        if last_task:
-            progress += f'<p class="qm-note">Last work: {_safe(work[last_task["task"]])}</p>'
+        progress = '<div class="qm-big">' + ('Finished' if terminal == 'complete' else
+                                             'Ended, not judged' if terminal == 'baseline, not judged'
+                                             else 'Stopped') + '</div>'
+        last_work = next((work[_text(e.get('task'))] for e in reversed(events)
+                          if e.get('kind') == 'call-started' and work.get(_text(e.get('task')))), None)
+        if last_work:
+            progress += f'<p class="qm-note">Last work: {_safe(last_work)}</p>'
         elif _number((result or {}).get('tasks')):
             progress += f'<p class="qm-note">{result["tasks"]} steps closed</p>'
     elif run_dir and events:
@@ -553,10 +619,10 @@ def render_story(status):
         check += f'<p class="qm-note">Last checked: {_safe(summary or saved_checks[-1]["summary"])}</p>'
     if last is not None:
         failures = []
-        for receipt in last.get('receipts', []):
-            report = receipt.get('report') if isinstance(receipt, dict) else None
-            for failure in (report or {}).get('failures', []):
-                name = str(failure.get('nodeid', '')).split('::')[-1]
+        for receipt in _records(last.get('receipts')):
+            report = receipt.get('report')
+            for failure in _records(report.get('failures')) if isinstance(report, dict) else []:
+                name = _text(failure.get('nodeid')).split('::')[-1]
                 name = re.sub(r'at 1280x800', '(desktop)', name)
                 name = re.sub(r'at 390x844', '(phone)', name)
                 name = name.replace('restore-order browser review', 'Restore library order')
@@ -612,7 +678,8 @@ def render_story(status):
             out.append(f'<p><strong>Last saved test output:</strong> {_safe(saved_checks[-1]["summary"])}</p>')
         else:
             out.append('<p><strong>Tests:</strong> No independent test result was saved.</p>')
-        out.append(f'<p><strong>{"Result" if terminal in ("complete", "listed tasks complete") else "Why it stopped"}:</strong> {_safe(why)}</p>')
+        ended = ("complete", "listed tasks complete", "baseline, not judged")
+        out.append(f'<p><strong>{"Result" if terminal in ended else "Why it stopped"}:</strong> {_safe(why)}</p>')
         if preserved and terminal not in ('complete', 'listed tasks complete'):
             out.append('<p><strong>Still unfinished:</strong> The final team reply was saved when the run stopped. '
                        'Quadratus did not finish independently checking and accepting that reply. '
@@ -620,10 +687,10 @@ def render_story(status):
         out.append('</section>')
 
     out.append('<section aria-label="Activity"><h3>Activity</h3>')
-    answered = {e.get('call_id') for e in events if e.get('kind') == 'reply'}
+    answered = {e['call_id'] for e in events if e.get('kind') == 'reply' and isinstance(e.get('call_id'), str)}
     visible = []
     for e in events:
-        if e.get('kind') == 'call-ended' and e.get('call_id') in answered:
+        if e.get('kind') == 'call-ended' and isinstance(e.get('call_id'), str) and e['call_id'] in answered:
             continue
         if e.get('kind') == 'stage' and e.get('stage') in ('draft', 'review', 'gate', 'closeout', 'close-out'):
             continue
@@ -661,6 +728,7 @@ def render_story(status):
                    + ('<p class="qm-note">Shown up to 6,000 characters; the whole reply is in the saved run '
                       'files.</p>' if reply['truncated'] else '') + '</details></article>')
     out.append('</div></section>')
+    out.append(render_breakdown_html(status.get('breakdown')))
     out.append('<details><summary>Run records and full report</summary>'
                '<p class="qm-note">Activity shows the last saved update. Team replies describe what agents reported; '
                'the Tests box shows results saved by the test runner. Tokens include cached input; actual cost is not shown.</p><pre>'

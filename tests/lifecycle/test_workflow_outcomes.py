@@ -130,7 +130,13 @@ def test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop(
     assert not replay.result.completed
     stop = _stop(replay)
     assert stop["legacy"] == "CheckFailing" and stop["kind"] == "product", "named since G9"
-    assert "still failing at close" in replay.of("closeout")[0].prompt, "the close-out is told the gate failed"
+    # The run stops right after t1, so no planning call reads a summary: the
+    # harness records the close-out, and it states the failed check (R24
+    # known-stop correction; old: a model close-out told "still failing").
+    assert not replay.of("closeout")
+    record = json.loads(replay.artifact_texts("factual-closeout")[0])
+    assert record["task"] == "t1" and "last check FAILED" in record["check"]
+    assert "stops on its failed check" in record["why"]
 
 
 # -- J15 / J16 / J17 / J18 stops that keep their precedence ------------------------------
@@ -166,15 +172,17 @@ def test_j17_a_refused_lead_is_a_refusal_never_rerouted(tmp_path, monkeypatch):
     assert t1["primary"] == "refusal" and _stop(replay)["legacy"] == "ProviderRefusal"
 
 
-def test_j17_a_refused_closeout_is_a_harness_record_not_a_stop(tmp_path, monkeypatch):
+def test_j17_a_task_record_is_the_harness_s_and_cannot_be_refused(tmp_path, monkeypatch):
+    """The closeout stage closes on the harness record (Davis, 2026-10-21):
+    a model that would refuse a summary is never asked, so no refusal fact
+    exists on the task and the run completes."""
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_then_done(DECL_T1),
                                                 closeout=lambda call, replay: H.claude_refusal("cyber")),
                   max_tasks=3)
     t1 = _task(replay, "t1")
     assert t1["closed_as"] == "closed" and t1["primary"] == "clean"
-    (refused,) = [f for f in t1["facts"] if f["kind"] == "refusal"]
-    assert refused["stage"] == "closeout" and refused["terminal"] is False and "cyber" in refused["detail"]
-    assert "artifact" in refused["detail"] and replay.result.completed
+    assert [f for f in t1["facts"] if f["kind"] == "refusal"] == [] and t1["edges"]["closeout"] is True
+    assert replay.of("closeout") == [] and replay.result.completed
 
 
 def test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap(tmp_path, monkeypatch):
@@ -195,7 +203,9 @@ def test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap(tmp_path, monkeypatch
 
 def test_j20_a_capped_lead_is_a_cap_that_blocks_completion(tmp_path, monkeypatch):
     def lead(call, replay):
-        H.write(call, {"app.py": FIXED})
+        # A half-done source the checks fail: a checked capped draft in the last
+        # slot meets an independent review instead (Step 2 r03).
+        H.write(call, {"app.py": "def add(a, b):\n    return a\n"})
         return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
     replay = _run(tmp_path, monkeypatch, Script(lead=lead), settings=CAPPED)
     t1 = _task(replay, "t1")
@@ -224,6 +234,7 @@ def test_j22_a_continuation_that_finishes_recovers_the_cap_and_keeps_its_record(
 
 
 def test_j23_two_caps_in_a_row_are_the_breaker(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"README.md": "# app\n\npartial\n"})
@@ -243,12 +254,21 @@ def test_j24_budget_exhaustion_is_a_budget_stop_with_the_task_stopped(tmp_path, 
     from quadratus.run_budget import RunLimits
     replay = _run(tmp_path, monkeypatch, Script(), limits=RunLimits(max_calls=2, max_reported_tokens=6_000_000,
                                                                     wall_seconds=600, max_concurrent_workers=2))
-    assert replay.result.error.startswith("RunBudgetExceeded")
+    # Two calls: the goal question's held call refuses the lead before the
+    # call limit is reached (Davis, 2026-10-16). Old (ba0e2be): a budget
+    # stop on FinishReserved with neither finishing judgment. The lead was
+    # the task's first editor and nothing was written, so t1 is NOT RUN and
+    # the held goal question is asked with the second call (root
+    # reconciliation of R23); unconfirmed, the cap names the stop.
+    assert [c.role for c in replay.calls] == ["orchestrator", "orchestrator"]
+    assert _task(replay, "t1")["closed_as"] == "not_started"
+    assert [n["task"] for n in H.result_json(replay)["not_started"]] == ["t1"]
     stop = _stop(replay)
-    assert stop["kind"] == "budget" and stop["legacy"] == "RunBudgetExceeded"
+    assert stop["legacy"] == "GoalUnconfirmedAtCap" and not replay.result.completed
 
 
 def test_j25_a_recovered_transport_failure_is_history_not_a_block(tmp_path, monkeypatch):
+    H.grok_lead_routing(monkeypatch, trust=True)  # the case injects a Grok lead or peer
     def lead(call, replay):
         if call.vendor == "grok":
             return H.grok_ok("I'll create it", stop="cancelled", num_turns=3)
@@ -303,8 +323,25 @@ def test_j10_a_blocking_design_review_is_unverified(tmp_path, monkeypatch):
 
 # -- P3: gate attribution (J4, J5, J6, J33; map G10) -----------------------------------
 #
-# Only a structured, attributable assertion failure reaches a gate-fix. Each
-# case below was a gate-fix on 9c6024b.
+# Phase 3 let only a structured, attributable assertion failure reach a
+# gate-fix. Since PR73 6693873055 attribution is the diagnosis and
+# ``repair_route`` decides: J4-J6 get the bounded repair with the reasons in
+# hand; J33's unavailable runner is still the operator's with no repair.
+
+
+def _repaired_once_with_its_diagnosis(replay, reason):
+    """One gate fix, told the harness's facts; the check still fails (the
+    scripted fix changes nothing), the cause stays unestablished, and the
+    run does not complete."""
+    t1 = _task(replay, "t1")
+    (fix,) = replay.of("gate-fix")
+    assert "Harness diagnosis" in fix.prompt and reason in fix.prompt
+    first = t1["checks"][0]
+    assert first["attribution"]["product"] is False and reason in "; ".join(first["attribution"]["reasons"])
+    assert first["repair_route"] == dict(repairable=True, blockers=[], attribution=first["attribution"])
+    assert not replay.result.error.startswith("CheckUnattributable"), replay.result.error
+    assert t1["primary"] == "operator" and not replay.result.completed
+    return t1
 
 def _handed_off(replay, reason):
     t1 = _task(replay, "t1")
@@ -317,35 +354,35 @@ def _handed_off(replay, reason):
     return t1
 
 
-def test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix(tmp_path, monkeypatch):
+def test_p3_j4_a_runner_crash_before_any_test_gets_one_diagnosed_gate_fix(tmp_path, monkeypatch):
     crash = shlex.join([sys.executable, "-c", "import sys; sys.stderr.write('uv_os_homedir ENOENT'); "
                         "sys.exit(1)", "--quadratus-report={report}"])
     replay = _run(tmp_path, monkeypatch, Script(lead=_looked), check=crash, files=FILES_OK)
-    _handed_off(replay, "check: structured report missing")
+    _repaired_once_with_its_diagnosis(replay, "check: structured report missing")
 
 
-def test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix(tmp_path, monkeypatch):
+def test_p3_j5_a_failure_with_no_declared_report_gets_one_diagnosed_gate_fix(tmp_path, monkeypatch):
     undeclared = f"{shlex.quote(sys.executable)} -m pytest -q"
     replay = _run(tmp_path, monkeypatch, Script(lead=_looked), check=undeclared)
-    _handed_off(replay, "check: structured report undeclared")
-    assert (replay.project / "app.py").read_text() == FILES["app.py"], "nothing was repaired"
+    _repaired_once_with_its_diagnosis(replay, "check: structured report undeclared")
+    assert (replay.project / "app.py").read_text() == FILES["app.py"], "the scripted fix changed nothing"
 
 
-def test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix(tmp_path, monkeypatch):
+def test_p3_j6_a_setup_error_mid_suite_gets_one_diagnosed_gate_fix(tmp_path, monkeypatch):
     files = {**FILES_OK, "tests/test_browser.py": (
         "import pytest\n\n\n@pytest.fixture\ndef browser():\n    raise RuntimeError('browser died')\n\n\n"
         "def test_page(browser):\n    assert browser\n")}
     replay = _run(tmp_path, monkeypatch, Script(lead=_looked), files=files)
-    _handed_off(replay, "1 setup or teardown error(s)")
+    _repaired_once_with_its_diagnosis(replay, "1 setup or teardown error(s)")
 
 
-def test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix(tmp_path, monkeypatch):
+def test_p3_j6_a_runtime_exception_in_a_test_body_gets_one_diagnosed_gate_fix(tmp_path, monkeypatch):
     """Codex control: a runner exception raised in the test body is a
     <failure> in JUnit, indistinguishable by counts; the producer's type is not."""
     files = {**FILES_OK, "tests/test_browser.py": (
         "def test_page():\n    raise RuntimeError('browser runner could not launch')\n")}
     replay = _run(tmp_path, monkeypatch, Script(lead=_looked), files=files)
-    _handed_off(replay, "failures that are not assertions: builtins.RuntimeError")
+    _repaired_once_with_its_diagnosis(replay, "failures that are not assertions: builtins.RuntimeError")
 
 
 def test_p3_j33_a_product_failure_beside_a_setup_failure_gets_no_gate_fix(tmp_path, monkeypatch):

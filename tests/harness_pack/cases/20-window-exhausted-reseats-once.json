@@ -24,7 +24,7 @@
     },
     {
      "role": "orchestrator",
-     "model": "openai:gpt-6-astra",
+     "model": "openai:astra",
      "reply": "KIND: general simple\nParse the numbers"
     }
    ],
@@ -33,9 +33,9 @@
     "task": {
      "description_startswith": "Parse the numbers"
     },
-    "seat": "openai:gpt-6-astra",
+    "seat": "openai:astra",
     "notes_contain": [
-     "is out of window; the seat falls to openai:gpt-6-astra"
+     "is out of window; the seat falls to openai:astra"
     ],
     "calls": {
      "role:orchestrator": 2

@@ -229,6 +229,57 @@ def test_requirements_unmet_at_the_cap_is_named_with_the_cap():
     assert decision.done_accepted is False
 
 
+_FORFEIT = dict(task="t2", detail="t2: cannot pay its selected route: short by tokens 126,136",
+                slots_unused=2, slots_used=1)
+
+
+def test_a_route_forfeit_names_the_refused_route_at_every_cap_stop_never_the_cap():
+    """The fresh end-to-end job on 21b342d stopped on 'the task cap (3) was
+    reached' when t2's route was refused at dispatch and two slots were
+    never planned. Carried in, the forfeit is what each cap stop names."""
+    reached = ("t2's route could not be paid from the allowance left (t2: cannot pay its selected "
+               "route: short by tokens 126,136), so 2 of 3 task slot(s) were forfeited")
+    unmet = decide(answered(CAP, satisfied=False, refusal="\n\n--- DONE SENT BACK ---\nR1 not met",
+                            route_forfeit=_FORFEIT))
+    assert unmet.stop.reason == (f"RequirementsUnmet: {reached} with the goal confirmed but the "
+                                 "requirements not met: R1 not met. Work preserved.")
+    unconfirmed, _made = drive(inputs(CAP, route_forfeit=_FORFEIT), goal=False)
+    assert unconfirmed.stop.reason == (f"GoalUnconfirmedAtCap: {reached} and the orchestrator did not "
+                                       "confirm the goal met. Work preserved.")
+    unproven = decide(answered(CAP, tasks=[task(covers=["R2"], edges={"review": None})], route_forfeit=_FORFEIT))
+    assert unproven.stop.reason.startswith(f"CompletionUnproven: the goal confirmation (asked when {reached}) "
+                                           "was accepted but the record does not support it: ")
+    for decision in (unmet, unconfirmed, unproven):
+        assert "the task cap (3) was reached" not in decision.stop.reason
+    # Without a forfeit every stop reads as before.
+    assert "the task cap (3) was reached" in decide(answered(CAP, satisfied=False)).stop.reason
+
+
+_TERMINAL = dict(task="t2", reason="its ordinary route could not be paid: short by tokens 260", selected="4 call(s)",
+                 slots_used=2, relinquished=1, max_tasks=3)
+
+
+def test_a_terminal_commitment_is_named_as_a_choice_at_every_cap_stop():
+    """The job committed to end after t2 (admission/3): the cap's stops say
+    so and name the relinquished slots, never that the cap was reached."""
+    reached = ("the job committed to end after t2 on its terminal route (its ordinary route could not be "
+               "paid: short by tokens 260), relinquishing 1 of 3 task slot(s)")
+    unmet = decide(answered(CAP, satisfied=False, refusal="\n\n--- DONE SENT BACK ---\nR2 not met",
+                            terminal_route=_TERMINAL))
+    assert unmet.stop.reason == (f"RequirementsUnmet: {reached} with the goal confirmed but the "
+                                 "requirements not met: R2 not met. Work preserved.")
+    unconfirmed, _made = drive(inputs(CAP, terminal_route=_TERMINAL), goal=False)
+    assert unconfirmed.stop.reason.startswith(f"GoalUnconfirmedAtCap: {reached} and the orchestrator")
+    unproven = decide(answered(CAP, tasks=[task(covers=["R2"], edges={"review": None})], terminal_route=_TERMINAL))
+    assert unproven.stop.reason.startswith(f"CompletionUnproven: the goal confirmation (asked when {reached})")
+    findings, _made = drive(inputs(CAP, ledger=OPEN_F1, terminal_route=_TERMINAL))
+    assert findings.stop.reason == f"FindingsUnresolved: audit findings F1 are still open; {reached}. Work preserved."
+    for decision in (unmet, unconfirmed, unproven, findings):
+        assert "the task cap (3) was reached" not in decision.stop.reason
+    # A clean record completes at the cap exactly as without the commitment.
+    assert decide(answered(CAP, terminal_route=_TERMINAL)).completed
+
+
 def test_dependencies_are_verified_only_after_requirements_pass():
     decision, made = drive(inputs(), satisfied=False)
     assert made == [CHECK_REQUIREMENTS] and decision.status == SEND_BACK
@@ -563,7 +614,10 @@ def test_shadow_done_with_a_capped_task_never_continued(tmp_path, monkeypatch, s
 def test_shadow_cap_with_a_capped_task_never_continued(tmp_path, monkeypatch, shadow):
     from quadratus.config import Settings
     H, _, FILES, FIXED, Script = _lifecycle()
-    replay = H.run(tmp_path, monkeypatch, Script(lead=_capped_lead(FIXED, H)), files=FILES, max_tasks=1,
+    # A half-done source the checks fail: a checked capped draft in the last
+    # slot meets an independent review instead (Step 2 r03).
+    replay = H.run(tmp_path, monkeypatch, Script(lead=_capped_lead("def add(a, b):\n    return a\n", H)),
+                   files=FILES, max_tasks=1,
                    settings=Settings(backend="cli", lead_max_turns=14))
     decision, session = _shadow_decision(shadow, CAP, 1)
     assert shadow["goal"] is None and decision.stop.name == "GoalUnconfirmedAtCap"

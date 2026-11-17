@@ -162,12 +162,12 @@ def test_programmatic_gates_keep_the_extras_and_refuse_a_clash():
 
 def test_policy_task_gates_keep_the_operator_extras(tmp_path):
     from quadratus.policy import load_policy, task_gate
-    from tests.test_policy import document, write_policy
+    from tests.test_policy import approval, document, write_policy
     doc = document()
     doc["gates"].append({"id": "lint", "runner": "command", "argv": ["true"], "required": True})
     doc["defaults"]["required_gates"] = ["scope", "lint"]
     write_policy(tmp_path, doc)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_project_policy=approval(tmp_path))
     existing = GateSuite([GateCommand(id="check", argv=("true",)), *_extra_gate_commands([["true"]])],
                          cwd=tmp_path)
     gate = task_gate(policy, policy.resolve(["a.py"]), existing)
@@ -261,7 +261,7 @@ ALL_SKIP = "const test = require('node:test');\ntest.skip('later', () => {});\n"
 
 def _policy(root, *, same_argv=None, policy_minimum=None):
     from quadratus.policy import load_policy
-    from tests.test_policy import document, write_policy
+    from tests.test_policy import approval, document, write_policy
     doc = document()
     gate = {"id": "lint", "runner": "command", "argv": ["true"], "required": True}
     if same_argv is not None:
@@ -271,7 +271,7 @@ def _policy(root, *, same_argv=None, policy_minimum=None):
     doc["gates"].append(gate)
     doc["defaults"]["required_gates"] = ["scope", gate["id"]]
     write_policy(root, doc)
-    return load_policy(root)
+    return load_policy(root, trust_project_policy=approval(root))
 
 
 def _merged(root, argv, *, minimum, same=False, policy_minimum=None):

@@ -142,7 +142,7 @@ def test_a_long_note_is_truncated_rather_than_rejected():
 def test_a_note_records_the_model_that_established_it_not_the_seat_record():
     """Attempt 9 wrote provenance as a whole Seat.
 
-    The map showed "{'key': 'openai:gpt-6-astra', 'reason':
+    The map showed "{'key': 'openai:astra', 'reason':
     'fallback-unavailable', ...}" where a reader expects a model name. A note's
     author answers "who established this fact", and that is the model; why it
     held the chair belongs to the ledger.
@@ -171,9 +171,9 @@ def test_a_note_records_the_model_that_established_it_not_the_seat_record():
         session.config.codebase_map = CodebaseMap(f'{tmp}/map.jsonl')
         meta = Session._absorb_orientation(
             session, _Meta('Do it.\nMAP NOTES: imports: csv is imported at app.py:8\n'),
-            _Seat('openai:gpt-6-astra'))
+            _Seat('openai:astra'))
         note = session.config.codebase_map.notes[-1]
-        assert note.author == 'openai:gpt-6-astra'
+        assert note.author == 'openai:astra'
         assert 'fallback-unavailable' not in note.author
         assert meta.description == 'Do it.'
 

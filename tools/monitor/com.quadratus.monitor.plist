@@ -2,7 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Starts the read-only Quadratus monitor page at login and keeps it up.
-  See tools/monitor/README.md. Replace the two paths before loading.
+  See tools/monitor/README.md. Before loading, replace the paths (the
+  quadratus binary, the series or project to watch, and the log, which
+  launchd needs as a full path: it does not expand ~) and the host name
+  the phone opens the page by.
+
+  The log is in your own Library/Logs folder, not /tmp: a fixed name in a
+  folder every user can write to can be put there first, as a link, by
+  someone else.
 -->
 <plist version="1.0">
 <dict>
@@ -17,13 +24,20 @@
     <string>--series</string>
     <string>/Users/davisfox/Documents/GitHub/stage-b/runs</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- The page answers only to 127.0.0.1 and localhost unless a name is
+         admitted here (comma separated). This is the tunnel's name. -->
+    <key>QUADRATUS_MONITOR_ALLOW_HOST</key>
+    <string>monitor.dfconsulting.tech</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/tmp/quadratus-monitor.log</string>
+  <string>/Users/davisfox/Library/Logs/quadratus-monitor.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/quadratus-monitor.log</string>
+  <string>/Users/davisfox/Library/Logs/quadratus-monitor.log</string>
 </dict>
 </plist>

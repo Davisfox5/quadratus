@@ -218,12 +218,12 @@ def test_application_output_that_mentions_a_sandbox_is_not_an_infrastructure_fai
         if call.task != "t1":
             return Script()._lead(call, replay)
         H.write(call, {"app.py": FIXED})
-        return _codex('Implemented add.\nCHANGED: ["app.py"]',
+        return _codex('Implemented add.\nPROVES: P1 - tests/test_app.py::test_add\nCHANGED: ["app.py"]',
                       ("pytest -q", "E   AssertionError: expected 'bwrap: denied' and seccomp profile", 1))
 
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_orchestrator, lead=lead), files=FILES)
     assert "execution environment" not in (replay.result.error or "")
-    assert replay.of("closeout"), "the task ran its ordinary course"
+    assert replay.artifact_texts("factual-closeout"), "the task ran its ordinary course to its close"
 
 
 # -- root review of d51ae79: five negatives, kept as root wrote them ----------------
@@ -275,7 +275,7 @@ def test_resolved_tool_failure_does_not_block_delivered_and_checked_source(tmp_p
         return '\n'.join(json.dumps(e) for e in events)
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_orchestrator, lead=lead), files=FILES,
                    record_complete=False)
-    assert replay.of('closeout'), replay.result.error
+    assert replay.artifact_texts('factual-closeout'), replay.result.error
     record = json.loads((Path(replay.result.run_dir) / 'result.json').read_text())
     assert any(c.get('passed') for c in record['checks']), 'real canonical gate must run'
     calls = (Path(replay.result.run_dir) / "invocations.jsonl").read_text()

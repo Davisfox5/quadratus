@@ -24,11 +24,11 @@
    "script": [
     {
      "role": "lead",
-     "model": "grok:default",
+     "model": "openai:sol",
      "times": 1,
      "raise": {
       "type": "ProviderError",
-      "message": "grok transport failed"
+      "message": "openai transport failed"
      }
     },
     {
@@ -45,7 +45,7 @@
     "history": 1,
     "calls": {
      "role:lead": 2,
-     "model:grok:default": 1
+     "model:openai:sol": 1
     },
     "notes_contain": [
      "failed without changing source; one recovery on"
@@ -59,14 +59,14 @@
    "script": [
     {
      "role": "lead",
-     "model": "grok:default",
+     "model": "openai:sol",
      "times": 1,
      "writes": {
       "app.py": "x = 2\n"
      },
      "raise": {
       "type": "ProviderError",
-      "message": "grok transport failed"
+      "message": "openai transport failed"
      }
     }
    ],

@@ -150,9 +150,9 @@ def test_fleet_records_denial_as_not_invoked_and_shares_budget_across_seats(tmp_
     monkeypatch.setattr('quadratus.runtime.build_provider', lambda *a, **kw: p)
     ledger = DelegationLedger(path=tmp_path / 'invocations.jsonl')
     fleet = Fleet(Settings(backend='cli'), run_budget=b, delegation_ledger=ledger)
-    fleet.invoke('openai:gpt-5.6-sol', 'first')
+    fleet.invoke('openai:sol', 'first')
     with pytest.raises(RunBudgetExceeded):
-        fleet.invoke('openai:gpt-5.6-luna', 'second')
+        fleet.invoke('openai:luna', 'second')
     assert len(p.calls) == 1
     assert [e.invoked for e in ledger.events] == [True, False]
 
@@ -182,8 +182,13 @@ def test_project_budget_stop_preserves_actual_edit_and_provider_success(tmp_path
             'result': 'saved', 'usage': {'input_tokens': 4, 'output_tokens': 2},
         }), '')
     monkeypatch.setattr('quadratus.cli_providers._launch', launch)
-    monkeypatch.setattr('quadratus.runtime.build_provider',
-                        lambda *a, **kw: ClaudeCLIProvider('fable', **kw))
+    def build(name, settings, **kw):
+        # The Fleet asks the factory for the vendor's transport only and
+        # binds the seat's family itself; the flag is the factory's, never
+        # the provider's.
+        assert kw.pop('resolve_family', None) is False
+        return ClaudeCLIProvider('fable', **kw)
+    monkeypatch.setattr('quadratus.runtime.build_provider', build)
     def run(self, **kwargs):
         assert self.config.worker_budget.max_concurrent == 2
         self.invoke('claude:fable', 'edit', allow_writes=True)
@@ -233,7 +238,7 @@ def test_fleet_rejects_a_provider_that_skips_the_controlled_attempt_path(monkeyp
     monkeypatch.setattr('quadratus.runtime.build_provider', lambda *a, **kw: p)
     fleet = Fleet(Settings(backend='cli'), run_budget=RunBudget(RunLimits()))
     with pytest.raises(RunBudgetExceeded, match='observed provider attempt'):
-        fleet.invoke('openai:gpt-5.6-sol', 'must not bypass')
+        fleet.invoke('openai:sol', 'must not bypass')
 
 
 def test_unspecified_transport_timeout_is_bounded_and_restored():
@@ -328,7 +333,16 @@ def test_the_shape_is_passed_only_where_the_argv_enforces_one_turn(monkeypatch, 
     provider.summary_only = True
     with pytest.raises(RunBudgetExceeded):
         provider._observed_call('p', None, 1, 1)
-    assert control.seen == [{}, {'expected_tokens': 64_000} if capped else {}]
+    # Every reservation names the call's identity (seat, task, role, prompt
+    # digest, the committed authority or none); the summary shape rides
+    # only where the argv enforces one turn.
+    assert len(control.seen) == 2
+    for seen in control.seen:
+        identity = seen['identity']
+        assert identity['seat'] == f'{provider.name}:{model}' and identity['role'] == 'direct'
+        assert identity['task'] == 'run' and len(identity['prompt_digest']) == 32 and identity['authority'] == ''
+    shapes = [{k: v for k, v in seen.items() if k != 'identity'} for seen in control.seen]
+    assert shapes == [{}, {'expected_tokens': 64_000} if capped else {}]
 
 
 def test_the_turn_cap_is_read_from_the_summary_argv_pair():

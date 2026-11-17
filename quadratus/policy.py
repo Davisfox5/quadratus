@@ -1,21 +1,47 @@
 """Offline repository policy loading and deterministic task-family resolution.
 
-Cards and schemas are pinned package data. A repository may narrow capability,
-never grant it through a fact or a model tier. Resolution does not run checks.
+Cards and schemas are pinned package data. Resolution does not run checks.
+
+A project's own ``.quadratus/policy.json`` is a project file: a clone can
+ship it and an editing call can write it, so it is untrusted input. What the
+code enforces for it:
+
+* It may narrow without approval: more write denials, sensitive paths, a
+  family choice. Its ``scope_max_lines`` is only the default size estimate
+  for a task that declares none: size is advisory and stops nothing.
+* It can never remove a built-in write denial. ``BUILTIN_DENY_WRITE`` is
+  unioned into whatever it declares.
+* Anything that grants capability (a command gate the harness would run, an
+  external-effects grant, an instruction file that is kept out of model
+  copies) loads only when the operator approved that exact file by its
+  sha256 (``trust_project_policy`` or ``QUADRATUS_TRUST_PROJECT_POLICY``).
+  Otherwise :class:`PolicyUntrusted` is raised before any model call, naming
+  the file, its hash and what it asked for.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shlex
+import stat
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 
 from jsonschema import Draft202012Validator
 
+from .project import source_path
 from .repo_scan import detect_adapters, scan_repo
 from .scope import TaskScope, _matches
+
+POLICY_FILE = '.quadratus/policy.json'
+#: The operator's approval of one exact policy file, by sha256.
+TRUST_ENV = 'QUADRATUS_TRUST_PROJECT_POLICY'
+#: Never editable, whatever a project's policy says.
+BUILTIN_DENY_WRITE = ('.git/**', '.env', '.env.*', '.quadratus/**')
+_MAX_POLICY_BYTES = 1_000_000
 
 #: Checklist items that forbid I/O, and the I/O kinds a task scope can ask
 #: for by name.
@@ -43,6 +69,99 @@ def _io_requested(text: str) -> list:
 
 class PolicyError(ValueError):
     pass
+
+
+class PolicyUntrusted(PolicyError):
+    """The project's own policy asks for capability the operator has not
+    approved for that exact file. Raised at load, before any model call."""
+
+
+def _read_policy(path) -> bytes:
+    """The policy file's bytes, read once, so the bytes hashed are the bytes
+    parsed. A regular file only, and bounded."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as exc:
+        raise PolicyError(f"Cannot read repository policy: {exc}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise PolicyError("Cannot read repository policy: it is not a regular file")
+        data = b''
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return data
+            data += chunk
+            if len(data) > _MAX_POLICY_BYTES:
+                raise PolicyError(f"Repository policy exceeds {_MAX_POLICY_BYTES} bytes")
+    except OSError as exc:
+        raise PolicyError(f"Cannot read repository policy: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
+def policy_grants(document) -> list:
+    """What a validated policy asks for beyond narrowing, one line each.
+
+    These are what the operator approves when approving the file. A command
+    gate is first: the harness would execute its argv in the project.
+    """
+    grants = []
+    for gate in document['gates']:
+        if gate['runner'] == 'command':
+            where = gate.get('cwd', '.')
+            grants.append(f"run a command as check {gate['id']}"
+                          + (f" in {where}" if where not in ('.', './') else '')
+                          + ': ' + shlex.join(gate['argv'])[:400])
+    effects = document['capability_policy']['external_effects']
+    if effects != 'deny':
+        grants.append(f"set external_effects to {effects}")
+    for name in document.get('instructions', []):
+        if not source_path(PurePosixPath(name.removeprefix('./')).parts):
+            grants.append(f"put {name} into every role packet, a file that is kept out of "
+                          "the copies models read")
+    return grants
+
+
+def _approval(value) -> str:
+    """The operator's sha256 in canonical form, or '' when none was given.
+
+    ``value`` is ``trust_project_policy``; None, an empty string or blanks
+    mean it was not given (an empty form field is not an approval of
+    nothing), and the environment variable is read instead.
+    """
+    named = 'trust_project_policy'
+    if not str(value or '').strip():
+        value, named = os.environ.get(TRUST_ENV, ''), TRUST_ENV
+    return approval_digest(value, named)
+
+
+def approval_digest(value, named='trust_project_policy') -> str:
+    """``value`` as a policy approval in canonical form, '' when blank.
+
+    The one reading of an approval's spelling, for the loader, the command
+    line and the Project form: a 'sha256:' prefix and upper case are
+    accepted, anything else raises PolicyError calling the value ``named``.
+    Never reads the environment.
+    """
+    text = str(value or '').strip().lower().removeprefix('sha256:')
+    if text and not re.fullmatch(r'[0-9a-f]{64}', text):
+        raise PolicyError(f"{named} must be the policy file's sha256: "
+                          f"64 hexadecimal characters, not {str(value)[:80]!r}")
+    return text
+
+
+class PacketTooLarge(PolicyError):
+    """A required role packet over its byte limit (cycle21): the same
+    refusal and message as before, with what was measured. ``needed`` is the
+    packet's mandatory UTF-8 bytes with operator exclusions exempt, exactly
+    as the limit is applied; ``components`` splits the task's own scope text
+    (``TaskScope.component_bytes``) from the policy's fixed part."""
+
+    def __init__(self, needed: int, limit: int, components=None, role: str = ""):
+        self.needed, self.limit, self.role = int(needed), int(limit), role
+        self.components = dict(components or {})
+        super().__init__(f'Required role packet exceeds {limit} bytes; narrow the task')
 
 
 def _json(text):
@@ -224,16 +343,97 @@ class RepositoryPolicy:
     adapters: dict
     explicit: bool
     forbid: tuple = ()
+    #: The operator approved this exact in-project policy file by its sha256.
+    #: Only an approved policy's capability grants are honoured.
+    approved: bool = False
+    #: sha256 of the in-project policy file as read, '' for the built-in.
+    source_sha256: str = ''
 
-    def role_packet(self, scope, role, conventions=''):
+    def role_packet(self, scope, role, conventions='', *, limit=None):
         """A bounded shared contract, without another reviewer's conversation.
 
         Required scope/checklist text is never silently cut. Oversized contracts
-        stop before dispatch; only reference notes may be excerpted.
+        stop before dispatch; only reference notes may be excerpted. ``limit``
+        is a task's approved allowance (Davis, 2026-11-09: a lead's justified
+        request the orchestrator granted, ``Session._packet_allowance``); None
+        is the policy's default, ``packet_limit``.
         """
-        plan = self.resolve(scope.permitted_paths if scope else ())
+        contract, exclusion_bytes, limit = self._packet_contract(scope, role, limit)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
+        if room < 0:
+            needed = limit - room
+            scope_bytes = scope.component_bytes() if scope is not None else {}
+            raise PacketTooLarge(needed, limit, dict(scope_bytes, fixed=needed - scope_bytes.get('scope', 0)),
+                                 role=role)
+        notes = conventions.encode()[:room + 1]
+        listed = 'instructions' in self.document
+        for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
+            if len(notes) > room:
+                break
+            try:
+                path = self.root / _path(name, self.root)
+            except PolicyError:
+                if listed:
+                    raise
+                # A default name the project happens to carry as a link out of
+                # the project is skipped, not a reason to stop every packet.
+                continue
+            try:
+                if not path.is_file():
+                    continue
+                inside = path.resolve().relative_to(self.root).parts
+            except (OSError, RuntimeError, ValueError):
+                continue
+            named = tuple(PurePosixPath(name.removeprefix('./')).parts)
+            if not source_path(inside) and not (self.approved and listed and inside == named):
+                # A file kept out of model copies is put into a prompt only
+                # when the approved policy lists that very path, which is
+                # what the approval named (policy_grants). One reached through
+                # a link or a default name never is.
+                continue
+            with path.open('rb') as source:
+                notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
+        truncated = len(notes) > room
+        return contract + heading + notes[:room].decode('utf-8', errors='ignore') + (marker if truncated else '')
+
+    @property
+    def packet_limit(self) -> int:
+        """The role packet's default byte limit: the policy's
+        ``reference_bytes_limit`` (12,000 when unset), which a repository
+        policy cannot set above 24,000. That clamp bounds the default only; a
+        task's approved allowance is passed to the builder as ``limit`` and is
+        bounded by the run's own ceiling (``Session._packet_ceiling``), never
+        by this figure."""
         context = self.document.get('context', {})
-        limit = min(24_000, context.get('reference_bytes_limit', 12_000))
+        return min(24_000, context.get('reference_bytes_limit', 12_000))
+
+    def packet_needed(self, scope, role) -> int:
+        """The mandatory bytes a role packet would carry for this scope, as
+        the builder measures them against a limit (exclusions exempt): the
+        size a task's allowance must reach for the packet to be built."""
+        contract, exclusion_bytes, _ = self._packet_contract(scope, role)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        return len((contract + heading + marker).encode()) - exclusion_bytes
+
+    def packet_overhead(self, role='lead') -> int:
+        """The mandatory bytes a role packet carries besides a task's own
+        scope text, measured with the builder itself on an empty scope (the
+        default families and gates; a task's paths can select others). Only
+        for stating the room in a prompt; the refusal is always measured."""
+        contract, exclusion_bytes, _ = self._packet_contract(None, role)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        return (len((contract + heading + marker).encode()) - exclusion_bytes
+                - len('Scope: no task scope declared.'.encode()))
+
+    def _packet_contract(self, scope, role, limit=None):
+        """The packet's mandatory text, the exempt exclusion bytes and the
+        limit: the one builder the refusal and the measurement share."""
+        plan = self.resolve(scope.permitted_paths if scope else ())
+        limit = self.packet_limit if limit is None else int(limit)
         scope_text = scope.render() if scope else 'Scope: no task scope declared.'
         # Exclusions are operator protections, not optional reference notes.
         # Their count or filename length must not prevent a run from starting.
@@ -278,23 +478,7 @@ class RepositoryPolicy:
             'gates': visible_gates, 'absent': plan['absent_gates'],
             'skipped': plan['skipped_gates'], 'adapters': plan['adapters']}, sort_keys=True))
         parts.append('Repository decisions: ' + json.dumps(self.document.get('decisions', [])))
-        contract = '\n'.join(parts)
-        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
-        marker = '\n[Reference notes truncated to packet byte limit]'
-        room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
-        if room < 0:
-            raise PolicyError(f'Required role packet exceeds {limit} bytes; narrow the task')
-        notes = conventions.encode()[:room + 1]
-        for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
-            if len(notes) > room:
-                break
-            path = self.root / _path(name, self.root)
-            if not path.is_file():
-                continue
-            with path.open('rb') as source:
-                notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
-        truncated = len(notes) > room
-        return contract + heading + notes[:room].decode('utf-8', errors='ignore') + (marker if truncated else '')
+        return '\n'.join(parts), exclusion_bytes, limit
 
     def resolve(self, paths=(), *, writing=False):
         paths = sorted({_path(p, self.root) for p in paths})
@@ -358,7 +542,10 @@ class RepositoryPolicy:
                 for field in self.cards[family]['adapter_fields']
             }
         result = dict(schema_version=1, repository_id=doc['repository_id'],
-                      policy_source='.quadratus/policy.json' if self.explicit else 'built-in',
+                      policy_source=POLICY_FILE if self.explicit else 'built-in',
+                      # The file as the operator would hash it, and whether
+                      # they approved exactly those bytes.
+                      policy_sha256=self.source_sha256 or None, policy_approved=self.approved,
                       policy_hash=_hash(doc), library_version=self.library['version'],
                       library_digest=self.library['digest'], declared_paths=paths,
                       primary_family=families[0], families=families, family_source=family_source,
@@ -370,7 +557,13 @@ class RepositoryPolicy:
         return result
 
     def scope(self, scope):
-        """Intersect policy and operator limits with the existing scope checks."""
+        """Intersect policy and operator limits with the existing scope checks.
+        Paths are enforced. ``scope_max_lines`` is the operator's default
+        size estimate for a task that declares none, advisory like the
+        task's own (operator directive 2026-10-20): a declared estimate is
+        kept as declared, the policy figure never clamps it, and neither
+        stops anything. The pinned library schema bounds only the
+        operator's default figure."""
         limit = self.document['defaults']['scope_max_lines']
         deny = self.document['capability_policy']['deny_write'] + list(self.forbid)
         deny += [p for entry in self.document['capability_policy']['sensitive'] for p in entry['paths']]
@@ -378,33 +571,81 @@ class RepositoryPolicy:
             return TaskScope(max_lines=limit, forbidden_paths=tuple(deny),
                              overrun_ratio=min(1.5, self.document['defaults']['overrun_ratio']))
         from dataclasses import replace
-        return replace(scope, max_lines=min(scope.max_lines or limit, limit),
+        return replace(scope, max_lines=scope.max_lines or limit,
                        overrun_ratio=min(scope.overrun_ratio, self.document['defaults']['overrun_ratio']),
                        forbidden_paths=tuple(dict.fromkeys([*scope.forbidden_paths, *deny])))
 
 
-def load_policy(root, *, forbid=(), scan=None):
+#: Why the built-in policy has no unit-tests gate: the project declares no
+#: test command, or it declares one and the operator declined it. The two
+#: read differently because they are different facts about the run.
+NO_TEST_COMMAND = 'No test command detected'
+DECLINED_TEST_COMMAND = ("The project declares a test command; the operator declined the project's "
+                         'declared checks (--no-declared-checks), so it is not run')
+
+
+def without_declared_checks(scan):
+    """``scan`` as a run that declines the project's declared checks reads
+    it: no check command and no declared checks. One rule for the run, the
+    baseline and the preview."""
+    from dataclasses import replace
+    return replace(scan, check_command=None, declared_checks=[])
+
+
+def load_policy(root, *, forbid=(), scan=None, trust_project_policy=None, declared_checks=True):
+    """The project's policy, or the built-in one when it carries none.
+
+    ``trust_project_policy`` is the operator's approval of one exact
+    in-project policy file: its sha256. ``None`` or an empty string reads the
+    ``QUADRATUS_TRUST_PROJECT_POLICY`` environment variable instead. A policy
+    that only narrows needs no approval; one that grants anything
+    (:func:`policy_grants`) without it raises :class:`PolicyUntrusted`.
+
+    ``declared_checks`` False is a run that declines the project's own
+    declared checks: the built-in policy is built from a scan without them
+    (:func:`without_declared_checks`), and where that leaves out a test
+    command the project does declare, the absent gate says the operator
+    declined it. It used to say no test command was detected.
+    """
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
         raise PolicyError(f"Project folder does not exist: {root}")
     origin, schemas, cards = load_library()
-    path = root / '.quadratus/policy.json'
+    path = root / POLICY_FILE
     explicit = path.exists() or path.is_symlink()
     scan = scan or scan_repo(root)
+    declined = False
+    if not declared_checks:
+        declined = bool(scan.check_command)
+        scan = without_declared_checks(scan)
+    approved, digest = False, ''
     if explicit:
-        _path('.quadratus/policy.json', root)
+        _path(POLICY_FILE, root)
+        raw = _read_policy(path)
+        digest = hashlib.sha256(raw).hexdigest()
         try:
-            document = _json(path.read_text(encoding='utf-8'))
-        except OSError as exc:
+            document = _json(raw.decode('utf-8'))
+        except UnicodeDecodeError as exc:
             raise PolicyError(f"Cannot read repository policy: {exc}") from exc
         validate_policy(document, schemas['policy'], cards, root)
         if document['library']['version'] != origin['version']:
             raise PolicyError('Repository policy library version does not match the installed library')
         if document['library'].get('digest', origin['digest']) != origin['digest']:
             raise PolicyError('Repository policy library digest does not match the installed library')
+        given = _approval(trust_project_policy)
+        approved = given == digest
+        grants = policy_grants(document)
+        if grants and not approved:
+            raise PolicyUntrusted(_untrusted_message(path, digest, grants, given))
+        # A project's policy may add write denials and can never remove the
+        # built-in ones. Written into the document so every reader of it
+        # (resolve, scope, the session's own checks) sees one list.
+        capability = document['capability_policy']
+        capability['deny_write'] = list(dict.fromkeys([*capability['deny_write'], *BUILTIN_DENY_WRITE]))
     else:
         gates = [{'id': 'scope', 'runner': 'builtin:scope', 'required': True}]
-        bindings = {'unit-tests': {'absent': True, 'because': 'No test command detected'}}
+        bindings = {'unit-tests': {'absent': True,
+                                   'because': DECLINED_TEST_COMMAND if declined else NO_TEST_COMMAND}}
         if scan.check_command:
             gates.append({'id': 'unit-tests', 'runner': 'command', 'required': True,
                           'argv': scan.check_command, 'cwd': '.', 'minimum_tests': 1})
@@ -413,15 +654,42 @@ def load_policy(root, *, forbid=(), scan=None):
                         library={'version': origin['version']},
                         defaults=dict(family='pure-logic', required_gates=['scope'],
                                       scope_max_lines=100, overrun_ratio=1.5, worker_depth=1),
-                        capability_policy=dict(deny_write=['.git/**', '.env', '.env.*', '.quadratus/**'],
+                        capability_policy=dict(deny_write=list(BUILTIN_DENY_WRITE),
                                                external_effects='deny', native_delegation='deny', sensitive=[]),
                         path_rules=[], gates=gates, gate_bindings=bindings, decisions=[])
     return RepositoryPolicy(root, document, cards, origin, detect_adapters(root, scan),
-                            explicit, tuple(_path(p, root) for p in forbid))
+                            explicit, tuple(_path(p, root) for p in forbid),
+                            approved=approved, source_sha256=digest)
 
 
-def preview_policy(root, paths=(), *, forbid=(), writing=False):
-    return load_policy(root, forbid=forbid).resolve(paths, writing=writing)
+def _untrusted_message(path, digest, grants, given) -> str:
+    """Everything the operator needs to decide: the file, its hash, what it
+    asks for, and how to approve exactly these bytes."""
+    shown = grants[:10] + ([f"and {len(grants) - 10} more"] if len(grants) > 10 else [])
+    return (
+        f"The project's own policy file {path} (sha256 {digest}) asks for more than a project "
+        "file is trusted to grant: " + "; ".join(shown) + ". "
+        + (f"The approval given ({given[:12]}...) is for different bytes: the file is not the one "
+           "that was approved. " if given else "")
+        + "Nothing was run and no model was called. A policy that only narrows loads without "
+        "approval. Read the file; to approve exactly these bytes pass "
+        f"--trust-project-policy {digest} (run_project(trust_project_policy=...)) or set "
+        f"{TRUST_ENV}={digest}.")
+
+
+def preview_policy(root, paths=(), *, forbid=(), writing=False, trust_project_policy=None,
+                   declared_checks=True):
+    """The plan a run with these inputs would resolve. Nothing is run.
+
+    ``declared_checks`` False previews a run that declines the project's own
+    declared checks (``run_project(declared_checks=False)``): the built-in
+    policy is built from a scan without them, as that run builds it
+    (``load_policy(declared_checks=False)``, the one rule for both). The
+    preview used to list the scanned check for such a run all the same.
+    """
+    return load_policy(root, forbid=forbid, trust_project_policy=trust_project_policy,
+                       **({} if declared_checks else {'declared_checks': False})
+                       ).resolve(paths, writing=writing)
 
 
 def render_preview(plan):
@@ -458,6 +726,12 @@ def task_gate(policy, plan, existing, *, exclude=()):
             continue
         if gate.get('side_effects') == 'external':
             raise PolicyError(f"Gate {gate['id']} needs a separate external-effect ruling")
+        if not policy.approved:
+            # Checked again where the command would be built: load_policy
+            # already refuses this, and a policy object made any other way
+            # must not reach execution by skipping it.
+            raise PolicyUntrusted(f"Gate {gate['id']} is a command from the project's own "
+                                  f"{POLICY_FILE}, which the operator has not approved")
         commands.append(integration.GateCommand(
             id=gate['id'], argv=tuple(gate['argv']), cwd=gate.get('cwd', '.'),
             timeout=gate.get('timeout_seconds', 600), required=required,

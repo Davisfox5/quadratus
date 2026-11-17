@@ -34,9 +34,16 @@ def test_explicit_needs_survive_decomposition(tmp_path, label):
     assert 'NEEDS:' not in spec.description
 
 
-@pytest.mark.parametrize('label', ['["shell"]', 'execute', '[true]', '{}',
-                                  '["execute"]\nNEEDS: ["patch"]'])
-def test_unknown_or_ambiguous_needs_cannot_dispatch(tmp_path, label):
+@pytest.mark.parametrize('label, asked', [
+    # A NEEDS line that cannot be read is sent back once (whole-repo review,
+    # 2026-11-10: it used to end the run with no correction round); the same
+    # line again stops the run.
+    ('["shell"]', 2), ('execute', 2), ('[true]', 2), ('{}', 2),
+    # Two declarations that disagree are refused with no correction, as the
+    # prompt says.
+    ('["execute"]\nNEEDS: ["patch"]', 1),
+])
+def test_unknown_or_ambiguous_needs_cannot_dispatch(tmp_path, label, asked):
     calls = []
 
     def invoke(*args):
@@ -46,7 +53,7 @@ def test_unknown_or_ambiguous_needs_cannot_dispatch(tmp_path, label):
     session = Session('fix', ArtifactStore(tmp_path), invoke)
     with pytest.raises(RunStalled, match='requirements'):
         session.next_task()
-    assert len(calls) == 1
+    assert len(calls) == asked
 
 
 @pytest.mark.parametrize('pinned', [None, 'grok:worker'])

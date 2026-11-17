@@ -3,11 +3,13 @@
 The system was designed goal-first, but most real runs do not start from an
 empty directory -- they start from a repository someone wants improved. The
 architecture handles that without a new mode: the same loop runs, and the
-difference is entirely in *seeding*. Three places change:
+difference is entirely in *seeding*. Two places change today, and a third
+is planned:
 
-* **The interview** gets this scan's summary, so it stops asking questions
-  the code already answers and asks about intent instead ("improve what,
-  for whom?").
+* **The interview**, when it is built, gets this scan's summary, so it
+  stops asking questions the code already answers and asks about intent
+  instead ("improve what, for whom?"). It is not implemented yet, so
+  nothing consumes the summary this way today.
 * **The codebase map** -- normally empty until close-outs populate it -- is
   seeded with scanned facts, each carrying ``author="scan"`` provenance so a
   reader can weigh a mechanical observation differently from a model's
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +63,37 @@ _MAX_TEST_DIRS = 3
 #: Lines read before giving up on one file, so a generated bundle or a minified
 #: asset cannot turn a bounded scan into a long one.
 _MAX_LINES_COUNTED = 200_000
+#: Bytes read from one file while counting its lines, so one enormous line
+#: costs no more than a short one.
+_MAX_COUNT_BYTES = 16 * 1024 * 1024
+#: Bytes of a README or a manifest the scan will read.
+_README_BYTES = 16_384
+_MANIFEST_BYTES = 256_000
+_CHUNK = 65_536
+
+
+def _read_text(path: Path, limit: int = _MANIFEST_BYTES) -> str:
+    """A small regular file as UTF-8 text, or '' when it is missing, not a
+    regular file, over ``limit`` bytes, unreadable or not UTF-8. A manifest
+    is project input: nothing about it is assumed."""
+    try:
+        if not path.is_file():
+            return ""
+        with path.open("rb") as handle:
+            data = handle.read(limit + 1)
+    except OSError:
+        return ""
+    if len(data) > limit:
+        return ""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
+def _table(value) -> dict:
+    """``value`` when it is a JSON or TOML table, else an empty one."""
+    return value if isinstance(value, dict) else {}
 
 
 def _is_test_path(relative: str) -> bool:
@@ -78,14 +112,25 @@ def _is_test_path(relative: str) -> bool:
 
 
 def _count_lines(path: Path) -> int:
-    """Line count, or 0 when the file cannot be read as text."""
+    """Line count, or 0 when the file cannot be read.
+
+    Newlines are counted in fixed-size chunks and reading stops at the line
+    or byte bound: iterating lines loaded a multi-gigabyte single-line file
+    as one line.
+    """
     try:
         with path.open("rb") as handle:
-            count = 0
-            for count, _ in enumerate(handle, start=1):
-                if count >= _MAX_LINES_COUNTED:
+            count, read, last = 0, 0, b"\n"
+            while count < _MAX_LINES_COUNTED and read < _MAX_COUNT_BYTES:
+                chunk = handle.read(_CHUNK)
+                if not chunk:
                     break
-            return count
+                read += len(chunk)
+                count += chunk.count(b"\n")
+                last = chunk[-1:]
+            if read and last != b"\n":
+                count += 1  # the final line, unterminated or cut at the bound
+            return min(count, _MAX_LINES_COUNTED)
     except OSError:
         return 0
 
@@ -99,6 +144,9 @@ _MANIFESTS = [
 
 #: Walk no further than this many files; a scan is a sketch, not an index.
 _MAX_FILES = 50_000
+#: Nor look at more than this many directory entries of any kind: a tree of
+#: empty folders has no files to count and was walked whole.
+_MAX_ENTRIES = 200_000
 
 
 @dataclass
@@ -112,6 +160,9 @@ class ScanReport:
     manifests: List[str] = field(default_factory=list)
     top_dirs: List[str] = field(default_factory=list)
     readme_head: str = ""
+    #: The README's file name as the directory stores it (cycle21: the map
+    #: said "README begins:" and a planner named ``readme.md``).
+    readme_name: str = ""
     #: ``(relative path, line count)`` for the biggest non-test source files,
     #: largest first. A lead is told which file to change and still has to
     #: discover what is in the project; naming the principal files costs a
@@ -127,6 +178,9 @@ class ScanReport:
     #: they are recognised. A project with both a ``package.json`` test script
     #: and a Python suite declares both, and both are run by the gate.
     declared_checks: List[List[str]] = field(default_factory=list)
+    #: Why the project's own ``.venv`` interpreter was not used for the Python
+    #: check, when it has one that was passed over. Shown in the gate plan.
+    interpreter_note: str = ""
 
     @property
     def has_code(self) -> bool:
@@ -150,7 +204,7 @@ class ScanReport:
         if self.check_command:
             lines.append("Check command: " + " ".join(self.check_command) + ".")
         if self.readme_head:
-            lines.append("README begins:\n" + self.readme_head)
+            lines.append(f"{self.readme_name or 'README'} begins:\n" + self.readme_head)
         return "\n".join(lines)
 
     def map_notes(self) -> List[Tuple[str, str]]:
@@ -196,7 +250,8 @@ def _detect_check_command(root: Path, manifests: List[str]) -> Optional[List[str
     return declared[0] if declared else None
 
 
-def _declared_checks(root: Path, manifests: List[str]) -> List[List[str]]:
+def _declared_checks(root: Path, manifests: List[str],
+                     notes: Optional[List[str]] = None) -> List[List[str]]:
     """Every test entry point the repository declares, first one first.
 
     Codex, Run 15: a project with a ``package.json`` test script and a
@@ -206,12 +261,12 @@ def _declared_checks(root: Path, manifests: List[str]) -> List[List[str]]:
     found: List[List[str]] = []
     if "package.json" in manifests:
         try:
-            pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
+            pkg = json.loads(_read_text(root / "package.json") or "{}")
             if isinstance(pkg, dict) and isinstance(pkg.get("scripts"), dict) and pkg["scripts"].get("test"):
                 found.append(["npm", "test", "--silent"])
-        except (ValueError, OSError):
+        except (ValueError, RecursionError):
             pass
-    python = _python_check(root, manifests)
+    python = _python_check(root, manifests, notes)
     if python:
         found.append(python)
     if "go.mod" in manifests:
@@ -256,7 +311,63 @@ def _has_python_tests(tests: Path, limit: int = 2000) -> bool:
     return False
 
 
-def _python_check(root: Path, manifests: List[str]) -> Optional[List[str]]:
+def _git_tracks(root: Path, relative: str) -> Optional[bool]:
+    """Whether git tracks anything at or under ``relative``. False when the
+    folder is in no repository; None when git could not say."""
+    try:
+        base = root.resolve()
+    except (OSError, RuntimeError):
+        return None
+    if not any(os.path.lexists(folder / ".git") for folder in (base, *base.parents)):
+        return False
+    from .project import GIT
+    try:
+        result = subprocess.run([*GIT, "ls-files", "-z", "--", relative], cwd=root,
+                                capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    return bool(result.stdout)
+
+
+def _project_interpreter(root: Path) -> Tuple[Optional[str], str]:
+    """The project's own interpreter when it can be trusted as one, else
+    ``(None, why not)``; ``(None, "")`` when the project has no ``.venv``.
+
+    A gate's first argument is a program the harness runs, so a file the
+    repository can simply contain is not enough (whole-repo review,
+    2026-11-10: a committed ``.venv/bin/python`` became the pytest gate's
+    interpreter). It is used only when ``.venv`` is a real virtual
+    environment (``pyvenv.cfg``), its ``bin/python`` resolves through its
+    whole link chain to an executable outside the project, and git tracks
+    nothing under ``.venv``.
+    """
+    venv = root / ".venv"
+    local = venv / "bin" / "python"
+    if not os.path.lexists(local):
+        return None, ""
+    try:
+        marker = venv / "pyvenv.cfg"
+        if marker.is_symlink() or not marker.is_file():
+            return None, "it is not a virtual environment: there is no .venv/pyvenv.cfg"
+        target = local.resolve(strict=True)
+        if not target.is_file() or not os.access(target, os.X_OK):
+            return None, "it does not resolve to an executable file"
+        if target.is_relative_to(root.resolve()):
+            return None, "it resolves to a file inside the project, which the project could have written"
+    except (OSError, RuntimeError) as exc:
+        return None, f"it could not be resolved ({type(exc).__name__})"
+    tracked = _git_tracks(root, ".venv")
+    if tracked is None:
+        return None, "git could not say whether .venv is tracked"
+    if tracked:
+        return None, "git tracks files under .venv, so the repository chose it"
+    return str(local), ""
+
+
+def _python_check(root: Path, manifests: List[str],
+                  notes: Optional[List[str]] = None) -> Optional[List[str]]:
     # A tests/ directory alone is not a Python signal: a JS-only project with
     # tests/ui.test.js gained a pytest gate that failed on zero tests (Codex
     # review of 3ef9962). A manifest, pytest.ini or a Python file under
@@ -269,9 +380,13 @@ def _python_check(root: Path, manifests: List[str]) -> Optional[List[str]]:
         or (tests.is_dir() and _has_python_tests(tests))
     )
     if python_signals and tests.is_dir():
-        local_python = root / '.venv' / 'bin' / 'python'
-        interpreter = str(local_python) if local_python.is_file() else sys.executable
-        return [interpreter, "-m", "pytest", "-q"]
+        interpreter, why = _project_interpreter(root)
+        if why and notes is not None:
+            notes.append(
+                f"The project's .venv/bin/python was not used for the Python check: {why}. "
+                "The harness interpreter runs it. Name an interpreter in your own check "
+                "command to use it.")
+        return [interpreter or sys.executable, "-m", "pytest", "-q"]
     return None
 
 
@@ -282,51 +397,80 @@ def scan_repo(root) -> ScanReport:
     if not root.is_dir():
         return report
 
-    report.top_dirs = sorted(
-        p.name for p in root.iterdir()
-        if p.is_dir() and p.name not in _SKIP_DIRS and not p.name.startswith(".")
-    )
     report.manifests = [m for m in _MANIFESTS if (root / m).is_file()
                         and not (root / m).is_symlink()]
 
     sized: List[Tuple[str, int]] = []
     test_files: List[str] = []
+    top_dirs: List[str] = []
     stack: List[Path] = [root]
-    while stack and report.file_count < _MAX_FILES:
+    # Every directory entry counts against the budget, and a listing is read
+    # as it is walked: a tree of millions of empty folders, or one folder
+    # with millions of names, was materialised whole before any bound applied.
+    seen = 0
+    while stack and report.file_count < _MAX_FILES and seen < _MAX_ENTRIES:
         current = stack.pop()
         try:
-            entries = list(current.iterdir())
+            listing = os.scandir(current)
         except OSError:
             continue
-        for entry in entries:
-            if entry.is_symlink():
-                continue
-            if entry.is_dir():
-                if entry.name not in _SKIP_DIRS and not entry.name.startswith("."):
-                    stack.append(entry)
-                continue
-            if not entry.is_file():
-                continue
-            report.file_count += 1
-            lang = _LANGUAGES.get(entry.suffix.lower())
-            if lang:
-                report.languages[lang] = report.languages.get(lang, 0) + 1
-                relative = entry.relative_to(root).as_posix()
-                if _is_test_path(relative):
-                    test_files.append(relative)
-                else:
-                    lines = _count_lines(entry)
-                    if lines:
-                        sized.append((relative, lines))
-            if report.file_count >= _MAX_FILES:
-                break
+        with listing:
+            for item in listing:
+                seen += 1
+                if seen > _MAX_ENTRIES:
+                    break
+                entry = Path(item.path)
+                named = item.name not in _SKIP_DIRS and not item.name.startswith(".")
+                try:
+                    if item.is_symlink():
+                        # Never walked. A linked top-level folder is still named.
+                        if current is root and named and item.is_dir():
+                            top_dirs.append(item.name)
+                        continue
+                    if item.is_dir(follow_symlinks=False):
+                        if named:
+                            stack.append(entry)
+                            if current is root:
+                                top_dirs.append(item.name)
+                        continue
+                    if not item.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                report.file_count += 1
+                lang = _LANGUAGES.get(entry.suffix.lower())
+                if lang:
+                    report.languages[lang] = report.languages.get(lang, 0) + 1
+                    relative = entry.relative_to(root).as_posix()
+                    if _is_test_path(relative):
+                        test_files.append(relative)
+                    else:
+                        lines = _count_lines(entry)
+                        if lines:
+                            sized.append((relative, lines))
+                if report.file_count >= _MAX_FILES:
+                    break
+    report.top_dirs = sorted(top_dirs)
 
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        entries = []
     for name in ("README.md", "README.rst", "README.txt", "README"):
-        candidate = root / name
+        # The spelling the directory stores, never the one asked for: on a
+        # case-insensitive filesystem ``README.md`` also opens ``readme.md``.
+        spelled = [n for n in entries if n.casefold() == name.casefold()]
+        actual = name if name in entries else (spelled[0] if len(spelled) == 1 else None)
+        if actual is None:
+            continue
+        candidate = root / actual
         if candidate.is_file() and not candidate.is_symlink():
             try:
-                head = candidate.read_text(encoding="utf-8", errors="replace")
+                # The head only: twelve lines never needed the whole file.
+                with candidate.open("rb") as handle:
+                    head = handle.read(_README_BYTES).decode("utf-8", errors="replace")
                 report.readme_head = "\n".join(head.splitlines()[:12]).strip()
+                report.readme_name = actual
             except OSError:
                 pass
             break
@@ -342,8 +486,10 @@ def scan_repo(root) -> ScanReport:
     report.test_dirs = [d for d, _ in sorted(directories.items(),
                                              key=lambda kv: (-kv[1], kv[0]))][:_MAX_TEST_DIRS]
 
-    report.declared_checks = _declared_checks(root, report.manifests)
+    notes: List[str] = []
+    report.declared_checks = _declared_checks(root, report.manifests, notes)
     report.check_command = report.declared_checks[0] if report.declared_checks else None
+    report.interpreter_note = " ".join(notes)
     return report
 
 
@@ -375,20 +521,24 @@ def detect_adapters(root, report=None):
         found[name] = {'status': 'detected', 'value': value, 'source': source}
 
     def read(relative):
+        # A manifest is project input. A link out of the project, a file that
+        # is too large, unreadable or not UTF-8 all read as absent.
         path = root / relative
-        if (not path.resolve().is_relative_to(root) or not path.is_file()
-                or path.stat().st_size > 256_000):
+        try:
+            if not path.resolve().is_relative_to(root):
+                return ''
+        except (OSError, RuntimeError):
             return ''
-        return path.read_text(encoding='utf-8')
+        return _read_text(path)
 
     if report.check_command:
         for name in ('test_runner', 'runner'):
             put(name, list(report.check_command), 'repo_scan.check_command')
     try:
-        project = tomllib.loads(read('pyproject.toml'))
-    except (ValueError, OSError):
+        project = _table(tomllib.loads(read('pyproject.toml')))
+    except (ValueError, RecursionError):
         project = {}
-    if project.get('project', {}).get('name') == 'quadratus' and read('quadratus/registry.py'):
+    if _table(project.get('project')).get('name') == 'quadratus' and read('quadratus/registry.py'):
         put('runtime_model_policy', 'multi-vendor', 'pyproject.toml#project.name')
         put('catalog_module', 'quadratus/registry.py', 'quadratus/registry.py')
         put('permitted_calls', ['quadratus/cli_providers.py', 'quadratus/providers.py'],
@@ -398,9 +548,11 @@ def detect_adapters(root, report=None):
     for manifest in ('package.json', 'site/package.json', 'apps/app/package.json'):
         try:
             pkg = json.loads(read(manifest) or '{}')
-        except (ValueError, OSError):
+        except (ValueError, RecursionError):
             continue
-        deps = {**pkg.get('devDependencies', {}), **pkg.get('dependencies', {})}
+        if not isinstance(pkg, dict):
+            continue
+        deps = {**_table(pkg.get('devDependencies')), **_table(pkg.get('dependencies'))}
         for name in ('@mui/material', 'react'):
             if name in deps and 'ui_lib' not in found:
                 put('ui_lib', name, manifest)
