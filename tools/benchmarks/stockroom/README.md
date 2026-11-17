@@ -229,3 +229,25 @@ as an edge case.
 The audit asked one decision, on R15, the same question as the sixth run
 (upgrade on open against "a refused command changes nothing"), and got the
 same answer.
+
+## Eighth run: the planner rules on audit disputes (2026-11-16)
+
+Engine at d13772d, `--lean`, no question channel. Graders 116 of 116, 2.36M
+reported tokens, 46 calls, 46 minutes, reported complete (33 requirements,
+eight tasks). The operator was asked nothing.
+
+The audit raised two decisions and the planner ruled on both, each in one
+call, and the auditor then judged those requirements under the ruling:
+
+- R29: which routes the Content-Length rules cover. Ruling: only the one
+  route that reads a body, `POST /reservations`.
+- R33: whether upgrading an old database on open breaks "a refused command
+  changes nothing". Ruling: no; opening is not part of the refused call,
+  and the data must be unchanged from the opened database.
+
+No requirement was held three times, so the two-repairs rule did not fire.
+The first audit held two requirements, two tasks repaired them, and the
+second audit kept 24 of 33 verdicts and asked 9 ids in two calls.
+
+The plan queue ran one later wave without a planning call and set one
+aside when a reviewer's finding was left open. Nine planning calls (664 s).
