@@ -324,6 +324,81 @@ def test_a_kept_verdict_lapses_when_a_file_it_named_changes(tmp_path):
     assert session._kept_met_lines(required) == {}
 
 
+_PARTS_SOURCE = """import os
+
+LIMIT = 5
+OTHER = 9
+
+
+def helper(x):
+    return x + LIMIT
+
+
+def unrelated():
+    return OTHER
+
+
+class Store:
+    kind = "s"
+
+    def reserve(self, q):
+        return self._check(q) + helper(q)
+
+    def _check(self, q):
+        return q
+
+    def release(self, i):
+        return i
+"""
+
+
+def test_a_cited_definition_is_compared_with_what_it_reaches_in_its_file():
+    from quadratus.sticky_parts import cited_names, part_digest
+    names = cited_names("R1: MET - s/store.py::Store::reserve and tests/t.py", "s/store.py")
+    assert names == ["Store.reserve"]
+    digest = part_digest(_PARTS_SOURCE, names)
+    assert digest and digest.startswith("parts:")
+    same = [("return OTHER", "return OTHER + 1"), ("return i\n", "return i + 1\n")]
+    for old, new in same:
+        assert part_digest(_PARTS_SOURCE.replace(old, new), names) == digest
+    assert part_digest(_PARTS_SOURCE + "\n\ndef new():\n    return 1\n", names) == digest
+    moved = [("LIMIT = 5", "LIMIT = 6"), ("return q\n", "return q + 1\n"), ("x + LIMIT", "x - LIMIT"),
+             ('kind = "s"', 'kind = "t"'), ("import os", "import os, sys"),
+             ("self._check(q) + helper(q)", "helper(q)")]
+    for old, new in moved:
+        assert part_digest(_PARTS_SOURCE.replace(old, new), names) != digest, old
+    # What cannot be placed is compared whole.
+    assert part_digest(_PARTS_SOURCE, ["Store.absent"]) is None
+    assert part_digest("def (", names) is None
+    assert part_digest(_PARTS_SOURCE, []) is None
+    assert cited_names("R1: MET - s/store.py::helper; s/store.py as a whole", "s/store.py") is None
+    assert cited_names("R1: MET - tests/t.py::test_x[a-b] passed", "tests/t.py") == ["test_x"]
+    assert cited_names("R1: MET - s/store.py::Store.reserve", "s/store.py") == ["Store.reserve"]
+
+
+def test_a_kept_verdict_survives_a_change_outside_the_parts_it_cited(tmp_path):
+    session, root = _session(tmp_path, {"store.py": _PARTS_SOURCE, "other.py": _PARTS_SOURCE},
+                             sticky_audit=True)
+    session._remember_met(
+        "R1: MET - store.py::Store::reserve holds it\nR2: MET - other.py holds it", {
+            "R1": (True, "store.py"), "R2": (True, "other.py")})
+    required = [("R1", "requirement"), ("R2", "requirement")]
+    assert list(session._kept_met_lines(required)) == ["R1", "R2"]
+    for name in ("store.py", "other.py"):
+        (root / name).write_text(_PARTS_SOURCE.replace("return OTHER", "return OTHER + 1"))
+    # The cited method does not reach unrelated(); the file named alone is whole.
+    assert list(session._kept_met_lines(required)) == ["R1"]
+    (root / "store.py").write_text(_PARTS_SOURCE.replace("return q\n", "return q + 1\n"))
+    assert session._kept_met_lines(required) == {}
+    # A cited definition that is gone cannot be placed: asked again.
+    session._remember_met("R1: MET - store.py::unrelated", {"R1": (True, "store.py")})
+    assert list(session._kept_met_lines([("R1", "requirement")])) == ["R1"]
+    (root / "store.py").write_text(_PARTS_SOURCE.replace("def unrelated():\n    return OTHER\n", ""))
+    assert session._kept_met_lines([("R1", "requirement")]) == {}
+    (root / "store.py").unlink()
+    assert session._kept_met_lines([("R1", "requirement")]) == {}
+
+
 def test_a_question_file_waits_for_its_answer_file(tmp_path):
     import threading
 

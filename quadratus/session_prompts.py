@@ -659,7 +659,10 @@ _AUDIT_CITE_RULE = (
     " On a MET line, name every project file the requirement's behaviour lives in and the test file "
     "that shows it. A requirement you judge MET is not asked again in a later audit of this run unless "
     "one of the files its line names has changed, so a file left out is a file whose changes you will "
-    "not see for that requirement."
+    "not see for that requirement. Where the behaviour is in particular functions, methods or test "
+    "cases of a Python file, cite them as `path/file.py::function`, `path/file.py::Class::method` or "
+    "`tests/test_file.py::test_case`: the requirement is then asked again only when one of those, or "
+    "something in that file they use, changes. A file named without `::` is compared whole."
 )
 _BRIEF_GOAL_QUESTION = (
     " Decide from the harness records and summaries above; do not re-derive each requirement, the "

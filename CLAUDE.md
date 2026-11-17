@@ -5287,6 +5287,15 @@ Key design decisions already settled:
     still asked when the plan is used up, so DONE stays its decision. A
     wave that says DONE, CONTINUES, RESOLVES or DISCHARGES is dropped. The
     queue is not carried across a resume. `result.json` `plan_waves`.
+  - Since 2026-11-17 a kept verdict can rest on parts of a file
+    (`sticky_parts.py`). The auditor may cite `path/file.py::function`,
+    `::Class::method` or `tests/test_x.py::test_case`. Such a file is
+    compared by those definitions, everything in the same file they
+    mention (followed until nothing new turns up), and all module-level
+    code that is not a definition. A file named without `::`, a name the
+    file does not define, or a file that does not parse is compared whole,
+    as before. Static only: parsed, never imported. In run 8 the second
+    audit kept 24 of 33 because whole files had changed.
 - **session.py was split by moving code, and two rules keep it split**
   (2026-11-11, redone 2026-11-12 after the development line was merged;
   `tests/test_review1110_split.py`). It went from 29,386 lines to 10,238

@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
-from . import delivery, judgment
+from . import delivery, judgment, sticky_parts
 from .check_facts import (
     _PASS_ONLY_WORDS,
     _RUNNER_SPAN,
@@ -1108,18 +1108,36 @@ class AuditMixin:
     _AUDIT_MAX_SHARDS = 4
     _AUDIT_MAX_DECISIONS = 4
 
-    def _file_hashes(self) -> Dict[str, str]:
+    def _file_bytes(self) -> Dict[str, bytes]:
         from .project import Project
         try:
-            now = Project(self.project, exclude=self.config.project_excludes).contents()
+            return dict(Project(self.project, exclude=self.config.project_excludes).contents())
         except Exception:  # noqa: BLE001 -- unknown source keeps nothing
             return {}
-        return {name: hashlib.sha256(data).hexdigest() for name, data in now.items()}
+
+    def _file_hashes(self) -> Dict[str, str]:
+        return {name: hashlib.sha256(data).hexdigest() for name, data in self._file_bytes().items()}
+
+    @staticmethod
+    def _rested_digest(name: str, data: bytes, names) -> str:
+        """What a kept verdict compares for one file: the parts the cited
+        definitions rest on where the line cited some and they can be placed,
+        else the whole file."""
+        if names and name.endswith(".py"):
+            try:
+                parts = sticky_parts.part_digest(data.decode("utf-8"), names)
+            except UnicodeDecodeError:
+                parts = None
+            if parts:
+                return parts
+        return hashlib.sha256(data).hexdigest()
 
     def _remember_met(self, reply: str, verdicts: dict) -> None:
         """Keep each requirement's MET line with the files it named, after the
-        harness's own lowering: only a verdict that stood is kept."""
-        hashes = self._file_hashes() if self.project else {}
+        harness's own lowering: only a verdict that stood is kept. A file the
+        line cites only as ``file.py::name`` is kept by the parts those
+        definitions rest on (``sticky_parts``); a file named alone, whole."""
+        files = self._file_bytes() if self.project else {}
         revisions = self._requirement_revisions()
         lines = {}
         for line in reply.splitlines():
@@ -1128,23 +1146,34 @@ class AuditMixin:
                 lines[rid] = line.strip()
         for rid, (met, _why) in verdicts.items():
             line = lines.get(rid)
-            named = {name: digest for name, digest in hashes.items() if line and len(name) >= 5 and name in line}
+            named, cited = {}, {}
+            for name, data in files.items():
+                if line and len(name) >= 5 and name in line:
+                    names = sticky_parts.cited_names(line, name)
+                    named[name] = self._rested_digest(name, data, names)
+                    if names and named[name].startswith("parts:"):
+                        cited[name] = names
             if met and line and named:
-                self._sticky_met[rid] = dict(line=line, files=named, revision=int(revisions.get(rid, 1)))
+                self._sticky_met[rid] = dict(line=line, files=named, cited=cited,
+                                             revision=int(revisions.get(rid, 1)))
             else:
                 self._sticky_met.pop(rid, None)
 
     def _kept_met_lines(self, required) -> Dict[str, str]:
         """The requirements a later audit does not ask again: judged MET
-        before, same requirement revision, every named file byte-identical."""
+        before, same requirement revision, and every named file unchanged in
+        what the verdict rested on (the cited parts, or the whole file)."""
         if not self._sticky_met or not self.project:
             return {}
-        hashes, revisions = self._file_hashes(), self._requirement_revisions()
+        files, revisions = self._file_bytes(), self._requirement_revisions()
         kept = {}
         for rid, kind in required:
             entry = self._sticky_met.get(rid)
-            if (kind == "requirement" and entry and int(revisions.get(rid, 1)) == entry["revision"]
-                    and all(hashes.get(name) == digest for name, digest in entry["files"].items())):
+            if not (kind == "requirement" and entry and int(revisions.get(rid, 1)) == entry["revision"]):
+                continue
+            cited = entry.get("cited") or {}
+            if all(name in files and self._rested_digest(name, files[name], cited.get(name)) == digest
+                   for name, digest in entry["files"].items()):
                 kept[rid] = entry["line"]
         return kept
 
