@@ -62,7 +62,13 @@ target-version = "py311"
 # red from the first bundle until they were excluded.
 # The Stage B graders carry the GameTape baseline tests copied verbatim
 # from 1cd9264 and hashed as frozen inputs; they are a record, not code to lint.
-extend-exclude = ["docs/handoffs", "tools/jev_stage_b/graders/baseline"]
+extend-exclude = [
+    "docs/handoffs",
+    "tools/jev_stage_b/graders/baseline",
+    # A benchmark seed is the code a run started from, kept byte for byte.
+    "tools/benchmarks/stockroom-change/seed",
+    "tools/benchmarks/stockroom-change/graders/original",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]

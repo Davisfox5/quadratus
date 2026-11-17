@@ -1,0 +1,30 @@
+Change stockroom, an existing inventory service with stock reservations: fix six reported bugs and add four features, across the store, the HTTP API, the command line and the documentation. Standard library only (pytest for tests). README.md and docs/errors.md describe how the service is meant to behave today. Everything they describe that this goal does not change must keep working, and every existing test must keep passing without being edited.
+
+BUG REPORTS (each is a difference between the code and README.md; README.md is right)
+1. A holder of exactly 64 characters is refused with `invalid_holder`. 64 characters after stripping is allowed; 65 is not.
+2. A reservation is still active when `now` equals its `expires_at`. It is expired at or after `expires_at`.
+3. `Store.availability` counts a reservation whose time is up as reserved until some other call notices it. Availability must not count it, whichever call comes first.
+4. `Store.release` on an expired reservation raises `reservation_expired`. It must return the reservation with state "expired".
+5. Over HTTP, committing a released reservation gets no JSON error response. It must get 409 `reservation_released` in the usual error shape.
+6. The `reserve` command without `--ttl` holds stock for 90 seconds. The default is 900.
+
+STORE (stockroom/store.py)
+7. `Store.extend(reservation_id, ttl_seconds, now=None)` moves an active reservation's expiry to `float(now + ttl_seconds)` (earlier or later than it was) and returns the reservation dict. Checks in this order: the id (`unknown_reservation`, same rule as the other calls), `ttl_seconds` (`invalid_ttl`, same rule as reserve), then the state: committed is refused with `already_committed`, released with `reservation_released`, expired with `reservation_expired`.
+8. Partial commit. `Store.commit(reservation_id, now=None, quantity=None)`. With `quantity` None it behaves as it does now. Otherwise checks in this order: the id; `quantity` is an int, not a bool, and at least 1, else `invalid_quantity`; the state, refused as commit refuses it now; `quantity` no more than the reservation's quantity, else `invalid_quantity`. A `quantity` equal to the reservation's quantity is a full commit. A smaller one takes that many off the item's quantity and off the reservation's quantity, and the reservation stays active with the same `expires_at`. The reservation dict is returned.
+9. `Store.adjust(sku, delta, now=None)` adds `delta` to the item's quantity and returns the availability object. Checks in this order: the sku (`unknown_sku`); `delta` is an int, not a bool, and not 0, else `invalid_quantity`; the new quantity must not be less than the quantity held by active reservations at `now`, else `insufficient_stock`.
+10. `Store.list_reservations(sku, holder=None, state=None, now=None)` returns a list of that item's reservation dicts in ascending id order, each with its state at `now`. Checks in this order: the sku (`unknown_sku`); `holder`, when given, by reserve's holder rule (`invalid_holder`), and it then keeps only reservations whose holder equals it after stripping; `state`, when given, must be one of "active", "released", "committed", "expired", else the new code `invalid_state`, and it then keeps only reservations in that state.
+11. A refused call changes nothing in the database, except that it may record that a reservation has expired. The schema version stays 2 and no table is added.
+
+HTTP API (stockroom/api.py)
+12. `POST /reservations/<id>/extend` with a JSON object `{"ttl_seconds": n}` returns 200 and the reservation. `POST /items/<sku>/adjust` with `{"delta": n}` returns 200 and the availability object. `GET /items/<sku>/reservations` returns 200 and `{"reservations": [...]}`; the optional query parameters `holder` and `state` filter it as in item 10, percent-decoded.
+13. `POST /reservations/<id>/commit` takes an optional body. With no Content-Length header, or a Content-Length of 0, it commits in full as now. Otherwise the body is a JSON object `{"quantity": n}` and commits that many.
+14. The bodies in items 12 and 13 are read by the rules README.md gives for `POST /reservations`: `invalid_length`, `body_too_large`, `invalid_json`, `invalid_body`, `missing_field` (the one required key is absent) and `unknown_field` (any other key), strict JSON, and a number with a fraction or exponent is `invalid_ttl` for `ttl_seconds` and `invalid_quantity` for `quantity` and `delta`. For extend and adjust a missing Content-Length is `invalid_length`. `invalid_state` is 400. A query parameter other than `holder` and `state`, or one given twice, is 400 `unknown_field`. The <id> rule (`invalid_id`), 404 `not_found` and 405 `method_not_allowed` apply to the new routes as to the old ones. Every error response has the usual shape, and a request that gets one changes nothing in the database (item 11's exception applies).
+
+COMMAND LINE (stockroom/cli.py)
+15. `commit ID [--quantity N]`, and the new commands `extend ID SECONDS`, `adjust SKU DELTA` and `reservations SKU [--holder HOLDER] [--state STATE]`. DELTA is a decimal integer with an optional leading minus sign, so `adjust A-1 -3` works. `reservations` prints `{"reservations": [...]}`. They follow the rules README.md gives for the reservation commands: one JSON line on stdout and status 0 on success; on failure one JSON line `{"error", "message"}` on stderr, nothing on stdout, no `SystemExit`, status 1 for a store refusal and 2 with code `usage` for anything the command line itself rejects (including N, SECONDS or DELTA that is not a decimal integer). A `--state` value outside the four states is a store refusal (`invalid_state`, status 1).
+
+DOCUMENTATION
+16. README.md documents the new Store methods, the new routes and the new commands, and partial commit. docs/errors.md gains a row for `invalid_state`.
+
+TESTS
+17. Each bug fix has a test that fails on the code as it is now. Each of items 7 to 15 has tests, including a test per refusal and tests that refused calls and requests leave the database unchanged. `python -m pytest -q` passes.
